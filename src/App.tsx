@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { type ProjectData, type TaskItem, type AgentContextItem, type MCPServer, type AIProviderConfig } from './types';
-import { DEMO_PROJECTS, INITIAL_MCP_SERVERS } from './lib/demoData';
+import { type ProjectData, type TaskItem, type AgentContextItem, type MCPServer, type AIProviderConfig, type AIProviderId, type AICredentialsMap, type ProviderCredentials } from './types';
+import { INITIAL_PROJECTS, createNewProjectData, INITIAL_MCP_SERVERS } from './lib/demoData';
 import { parseTodoMarkdown, serializeTodoMarkdown, parseAgentContextMarkdown, serializeAgentContextMarkdown } from './lib/parser';
+import { SUPPORTED_AI_PROVIDERS } from './lib/aiProviders';
 import { Navbar } from './components/Navbar';
 import { TaskPane } from './components/TaskPane';
 import { BriefPane } from './components/BriefPane';
@@ -9,15 +10,35 @@ import { DraftTaskModal } from './components/DraftTaskModal';
 import { ExecutionModal } from './components/ExecutionModal';
 import { McpHubModal } from './components/McpHubModal';
 import { RawMarkdownModal } from './components/RawMarkdownModal';
+import { CreateProjectModal } from './components/CreateProjectModal';
+import { AiCredentialsModal } from './components/AiCredentialsModal';
 
 export function App() {
-  // Projects State
+  // Projects State - Purges old legacy dummy data and defaults to clean projects main folder structure
   const [projects, setProjects] = useState<ProjectData[]>(() => {
     const saved = localStorage.getItem('ergo_projects');
-    return saved ? JSON.parse(saved) : DEMO_PROJECTS;
+    if (saved) {
+      try {
+        const parsed: ProjectData[] = JSON.parse(saved);
+        const cleaned = parsed.filter(
+          (p) =>
+            p.folderPath &&
+            p.id !== 'ergo-takeoff-demo' &&
+            p.id !== 'q3-marketing-campaign' &&
+            p.id !== 'nextjs-saas-refactor'
+        );
+        if (cleaned.length > 0) return cleaned;
+      } catch (e) {
+        // Fallthrough to INITIAL_PROJECTS
+      }
+    }
+    return INITIAL_PROJECTS;
   });
 
-  const [activeProjectId, setActiveProjectId] = useState<string>('ergo-takeoff-demo');
+  const [activeProjectId, setActiveProjectId] = useState<string>(() => {
+    return projects[0]?.id || 'default-workspace';
+  });
+
   const activeProject = useMemo(
     () => projects.find((p) => p.id === activeProjectId) || projects[0],
     [projects, activeProjectId]
@@ -31,9 +52,35 @@ export function App() {
 
   // MCP & AI Settings State
   const [mcpServers, setMcpServers] = useState<MCPServer[]>(INITIAL_MCP_SERVERS);
-  const [aiConfig, setAiConfig] = useState<AIProviderConfig>({
-    provider: 'mock',
-    model: 'claude-3-7-sonnet'
+
+  const [credentialsMap, setCredentialsMap] = useState<AICredentialsMap>(() => {
+    const saved = localStorage.getItem('ergo_ai_credentials');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {}
+    }
+    return {
+      openai: {},
+      anthropic: {},
+      gemini: {},
+      ollama: { baseUrl: 'http://localhost:11434', model: 'llama3.2' },
+      mock: { model: 'ergo-native-v1', isConnected: true }
+    };
+  });
+
+  const [aiConfig, setAiConfig] = useState<AIProviderConfig>(() => {
+    const saved = localStorage.getItem('ergo_active_ai_config');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {}
+    }
+    return {
+      provider: 'mock',
+      model: 'ergo-native-v1',
+      isConnected: true
+    };
   });
 
   // Modal Open States
@@ -41,7 +88,11 @@ export function App() {
   const [isExecutionModalOpen, setIsExecutionModalOpen] = useState(false);
   const [isMcpHubOpen, setIsMcpHubOpen] = useState(false);
   const [isRawMarkdownOpen, setIsRawMarkdownOpen] = useState(false);
+  const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
+  const [isCredentialsModalOpen, setIsCredentialsModalOpen] = useState(false);
+  const [credentialsModalProviderId, setCredentialsModalProviderId] = useState<AIProviderId | null>(null);
   const [executingTask, setExecutingTask] = useState<TaskItem | null>(null);
+
 
   // Resizable Split Pane State
   const [splitWidth, setSplitWidth] = useState<number>(50); // percentage
@@ -120,90 +171,6 @@ export function App() {
     );
   };
 
-  // Toggle Task Done Status
-  const handleToggleTaskDone = (taskId: number) => {
-    const updatedTasks = tasks.map((t) => {
-      if (t.id === taskId) {
-        const nextDone = !t.isDone;
-        return {
-          ...t,
-          isDone: nextDone,
-          status: (nextDone ? 'done' : 'not_started') as any,
-          subtasks: t.subtasks.map((s) => ({ ...s, isDone: nextDone }))
-        };
-      }
-      return t;
-    });
-
-    const updatedBriefs = briefs.map((b) => {
-      if (b.itemNumber === taskId) {
-        const targetTask = updatedTasks.find((t) => t.id === taskId);
-        return { ...b, status: targetTask?.isDone ? 'done' : 'not started' };
-      }
-      return b;
-    });
-
-    syncAndSaveProject(updatedTasks, updatedBriefs);
-  };
-
-  // Toggle Subtask Done Status
-  const handleToggleSubtaskDone = (taskId: number, subtaskId: string) => {
-    const updatedTasks = tasks.map((t) => {
-      if (t.id === taskId) {
-        const nextSubtasks = t.subtasks.map((s) => (s.id === subtaskId ? { ...s, isDone: !s.isDone } : s));
-        const allDone = nextSubtasks.every((s) => s.isDone);
-        const someDone = nextSubtasks.some((s) => s.isDone);
-
-        let newStatus = t.status;
-        if (allDone) newStatus = 'done';
-        else if (someDone) newStatus = 'in_progress';
-        else newStatus = 'not_started';
-
-        return {
-          ...t,
-          subtasks: nextSubtasks,
-          isDone: allDone,
-          status: newStatus as any
-        };
-      }
-      return t;
-    });
-
-    syncAndSaveProject(updatedTasks, briefs);
-  };
-
-  // Add Manual Blank Task
-  const handleAddNewTask = () => {
-    const nextId = tasks.length > 0 ? Math.max(...tasks.map((t) => t.id)) + 1 : 1;
-    const newTask: TaskItem = {
-      id: nextId,
-      title: 'New Feature Task',
-      category: 'Missing features todos',
-      status: 'not_started',
-      isDone: false,
-      subtasks: [
-        { id: `${nextId}-1`, text: 'Define detailed implementation brief', isDone: false },
-        { id: `${nextId}-2`, text: 'Verify implementation', isDone: false, isHumanReview: true }
-      ],
-      isHumanReview: true
-    };
-
-    const newBrief: AgentContextItem = {
-      itemNumber: nextId,
-      title: 'New Feature Task',
-      status: 'not started',
-      brief: 'Draft brief specification for this task.',
-      built: '',
-      validation: '',
-      followUps: ''
-    };
-
-    const nextTasks = [...tasks, newTask];
-    const nextBriefs = [...briefs, newBrief];
-
-    setSelectedTaskId(nextId);
-    syncAndSaveProject(nextTasks, nextBriefs);
-  };
 
   // Commit Drafted Tasks from AI (Skill: new-todo)
   const handleCommitDraftedTasks = (newTasks: Partial<TaskItem>[], newBriefs: Partial<AgentContextItem>[]) => {
@@ -216,7 +183,7 @@ export function App() {
       const fullTask: TaskItem = {
         id: currentId,
         title: nt.title || `Task ${currentId}`,
-        category: nt.category || 'Major TODOs for beta',
+        category: nt.category || 'Core Tasks',
         status: 'not_started',
         isDone: false,
         subtasks: nt.subtasks || [],
@@ -272,7 +239,7 @@ export function App() {
       itemNumber: task.id,
       title: task.title,
       status: task.status,
-      brief: `${existingBrief?.brief || ''}\n\n**AI Refinement (${new Date().toLocaleDateString()}):**\nTarget Seams: \`lib/schedules.js\` and \`components/SchedulesTree.jsx\`.\nData Model: Additive property flags. Constraints: Must pass automated unit tests without breaking existing total outputs.`,
+      brief: `${existingBrief?.brief || ''}\n\n**AI Refinement (${new Date().toLocaleDateString()}):**\nTarget Folder: \`${activeProject.folderPath}\`.\nData Model: Additive property flags. Constraints: Must pass automated verification without cross-project leakage.`,
       built: existingBrief?.built || '',
       validation: existingBrief?.validation || '',
       followUps: existingBrief?.followUps || ''
@@ -280,7 +247,20 @@ export function App() {
     handleSaveBrief(updatedBrief);
   };
 
-  // Save Raw Markdown Editing
+  // Live edit handler from Obsidian-style TaskPane editor
+  const handleRawTodoEdit = (newTodoMd: string) => {
+    const parsedTodo = parseTodoMarkdown(newTodoMd);
+    setTasks(parsedTodo.items);
+    setHeaderComments(parsedTodo.headerComments);
+    // Sync the raw markdown into the project record
+    setProjects((prev) =>
+      prev.map((p) =>
+        p.id === activeProjectId ? { ...p, todoMarkdown: newTodoMd } : p
+      )
+    );
+  };
+
+  // Save Raw Markdown Editing (from Raw Markdown modal)
   const handleSaveRawMarkdown = (newTodoMd: string, newAgentContextMd: string) => {
     const parsedTodo = parseTodoMarkdown(newTodoMd);
     const parsedBriefs = parseAgentContextMarkdown(newAgentContextMd);
@@ -298,39 +278,98 @@ export function App() {
     );
   };
 
-  // Export Project Files
+  // Export Project Files uniquely named by folder path
   const handleExportProject = () => {
+    if (!activeProject) return;
+    const folderSlug = activeProject.folderPath ? activeProject.folderPath.replace(/^projects\//, '') : activeProject.id;
     const todoBlob = new Blob([serializeTodoMarkdown(tasks, headerComments)], { type: 'text/markdown' });
     const briefBlob = new Blob([serializeAgentContextMarkdown(briefs)], { type: 'text/markdown' });
 
     const a1 = document.createElement('a');
     a1.href = URL.createObjectURL(todoBlob);
-    a1.download = 'TODO.md';
+    a1.download = `${folderSlug}_TODO.md`;
     a1.click();
 
     setTimeout(() => {
       const a2 = document.createElement('a');
       a2.href = URL.createObjectURL(briefBlob);
-      a2.download = 'AGENT_CONTEXT.md';
+      a2.download = `${folderSlug}_AGENT_CONTEXT.md`;
       a2.click();
     }, 300);
   };
 
-  // Create New Custom Project
-  const handleCreateNewProject = () => {
-    const id = `project-${Date.now()}`;
-    const name = `New Project ${projects.length + 1}`;
-    const newProj: ProjectData = {
-      id,
-      name,
-      description: 'Custom AI co-working project roadmap.',
-      connectedMcps: ['mcp-filesystem'],
-      todoMarkdown: `<!-- Keep this file scannable. Full briefs, build records and test notes live in AGENT_CONTEXT.md -->\n\n# Project Roadmap:\n\n1. **Initial Task Setup:**\n    - Define core project goals`,
-      agentContextMarkdown: `# TODO context — the verbose half of TODO.md\n\n### 1. Initial Task Setup\n\n**Status:** not started\n\n**Brief**\nInitial project setup brief details.`
-    };
+  // Create New Linked Project in Main Directory Structure
+  const handleConfirmCreateProject = (name: string, customFolder: string, description: string) => {
+    const newProj = createNewProjectData(name, customFolder, description);
+    setProjects((prev) => [...prev, newProj]);
+    setActiveProjectId(newProj.id);
+  };
 
-    setProjects([...projects, newProj]);
-    setActiveProjectId(id);
+  // Persist Credentials & Active Config to localStorage
+  useEffect(() => {
+    localStorage.setItem('ergo_ai_credentials', JSON.stringify(credentialsMap));
+  }, [credentialsMap]);
+
+  useEffect(() => {
+    localStorage.setItem('ergo_active_ai_config', JSON.stringify(aiConfig));
+  }, [aiConfig]);
+
+  const handleOpenCredentialsModal = (providerId: AIProviderId) => {
+    setCredentialsModalProviderId(providerId);
+    setIsCredentialsModalOpen(true);
+  };
+
+  const handleSaveCredentials = (providerId: AIProviderId, creds: ProviderCredentials) => {
+    const updatedMap = {
+      ...credentialsMap,
+      [providerId]: creds
+    };
+    setCredentialsMap(updatedMap);
+
+    // Automatically set saved provider as active AI
+    const providerMeta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === providerId);
+    const newConfig: AIProviderConfig = {
+      provider: providerId,
+      model: creds.model || providerMeta?.defaultModel || 'gpt-4o',
+      apiKey: creds.apiKey,
+      baseUrl: creds.baseUrl,
+      isConnected: true
+    };
+    setAiConfig(newConfig);
+  };
+
+  const handleClearCredentials = (providerId: AIProviderId) => {
+    const updatedMap = {
+      ...credentialsMap,
+      [providerId]: { isConnected: false }
+    };
+    setCredentialsMap(updatedMap);
+
+    if (aiConfig.provider === providerId) {
+      setAiConfig({
+        provider: 'mock',
+        model: 'ergo-native-v1',
+        isConnected: true
+      });
+    }
+  };
+
+  const handleSelectAiProvider = (providerId: AIProviderId) => {
+    const creds = credentialsMap[providerId];
+    const isConnected = (providerId as string) === 'mock' || !!creds?.isConnected;
+
+    if (!isConnected && (providerId as string) !== 'mock') {
+      handleOpenCredentialsModal(providerId);
+    } else {
+      const providerMeta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === providerId);
+      setAiConfig({
+        provider: providerId,
+        model: creds?.model || providerMeta?.defaultModel || 'gpt-4o',
+        apiKey: creds?.apiKey,
+        baseUrl: creds?.baseUrl,
+        isConnected: true
+      });
+    }
   };
 
   const activeTask = tasks.find((t) => t.id === selectedTaskId) || tasks[0] || null;
@@ -343,11 +382,13 @@ export function App() {
         projects={projects}
         activeProject={activeProject}
         onSelectProject={(p) => setActiveProjectId(p.id)}
-        onNewProject={handleCreateNewProject}
+        onNewProject={() => setIsCreateProjectModalOpen(true)}
         mcpServers={mcpServers}
         onOpenMcpHub={() => setIsMcpHubOpen(true)}
         aiConfig={aiConfig}
-        onChangeAiConfig={setAiConfig}
+        credentialsMap={credentialsMap}
+        onSelectAiProvider={handleSelectAiProvider}
+        onOpenCredentialsModal={handleOpenCredentialsModal}
         onOpenRawMarkdownModal={() => setIsRawMarkdownOpen(true)}
       />
 
@@ -356,17 +397,13 @@ export function App() {
         className={`workspace-body ${isDragging ? 'is-dragging' : ''}`}
         ref={workspaceRef}
       >
-        {/* Left Pane: Your Tasks */}
+        {/* Left Pane: Obsidian-style Markdown Editor */}
         <div style={{ width: `${splitWidth}%`, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
           <TaskPane
+            rawMarkdown={activeProject?.todoMarkdown || ''}
             tasks={tasks}
-            selectedTaskId={selectedTaskId}
-            onSelectTask={(t) => setSelectedTaskId(t.id)}
-            onToggleTaskDone={handleToggleTaskDone}
-            onToggleSubtaskDone={handleToggleSubtaskDone}
-            onExecuteTask={handleExecuteTask}
-            onAddNewTask={handleAddNewTask}
             onOpenDraftModal={() => setIsDraftModalOpen(true)}
+            onMarkdownChange={handleRawTodoEdit}
           />
         </div>
 
@@ -391,7 +428,14 @@ export function App() {
         </div>
       </div>
 
-      {/* AI Skill 1: Draft Tasks Modal */}
+      {/* Modal 1: Create New Project Directory */}
+      <CreateProjectModal
+        isOpen={isCreateProjectModalOpen}
+        onClose={() => setIsCreateProjectModalOpen(false)}
+        onCreateProject={handleConfirmCreateProject}
+      />
+
+      {/* Modal 2: Draft Tasks with AI */}
       <DraftTaskModal
         isOpen={isDraftModalOpen}
         onClose={() => setIsDraftModalOpen(false)}
@@ -401,7 +445,7 @@ export function App() {
         onCommitDraftedTasks={handleCommitDraftedTasks}
       />
 
-      {/* AI Skill 2: Execution Modal */}
+      {/* Modal 3: Task Execution Runner */}
       <ExecutionModal
         isOpen={isExecutionModalOpen}
         onClose={() => setIsExecutionModalOpen(false)}
@@ -413,7 +457,7 @@ export function App() {
         onCompleteExecution={handleCompleteExecution}
       />
 
-      {/* MCP Connections Hub Modal */}
+      {/* Modal 4: MCP Connections Hub */}
       <McpHubModal
         isOpen={isMcpHubOpen}
         onClose={() => setIsMcpHubOpen(false)}
@@ -438,14 +482,27 @@ export function App() {
         onAddCustomServer={(newServer) => setMcpServers([...mcpServers, newServer])}
       />
 
-      {/* Raw Markdown Editor Sync & Preview Download Modal */}
+      {/* Modal 5: Raw Markdown Sync & Download Preview */}
       <RawMarkdownModal
         isOpen={isRawMarkdownOpen}
         onClose={() => setIsRawMarkdownOpen(false)}
         todoMarkdown={serializeTodoMarkdown(tasks, headerComments)}
         agentContextMarkdown={serializeAgentContextMarkdown(briefs)}
+        folderPath={activeProject?.folderPath}
+        todoFilePath={activeProject?.todoFilePath}
+        agentContextFilePath={activeProject?.agentContextFilePath}
         onSaveMarkdown={handleSaveRawMarkdown}
         onExportProject={handleExportProject}
+      />
+
+      {/* Modal 6: AI Engine Sign In & Credentials Manager */}
+      <AiCredentialsModal
+        isOpen={isCredentialsModalOpen}
+        onClose={() => setIsCredentialsModalOpen(false)}
+        providerId={credentialsModalProviderId}
+        currentCredentials={credentialsModalProviderId ? credentialsMap[credentialsModalProviderId] : undefined}
+        onSaveCredentials={handleSaveCredentials}
+        onClearCredentials={handleClearCredentials}
       />
     </div>
   );

@@ -50,18 +50,34 @@ export interface MCPTool {
   autoApprove: boolean;
 }
 
+export type AIProviderId = 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'mock';
+
 export interface AIProviderConfig {
-  provider: 'anthropic' | 'openai' | 'gemini' | 'ollama' | 'mock';
+  provider: AIProviderId;
   model: string;
   apiKey?: string;
   baseUrl?: string;
   isCustomKey?: boolean;
+  isConnected?: boolean;
 }
+
+export interface ProviderCredentials {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+  isConnected?: boolean;
+}
+
+export type AICredentialsMap = Record<AIProviderId, ProviderCredentials>;
+
 
 export interface ProjectData {
   id: string;
   name: string;
   description: string;
+  folderPath: string; // e.g. "projects/default-workspace"
+  todoFilePath: string; // e.g. "projects/default-workspace/TODO.md"
+  agentContextFilePath: string; // e.g. "projects/default-workspace/AGENT_CONTEXT.md"
   todoMarkdown: string;
   agentContextMarkdown: string;
   connectedMcps: string[];

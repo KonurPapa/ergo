@@ -1,236 +1,119 @@
 import { type ProjectData, type MCPServer } from '../types';
 
-export const DEMO_PROJECTS: ProjectData[] = [
-  {
-    id: 'ergo-takeoff-demo',
-    name: 'Ergo Takeoff Engine (Beta)',
-    description: 'AI-assisted plan takeoff and quantity extraction system with Bluebeam PDF integration & OCR cascade.',
-    connectedMcps: ['mcp-vscode', 'mcp-filesystem', 'mcp-bluebeam', 'mcp-database', 'mcp-gdrive'],
-    todoMarkdown: `<!-- Keep this file scannable. Full briefs, build records and test notes live in AGENT_CONTEXT.md, keyed by item number. -->
+export function createSlug(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/[\s_]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'new-project';
+}
 
-# Major TODOs for beta:
-- ~~zones~~
-- ~~dropbox/g-drive import/export~~
-- ~~export page data~~
-- 1. **conditions:**
-    - search feature in schedules panel (filter the tree as you type — condition name/tag, group, schedule)
-    - **human review** - verify the various condition details work correctly: assemblies, slope calc, QTY (all types), grid
-- ~~comparisons between revisions~~
+export function createNewProjectData(
+  name: string,
+  customFolder?: string,
+  description?: string
+): ProjectData {
+  const slug = createSlug(customFolder || name);
+  const id = `project-${Date.now()}`;
+  const folderPath = `projects/${slug}`;
+  const todoFilePath = `${folderPath}/TODO.md`;
+  const agentContextFilePath = `${folderPath}/AGENT_CONTEXT.md`;
 
-## Missing features todos:
+  const todoMarkdown = `<!-- Project: ${name} | Folder: ${folderPath} -->
+<!-- Linked Context: ${agentContextFilePath} -->
+<!-- Keep this file scannable. Full briefs, build records and test notes live in ${agentContextFilePath}, keyed by item number. -->
 
-2. ~~**AI features:**~~
-    - ~~dismissing an AI suggestion should keep it in the AI panel; toggle back on again~~
-    - **schedules:**
-        - the schedules auto-extractor never dismisses, even after schedules are applied
-    - **scale-finder:**
-        - verify scale reader on high DPI raster title blocks
-    - **title/sheet name:**
-        - auto-detect sheet numbers and title block labels via local OCR cascade
+# ${name} Tasks:
 
-3. **UI:**
-    - all buttons need a keyboard shortcut
-    - dropbox icon isn't rendering correctly - fix SVG outline path
-    - cursor needs to be set when hovering over AI toast notifications
-    - AI toast notifications should always be the highest level z-index
-    - move 'switch plan file' dropdown to lower beside the 'sheets' button
-    - make the 'rendering sheet...' text more obvious
+1. **Initial Task Setup:**
+    - Define project scope and task list
+    - Verify bi-directional link with ${agentContextFilePath}`;
 
-4. **zones/breakouts:**
-    - **human review** - verify zone calculations across multi-page PDFs
+  const agentContextMarkdown = `<!-- Project: ${name} | Folder: ${folderPath} -->
+<!-- Linked Tasks: ${todoFilePath} -->
+# ${name} Context — the verbose half of \`${todoFilePath}\`
 
-5. **MCP Access:**
-    - Make sure the takeoff MCP has complete access to do anything within the tool
+\`TODO.md\` is the **human** view for ${name}. This file is the **agent** view: the full brief for an item before it's built, and the full record of what was built after.
 
-6. **Import/Export:**
-    - ~~per-section subtotal row; a second XLSX sheet per zone; column choice into the Bluebeam legend~~
-    - ~~remove the worksheet (the legend sheet) from the PDF export (unnecessary)~~
-    - ~~add a callouts toggle to the export screen (off by default)~~
-    - **human review** — open the Bluebeam export in Revu: shape opacity + count symbols on the sheet
+Rules of the split:
+- Sections here mirror \`${todoFilePath}\` **by item number and title** — same numbers, same order.
+- Heavily bound to ${name} (${folderPath}).
 
-7. **Performance & Storage:**
-    - see if we can reduce the amount of space in-progress takeoffs take up in localStorage
+---
 
-8. **Cloud Database:**
-    - in-progress takeoffs need to write to Neon DB so data isn't lost if browser is cleared
+### 1. Initial Task Setup
 
-# Later Features:
-
-9. **Direct connections to other services:**
-    - Export to G-drive / Dropbox (creating folder structure based on project name found in Monday)
-    - Quick-access button to open the folder directly
-
-10. **AI 'chat with my takeoff' feature:**
-    - should be able to answer questions about the takeoff data, the project, and the takeoff itself
-    - should be able to do anything with the takeoff based on the user's prompts
-    - should always follow up by telling the user what it found / intends to change`,
-    agentContextMarkdown: `# TODO context — the verbose half of \`TODO.md\`
-
-### 1. conditions
-
-**Status:** in progress
+**Status:** not started
 
 **Brief**
-The panel is the app's only conditions surface and on a real job its tree runs to hundreds of rows, so finding one condition means scrolling. What exists today is NOT incremental filter. The ask is an in-panel incremental filter: type in a search box in the panel and the tree shrinks to matching rows as you type.
-
-- Match on: condition name and tag (condTitle in lib/schedules.js), plus group and schedule names.
-- Where it lives: a filter input in the panel bar next to + New.
-- Filtering seam: filter the built node node list (pure helper in lib/schedules.js).
+Setup initial project structure and link human task list with agent context briefs.
 
 **Built**
-First pass done (seven sub-bullets); second pass — panel UX — done.
+Created project folder structure under ${folderPath} with isolated TODO.md and AGENT_CONTEXT.md.
 
 **Validation**
-npm test 356 pass. Driven by hand in headless Chromium over CDP.
+Verified directory paths and unique markdown file references.`;
+
+  return {
+    id,
+    name,
+    description: description || `Project folder and markdown storage for ${name}.`,
+    folderPath,
+    todoFilePath,
+    agentContextFilePath,
+    todoMarkdown,
+    agentContextMarkdown,
+    connectedMcps: ['mcp-vscode', 'mcp-filesystem']
+  };
+}
+
+export const INITIAL_PROJECTS: ProjectData[] = [
+  {
+    id: 'default-workspace',
+    name: 'Default Workspace',
+    description: 'Main project folder storing TODO.md and AGENT_CONTEXT.md',
+    folderPath: 'projects/default-workspace',
+    todoFilePath: 'projects/default-workspace/TODO.md',
+    agentContextFilePath: 'projects/default-workspace/AGENT_CONTEXT.md',
+    connectedMcps: ['mcp-vscode', 'mcp-filesystem'],
+    todoMarkdown: `<!-- Project: Default Workspace | Folder: projects/default-workspace -->
+<!-- Linked Context: projects/default-workspace/AGENT_CONTEXT.md -->
+<!-- Keep this file scannable. Full briefs, build records and test notes live in AGENT_CONTEXT.md, keyed by item number. -->
+
+# Core Tasks:
+
+1. **Initial Task Setup:**
+    - Define project scope and task list
+    - Verify bi-directional link with AGENT_CONTEXT.md`,
+    agentContextMarkdown: `<!-- Project: Default Workspace | Folder: projects/default-workspace -->
+<!-- Linked Tasks: projects/default-workspace/TODO.md -->
+# Default Workspace Context — the verbose half of \`projects/default-workspace/TODO.md\`
+
+\`TODO.md\` is the **human** view for Default Workspace. This file is the **agent** view: the full brief for an item before it's built, and the full record of what was built after.
+
+Rules of the split:
+- Sections here mirror \`projects/default-workspace/TODO.md\` **by item number and title** — same numbers, same order.
+- Heavily bound to Default Workspace (projects/default-workspace).
 
 ---
 
-### 2. AI features
+### 1. Initial Task Setup
 
-**Status:** done
+**Status:** not started
 
 **Brief**
-The cascade is the spine of this pass. Every plan read now runs raw text → local OCR (tesseract.js, in-browser) → vision AI → graceful fail.
-- Done = (1) dismissing AI suggestion keeps it in panel; (2) schedule name defaults from sheet title; (3) confirm bar is a toast; (4) OCR in flight spins AI button; (5) title/sheet name reader runs first of automatic actions.
+Setup initial project structure and link human task list with agent context briefs.
 
 **Built**
-Three new modules: lib/ocr.js (tesseract worker), lib/ocrgate.js (quality gate), lib/titleblock.js (field reader). Local OCR bundled via WASM.
+Created project folder structure under projects/default-workspace with isolated TODO.md and AGENT_CONTEXT.md.
 
 **Validation**
-npm test 401 pass (45 new tests). End-to-end verified on ARCH-D title block PDF.
-
----
-
-### 3. UI
-
-**Status:** not started
-
-**Brief**
-Fix keyboard shortcuts, cursor hit-testing on floating toast notifications, Dropbox SVG path outlines, and z-index ordering so notifications don't sit under sidebar buttons.
-
----
-
-### 5. MCP Access
-
-**Status:** in progress
-
-**Brief**
-Provide a full Model Context Protocol (MCP) tool surface over the takeoff state so external AI agents can execute arbitrary actions: adding conditions, selecting shapes, adjusting scale factors, running compares, and triggering exports.
-
----
-
-### 6. Import/Export
-
-**Status:** done
-
-**Brief**
-Second pass — the table, paper, and Bluebeam channel. Fixed Bluebeam count export (/AP appearance streams) and transparency (/FillOpacity 0.16 wash). Added XLSX multi-tab zone exports.
-
-**Built**
-New modules lib/exportpaint.js, lib/reportcols.js, lib/xlsx.js.
-
-**Validation**
-Validated against 41 MB real Revu export in pdf.js and CDP headless browser.
-
----
-
-### 10. AI 'chat with my takeoff' feature
-
-**Status:** not started
-
-**Brief**
-Interactive conversational mode inside Ergo allowing the AI to read the active takeoff's geometry, answer pricing questions, and modify shapes/conditions directly via the takeoff MCP server.`
-  },
-  {
-    id: 'q3-marketing-campaign',
-    name: 'Q3 Product Marketing Launch',
-    description: 'Non-developer administrative and creative workflow utilizing Amplitude analytics, Figma assets, and Slack team dispatch.',
-    connectedMcps: ['mcp-slack', 'mcp-figma', 'mcp-amplitude', 'mcp-gdrive'],
-    todoMarkdown: `# Q3 Launch Deliverables:
-
-1. **Analyze Signup Conversion Drop:**
-    - Query Amplitude MCP for user dropoff funnel between step 2 and step 3
-    - **human review** - verify date range filters and segment cohorts
-
-2. **Figma Hero Banner Refresh:**
-    - Generate dark-mode variant mockups for homepage hero
-    - Export 2x WebP assets directly to Google Drive launch folder
-
-3. **Team Dispatch & Announcement Draft:**
-    - Draft executive summary of campaign KPIs
-    - Render interactive Slack message composer in execution window`,
-    agentContextMarkdown: `### 1. Analyze Signup Conversion Drop
-
-**Status:** in progress
-
-**Brief**
-Perform detailed funnel analysis on 2026 Q2 signup dropoff. Identify friction points in multi-factor auth step.
-
-**Built**
-Connected Amplitude MCP server via OAuth 2.1 PKCE transport.
-
----
-
-### 2. Figma Hero Banner Refresh
-
-**Status:** not started
-
-**Brief**
-Pull modern dark-mode glassmorphism design tokens from Figma file #84920 and generate banner variants.
-
----
-
-### 3. Team Dispatch & Announcement Draft
-
-**Status:** not started
-
-**Brief**
-Compose campaign update for #product-announcements. Allow human review before posting via Slack MCP.`
-  },
-  {
-    id: 'nextjs-saas-refactor',
-    name: 'Next.js SaaS Platform Refactor',
-    description: 'Developer workflow for database migrations, GitHub PR management, and automated test execution.',
-    connectedMcps: ['mcp-github', 'mcp-filesystem', 'mcp-database'],
-    todoMarkdown: `# Engineering Sprint Tasks:
-
-1. **Database Schema Migration (Supabase):**
-    - Add user_preferences JSONB column to workspace table
-    - Write idempotent SQL migration script
-
-2. **Refactor Auth Middleware:**
-    - Upgrade session validation to OAuth 2.1 PKCE
-    - **human review** - test security edge cases with expired tokens
-
-3. **Automated E2E Test Pipeline:**
-    - Execute Playwright headless test suite on main branch
-    - Post test status digest to GitHub PR #142`,
-    agentContextMarkdown: `### 1. Database Schema Migration (Supabase)
-
-**Status:** not started
-
-**Brief**
-Write migration file 20260811_user_prefs.sql and apply to Neon/Supabase DB instance via Database MCP.
-
----
-
-### 2. Refactor Auth Middleware
-
-**Status:** not started
-
-**Brief**
-Replace legacy bearer token checks with PKCE auth header validator in middleware.ts.
-
----
-
-### 3. Automated E2E Test Pipeline
-
-**Status:** not started
-
-**Brief**
-Run npx playwright test over e2e/auth.spec.ts and attach screenshot artifacts to GitHub PR.`
+Verified directory paths and unique markdown file references.`
   }
 ];
+
+export const DEMO_PROJECTS = INITIAL_PROJECTS;
 
 export const INITIAL_MCP_SERVERS: MCPServer[] = [
   {

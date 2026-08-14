@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { type TaskItem, type AgentContextItem } from '../types';
 import { FileText, Edit3, Save, Sparkles, Play, AlertCircle } from 'lucide-react';
+import { RichTextToolbar } from './RichTextToolbar';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface BriefPaneProps {
   activeTask: TaskItem | null;
@@ -23,6 +25,13 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   const [validationText, setValidationText] = useState('');
   const [followUpsText, setFollowUpsText] = useState('');
 
+  const briefRef = useRef<HTMLTextAreaElement>(null);
+  const builtRef = useRef<HTMLTextAreaElement>(null);
+  const validationRef = useRef<HTMLTextAreaElement>(null);
+  const followUpsRef = useRef<HTMLTextAreaElement>(null);
+
+  const [activeFocusedRef, setActiveFocusedRef] = useState<React.RefObject<HTMLTextAreaElement | null> | null>(null);
+
   useEffect(() => {
     if (activeBrief) {
       setBriefText(activeBrief.brief || '');
@@ -43,7 +52,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
       <div className="pane pane-right" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
           <FileText size={48} color="var(--accent-violet)" style={{ opacity: 0.5, marginBottom: '1rem' }} />
-          <h3>Select a task to inspect its Agent Brief</h3>
+          <h3>Select a task item to inspect its Agent Brief</h3>
           <p style={{ fontSize: '0.85rem', marginTop: '0.5rem', maxWidth: '400px' }}>
             The agent view holds the full done-state brief, target code seams, decisions made, validation notes, and execution records.
           </p>
@@ -70,7 +79,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
       <div className="pane-header">
         <div className="pane-title">
           <FileText size={18} color="var(--accent-violet)" />
-          <span>AI Canvas</span>
+          <span>AI Canvas & Brief</span>
           <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
             Item #{activeTask.id}
           </span>
@@ -94,7 +103,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
           ) : (
             <button className="btn btn-secondary" style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem' }} onClick={() => setIsEditing(true)}>
               <Edit3 size={14} />
-              <span>Edit</span>
+              <span>Edit Brief</span>
             </button>
           )}
 
@@ -105,31 +114,18 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
         </div>
       </div>
 
+      {/* Text Editor Formatting Bar in Edit Mode */}
+      {isEditing && (
+        <div style={{ padding: '0.6rem 1.25rem', borderBottom: '1px solid var(--border-subtle)', background: 'rgba(7, 10, 18, 0.8)' }}>
+          <RichTextToolbar
+            targetRef={activeFocusedRef || briefRef}
+            compact={false}
+          />
+        </div>
+      )}
+
       {/* Pane Body */}
       <div className="pane-content">
-        {/* Task Summary Banner */}
-        <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-glow)', borderRadius: 'var(--radius-md)', padding: '1rem 1.25rem', marginBottom: '1.25rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
-            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-violet)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-              Shared Human/Agent Task Map
-            </span>
-            <span className={`badge badge-${activeTask.status}`}>
-              {activeTask.status.replace('_', ' ')}
-            </span>
-          </div>
-
-          <h2 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#fff', marginBottom: '0.5rem' }}>
-            #{activeTask.id}. {activeTask.title}
-          </h2>
-
-          {activeTask.isHumanReview && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--accent-rose)', fontSize: '0.8rem', fontWeight: 600, marginTop: '0.2rem' }}>
-              <AlertCircle size={14} />
-              <span>Requires Human Verification / Review step after execution</span>
-            </div>
-          )}
-        </div>
-
         {/* Brief Sections */}
         <div className="brief-container">
           {/* Section 1: Brief */}
@@ -139,14 +135,26 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
             </div>
             {isEditing ? (
               <textarea
+                ref={briefRef}
                 className="textarea-text"
                 style={{ height: '140px', border: 'none', borderRadius: 0, padding: '1rem' }}
                 value={briefText}
                 onChange={(e) => setBriefText(e.target.value)}
+                onFocus={() => setActiveFocusedRef(briefRef)}
               />
             ) : (
               <div className="brief-body">
-                {briefText || <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>No detailed brief defined yet. Click 'Refine Brief AI' to draft one.</span>}
+                {briefText ? (
+                  <div className="brief-markdown-render">
+                    {briefText.split('\n').map((line, idx) => (
+                      <p key={idx} style={{ minHeight: line ? 'auto' : '0.8rem', marginBottom: '0.35rem' }}>
+                        <MarkdownRenderer content={line} />
+                      </p>
+                    ))}
+                  </div>
+                ) : (
+                  <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>No detailed brief defined yet. Click 'Refine Brief AI' to draft one.</span>
+                )}
               </div>
             )}
           </div>
@@ -158,14 +166,26 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
             </div>
             {isEditing ? (
               <textarea
+                ref={builtRef}
                 className="textarea-text"
                 style={{ height: '120px', border: 'none', borderRadius: 0, padding: '1rem' }}
                 value={builtText}
                 onChange={(e) => setBuiltText(e.target.value)}
+                onFocus={() => setActiveFocusedRef(builtRef)}
               />
             ) : (
               <div className="brief-body">
-                {builtText || <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>Not executed yet. Click 'Execute Task' to perform execution and populate build records.</span>}
+                {builtText ? (
+                  <div className="brief-markdown-render">
+                    {builtText.split('\n').map((line, idx) => (
+                      <p key={idx} style={{ minHeight: line ? 'auto' : '0.8rem', marginBottom: '0.35rem' }}>
+                        <MarkdownRenderer content={line} />
+                      </p>
+                    ))}
+                  </div>
+                ) : (
+                  <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>Not executed yet. Click 'Execute Task' to perform execution and populate build records.</span>
+                )}
               </div>
             )}
           </div>
@@ -177,14 +197,26 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
             </div>
             {isEditing ? (
               <textarea
+                ref={validationRef}
                 className="textarea-text"
                 style={{ height: '100px', border: 'none', borderRadius: 0, padding: '1rem' }}
                 value={validationText}
                 onChange={(e) => setValidationText(e.target.value)}
+                onFocus={() => setActiveFocusedRef(validationRef)}
               />
             ) : (
               <div className="brief-body">
-                {validationText || <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>Validation notes will record passing unit checks and browser verification.</span>}
+                {validationText ? (
+                  <div className="brief-markdown-render">
+                    {validationText.split('\n').map((line, idx) => (
+                      <p key={idx} style={{ minHeight: line ? 'auto' : '0.8rem', marginBottom: '0.35rem' }}>
+                        <MarkdownRenderer content={line} />
+                      </p>
+                    ))}
+                  </div>
+                ) : (
+                  <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>Validation notes will record passing unit checks and browser verification.</span>
+                )}
               </div>
             )}
           </div>
@@ -196,14 +228,26 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
             </div>
             {isEditing ? (
               <textarea
+                ref={followUpsRef}
                 className="textarea-text"
                 style={{ height: '90px', border: 'none', borderRadius: 0, padding: '1rem' }}
                 value={followUpsText}
                 onChange={(e) => setFollowUpsText(e.target.value)}
+                onFocus={() => setActiveFocusedRef(followUpsRef)}
               />
             ) : (
               <div className="brief-body">
-                {followUpsText || <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>No follow-ups recorded.</span>}
+                {followUpsText ? (
+                  <div className="brief-markdown-render">
+                    {followUpsText.split('\n').map((line, idx) => (
+                      <p key={idx} style={{ minHeight: line ? 'auto' : '0.8rem', marginBottom: '0.35rem' }}>
+                        <MarkdownRenderer content={line} />
+                      </p>
+                    ))}
+                  </div>
+                ) : (
+                  <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>No follow-ups recorded.</span>
+                )}
               </div>
             )}
           </div>

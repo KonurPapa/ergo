@@ -3,18 +3,167 @@ import { type TaskItem, type AgentContextItem, type ProjectData, type MCPServer,
 /**
  * Drafts new scannable tasks for TODO.md and verbose briefs for AGENT_CONTEXT.md
  */
+/**
+ * Generic API call handler for Bring-Your-Own-AI providers (OpenAI, Anthropic, Gemini, Ollama)
+ */
+export async function callAiEngine(prompt: string, systemPrompt: string, config: AIProviderConfig): Promise<string> {
+  const { provider, apiKey, baseUrl, model } = config;
+
+  if (provider === 'openai') {
+    if (!apiKey) throw new Error('OpenAI API key missing.');
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: model || 'gpt-4o',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: prompt }
+        ],
+        response_format: { type: 'json_object' }
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `OpenAI API returned HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || '';
+  }
+
+  if (provider === 'anthropic') {
+    if (!apiKey) throw new Error('Anthropic API key missing.');
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: model || 'claude-3-7-sonnet-20250219',
+        max_tokens: 3000,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Anthropic API returned HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    return data.content?.[0]?.text || '';
+  }
+
+  if (provider === 'gemini') {
+    if (!apiKey) throw new Error('Google Gemini API key missing.');
+    const targetModel = model || 'gemini-2.5-flash';
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: `${systemPrompt}\n\nUSER PROMPT:\n${prompt}` }] }]
+        })
+      }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Gemini API returned HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  }
+
+  if (provider === 'ollama') {
+    const host = (baseUrl || 'http://localhost:11434').replace(/\/+$/, '');
+    const res = await fetch(`${host}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: model || 'llama3.2',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: prompt }
+        ],
+        stream: false,
+        format: 'json'
+      })
+    });
+    if (!res.ok) {
+      await res.json().catch(() => ({}));
+      throw new Error(`Ollama server at ${host} returned HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    return data.message?.content || '';
+  }
+
+  throw new Error('Simulated engine active.');
+}
+
+/**
+ * Drafts new scannable tasks for TODO.md and verbose briefs for AGENT_CONTEXT.md
+ */
 export async function draftTasksWithAi(
   userPrompt: string,
   _currentProject: ProjectData,
-  _aiConfig: AIProviderConfig,
+  aiConfig: AIProviderConfig,
   connectedMcps: MCPServer[]
 ): Promise<{ newTasks: Partial<TaskItem>[]; newBriefs: Partial<AgentContextItem>[] }> {
-  // If actual API key is provided for Claude/OpenAI/Gemini, we can call external endpoints.
-  // We also provide a rich interactive native generator for instant demo out-of-the-box!
+  const mcpNames = connectedMcps.filter((m) => m.status === 'connected').map((m) => m.name);
 
-  await new Promise((resolve) => setTimeout(resolve, 1500)); // Simulate AI thinking time
+  // If real AI credentials are set for OpenAI, Anthropic, Gemini, or Ollama, make live call to provider
+  if (aiConfig.provider !== 'mock' && (aiConfig.apiKey || aiConfig.provider === 'ollama')) {
+    try {
+      const systemPrompt = `You are Ergo AI, an agentic workspace task architect.
+Given a user project goal, generate dual-layer project tasks:
+1) Scannable TODO task items for TODO.md
+2) Detailed technical context briefs for AGENT_CONTEXT.md.
 
-  const mcpNames = connectedMcps.filter(m => m.status === 'connected').map(m => m.name);
+Respond strictly with valid JSON matching this schema:
+{
+  "tasks": [
+    {
+      "title": "Task title",
+      "category": "Core Tasks",
+      "isHumanReview": false,
+      "subtasks": [
+        { "id": "sub-1", "text": "Subtask step 1", "isDone": false },
+        { "id": "sub-2", "text": "Subtask step 2", "isDone": false }
+      ],
+      "mcpRequired": ["tool_name"]
+    }
+  ],
+  "briefs": [
+    {
+      "title": "Task title",
+      "brief": "**Goal:** Goal description\\n\\n**Seams:** Affected code files\\n\\n**Connected MCPs:** Tool list",
+      "built": "",
+      "validation": "",
+      "followUps": "Next steps"
+    }
+  ]
+}`;
+      const responseText = await callAiEngine(userPrompt, systemPrompt, aiConfig);
+      const cleanJson = responseText.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
+      const parsed = JSON.parse(cleanJson);
+      if (parsed.tasks && parsed.briefs && Array.isArray(parsed.tasks)) {
+        return {
+          newTasks: parsed.tasks,
+          newBriefs: parsed.briefs
+        };
+      }
+    } catch (e: any) {
+      console.warn(`[Ergo AI] ${aiConfig.provider} live API call notice (falling back to native workspace generator):`, e.message);
+    }
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 1200)); // Simulated thinking time
 
   if (userPrompt.toLowerCase().includes('vscode') || userPrompt.toLowerCase().includes('vs code') || userPrompt.toLowerCase().includes('editor') || userPrompt.toLowerCase().includes('markdown')) {
     return {

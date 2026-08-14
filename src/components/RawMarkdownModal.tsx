@@ -6,6 +6,9 @@ interface RawMarkdownModalProps {
   onClose: () => void;
   todoMarkdown: string;
   agentContextMarkdown: string;
+  folderPath?: string;
+  todoFilePath?: string;
+  agentContextFilePath?: string;
   onSaveMarkdown: (newTodoMd: string, newAgentContextMd: string) => void;
   onExportProject?: () => void;
 }
@@ -15,6 +18,9 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
   onClose,
   todoMarkdown,
   agentContextMarkdown,
+  folderPath,
+  todoFilePath,
+  agentContextFilePath,
   onSaveMarkdown,
   onExportProject
 }) => {
@@ -40,7 +46,14 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <Code2 size={22} color="var(--accent-cyan)" />
-            <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Preview & Sync Raw Markdown</h3>
+            <div>
+              <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Preview & Sync Raw Markdown</h3>
+              {folderPath && (
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                  Main Folder: <span style={{ color: 'var(--accent-cyan)' }}>{folderPath}</span>
+                </div>
+              )}
+            </div>
           </div>
           <button className="btn btn-secondary" style={{ padding: '0.3rem 0.5rem' }} onClick={onClose}>
             <X size={16} />
@@ -66,7 +79,7 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
             onClick={() => setActiveTab('todo')}
           >
             <CheckSquare size={16} color="var(--accent-cyan)" />
-            <span>TODO.md (Your Tasks)</span>
+            <span>{todoFilePath || 'TODO.md'} (Your Tasks)</span>
           </button>
 
           <button
@@ -86,7 +99,7 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
             onClick={() => setActiveTab('agent')}
           >
             <FileText size={16} color="var(--accent-violet)" />
-            <span>AGENT_CONTEXT.md (AI Canvas)</span>
+            <span>{agentContextFilePath || 'AGENT_CONTEXT.md'} (AI Canvas)</span>
           </button>
         </div>
 

@@ -1,5 +1,7 @@
 # Ergo
 
+## Work together with AI
+
 **Ergo** is an AI-powered visual todo list and task workspace designed to align humans and AI in a shared, holistic project environment. 
 
 Rather than treating AI as an invisible black-box agent or burying context inside chat windows, Ergo provides a scannable visual dashboard paired with structured, agentic technical briefs. It acts as an **MCP Host** (Model Context Protocol client) with support for interactive **MCP Apps**, enabling seamless execution of real-world tools across developer and non-developer workflows alike.
