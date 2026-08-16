@@ -5,7 +5,13 @@
     - **Model Adaptivity**: User can select effort level, or let it automatically use the best model based on task complexity
     - **Prompting for Information**: If not enough information is provided in the task brief, the AI should prompt the user for more information as it needs it (similar to how Claude Code pops up multi-choice prompts mid-run)
     - **Human Summaries**: AI should give brief summaries of completed tasks for human review, as well as any action items the human may need to perform (if any)
-    
+    - Ask the AI what it thinks a particular task is telling it to do (with a lightweight model), so the user can clarify any bad assumptions BEFORE execution
+        - should this just be part of the AGENT_CONTEXT brief's generation process?
+    - The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with
+        - but it should always tell the user what it added (and maybe the task is indicated with a 'review' tag or something)
+    - Autocomplete for the task input - pull from tags and previous inputs to determine most relevant suggestion
+    - make sure what's put in the human task list is succinct, clear and easily readable - make sure the AI side is verbose enough for the AI, but still in human-readable terms
+
 
 **UI/UX Features (Future Roadmap)**
     - **Organization Redesign**: Better task/subtask draggability/regrouping

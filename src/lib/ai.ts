@@ -145,7 +145,7 @@ Respond strictly with valid JSON matching this schema:
       "brief": "**Goal:** Goal description\\n\\n**Seams:** Affected code files\\n\\n**Connected MCPs:** Tool list",
       "built": "",
       "validation": "",
-      "followUps": "Next steps"
+      "humanReview": "Next steps & verification checklist"
     }
   ]
 }`;
@@ -192,7 +192,8 @@ Respond strictly with valid JSON matching this schema:
                  `**Connected MCPs:** ${mcpNames.join(', ') || 'VS Code Editor MCP'}`,
           built: '',
           validation: '',
-          followUps: 'Verify selection highlighting and auto-save triggers.'
+          humanReview: 'Verify selection highlighting and auto-save triggers in active VS Code tabs.',
+          followUps: 'Verify selection highlighting and auto-save triggers in active VS Code tabs.'
         }
       ]
     };
@@ -235,7 +236,8 @@ Respond strictly with valid JSON matching this schema:
                  `**Connected MCPs:** ${mcpNames.join(', ') || 'Bluebeam MCP'}`,
           built: '',
           validation: '',
-          followUps: 'Test against 300 DPI scanned raster blueprints.'
+          humanReview: 'Test against 300 DPI scanned raster blueprints and verify OCR bounding boxes.',
+          followUps: 'Test against 300 DPI scanned raster blueprints and verify OCR bounding boxes.'
         },
         {
           title: 'Export Layered Diff PDF for Revision Compare',
@@ -245,7 +247,8 @@ Respond strictly with valid JSON matching this schema:
                  `**Out of Scope:** Automatic AI redrawing of changed polyline geometry.`,
           built: '',
           validation: '',
-          followUps: 'Verify in Adobe Acrobat and Bluebeam Revu layer panel.'
+          humanReview: 'Verify in Adobe Acrobat and Bluebeam Revu layer panel for correct OCG grouping.',
+          followUps: 'Verify in Adobe Acrobat and Bluebeam Revu layer panel for correct OCG grouping.'
         }
       ]
     };
@@ -279,7 +282,8 @@ Respond strictly with valid JSON matching this schema:
                `**Connected MCP Tools:** ${mcpNames.join(', ') || 'Local Workspace'}`,
         built: '',
         validation: '',
-        followUps: 'Check performance impact and memory footprint.'
+        humanReview: 'Inspect performance impact, verify memory footprint, and confirm UI responsiveness.',
+        followUps: 'Inspect performance impact, verify memory footprint, and confirm UI responsiveness.'
       }
     ]
   };
@@ -444,14 +448,19 @@ export async function executeTaskWithAi(
     ? `${brief.validation}\n\nAutomated execution suite verified 100% pass rate. 0 regressions.`
     : `Verified via automated step runner. Unit checks passed clean.`;
 
+  const reviewContent = brief?.humanReview || brief?.followUps
+    ? `${brief.humanReview || brief.followUps}\n\n**AI Follow-up (${buildDate}):**\n- [ ] Review implementation log in the Built section.\n- [ ] Confirm automated validation pass rate.\n- [ ] Perform browser verification on updated components.`
+    : `**AI Follow-up (${buildDate}):**\n- [ ] Review implementation log in the Built section.\n- [ ] Confirm automated validation pass rate.\n- [ ] Perform browser verification on updated components.`;
+
   const updatedBrief: AgentContextItem = {
     itemNumber: task.id,
     title: task.title,
     status: 'done',
+    humanReview: reviewContent,
+    followUps: reviewContent,
     brief: brief?.brief || `Task #${task.id} brief details.`,
     built: builtContent,
-    validation: validationContent,
-    followUps: brief?.followUps || 'None pending.'
+    validation: validationContent
   };
 
   const updatedTask: TaskItem = {

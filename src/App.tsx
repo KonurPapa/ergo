@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { type ProjectData, type TaskItem, type AgentContextItem, type MCPServer, type AIProviderConfig, type AIProviderId, type AICredentialsMap, type ProviderCredentials } from './types';
+import { type ProjectData, type TaskItem, type AgentContextItem, type MCPServer, type AIProviderConfig, type UserApiKey } from './types';
 import { INITIAL_PROJECTS, createNewProjectData, INITIAL_MCP_SERVERS } from './lib/demoData';
-import { parseTodoMarkdown, serializeTodoMarkdown, parseAgentContextMarkdown, serializeAgentContextMarkdown } from './lib/parser';
+import { parseTodoMarkdown, serializeTodoMarkdown, parseAgentContextMarkdown, serializeAgentContextMarkdown, syncBriefsWithTasks } from './lib/parser';
 import { SUPPORTED_AI_PROVIDERS } from './lib/aiProviders';
 import { Navbar } from './components/Navbar';
 import { TaskPane } from './components/TaskPane';
@@ -53,28 +53,59 @@ export function App() {
   // MCP & AI Settings State
   const [mcpServers, setMcpServers] = useState<MCPServer[]>(INITIAL_MCP_SERVERS);
 
-  const [credentialsMap, setCredentialsMap] = useState<AICredentialsMap>(() => {
-    const saved = localStorage.getItem('ergo_ai_credentials');
+  // User API Keys State
+  const [userApiKeys, setUserApiKeys] = useState<UserApiKey[]>(() => {
+    const saved = localStorage.getItem('ergo_user_api_keys');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
       } catch (e) {}
     }
-    return {
-      openai: {},
-      anthropic: {},
-      gemini: {},
-      ollama: { baseUrl: 'http://localhost:11434', model: 'llama3.2' },
-      mock: { model: 'ergo-native-v1', isConnected: true }
-    };
+    // Migration check: check for legacy credentialsMap
+    const legacyCreds = localStorage.getItem('ergo_ai_credentials');
+    if (legacyCreds) {
+      try {
+        const parsedMap = JSON.parse(legacyCreds);
+        const migrated: UserApiKey[] = [];
+        Object.keys(parsedMap).forEach((pid) => {
+          if (pid !== 'mock' && parsedMap[pid]?.apiKey) {
+            const meta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === pid);
+            migrated.push({
+              id: `key_${pid}_${Date.now()}`,
+              name: `${meta?.shortName || pid} Key`,
+              provider: pid as any,
+              apiKey: parsedMap[pid].apiKey,
+              baseUrl: parsedMap[pid].baseUrl,
+              model: parsedMap[pid].model || meta?.defaultModel,
+              isConnected: true
+            });
+          }
+        });
+        if (migrated.length > 0) return migrated;
+      } catch (e) {}
+    }
+    return [];
   });
 
+  const [activeKeyId, setActiveKeyId] = useState<string | null>(() => {
+    const saved = localStorage.getItem('ergo_active_key_id');
+    return saved || (userApiKeys[0]?.id ?? null);
+  });
+
+  const [editingKey, setEditingKey] = useState<UserApiKey | null>(null);
+
+  // Active AI Provider Config
   const [aiConfig, setAiConfig] = useState<AIProviderConfig>(() => {
-    const saved = localStorage.getItem('ergo_active_ai_config');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {}
+    const activeKey = userApiKeys.find((k) => k.id === activeKeyId) || userApiKeys[0];
+    if (activeKey) {
+      return {
+        provider: activeKey.provider,
+        model: activeKey.model || 'gpt-4o',
+        apiKey: activeKey.apiKey,
+        baseUrl: activeKey.baseUrl,
+        isConnected: true
+      };
     }
     return {
       provider: 'mock',
@@ -83,16 +114,96 @@ export function App() {
     };
   });
 
+  // Sync activeKeyId & userApiKeys to aiConfig
+  useEffect(() => {
+    const activeKey = userApiKeys.find((k) => k.id === activeKeyId);
+    if (activeKey) {
+      const pMeta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === activeKey.provider);
+      setAiConfig({
+        provider: activeKey.provider,
+        model: activeKey.model || pMeta?.defaultModel || 'gpt-4o',
+        apiKey: activeKey.apiKey,
+        baseUrl: activeKey.baseUrl,
+        isConnected: true
+      });
+    } else {
+      setAiConfig({
+        provider: 'mock',
+        model: 'ergo-native-v1',
+        isConnected: true
+      });
+    }
+  }, [activeKeyId, userApiKeys]);
+
+  // Persist keys to localStorage
+  useEffect(() => {
+    localStorage.setItem('ergo_user_api_keys', JSON.stringify(userApiKeys));
+  }, [userApiKeys]);
+
+  useEffect(() => {
+    if (activeKeyId) {
+      localStorage.setItem('ergo_active_key_id', activeKeyId);
+    } else {
+      localStorage.removeItem('ergo_active_key_id');
+    }
+  }, [activeKeyId]);
+
   // Modal Open States
   const [isDraftModalOpen, setIsDraftModalOpen] = useState(false);
   const [isExecutionModalOpen, setIsExecutionModalOpen] = useState(false);
   const [isMcpHubOpen, setIsMcpHubOpen] = useState(false);
   const [isRawMarkdownOpen, setIsRawMarkdownOpen] = useState(false);
   const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
-  const [isCredentialsModalOpen, setIsCredentialsModalOpen] = useState(false);
-  const [credentialsModalProviderId, setCredentialsModalProviderId] = useState<AIProviderId | null>(null);
+  const [isAiScreenOpen, setIsAiScreenOpen] = useState(false);
   const [executingTask, setExecutingTask] = useState<TaskItem | null>(null);
 
+  // Handlers for API Keys
+  const handleSaveUserKey = (keyData: Omit<UserApiKey, 'id'> & { id?: string }) => {
+    let savedId = keyData.id;
+    if (savedId) {
+      // Edit existing key
+      setUserApiKeys((prev) =>
+        prev.map((k) => (k.id === savedId ? { ...k, ...keyData, id: savedId! } : k))
+      );
+    } else {
+      // Add new key
+      savedId = `key_${Date.now()}`;
+      const newKey: UserApiKey = {
+        ...keyData,
+        id: savedId,
+        createdAt: new Date().toISOString()
+      };
+      setUserApiKeys((prev) => [...prev, newKey]);
+    }
+    setActiveKeyId(savedId);
+    setEditingKey(null);
+  };
+
+  const handleDeleteUserKey = (id: string) => {
+    setUserApiKeys((prev) => prev.filter((k) => k.id !== id));
+    if (activeKeyId === id) {
+      const remaining = userApiKeys.filter((k) => k.id !== id);
+      setActiveKeyId(remaining[0]?.id || null);
+    }
+  };
+
+  const handleSelectUserKey = (keyId: string) => {
+    setActiveKeyId(keyId);
+  };
+
+  const handleSelectNativeEngine = () => {
+    setActiveKeyId(null);
+    setAiConfig({
+      provider: 'mock',
+      model: 'ergo-native-v1',
+      isConnected: true
+    });
+  };
+
+  const handleOpenAiScreen = () => {
+    setEditingKey(null);
+    setIsAiScreenOpen(true);
+  };
 
   // Resizable Split Pane State
   const [splitWidth, setSplitWidth] = useState<number>(50); // percentage
@@ -171,7 +282,6 @@ export function App() {
     );
   };
 
-
   // Commit Drafted Tasks from AI (Skill: new-todo)
   const handleCommitDraftedTasks = (newTasks: Partial<TaskItem>[], newBriefs: Partial<AgentContextItem>[]) => {
     let currentId = tasks.length > 0 ? Math.max(...tasks.map((t) => t.id)) : 0;
@@ -193,6 +303,7 @@ export function App() {
       createdTasks.push(fullTask);
 
       const nb = newBriefs[idx];
+      const reviewText = nb?.humanReview || nb?.followUps || '';
       createdBriefs.push({
         itemNumber: currentId,
         title: fullTask.title,
@@ -200,7 +311,8 @@ export function App() {
         brief: nb?.brief || `Brief for ${fullTask.title}`,
         built: nb?.built || '',
         validation: nb?.validation || '',
-        followUps: nb?.followUps || ''
+        humanReview: reviewText,
+        followUps: reviewText
       });
     });
 
@@ -228,13 +340,20 @@ export function App() {
 
   // Save Brief Edits
   const handleSaveBrief = (updatedBrief: AgentContextItem) => {
-    const nextBriefs = briefs.map((b) => (b.itemNumber === updatedBrief.itemNumber ? updatedBrief : b));
+    const existingIdx = briefs.findIndex((b) => b.itemNumber === updatedBrief.itemNumber);
+    let nextBriefs: AgentContextItem[];
+    if (existingIdx !== -1) {
+      nextBriefs = briefs.map((b) => (b.itemNumber === updatedBrief.itemNumber ? updatedBrief : b));
+    } else {
+      nextBriefs = [...briefs, updatedBrief];
+    }
     syncAndSaveProject(tasks, nextBriefs);
   };
 
   // Refine Brief with AI
   const handleUpdateBriefWithAi = (task: TaskItem) => {
     const existingBrief = briefs.find((b) => b.itemNumber === task.id);
+    const existingReview = existingBrief?.humanReview || existingBrief?.followUps || '';
     const updatedBrief: AgentContextItem = {
       itemNumber: task.id,
       title: task.title,
@@ -242,7 +361,8 @@ export function App() {
       brief: `${existingBrief?.brief || ''}\n\n**AI Refinement (${new Date().toLocaleDateString()}):**\nTarget Folder: \`${activeProject.folderPath}\`.\nData Model: Additive property flags. Constraints: Must pass automated verification without cross-project leakage.`,
       built: existingBrief?.built || '',
       validation: existingBrief?.validation || '',
-      followUps: existingBrief?.followUps || ''
+      humanReview: existingReview,
+      followUps: existingReview
     };
     handleSaveBrief(updatedBrief);
   };
@@ -252,10 +372,18 @@ export function App() {
     const parsedTodo = parseTodoMarkdown(newTodoMd);
     setTasks(parsedTodo.items);
     setHeaderComments(parsedTodo.headerComments);
-    // Sync the raw markdown into the project record
+
+    // Sync and renumber briefs matching the updated tasks
+    const updatedBriefs = syncBriefsWithTasks(briefs, parsedTodo.items);
+    setBriefs(updatedBriefs);
+    const updatedBriefsMd = serializeAgentContextMarkdown(updatedBriefs);
+
+    // Sync the raw markdown and updated briefs into the project record
     setProjects((prev) =>
       prev.map((p) =>
-        p.id === activeProjectId ? { ...p, todoMarkdown: newTodoMd } : p
+        p.id === activeProjectId
+          ? { ...p, todoMarkdown: newTodoMd, agentContextMarkdown: updatedBriefsMd }
+          : p
       )
     );
   };
@@ -305,73 +433,6 @@ export function App() {
     setActiveProjectId(newProj.id);
   };
 
-  // Persist Credentials & Active Config to localStorage
-  useEffect(() => {
-    localStorage.setItem('ergo_ai_credentials', JSON.stringify(credentialsMap));
-  }, [credentialsMap]);
-
-  useEffect(() => {
-    localStorage.setItem('ergo_active_ai_config', JSON.stringify(aiConfig));
-  }, [aiConfig]);
-
-  const handleOpenCredentialsModal = (providerId: AIProviderId) => {
-    setCredentialsModalProviderId(providerId);
-    setIsCredentialsModalOpen(true);
-  };
-
-  const handleSaveCredentials = (providerId: AIProviderId, creds: ProviderCredentials) => {
-    const updatedMap = {
-      ...credentialsMap,
-      [providerId]: creds
-    };
-    setCredentialsMap(updatedMap);
-
-    // Automatically set saved provider as active AI
-    const providerMeta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === providerId);
-    const newConfig: AIProviderConfig = {
-      provider: providerId,
-      model: creds.model || providerMeta?.defaultModel || 'gpt-4o',
-      apiKey: creds.apiKey,
-      baseUrl: creds.baseUrl,
-      isConnected: true
-    };
-    setAiConfig(newConfig);
-  };
-
-  const handleClearCredentials = (providerId: AIProviderId) => {
-    const updatedMap = {
-      ...credentialsMap,
-      [providerId]: { isConnected: false }
-    };
-    setCredentialsMap(updatedMap);
-
-    if (aiConfig.provider === providerId) {
-      setAiConfig({
-        provider: 'mock',
-        model: 'ergo-native-v1',
-        isConnected: true
-      });
-    }
-  };
-
-  const handleSelectAiProvider = (providerId: AIProviderId) => {
-    const creds = credentialsMap[providerId];
-    const isConnected = (providerId as string) === 'mock' || !!creds?.isConnected;
-
-    if (!isConnected && (providerId as string) !== 'mock') {
-      handleOpenCredentialsModal(providerId);
-    } else {
-      const providerMeta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === providerId);
-      setAiConfig({
-        provider: providerId,
-        model: creds?.model || providerMeta?.defaultModel || 'gpt-4o',
-        apiKey: creds?.apiKey,
-        baseUrl: creds?.baseUrl,
-        isConnected: true
-      });
-    }
-  };
-
   const activeTask = tasks.find((t) => t.id === selectedTaskId) || tasks[0] || null;
   const activeBrief = briefs.find((b) => b.itemNumber === activeTask?.id);
 
@@ -385,10 +446,12 @@ export function App() {
         onNewProject={() => setIsCreateProjectModalOpen(true)}
         mcpServers={mcpServers}
         onOpenMcpHub={() => setIsMcpHubOpen(true)}
+        userApiKeys={userApiKeys}
+        activeKeyId={activeKeyId}
         aiConfig={aiConfig}
-        credentialsMap={credentialsMap}
-        onSelectAiProvider={handleSelectAiProvider}
-        onOpenCredentialsModal={handleOpenCredentialsModal}
+        onSelectUserKey={handleSelectUserKey}
+        onSelectNativeEngine={handleSelectNativeEngine}
+        onOpenAiScreen={handleOpenAiScreen}
         onOpenRawMarkdownModal={() => setIsRawMarkdownOpen(true)}
       />
 
@@ -402,6 +465,8 @@ export function App() {
           <TaskPane
             rawMarkdown={activeProject?.todoMarkdown || ''}
             tasks={tasks}
+            selectedTaskId={selectedTaskId}
+            onSelectTask={(id) => setSelectedTaskId(id)}
             onOpenDraftModal={() => setIsDraftModalOpen(true)}
             onMarkdownChange={handleRawTodoEdit}
           />
@@ -495,14 +560,16 @@ export function App() {
         onExportProject={handleExportProject}
       />
 
-      {/* Modal 6: AI Engine Sign In & Credentials Manager */}
+      {/* Modal 6: AI Engine Screen & Key Setup Manager */}
       <AiCredentialsModal
-        isOpen={isCredentialsModalOpen}
-        onClose={() => setIsCredentialsModalOpen(false)}
-        providerId={credentialsModalProviderId}
-        currentCredentials={credentialsModalProviderId ? credentialsMap[credentialsModalProviderId] : undefined}
-        onSaveCredentials={handleSaveCredentials}
-        onClearCredentials={handleClearCredentials}
+        isOpen={isAiScreenOpen}
+        onClose={() => setIsAiScreenOpen(false)}
+        userApiKeys={userApiKeys}
+        activeKeyId={activeKeyId}
+        onSaveUserKey={handleSaveUserKey}
+        onDeleteUserKey={handleDeleteUserKey}
+        onSelectActiveKey={handleSelectUserKey}
+        editingKey={editingKey}
       />
     </div>
   );

@@ -8,7 +8,6 @@ import {
   Heading3,
   List,
   ListOrdered,
-  CheckSquare,
   Code,
   FileCode,
   Quote,
@@ -74,7 +73,6 @@ export const RichTextToolbar: React.FC<RichTextToolbarProps> = ({
     { divider: true },
     { label: 'Bullet List', icon: List, prefix: '- ', suffix: '', placeholder: 'List item', tooltip: 'Bullet List (- item)' },
     { label: 'Numbered List', icon: ListOrdered, prefix: '1. ', suffix: '', placeholder: 'Numbered item', tooltip: 'Numbered List (1. item)' },
-    { label: 'Checklist Item', icon: CheckSquare, prefix: '- [ ] ', suffix: '', placeholder: 'Task item', tooltip: 'Task Checkbox (- [ ] task)' },
     { divider: true },
     { label: 'Inline Code', icon: Code, prefix: '`', suffix: '`', placeholder: 'code', tooltip: 'Inline Code (`code`)' },
     { label: 'Code Block', icon: FileCode, prefix: '```\n', suffix: '\n```', placeholder: 'code block content', tooltip: 'Code Block (```)' },
@@ -92,19 +90,13 @@ export const RichTextToolbar: React.FC<RichTextToolbarProps> = ({
         display: 'flex',
         alignItems: 'center',
         gap: compact ? '0.2rem' : '0.35rem',
-        padding: compact ? '0.25rem 0.4rem' : '0.4rem 0.6rem',
         background: 'rgba(13, 18, 31, 0.95)',
-        border: '1px solid var(--border-subtle)',
-        borderRadius: 'var(--radius-md)',
         overflowX: 'auto',
         maxWidth: '100%',
         boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
         ...style
       }}
     >
-      <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.05em', marginRight: '0.2rem', whiteSpace: 'nowrap' }}>
-        Markdown:
-      </span>
       {toolbarButtons.map((btn, idx) => {
         if ('divider' in btn) {
           return (

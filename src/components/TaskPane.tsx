@@ -3,16 +3,63 @@ import { type TaskItem as TaskItemType } from '../types';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
-import TiptapTaskList from '@tiptap/extension-task-list';
-import TiptapTaskItem from '@tiptap/extension-task-item';
 import Link from '@tiptap/extension-link';
 import Typography from '@tiptap/extension-typography';
 import { Markdown } from 'tiptap-markdown';
 
 import { Extension } from '@tiptap/core';
-import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Plugin, PluginKey, Selection } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
-import { Plus } from 'lucide-react';
+import { canJoin } from '@tiptap/pm/transform';
+import {
+  Plus,
+  FileText,
+  Sparkles,
+  Bold,
+  Italic,
+  Strikethrough,
+  Heading1,
+  Heading2,
+  Heading3,
+  List,
+  ListOrdered,
+  Code,
+  FileCode,
+  Quote,
+  Minus,
+  Link as LinkIcon,
+  Undo2,
+  Redo2,
+} from 'lucide-react';
+
+interface WithMarkdownStorage {
+  storage: {
+    markdown: {
+      getMarkdown: () => string;
+    };
+  };
+}
+
+// Helper: check if a node (paragraph) is marked as done via strikethrough
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function isNodeChecked(node: any): boolean {
+  if (!node) return false;
+  let hasText = false;
+  let allTextStruck = true;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  node.descendants((child: any) => {
+    if (child.isText) {
+      hasText = true;
+      const isStruck = child.marks.some((m: any) => m.type.name === 'strike');
+      if (!isStruck) {
+        allTextStruck = false;
+      }
+    }
+  });
+
+  return hasText && allTextStruck;
+}
 
 // Helper: insert a bullet subtask inside the listItem card at the given position
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -32,6 +79,7 @@ function insertSubtaskAtCardPos(editorInstance: any, listItemPos: number) {
   let insertAfterParagraph = listItemPos + 1;
   let existingBulletEnd: number | null = null;
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   liveNode.forEach((child: any, offset: number) => {
     if (child.type.name === 'paragraph') {
       insertAfterParagraph = listItemPos + 1 + offset + child.nodeSize;
@@ -58,12 +106,161 @@ function insertSubtaskAtCardPos(editorInstance: any, listItemPos: number) {
   }
 
   const clampedPos = Math.min(focusPos, tr.doc.content.size - 1);
-  tr.setSelection(editorInstance.state.selection.constructor.near(tr.doc.resolve(clampedPos)));
+  tr.setSelection(Selection.near(tr.doc.resolve(clampedPos)));
   editorInstance.view.dispatch(tr);
   editorInstance.view.focus();
 }
 
-// Extension: H1 → ordered list on Enter; Shift+Enter inside card → add subtask
+// Helper: robustly append a new task card to the existing ordered list
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function handleAddNewCard(editorInstance: any) {
+  if (!editorInstance) return;
+  const { state, view } = editorInstance;
+  const { doc, schema } = state;
+  const listItem = schema.nodes.listItem;
+  const paragraph = schema.nodes.paragraph;
+  const orderedList = schema.nodes.orderedList;
+  if (!listItem || !paragraph || !orderedList) return;
+
+  let lastOrderedListPos: number | null = null;
+  let lastOrderedListNode: any = null;
+
+  doc.descendants((node: any, pos: number) => {
+    if (node.type === orderedList) {
+      const resolved = doc.resolve(pos);
+      if (resolved.depth === 0 || (resolved.depth === 1 && resolved.parent.type.name === 'doc')) {
+        lastOrderedListPos = pos;
+        lastOrderedListNode = node;
+      }
+    }
+  });
+
+  const tr = state.tr;
+  let focusPos: number;
+
+  if (lastOrderedListPos !== null && lastOrderedListNode !== null) {
+    const insertPos = Number(lastOrderedListPos) + lastOrderedListNode.nodeSize - 1;
+    const newItem = listItem.create(null, paragraph.create(null));
+    tr.insert(insertPos, newItem);
+    focusPos = insertPos + 2;
+  } else {
+    const newList = orderedList.create(null, listItem.create(null, paragraph.create(null)));
+    const endPos = doc.content.size;
+    tr.insert(endPos, newList);
+    focusPos = endPos + 3;
+  }
+
+  const clampedPos = Math.min(focusPos, tr.doc.content.size - 1);
+  tr.setSelection(Selection.near(tr.doc.resolve(clampedPos)));
+  tr.scrollIntoView();
+  view.dispatch(tr);
+  view.focus();
+}
+
+// Helper: compute 1-based top-level card index from document position
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getTaskIndexAtPos(doc: any, pos: number): number | null {
+  const resolved = doc.resolve(pos);
+  for (let d = resolved.depth; d > 0; d--) {
+    const node = resolved.node(d);
+    if (node.type.name === 'listItem') {
+      const parent = resolved.node(d - 1);
+      if (parent.type.name === 'orderedList') {
+        const itemPos = resolved.before(d);
+        let count = 0;
+        let found = 0;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        doc.descendants((n: any, p: number) => {
+          if (n.type.name === 'listItem') {
+            const r = doc.resolve(p);
+            if (r.parent.type.name === 'orderedList' && (r.depth < 2 || r.node(r.depth - 2)?.type.name !== 'listItem')) {
+              count++;
+              if (p === itemPos) {
+                found = count;
+              }
+            }
+          }
+        });
+        return found || 1;
+      }
+    }
+  }
+  return null;
+}
+
+// Extension: Auto-join adjacent ordered lists and remove empty paragraphs between them
+const AutoJoinListsExtension = Extension.create({
+  name: 'autoJoinLists',
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: new PluginKey('autoJoinOrderedListsPlugin'),
+        appendTransaction(transactions, _oldState, newState) {
+          if (!transactions.some((t) => t.docChanged)) return null;
+
+          const { schema } = newState;
+          const orderedListType = schema.nodes.orderedList;
+          const paragraphType = schema.nodes.paragraph;
+          if (!orderedListType) return null;
+
+          const tr = newState.tr;
+          let changed = false;
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const isParagraphEmpty = (node: any) => {
+            if (!node || node.type !== paragraphType) return false;
+            return node.textContent.trim() === '';
+          };
+
+          let iterations = 0;
+          while (iterations < 10) {
+            iterations++;
+            let localChanged = false;
+            const currentDoc = tr.doc;
+
+            let pos = 0;
+            for (let i = 0; i < currentDoc.childCount; i++) {
+              const child = currentDoc.child(i);
+              const childSize = child.nodeSize;
+
+              if (child.type === orderedListType) {
+                let nextIdx = i + 1;
+                let emptyRangeEnd = pos + childSize;
+                let hasEmptyParagraphs = false;
+
+                while (nextIdx < currentDoc.childCount && isParagraphEmpty(currentDoc.child(nextIdx))) {
+                  hasEmptyParagraphs = true;
+                  emptyRangeEnd += currentDoc.child(nextIdx).nodeSize;
+                  nextIdx++;
+                }
+
+                if (nextIdx < currentDoc.childCount && currentDoc.child(nextIdx).type === orderedListType) {
+                  const joinAt = pos + childSize;
+                  if (hasEmptyParagraphs) {
+                    tr.delete(joinAt, emptyRangeEnd);
+                  }
+                  if (canJoin(tr.doc, joinAt)) {
+                    tr.join(joinAt);
+                    localChanged = true;
+                    changed = true;
+                    break;
+                  }
+                }
+              }
+              pos += childSize;
+            }
+
+            if (!localChanged) break;
+          }
+
+          return changed ? tr : null;
+        },
+      }),
+    ];
+  },
+});
+
+// Extension: H1 → ordered list on Enter; Shift+Enter inside card → add subtask; Backspace on empty card → clean delete
 const AutoCardListExtension = Extension.create({
   name: 'autoCardList',
   addKeyboardShortcuts() {
@@ -94,96 +291,70 @@ const AutoCardListExtension = Extension.create({
         }
         return false;
       },
+      Backspace: ({ editor }) => {
+        const { state, view } = editor;
+        const { selection } = state;
+        const { $from, empty } = selection;
+
+        if (!empty) return false;
+
+        for (let depth = $from.depth; depth > 0; depth--) {
+          const node = $from.node(depth);
+          if (node.type.name === 'listItem') {
+            const parent = $from.node(depth - 1);
+            const isTopLevelCard =
+              parent.type.name === 'orderedList' &&
+              (depth < 2 || $from.node(depth - 2)?.type.name !== 'listItem');
+
+            if (isTopLevelCard) {
+              const cardStartPos = $from.start(depth);
+              const cardBeforePos = $from.before(depth);
+              const cardAfterPos = $from.after(depth);
+
+              // Check if card is empty
+              let isCardEmpty = true;
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              node.forEach((child: any) => {
+                if (child.type.name === 'paragraph' && child.textContent.trim() !== '') {
+                  isCardEmpty = false;
+                }
+                if (child.type.name === 'bulletList' || child.type.name === 'orderedList') {
+                  isCardEmpty = false;
+                }
+              });
+
+              if (isCardEmpty) {
+                // Directly delete the listItem to prevent liftListItem splitting the list into orphans
+                const tr = state.tr;
+                tr.delete(cardBeforePos, cardAfterPos);
+                const targetPos = Math.max(1, Math.min(cardBeforePos, tr.doc.content.size - 1));
+                tr.setSelection(Selection.near(tr.doc.resolve(targetPos)));
+                view.dispatch(tr);
+                return true;
+              }
+
+              // At start of non-empty card: avoid liftListItem splitting list
+              if ($from.pos === cardStartPos) {
+                const indexInParent = $from.index(depth - 1);
+                if (indexInParent > 0) {
+                  return true;
+                }
+              }
+            }
+            break;
+          }
+        }
+        return false;
+      },
     };
   },
 });
 
-// Decoration plugin: renders an "Add Subtask" button on every top-level ordered-list card
-const CardSubtaskDecorationExtension = Extension.create({
-  name: 'cardSubtaskDecoration',
-  addProseMirrorPlugins() {
-    const editor = this.editor;
-    return [
-      new Plugin({
-        key: new PluginKey('cardSubtaskDecorationPlugin'),
-        props: {
-          decorations(state) {
-            const decorations: Decoration[] = [];
-            const { doc } = state;
-
-            doc.descendants((node, pos) => {
-              if (node.type.name !== 'listItem') return;
-              const resolved = doc.resolve(pos);
-              const parent = resolved.parent;
-              if (parent.type.name !== 'orderedList') return;
-              // Skip nested listItems (subtask bullets already inside a card)
-              if (resolved.depth >= 2) {
-                const grandParent = resolved.node(resolved.depth - 2);
-                if (grandParent && grandParent.type.name === 'listItem') return;
-              }
-
-              // Place widget at pos+1 (inside the listItem). Remember that
-              // getPos() will return this pos+1 value, so the click handler
-              // must subtract 1 to get the actual listItem position.
-              const widget = Decoration.widget(
-                pos + 1,
-                (_view, getPos) => {
-                  const btn = document.createElement('button');
-                  btn.className = 'card-add-subtask-btn';
-                  btn.setAttribute('contenteditable', 'false');
-                  btn.type = 'button';
-                  btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg><span>Add Subtask</span>`;
-
-                  btn.addEventListener('mousedown', (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const widgetPos = typeof getPos === 'function' ? getPos() : pos + 1;
-                    if (widgetPos == null) return;
-                    // Widget is at pos+1 (inside listItem), so subtract 1
-                    // to get the actual listItem node position
-                    const listItemPos = widgetPos - 1;
-                    insertSubtaskAtCardPos(editor, listItemPos);
-                  });
-
-                  return btn;
-                },
-                { side: -1 }
-              );
-              decorations.push(widget);
-            });
-
-            return DecorationSet.create(doc, decorations);
-          },
-        },
-      }),
-    ];
-  },
-});
-
-import {
-  FileText,
-  Sparkles,
-  Bold,
-  Italic,
-  Strikethrough,
-  Heading1,
-  Heading2,
-  Heading3,
-  List,
-  ListOrdered,
-  CheckSquare,
-  Code,
-  FileCode,
-  Quote,
-  Minus,
-  Link as LinkIcon,
-  Undo2,
-  Redo2,
-} from 'lucide-react';
-
 interface TaskPaneProps {
   rawMarkdown: string;
   tasks: TaskItemType[];
+  selectedTaskId?: number | null;
+  onSelectTask?: (taskId: number) => void;
   onOpenDraftModal: () => void;
   onMarkdownChange: (newMarkdown: string) => void;
 }
@@ -216,9 +387,339 @@ const Sep = () => <div className="tiptap-toolbar-sep" />;
 export const TaskPane: React.FC<TaskPaneProps> = ({
   rawMarkdown,
   tasks,
+  selectedTaskId,
+  onSelectTask,
   onOpenDraftModal,
   onMarkdownChange,
 }) => {
+  // ProseMirror decoration extension for UI Checkboxes, Add Subtask, and Active Card highlighting
+  const TaskCheckboxDecorationExtension = Extension.create({
+    name: 'taskCheckboxDecoration',
+    addProseMirrorPlugins() {
+      const editor = this.editor;
+      return [
+        new Plugin({
+          key: new PluginKey('taskCheckboxDecorationPlugin'),
+          props: {
+            decorations(state) {
+              const decorations: Decoration[] = [];
+              const { doc, schema } = state;
+              const strikeMarkType = schema.marks.strike;
+              let currentCardIndex = 0;
+
+              doc.descendants((node, pos) => {
+                if (node.type.name !== 'listItem') return;
+                const resolved = doc.resolve(pos);
+                const parent = resolved.parent;
+                const isTopLevelCard =
+                  parent.type.name === 'orderedList' &&
+                  (resolved.depth < 2 || resolved.node(resolved.depth - 2)?.type.name !== 'listItem');
+
+                if (isTopLevelCard) {
+                  currentCardIndex++;
+                  const cardTaskId = tasks[currentCardIndex - 1]?.id || currentCardIndex;
+                  const isSelected = selectedTaskId === cardTaskId;
+
+                  // Find first paragraph in this card (parent task title)
+                  let firstParagraphPos: number | null = null;
+                  let firstParagraphNode: any = null;
+
+                  node.forEach((child: any, offset: number) => {
+                    const childPos = pos + 1 + offset;
+                    if (child.type.name === 'paragraph' && firstParagraphPos === null) {
+                      firstParagraphPos = childPos;
+                      firstParagraphNode = child;
+                    }
+                  });
+
+                  const isParentChecked = firstParagraphNode ? isNodeChecked(firstParagraphNode) : false;
+
+                  // 1. Add active-card and card-done class decoration
+                  const cardClasses = [
+                    isSelected ? 'is-active-card' : '',
+                    isParentChecked ? 'is-card-done' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ');
+
+                  if (cardClasses) {
+                    decorations.push(
+                      Decoration.node(pos, pos + node.nodeSize, {
+                        class: cardClasses,
+                      })
+                    );
+                  }
+
+                  // 2. Add Parent Task Checkbox Widget at pos + 1
+                  const parentCheckboxWidget = Decoration.widget(
+                    pos + 1,
+                    (view, getPos) => {
+                      const container = document.createElement('div');
+                      container.className = `task-card-checkbox-wrapper ${isParentChecked ? 'is-checked' : ''}`;
+                      container.setAttribute('contenteditable', 'false');
+                      container.title = isParentChecked ? 'Mark task as incomplete' : 'Mark task as completed';
+
+                      const checkbox = document.createElement('button');
+                      checkbox.type = 'button';
+                      checkbox.className = `task-ui-checkbox parent-checkbox ${isParentChecked ? 'checked' : ''}`;
+                      checkbox.setAttribute('aria-checked', String(isParentChecked));
+                      checkbox.setAttribute('role', 'checkbox');
+                      checkbox.setAttribute('aria-label', isParentChecked ? 'Completed task' : 'Incomplete task');
+
+                      if (isParentChecked) {
+                        checkbox.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+                      }
+
+                      const toggleParentTask = (e: MouseEvent) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+
+                        const rawPos = typeof getPos === 'function' ? getPos() : pos + 1;
+                        if (rawPos == null) return;
+                        const widgetPos = Number(rawPos);
+                        if (isNaN(widgetPos)) return;
+                        const listItemPos: number = widgetPos - 1;
+
+                        const liveDoc = view.state.doc;
+                        const liveNode = liveDoc.nodeAt(listItemPos);
+                        if (!liveNode || liveNode.type.name !== 'listItem') return;
+
+                        let liveFirstPPos: number | null = null;
+                        let liveFirstPNode: any = null;
+                        const liveSubtaskPs: { pos: number; node: any }[] = [];
+
+                        liveNode.forEach((child: any, offset: number) => {
+                          const childPos: number = listItemPos + 1 + offset;
+                          if (child.type.name === 'paragraph' && liveFirstPPos === null) {
+                            liveFirstPPos = childPos;
+                            liveFirstPNode = child;
+                          } else if (child.type.name === 'bulletList' || child.type.name === 'orderedList') {
+                            child.forEach((nestedItem: any, nestedOffset: number) => {
+                              const nestedItemPos: number = childPos + 1 + nestedOffset;
+                              if (nestedItem.type.name === 'listItem') {
+                                nestedItem.forEach((nestedChild: any, nOffset: number) => {
+                                  if (nestedChild.type.name === 'paragraph') {
+                                    liveSubtaskPs.push({
+                                      pos: nestedItemPos + 1 + nOffset,
+                                      node: nestedChild,
+                                    });
+                                  }
+                                });
+                              }
+                            });
+                          }
+                        });
+
+                        if (!liveFirstPNode || liveFirstPPos === null) return;
+
+                        const shouldCheck = !isNodeChecked(liveFirstPNode);
+                        const tr = view.state.tr;
+                        const fromPos: number = Number(liveFirstPPos);
+                        const toPos: number = fromPos + Number(liveFirstPNode.nodeSize);
+
+                        if (shouldCheck) {
+                          // Strikethrough parent task
+                          tr.addMark(fromPos, toPos, strikeMarkType.create());
+                          // Cascade: check and strikethrough all children subtasks
+                          liveSubtaskPs.forEach((sp) => {
+                            const spFrom: number = Number(sp.pos);
+                            const spTo: number = spFrom + Number(sp.node.nodeSize);
+                            tr.addMark(spFrom, spTo, strikeMarkType.create());
+                          });
+                        } else {
+                          // Uncheck parent task
+                          tr.removeMark(fromPos, toPos, strikeMarkType);
+                          // Cascade: uncheck and remove strikethrough from all children subtasks
+                          liveSubtaskPs.forEach((sp) => {
+                            const spFrom: number = Number(sp.pos);
+                            const spTo: number = spFrom + Number(sp.node.nodeSize);
+                            tr.removeMark(spFrom, spTo, strikeMarkType);
+                          });
+                        }
+
+                        view.dispatch(tr);
+                        view.focus();
+                      };
+
+                      checkbox.addEventListener('mousedown', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      });
+                      checkbox.addEventListener('click', toggleParentTask);
+
+                      container.appendChild(checkbox);
+                      return container;
+                    },
+                    { side: -1, stopEvent: () => true }
+                  );
+                  decorations.push(parentCheckboxWidget);
+
+                  // 3. Add Card Action Buttons Widget (Add Subtask + Delete Task) at pos + 1
+                  const cardActionsWidget = Decoration.widget(
+                    pos + 1,
+                    (view, getPos) => {
+                      const container = document.createElement('div');
+                      container.className = 'card-actions-wrapper';
+                      container.setAttribute('contenteditable', 'false');
+
+                      // Add subtask button
+                      const addBtn = document.createElement('button');
+                      addBtn.className = 'card-action-btn card-add-subtask-btn';
+                      addBtn.setAttribute('contenteditable', 'false');
+                      addBtn.type = 'button';
+                      addBtn.title = 'Add subtask';
+                      addBtn.setAttribute('aria-label', 'Add subtask');
+                      addBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`;
+
+                      addBtn.addEventListener('mousedown', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const widgetPos = typeof getPos === 'function' ? getPos() : pos + 1;
+                        if (widgetPos == null) return;
+                        const listItemPos = Number(widgetPos) - 1;
+                        insertSubtaskAtCardPos(editor, listItemPos);
+                        if (onSelectTask) {
+                          onSelectTask(cardTaskId);
+                        }
+                      });
+
+                      // Delete task card button
+                      const deleteBtn = document.createElement('button');
+                      deleteBtn.className = 'card-action-btn card-delete-task-btn';
+                      deleteBtn.setAttribute('contenteditable', 'false');
+                      deleteBtn.type = 'button';
+                      deleteBtn.title = 'Delete task';
+                      deleteBtn.setAttribute('aria-label', 'Delete task');
+                      deleteBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>`;
+
+                      deleteBtn.addEventListener('mousedown', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      });
+
+                      deleteBtn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const widgetPos = typeof getPos === 'function' ? getPos() : pos + 1;
+                        if (widgetPos == null) return;
+                        const listItemPos = Number(widgetPos) - 1;
+
+                        const liveDoc = view.state.doc;
+                        const liveNode = liveDoc.nodeAt(listItemPos);
+                        if (!liveNode || liveNode.type.name !== 'listItem') return;
+
+                        const tr = view.state.tr;
+                        tr.delete(listItemPos, listItemPos + liveNode.nodeSize);
+                        view.dispatch(tr);
+                        view.focus();
+                      });
+
+                      container.appendChild(addBtn);
+                      container.appendChild(deleteBtn);
+                      return container;
+                    },
+                    { side: 1, stopEvent: () => true }
+                  );
+                  decorations.push(cardActionsWidget);
+
+                } else {
+                  // Subtask list item (nested under a card or bullet list item)
+                  let subPPos: number | null = null;
+                  let subPNode: any = null;
+
+                  node.forEach((child: any, offset: number) => {
+                    if (child.type.name === 'paragraph' && subPPos === null) {
+                      subPPos = pos + 1 + offset;
+                      subPNode = child;
+                    }
+                  });
+
+                  if (subPNode && subPPos !== null) {
+                    const isSubChecked = isNodeChecked(subPNode);
+
+                    const subtaskCheckboxWidget = Decoration.widget(
+                      pos + 1,
+                      (view, getPos) => {
+                        const container = document.createElement('div');
+                        container.className = `subtask-checkbox-wrapper ${isSubChecked ? 'is-checked' : ''}`;
+                        container.setAttribute('contenteditable', 'false');
+                        container.title = isSubChecked ? 'Mark subtask as incomplete' : 'Mark subtask as completed';
+
+                        const checkbox = document.createElement('button');
+                        checkbox.type = 'button';
+                        checkbox.className = `task-ui-checkbox subtask-checkbox ${isSubChecked ? 'checked' : ''}`;
+                        checkbox.setAttribute('aria-checked', String(isSubChecked));
+                        checkbox.setAttribute('role', 'checkbox');
+                        checkbox.setAttribute('aria-label', isSubChecked ? 'Completed subtask' : 'Incomplete subtask');
+
+                        if (isSubChecked) {
+                          checkbox.innerHTML = `<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+                        }
+
+                        const toggleSubtask = (e: MouseEvent) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+
+                          const rawPos = typeof getPos === 'function' ? getPos() : pos + 1;
+                          if (rawPos == null) return;
+                          const widgetPos = Number(rawPos);
+                          if (isNaN(widgetPos)) return;
+                          const itemPos: number = widgetPos - 1;
+
+                          const liveDoc = view.state.doc;
+                          const liveNode = liveDoc.nodeAt(itemPos);
+                          if (!liveNode || liveNode.type.name !== 'listItem') return;
+
+                          let livePPos: number | null = null;
+                          let livePNode: any = null;
+                          liveNode.forEach((child: any, offset: number) => {
+                            if (child.type.name === 'paragraph' && livePPos === null) {
+                              livePPos = itemPos + 1 + offset;
+                              livePNode = child;
+                            }
+                          });
+
+                          if (!livePNode || livePPos === null) return;
+
+                          const shouldCheck = !isNodeChecked(livePNode);
+                          const tr = view.state.tr;
+                          const fromPos: number = Number(livePPos);
+                          const toPos: number = fromPos + Number(livePNode.nodeSize);
+
+                          if (shouldCheck) {
+                            tr.addMark(fromPos, toPos, strikeMarkType.create());
+                          } else {
+                            tr.removeMark(fromPos, toPos, strikeMarkType);
+                          }
+
+                          view.dispatch(tr);
+                          view.focus();
+                        };
+
+                        checkbox.addEventListener('mousedown', (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                        });
+                        checkbox.addEventListener('click', toggleSubtask);
+
+                        container.appendChild(checkbox);
+                        return container;
+                      },
+                      { side: -1, stopEvent: () => true }
+                    );
+                    decorations.push(subtaskCheckboxWidget);
+                  }
+                }
+              });
+
+              return DecorationSet.create(doc, decorations);
+            },
+          },
+        }),
+      ];
+    },
+  });
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -232,12 +733,11 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
       Placeholder.configure({
         placeholder: '# My Task List\n\nStart typing in markdown — **bold**, *italic*, `code`, headings, lists…',
       }),
-      TiptapTaskList,
-      TiptapTaskItem.configure({ nested: true }),
       Link.configure({ openOnClick: false }),
       Typography,
       AutoCardListExtension,
-      CardSubtaskDecorationExtension,
+      AutoJoinListsExtension,
+      TaskCheckboxDecorationExtension,
       Markdown.configure({
         html: false,
         transformPastedText: true,
@@ -246,6 +746,16 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
     ],
     content: rawMarkdown,
     autofocus: false,
+    onSelectionUpdate({ editor }) {
+      if (!onSelectTask) return;
+      const pos = editor.state.selection.from;
+      const itemIndex = getTaskIndexAtPos(editor.state.doc, pos);
+      if (itemIndex !== null) {
+        const targetTask = tasks[itemIndex - 1];
+        const targetId = targetTask ? targetTask.id : itemIndex;
+        onSelectTask(targetId);
+      }
+    },
     onUpdate({ editor }) {
       // Serialize back to markdown on every change
       const md = (editor as unknown as WithMarkdownStorage).storage.markdown.getMarkdown();
@@ -261,8 +771,15 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
     if (current.trim() !== rawMarkdown.trim()) {
       editor.commands.setContent(rawMarkdown);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawMarkdown, editor]);
+
+  // Re-dispatch transaction when selectedTaskId changes to update active card decoration
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    const tr = editor.state.tr.setMeta('selectedCardSync', true);
+    editor.view.dispatch(tr);
+  }, [selectedTaskId, editor]);
 
   const setLink = useCallback(() => {
     if (!editor) return;
@@ -284,7 +801,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
       <div className="pane-header obsidian-header">
         <div className="pane-title">
           <FileText size={17} color="var(--accent-cyan)" />
-          <span>TODO.md</span>
+          <span>Human Workspace</span>
           <span className="pane-subtitle">{doneTasks}/{tasks.length} done</span>
         </div>
         <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
@@ -347,9 +864,6 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
         <ToolbarBtn title="Numbered List" active={editor?.isActive('orderedList')} onClick={() => editor?.chain().focus().toggleOrderedList().run()}>
           <ListOrdered size={14} />
         </ToolbarBtn>
-        <ToolbarBtn title="Task / Checklist" active={editor?.isActive('taskList')} onClick={() => editor?.chain().focus().toggleTaskList().run()}>
-          <CheckSquare size={14} />
-        </ToolbarBtn>
 
         <Sep />
 
@@ -371,23 +885,19 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
       {/* ── Editor canvas ── */}
       <div className="obsidian-body tiptap-body" style={{ position: 'relative' }}>
         <EditorContent editor={editor} className="tiptap-editor-root" />
-        <div style={{ padding: '0 2.25rem 1.75rem' }}>
-          <button
-            type="button"
-            className="new-card-btn"
-            onClick={() => {
-              if (!editor) return;
-              if (editor.isActive('orderedList')) {
-                editor.chain().focus().splitListItem('listItem').run();
-              } else {
-                editor.chain().focus().toggleOrderedList().run();
-              }
-            }}
-          >
-            <Plus size={15} />
-            <span>New Card</span>
-          </button>
-        </div>
+      </div>
+
+      {/* ── Fixed Footer at Bottom of Screen ── */}
+      <div className="task-pane-footer">
+        <button
+          type="button"
+          className="new-card-btn"
+          onClick={() => handleAddNewCard(editor)}
+          style={{ width: "50%", margin: "0 auto" }}
+        >
+          <Plus size={20} />
+          <span style={{ fontSize: "1rem", marginLeft: "0.5rem" }}>New Card</span>
+        </button>
       </div>
     </div>
   );

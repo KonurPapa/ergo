@@ -14,19 +14,26 @@ export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; header
     const line = lines[i];
 
     // Capture header comments
-    if (line.trim().startsWith('<!--') || (i < 5 && line.trim().startsWith('#') && !line.match(/^\#\#?\s+\w+/))) {
+    if (line.trim().startsWith('<!--') || (i < 5 && line.trim().startsWith('#') && !line.match(/^##?\s+\w+/))) {
       if (line.trim().startsWith('<!--')) {
         commentLines.push(line);
       }
     }
 
     // Category headers (e.g. # Major TODOs for beta: or ## Missing features todos:)
-    const categoryMatch = line.match(/^(?:#|##)\s+(.+):?$/);
+    const categoryMatch = line.match(/^(?:#{1,6})\s+(.+):?$/);
     if (categoryMatch && !line.trim().startsWith('<!--')) {
       const catText = categoryMatch[1].trim().replace(/:$/, '');
       if (catText.toLowerCase() !== 'todos') {
         currentCategory = catText;
       }
+      currentTask = null;
+      continue;
+    }
+
+    // Horizontal rule separator
+    if (line.trim().match(/^(-{3,}|\*{3,}|_{3,})$/)) {
+      currentTask = null;
       continue;
     }
 
@@ -36,7 +43,6 @@ export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; header
     const bulletMatch = line.match(/^[-*]\s+(?:~~)?(?:\*\*)?(.*?)(?:\*\*)?(?:~~)?\s*$/);
 
     if (numberedMatch) {
-      const id = parseInt(numberedMatch[1], 10);
       let rawTitle = numberedMatch[2].trim();
       const isDone = line.includes('~~');
       const isHumanReview = line.includes('**human review**');
@@ -44,9 +50,10 @@ export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; header
       // Clean title
       rawTitle = rawTitle.replace(/\*\*/g, '').replace(/~~/g, '').replace(/:$/, '').trim();
 
+      const nextId = items.length + 1;
       currentTask = {
-        id,
-        title: rawTitle || `Task ${id}`,
+        id: nextId,
+        title: rawTitle || `Task ${nextId}`,
         category: currentCategory,
         status: isDone ? 'done' : 'not_started',
         isDone,
@@ -65,10 +72,10 @@ export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; header
       const isHumanReview = line.includes('**human review**');
       rawTitle = rawTitle.replace(/\*\*/g, '').replace(/~~/g, '').replace(/:$/, '').trim();
 
-      const nextId = items.length > 0 ? Math.max(...items.map(t => t.id)) + 1 : 1;
+      const nextId = items.length + 1;
       currentTask = {
         id: nextId,
-        title: rawTitle,
+        title: rawTitle || `Task ${nextId}`,
         category: currentCategory,
         status: isDone ? 'done' : 'not_started',
         isDone,
@@ -84,10 +91,10 @@ export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; header
     const subtaskMatch = line.match(/^\s{2,4}[-*]\s+(.*)$/);
     if (subtaskMatch && currentTask) {
       let subtext = subtaskMatch[1].trim();
-      const subDone = subtext.startsWith('~~') && subtext.endsWith('~~');
+      const subDone = subtext.includes('~~');
       const subHuman = subtext.includes('**human review**');
 
-      subtext = subtext.replace(/^~~|~~$/g, '').replace(/\*\*/g, '').trim();
+      subtext = subtext.replace(/~~/g, '').replace(/\*\*human review\*\*\s*-\s*/i, '').replace(/\*\*/g, '').trim();
 
       currentTask.subtasks.push({
         id: `${currentTask.id}-${currentTask.subtasks.length + 1}`,
@@ -127,9 +134,11 @@ export function serializeTodoMarkdown(items: TaskItem[], headerComment?: string)
 
   categoriesMap.forEach((catItems, catName) => {
     md += `# ${catName}:\n\n`;
+    let catIndex = 1;
     for (const item of catItems) {
       const titleFormatted = item.isDone ? `~~**${item.title}:**~~` : `**${item.title}:**`;
-      md += `${item.id}. ${titleFormatted}\n`;
+      md += `${catIndex}. ${titleFormatted}\n`;
+      catIndex++;
 
       for (const sub of item.subtasks) {
         const subFormatted = sub.isDone ? `~~${sub.text}~~` : sub.text;
@@ -140,6 +149,57 @@ export function serializeTodoMarkdown(items: TaskItem[], headerComment?: string)
   });
 
   return md.trim();
+}
+
+/**
+ * Synchronizes AgentContextItem array with updated TaskItem array:
+ * - Renumbers briefs to mirror task item numbers and titles (1, 2, 3...)
+ * - Preserves existing brief, built, validation, humanReview contents for matching tasks
+ * - Removes briefs for deleted tasks
+ * - Creates default briefs for newly added tasks
+ */
+export function syncBriefsWithTasks(
+  prevBriefs: AgentContextItem[],
+  currentTasks: TaskItem[]
+): AgentContextItem[] {
+  const updatedBriefs: AgentContextItem[] = [];
+
+  for (let i = 0; i < currentTasks.length; i++) {
+    const task = currentTasks[i];
+    const newNumber = i + 1;
+
+    // Try finding matching brief by task title (case-insensitive)
+    let match = prevBriefs.find(
+      (b) => b.title.trim().toLowerCase() === task.title.trim().toLowerCase()
+    );
+
+    // If not found by title, try finding by previous index if available
+    if (!match && prevBriefs[i]) {
+      match = prevBriefs[i];
+    }
+
+    if (match) {
+      updatedBriefs.push({
+        ...match,
+        itemNumber: newNumber,
+        title: task.title,
+        status: task.status,
+      });
+    } else {
+      updatedBriefs.push({
+        itemNumber: newNumber,
+        title: task.title,
+        status: task.status,
+        brief: `Brief for ${task.title}`,
+        built: '',
+        validation: '',
+        humanReview: '',
+        followUps: '',
+      });
+    }
+  }
+
+  return updatedBriefs;
 }
 
 /**
@@ -160,20 +220,21 @@ export function parseAgentContextMarkdown(markdown: string): AgentContextItem[] 
     const statusMatch = section.match(/\*\*Status:\*\*\s*(.+)$/m);
     const statusStr = statusMatch ? statusMatch[1].trim() : 'not started';
 
-    // Parse sub-sections: Brief, Built, Validation, Follow-ups
+    // Parse sub-sections: Human Review (or Follow-ups), Brief, Built, Validation
+    const humanReview = extractSectionContent(section, 'Human Review') || extractSectionContent(section, 'Follow-ups') || extractSectionContent(section, 'Followups');
     const brief = extractSectionContent(section, 'Brief');
     const built = extractSectionContent(section, 'Built');
     const validation = extractSectionContent(section, 'Validation');
-    const followUps = extractSectionContent(section, 'Follow-ups');
 
     items.push({
       itemNumber,
       title,
       status: mapStatusString(statusStr),
+      humanReview,
+      followUps: humanReview,
       brief,
       built,
       validation,
-      followUps,
       rawContent: section
     });
   }
@@ -193,17 +254,18 @@ export function serializeAgentContextMarkdown(items: AgentContextItem[]): string
     md += `### ${item.itemNumber}. ${item.title}\n\n`;
     md += `**Status:** ${item.status}\n\n`;
 
-    if (item.brief) {
+    const reviewContent = item.humanReview || item.followUps;
+    if (reviewContent && reviewContent.trim()) {
+      md += `**Human Review**\n\n${reviewContent.trim()}\n\n`;
+    }
+    if (item.brief && item.brief.trim()) {
       md += `**Brief**\n\n${item.brief.trim()}\n\n`;
     }
-    if (item.built) {
+    if (item.built && item.built.trim()) {
       md += `**Built**\n\n${item.built.trim()}\n\n`;
     }
-    if (item.validation) {
+    if (item.validation && item.validation.trim()) {
       md += `**Validation**\n\n${item.validation.trim()}\n\n`;
-    }
-    if (item.followUps) {
-      md += `**Follow-ups**\n\n${item.followUps.trim()}\n\n`;
     }
 
     md += `---\n\n`;
@@ -218,7 +280,7 @@ function extractSectionContent(text: string, sectionName: string): string {
   if (secStart === -1) return '';
 
   const afterSec = text.slice(secStart);
-  const nextSecOffset = afterSec.slice(1).search(/\n\*\*(Status|Brief|Built|Validation|Follow-ups)\*\*|\n### |\n---/i);
+  const nextSecOffset = afterSec.slice(1).search(/\n\*\*(Status|Human Review|Brief|Built|Validation|Follow-ups|Followups)\*\*|\n### |\n---/i);
 
   let content = nextSecOffset !== -1 ? afterSec.slice(0, nextSecOffset + 1) : afterSec;
   // Remove section title heading line

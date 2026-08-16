@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { type ProjectData, type MCPServer, type AIProviderConfig, type AIProviderId, type AICredentialsMap } from '../types';
+import { type ProjectData, type MCPServer, type AIProviderConfig, type UserApiKey } from '../types';
 import { SUPPORTED_AI_PROVIDERS } from '../lib/aiProviders';
-import { Cpu, Download, Bot, ChevronDown, Check, Plus, Folder, Settings, Key } from 'lucide-react';
+import { Cpu, Download, Bot, ChevronDown, Check, Plus, Folder, Key } from 'lucide-react';
 
 interface NavbarProps {
   projects: ProjectData[];
@@ -10,10 +10,12 @@ interface NavbarProps {
   onNewProject: () => void;
   mcpServers: MCPServer[];
   onOpenMcpHub: () => void;
+  userApiKeys: UserApiKey[];
+  activeKeyId: string | null;
   aiConfig: AIProviderConfig;
-  credentialsMap: AICredentialsMap;
-  onSelectAiProvider: (providerId: AIProviderId) => void;
-  onOpenCredentialsModal: (providerId: AIProviderId) => void;
+  onSelectUserKey: (keyId: string) => void;
+  onSelectNativeEngine: () => void;
+  onOpenAiScreen: () => void;
   onOpenRawMarkdownModal: () => void;
 }
 
@@ -24,10 +26,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   onNewProject,
   mcpServers,
   onOpenMcpHub,
+  userApiKeys,
+  activeKeyId,
   aiConfig,
-  credentialsMap,
-  onSelectAiProvider,
-  onOpenCredentialsModal,
+  onSelectUserKey,
+  onSelectNativeEngine,
+  onOpenAiScreen,
   onOpenRawMarkdownModal
 }) => {
   const connectedCount = mcpServers.filter((s) => s.status === 'connected').length;
@@ -53,23 +57,19 @@ export const Navbar: React.FC<NavbarProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const selectedAiProvider = SUPPORTED_AI_PROVIDERS.find((p) => p.id === aiConfig.provider) || SUPPORTED_AI_PROVIDERS[0];
-  const activeCreds = credentialsMap[aiConfig.provider];
-  const activeIsConnected = aiConfig.provider === 'mock' || !!activeCreds?.isConnected;
+  const activeUserKey = userApiKeys.find((k) => k.id === activeKeyId);
+  const activeProviderMeta = activeUserKey
+    ? SUPPORTED_AI_PROVIDERS.find((p) => p.id === activeUserKey.provider)
+    : SUPPORTED_AI_PROVIDERS.find((p) => p.id === aiConfig.provider);
 
-  const handleAiOptionClick = (providerId: AIProviderId) => {
-    setIsAiDropdownOpen(false);
-    const creds = credentialsMap[providerId];
-    const isConnected = providerId === 'mock' || !!creds?.isConnected;
+  const activeLabel = activeUserKey
+    ? activeUserKey.name
+    : aiConfig.provider === 'mock'
+      ? 'Ergo Native Engine'
+      : 'Select AI Key';
 
-    if (!isConnected) {
-      // Prompt user to sign in / configure credentials for this provider
-      onOpenCredentialsModal(providerId);
-    } else {
-      // Switch active provider
-      onSelectAiProvider(providerId);
-    }
-  };
+  const activeIcon = activeProviderMeta?.icon || '🤖';
+  const hasActiveKey = !!activeUserKey || aiConfig.provider === 'mock';
 
   return (
     <header className="app-header">
@@ -106,7 +106,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {isProjectDropdownOpen && (
             <div className="custom-dropdown-menu" style={{ minWidth: '260px' }}>
-              <div className="custom-dropdown-header">Switch Project Directory</div>
+              <div className="custom-dropdown-header">Switch Project</div>
               {projects.map((p) => {
                 const isSelected = p.id === activeProject.id;
                 return (
@@ -146,23 +146,23 @@ export const Navbar: React.FC<NavbarProps> = ({
           )}
         </div>
 
-        {/* Custom AI Provider Selector Dropdown */}
+        {/* Custom AI Engine / Key Selector Dropdown */}
         <div ref={aiDropdownRef} style={{ position: 'relative' }}>
           <button
             className="ai-selector-custom"
             onClick={() => setIsAiDropdownOpen(!isAiDropdownOpen)}
             type="button"
-            title={`Active Engine: ${selectedAiProvider.name} (${aiConfig.model})`}
+            title={`Active Engine Key: ${activeLabel}`}
           >
-            <Bot size={16} color={selectedAiProvider.badgeColor || 'var(--accent-cyan)'} />
+            <Bot size={16} color={activeProviderMeta?.badgeColor || 'var(--accent-cyan)'} />
             <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <span>{selectedAiProvider.icon}</span>
-              <span style={{ fontWeight: 600 }}>{selectedAiProvider.name}</span>
+              <span>{activeIcon}</span>
+              <span style={{ fontWeight: 600 }}>{activeLabel}</span>
             </span>
-            {activeIsConnected ? (
-              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--accent-emerald)', boxShadow: '0 0 8px var(--accent-emerald)' }} title="Connected" />
+            {hasActiveKey ? (
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--accent-emerald)', boxShadow: '0 0 8px var(--accent-emerald)' }} title="Key Active" />
             ) : (
-              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--accent-amber)' }} title="Sign in required" />
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--accent-amber)' }} title="No Key Configured" />
             )}
             <ChevronDown
               size={15}
@@ -175,68 +175,105 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
 
           {isAiDropdownOpen && (
-            <div className="custom-dropdown-menu" style={{ width: '360px' }}>
+            <div className="custom-dropdown-menu" style={{ width: '340px' }}>
               <div className="custom-dropdown-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>Bring Your Own AI Engine</span>
-                <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Sign in to connect</span>
+                <span>AI Engine Keys</span>
+                <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                  {userApiKeys.length > 0 ? `${userApiKeys.length} Key${userApiKeys.length > 1 ? 's' : ''} Configured` : 'No Keys Specified'}
+                </span>
               </div>
-              {SUPPORTED_AI_PROVIDERS.map((provider) => {
-                const isSelected = provider.id === aiConfig.provider;
-                const creds = credentialsMap[provider.id];
-                const isConnected = provider.id === 'mock' || !!creds?.isConnected;
 
-                return (
-                  <div
-                    key={provider.id}
-                    className={`custom-dropdown-item ${isSelected ? 'selected' : ''}`}
-                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', padding: '0.65rem 0.85rem' }}
-                    onClick={() => handleAiOptionClick(provider.id)}
+              {/* If User Has Not Specified Any API Keys Yet */}
+              {userApiKeys.length === 0 ? (
+                <div style={{ padding: '1rem', textAlign: 'center' }}>
+                  <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '0.5rem', color: 'var(--accent-amber)' }}>
+                    <Key size={24} />
+                  </div>
+                  <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '0.85rem', lineHeight: 1.4 }}>
+                    You haven't specified any API keys yet.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    style={{ width: '100%', justifyContent: 'center', fontSize: '0.85rem' }}
+                    onClick={() => {
+                      setIsAiDropdownOpen(false);
+                      onOpenAiScreen();
+                    }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flex: 1, minWidth: 0 }}>
-                      <span style={{ fontSize: '1.15rem' }}>{provider.icon}</span>
-                      <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.25, minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                          <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff' }}>{provider.name}</span>
-                          {isSelected && <Check size={14} color="var(--accent-cyan)" />}
+                    <Plus size={15} />
+                    <span>Open AI Screen to Add Key</span>
+                  </button>
+                </div>
+              ) : (
+                /* User Has Specified Keys */
+                <div style={{ maxHeight: '260px', overflowY: 'auto' }}>
+                  {userApiKeys.map((key) => {
+                    const isSelected = key.id === activeKeyId;
+                    const pMeta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === key.provider);
+
+                    return (
+                      <div
+                        key={key.id}
+                        className={`custom-dropdown-item ${isSelected ? 'selected' : ''}`}
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', padding: '0.65rem 0.85rem' }}
+                        onClick={() => {
+                          onSelectUserKey(key.id);
+                          setIsAiDropdownOpen(false);
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flex: 1, minWidth: 0 }}>
+                          <span style={{ fontSize: '1.15rem' }}>{pMeta?.icon || '🔑'}</span>
+                          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.25, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                              <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff' }}>{key.name}</span>
+                              {isSelected && <Check size={14} color="var(--accent-cyan)" />}
+                            </div>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                              {pMeta?.shortName || key.provider} ({key.model || pMeta?.defaultModel})
+                            </span>
+                          </div>
                         </div>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {provider.id === 'mock'
-                            ? 'Simulated Engine'
-                            : isConnected
-                            ? `Connected (${creds?.model || provider.defaultModel})`
-                            : 'Sign in to connect'}
+
+                        <span className="badge badge-done" style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem' }}>
+                          Active Key
                         </span>
                       </div>
-                    </div>
+                    );
+                  })}
+                </div>
+              )}
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }} onClick={(e) => e.stopPropagation()}>
-                      {provider.id !== 'mock' && (
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          style={{ padding: '0.2rem 0.45rem', fontSize: '0.72rem', borderRadius: '4px' }}
-                          title={`Configure ${provider.name} credentials`}
-                          onClick={() => {
-                            setIsAiDropdownOpen(false);
-                            onOpenCredentialsModal(provider.id);
-                          }}
-                        >
-                          {isConnected ? <Settings size={12} color="var(--accent-cyan)" /> : <Key size={12} color="var(--accent-amber)" />}
-                        </button>
-                      )}
-                      {isConnected ? (
-                        <span className="badge badge-done" style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem' }}>
-                          Ready
-                        </span>
-                      ) : (
-                        <span className="badge badge-in_progress" style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', color: 'var(--accent-amber)', borderColor: 'rgba(245, 158, 11, 0.3)' }}>
-                          Sign In
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+              {/* Native Engine Fallback option */}
+              <div className="custom-dropdown-divider" />
+              <div
+                className={`custom-dropdown-item ${aiConfig.provider === 'mock' && !activeKeyId ? 'selected' : ''}`}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.55rem 0.85rem' }}
+                onClick={() => {
+                  onSelectNativeEngine();
+                  setIsAiDropdownOpen(false);
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>⚡</span>
+                  <span style={{ fontSize: '0.82rem', fontWeight: 500, color: 'var(--text-muted)' }}>Ergo Native Simulated Engine</span>
+                </div>
+                {aiConfig.provider === 'mock' && !activeKeyId && <Check size={14} color="var(--accent-cyan)" />}
+              </div>
+
+              {/* Button at the Bottom of the AI selection dropdown to open AI Screen */}
+              <div className="custom-dropdown-divider" />
+              <div
+                className="custom-dropdown-item create-action"
+                style={{ padding: '0.75rem 0.85rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                onClick={() => {
+                  setIsAiDropdownOpen(false);
+                  onOpenAiScreen();
+                }}
+              >
+                <Plus size={15} color="var(--accent-emerald)" />
+                <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>Open AI Screen & Manage Keys...</span>
+              </div>
             </div>
           )}
         </div>

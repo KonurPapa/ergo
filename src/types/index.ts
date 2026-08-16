@@ -23,10 +23,11 @@ export interface AgentContextItem {
   itemNumber: number;
   title: string;
   status: TaskStatus | string;
+  humanReview?: string;
+  followUps?: string;
   brief: string;
   built: string;
   validation: string;
-  followUps: string;
   rawContent?: string;
   passes?: Array<{ title: string; content: string }>;
 }
@@ -69,6 +70,17 @@ export interface ProviderCredentials {
 }
 
 export type AICredentialsMap = Record<AIProviderId, ProviderCredentials>;
+
+export interface UserApiKey {
+  id: string;
+  name: string;
+  provider: AIProviderId;
+  apiKey: string;
+  baseUrl?: string;
+  model?: string;
+  isConnected?: boolean;
+  createdAt?: string;
+}
 
 
 export interface ProjectData {

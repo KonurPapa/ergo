@@ -55,13 +55,16 @@ body {
   width: 8px;
   height: 8px;
 }
+
 ::-webkit-scrollbar-track {
   background: var(--bg-darkest);
 }
+
 ::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.15);
   border-radius: 4px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.3);
 }
@@ -73,8 +76,8 @@ body {
   height: 100vh;
   overflow: hidden;
   background: radial-gradient(circle at 50% 0%, rgba(99, 102, 241, 0.08) 0%, transparent 60%),
-              radial-gradient(circle at 100% 100%, rgba(6, 182, 212, 0.05) 0%, transparent 50%),
-              var(--bg-darkest);
+    radial-gradient(circle at 100% 100%, rgba(6, 182, 212, 0.05) 0%, transparent 50%),
+    var(--bg-darkest);
 }
 
 /* Header Navbar */
@@ -410,10 +413,12 @@ body {
 .obsidian-body::-webkit-scrollbar {
   width: 6px;
 }
+
 .obsidian-body::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.1);
   border-radius: 3px;
 }
+
 .obsidian-body::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.2);
 }
@@ -539,18 +544,21 @@ body {
   border-bottom: 1px solid var(--border-subtle);
   letter-spacing: -0.02em;
 }
+
 .tiptap-editor-root .tiptap h2 {
   font-size: 1.25rem;
   font-weight: 700;
   color: var(--accent-cyan);
   margin: 1.4rem 0 0.45rem;
 }
+
 .tiptap-editor-root .tiptap h3 {
   font-size: 1.05rem;
   font-weight: 700;
   color: var(--accent-violet);
   margin: 1rem 0 0.35rem;
 }
+
 .tiptap-editor-root .tiptap h4 {
   font-size: 0.95rem;
   font-weight: 600;
@@ -559,12 +567,26 @@ body {
 }
 
 /* Paragraph */
-.tiptap-editor-root .tiptap p { margin: 0 0 0.4rem; }
+.tiptap-editor-root .tiptap p {
+  margin: 0 0 0.4rem;
+}
 
 /* Inline text styles */
-.tiptap-editor-root .tiptap strong { color: #ffffff; font-weight: 700; }
-.tiptap-editor-root .tiptap em { color: #c9d1d9; font-style: italic; }
-.tiptap-editor-root .tiptap s { text-decoration: line-through; opacity: 0.6; color: var(--text-muted); }
+.tiptap-editor-root .tiptap strong {
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.tiptap-editor-root .tiptap em {
+  color: #c9d1d9;
+  font-style: italic;
+}
+
+.tiptap-editor-root .tiptap s {
+  text-decoration: line-through;
+  opacity: 0.6;
+  color: var(--text-muted);
+}
 
 /* Inline code */
 .tiptap-editor-root .tiptap code {
@@ -587,9 +609,14 @@ body {
   overflow-x: auto;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
 }
+
 .tiptap-editor-root .tiptap pre code {
-  background: none; border: none; padding: 0;
-  color: #e2e8f0; font-size: 0.87rem; line-height: 1.65;
+  background: none;
+  border: none;
+  padding: 0;
+  color: #e2e8f0;
+  font-size: 0.87rem;
+  line-height: 1.65;
 }
 
 /* Blockquote */
@@ -602,7 +629,10 @@ body {
   font-style: italic;
   color: #9ca3af;
 }
-.tiptap-editor-root .tiptap blockquote p { margin: 0; }
+
+.tiptap-editor-root .tiptap blockquote p {
+  margin: 0;
+}
 
 /* Horizontal rule */
 .tiptap-editor-root .tiptap hr {
@@ -619,19 +649,13 @@ body {
   text-underline-offset: 3px;
   transition: color 0.15s ease;
 }
-.tiptap-editor-root .tiptap a:hover { color: #fff; text-decoration-style: solid; }
 
-/* Task list & Card UI for ordered/bullet lists under H1 */
-.tiptap-editor-root .tiptap h1 {
-  font-size: 1.65rem;
-  font-weight: 800;
-  color: #ffffff;
-  margin: 1rem 0 0.85rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--border-glow);
-  letter-spacing: -0.02em;
+.tiptap-editor-root .tiptap a:hover {
+  color: #fff;
+  text-decoration-style: solid;
 }
 
+/* Task list & Card UI for ordered/bullet lists under H1 */
 .tiptap-editor-root .tiptap ol {
   padding-left: 0;
   margin: 0.75rem 0 1.25rem;
@@ -642,103 +666,265 @@ body {
   gap: 0.65rem;
 }
 
-.tiptap-editor-root .tiptap ol > li {
+.tiptap-editor-root .tiptap h1,
+.tiptap-editor-root .tiptap h2,
+.tiptap-editor-root .tiptap h3,
+.tiptap-editor-root .tiptap h4,
+.tiptap-editor-root .tiptap h5,
+.tiptap-editor-root .tiptap h6,
+.tiptap-editor-root .tiptap hr {
+  counter-reset: card-counter;
+}
+
+.tiptap-editor-root .tiptap ol>li {
   counter-increment: card-counter;
   position: relative;
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  padding: 0.75rem 6.5rem 0.75rem 2.8rem;
+  padding: 0.75rem 4.5rem 0.75rem 4rem;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
   margin-bottom: 0;
+  cursor: text;
 }
 
-.tiptap-editor-root .tiptap ol > li:hover {
+.tiptap-editor-root .tiptap ol>li:hover {
   border-color: var(--border-glow);
   background: var(--bg-card-hover);
   box-shadow: 0 6px 16px rgba(99, 102, 241, 0.15);
 }
 
-.tiptap-editor-root .tiptap ol > li:focus-within {
+.tiptap-editor-root .tiptap ol>li.is-active-card {
+  border-color: var(--accent-cyan);
+  background: rgba(6, 182, 212, 0.08);
+  box-shadow: 0 0 0 1.5px rgba(6, 182, 212, 0.45), 0 6px 20px rgba(6, 182, 212, 0.15);
+}
+
+.tiptap-editor-root .tiptap ol>li.is-card-done {
+  opacity: 0.78;
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.tiptap-editor-root .tiptap ol>li.is-card-done:hover {
+  opacity: 0.95;
+}
+
+.tiptap-editor-root .tiptap ol>li:focus-within {
   border-color: var(--accent-primary);
   box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25);
 }
 
-.tiptap-editor-root .tiptap ol > li::before {
+.tiptap-editor-root .tiptap ol>li::before {
   content: counter(card-counter) ".";
   position: absolute;
-  left: 0.9rem;
-  top: 0.75rem;
+  left: 0.95rem;
+  top: 0.76rem;
   font-weight: 700;
-  font-size: 0.9rem;
+  font-size: 0.88rem;
   color: var(--accent-cyan);
   font-family: var(--font-mono);
+  line-height: 1.2;
 }
 
-/* Card Action Button (Add Subtask) on the right of each card */
-.card-add-subtask-btn {
+/* ── UI Checkboxes in Task & Subtask Items ── */
+.task-card-checkbox-wrapper {
+  position: absolute;
+  left: 2.25rem;
+  top: 0.74rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  user-select: none;
+}
+
+.subtask-checkbox-wrapper {
+  position: absolute;
+  left: 0.15rem;
+  top: 0.22rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  user-select: none;
+}
+
+.task-ui-checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+  outline: none;
+  border-style: solid;
+}
+
+.task-ui-checkbox.parent-checkbox {
+  width: 17px;
+  height: 17px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1.5px solid rgba(255, 255, 255, 0.28);
+  color: #ffffff;
+}
+
+.task-ui-checkbox.parent-checkbox:hover {
+  border-color: var(--accent-cyan);
+  background: rgba(6, 182, 212, 0.18);
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.35);
+}
+
+.task-ui-checkbox.parent-checkbox.checked {
+  background: var(--accent-emerald);
+  border-color: var(--accent-emerald);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.45);
+}
+
+.task-ui-checkbox.parent-checkbox.checked:hover {
+  background: #059669;
+  border-color: #059669;
+}
+
+.task-ui-checkbox.subtask-checkbox {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1.5px solid rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+}
+
+.task-ui-checkbox.subtask-checkbox:hover {
+  border-color: var(--accent-cyan);
+  background: rgba(6, 182, 212, 0.18);
+  box-shadow: 0 0 6px rgba(6, 182, 212, 0.3);
+}
+
+.task-ui-checkbox.subtask-checkbox.checked {
+  background: var(--accent-emerald);
+  border-color: var(--accent-emerald);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+}
+
+.task-ui-checkbox.subtask-checkbox.checked:hover {
+  background: #059669;
+  border-color: #059669;
+}
+
+/* Card Action Buttons Container on the right of each card */
+.card-actions-wrapper {
   position: absolute;
   right: 0.75rem;
   top: 0.65rem;
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
-  padding: 0.25rem 0.55rem;
-  background: rgba(6, 182, 212, 0.12);
-  border: 1px solid rgba(6, 182, 212, 0.3);
-  border-radius: var(--radius-sm);
-  color: var(--accent-cyan);
-  font-size: 0.75rem;
-  font-weight: 600;
-  cursor: pointer;
-  opacity: 0.65;
-  transition: all 0.2s ease;
-  user-select: none;
+  gap: 0.35rem;
   z-index: 10;
+  user-select: none;
 }
 
-.tiptap-editor-root .tiptap ol > li:hover .card-add-subtask-btn,
+.card-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.45rem;
+  height: 1.45rem;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0.55;
+  transition: all 0.18s ease;
+  user-select: none;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 0;
+  line-height: 0;
+  box-sizing: border-box;
+}
+
+.card-action-btn svg {
+  width: 13px;
+  height: 13px;
+  min-width: 13px;
+  min-height: 13px;
+  flex-shrink: 0;
+  display: block;
+}
+
+.card-add-subtask-btn {
+  background: rgba(6, 182, 212, 0.12);
+  border: 1px solid rgba(6, 182, 212, 0.3);
+  color: var(--accent-cyan);
+}
+
+.tiptap-editor-root .tiptap ol>li:hover .card-add-subtask-btn,
 .card-add-subtask-btn:hover {
   opacity: 1;
   background: rgba(6, 182, 212, 0.25);
   border-color: var(--accent-cyan);
   color: #ffffff;
   box-shadow: 0 2px 8px rgba(6, 182, 212, 0.3);
+  transform: scale(1.05);
 }
 
-.tiptap-editor-root .tiptap ol > li > p {
+.card-delete-task-btn {
+  background: rgba(244, 63, 94, 0.08);
+  border: 1px solid rgba(244, 63, 94, 0.25);
+  color: var(--accent-rose);
+}
+
+.tiptap-editor-root .tiptap ol>li:hover .card-delete-task-btn,
+.card-delete-task-btn:hover {
+  opacity: 1;
+  background: rgba(244, 63, 94, 0.25);
+  border-color: var(--accent-rose);
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(244, 63, 94, 0.35);
+  transform: scale(1.05);
+}
+
+.tiptap-editor-root .tiptap ol>li>p {
   margin: 0;
   color: var(--text-main);
   font-weight: 500;
 }
 
 /* Nested subtask bullets inside card items */
-.tiptap-editor-root .tiptap ol > li ul {
-  margin-top: 0.5rem;
+.tiptap-editor-root .tiptap ol>li ul {
+  margin-top: 0.55rem;
   margin-bottom: 0.25rem;
-  padding-left: 1.5rem;
+  padding-left: 0;
   border-top: 1px dashed rgba(255, 255, 255, 0.08);
-  padding-top: 0.4rem;
-  list-style-type: disc !important;
+  padding-top: 0.45rem;
+  list-style: none !important;
+  display: flex;
+  flex-direction: column;
+  gap: 0.32rem;
 }
 
-.tiptap-editor-root .tiptap ol > li ul > li {
+.tiptap-editor-root .tiptap ol>li ul>li {
+  position: relative;
   font-size: 0.88rem;
   color: var(--text-muted);
   background: transparent !important;
   border: none !important;
-  padding: 0.15rem 0 !important;
+  padding: 0.12rem 0 0.12rem 1.6rem !important;
   box-shadow: none !important;
   margin: 0 !important;
+  list-style: none !important;
+  display: block;
 }
 
-.tiptap-editor-root .tiptap ol > li ul > li::before {
+.tiptap-editor-root .tiptap ol>li ul>li::before {
   content: none !important;
 }
 
-.tiptap-editor-root .tiptap ol > li ul > li::marker {
-  color: var(--accent-cyan);
+.tiptap-editor-root .tiptap ol>li ul>li::marker {
+  content: none !important;
 }
 
 /* Card Section Container styling */
@@ -755,12 +941,22 @@ body {
   margin-top: 0 !important;
 }
 
+.task-pane-footer {
+  padding: 0.75rem 1.75rem;
+  border-top: 1px solid var(--border-subtle);
+  background: rgba(7, 10, 18, 0.85);
+  backdrop-filter: blur(8px);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
 .new-card-btn {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  margin-top: 0.5rem;
-  padding: 0.45rem 0.85rem;
+  gap: 0.45rem;
+  margin-top: 0;
+  padding: 0.5rem 1rem;
   background: rgba(99, 102, 241, 0.1);
   border: 1px dashed var(--border-glow);
   border-radius: var(--radius-md);
@@ -780,44 +976,21 @@ body {
   box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
 }
 
-/* Task list */
-.tiptap-editor-root .tiptap ul[data-type="taskList"] {
-  list-style: none;
-  padding-left: 0.25rem;
-}
-.tiptap-editor-root .tiptap ul[data-type="taskList"] li {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.55rem;
-  margin-bottom: 0.35rem;
-}
-.tiptap-editor-root .tiptap ul[data-type="taskList"] li > label {
-  flex-shrink: 0;
-  margin-top: 0.2rem;
-  cursor: pointer;
-}
-.tiptap-editor-root .tiptap ul[data-type="taskList"] li > label input[type="checkbox"] {
-  width: 15px;
-  height: 15px;
-  accent-color: var(--accent-emerald);
-  cursor: pointer;
-}
-.tiptap-editor-root .tiptap ul[data-type="taskList"] li > div { flex: 1; }
-.tiptap-editor-root .tiptap ul[data-type="taskList"] li[data-checked="true"] > div {
-  text-decoration: line-through;
-  color: var(--text-dim);
-  opacity: 0.65;
-}
-
 /* Text selection */
-.tiptap-editor-root .tiptap ::selection { background: rgba(99, 102, 241, 0.3); }
-.tiptap-editor-root .tiptap:focus-visible { outline: none; }
+.tiptap-editor-root .tiptap ::selection {
+  background: rgba(99, 102, 241, 0.3);
+}
 
-/* Brief Detail View in Right Pane */
+.tiptap-editor-root .tiptap:focus-visible {
+  outline: none;
+}
+
+/* ── Brief Detail View in Right Pane (AGENT_CONTEXT.md) ────── */
 .brief-container {
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: 1rem;
+  padding: 0.25rem 0 1.5rem;
 }
 
 .brief-card {
@@ -825,38 +998,239 @@ body {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   overflow: hidden;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.brief-card:hover {
+  border-color: var(--border-glow);
+  box-shadow: 0 6px 18px rgba(99, 102, 241, 0.12);
+}
+
+.brief-card:focus-within {
+  border-color: var(--accent-violet);
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
+}
+
+/* Special styling for Human Review post-execution card */
+.brief-card.card-human-review {
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  background: linear-gradient(180deg, rgba(139, 92, 246, 0.06) 0%, var(--bg-card) 40%);
+  box-shadow: 0 4px 16px rgba(139, 92, 246, 0.12);
+}
+
+.brief-card.card-human-review:hover {
+  border-color: rgba(139, 92, 246, 0.6);
+  box-shadow: 0 6px 22px rgba(139, 92, 246, 0.22);
 }
 
 .brief-section-header {
   padding: 0.65rem 1rem;
   background: rgba(255, 255, 255, 0.03);
   border-bottom: 1px solid var(--border-subtle);
-  font-size: 0.8rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--accent-violet);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  user-select: none;
+  transition: background 0.15s ease;
+}
+
+.brief-card.is-collapsed .brief-section-header {
+  border-bottom: none;
+}
+
+.brief-section-header.clickable-header {
+  cursor: pointer;
+}
+
+.brief-section-header.clickable-header:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.brief-section-header .header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.brief-section-header .card-collapse-btn {
+  position: relative;
+  left: auto;
+  top: auto;
+  opacity: 0.75;
+  width: 1.35rem;
+  height: 1.35rem;
+  flex-shrink: 0;
+}
+
+.brief-section-header:hover .card-collapse-btn,
+.brief-section-header .card-collapse-btn:hover {
+  opacity: 1;
+  color: var(--accent-violet);
+  background: rgba(139, 92, 246, 0.18);
+}
+
+.brief-section-header .header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.section-title-text {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  letter-spacing: -0.01em;
+}
+
+.section-emoji {
+  margin-right: 0.35rem;
+}
+
+.section-subtitle-tag {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.human-review-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 9999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: rgba(139, 92, 246, 0.18);
+  border: 1px solid rgba(139, 92, 246, 0.4);
+  color: #c4b5fd;
+  letter-spacing: 0.02em;
+}
+
+.card-item-count {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+}
+
+.card-item-tag-empty {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.brief-body-wrapper {
+  animation: fadeInBody 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes fadeInBody {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .brief-body {
-  padding: 1rem 1.15rem;
-  font-size: 0.9rem;
+  padding: 1rem 1.25rem;
+  font-size: 0.92rem;
   color: var(--text-main);
-  line-height: 1.6;
-  white-space: pre-wrap;
+  line-height: 1.7;
   font-family: var(--font-sans);
 }
 
 .brief-body code {
   font-family: var(--font-mono);
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(0, 0, 0, 0.45);
   padding: 0.15rem 0.4rem;
   border-radius: 4px;
   font-size: 0.82rem;
   color: var(--accent-cyan);
+  border: 1px solid rgba(6, 182, 212, 0.15);
+}
+
+.brief-markdown-render {
+  line-height: 1.7;
+}
+
+.brief-markdown-render .md-h1,
+.brief-markdown-render .md-h2,
+.brief-markdown-render .md-h3 {
+  margin-top: 0.85rem;
+  margin-bottom: 0.35rem;
+}
+
+.brief-empty-markdown {
+  padding: 0.2rem 0;
+  font-size: 0.86rem;
+  color: var(--text-muted);
+}
+
+/* Card textarea in edit mode */
+.obsidian-card-textarea {
+  width: 100%;
+  background: var(--bg-darkest);
+  border: none;
+  outline: none;
+  padding: 1rem 1.25rem;
+  color: #c9d1d9;
+  font-family: 'Fira Code', 'Cascadia Code', 'Menlo', monospace;
+  font-size: 0.88rem;
+  line-height: 1.65;
+  caret-color: var(--accent-cyan);
+  resize: vertical;
+  tab-size: 2;
+  box-sizing: border-box;
+}
+
+.obsidian-card-textarea:focus {
+  background: rgba(7, 10, 18, 0.95);
+}
+
+/* Status Pill in Pane Header */
+.task-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 9999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: capitalize;
+  letter-spacing: 0.02em;
+}
+
+.task-status-pill.status-done {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: var(--accent-emerald);
+}
+
+.task-status-pill.status-in-progress {
+  background: rgba(6, 182, 212, 0.15);
+  border: 1px solid rgba(6, 182, 212, 0.35);
+  color: var(--accent-cyan);
+}
+
+.task-status-pill.status-not-started {
+  background: rgba(156, 163, 175, 0.12);
+  border: 1px solid rgba(156, 163, 175, 0.25);
+  color: var(--text-muted);
 }
 
 /* Modals */
@@ -891,6 +1265,7 @@ body {
     opacity: 0;
     transform: scale(0.96) translateY(10px);
   }
+
   to {
     opacity: 1;
     transform: scale(1) translateY(0);
@@ -936,7 +1311,8 @@ body {
   color: var(--text-muted);
 }
 
-.input-text, .textarea-text {
+.input-text,
+.textarea-text {
   width: 100%;
   background: var(--bg-darkest);
   border: 1px solid var(--border-subtle);
@@ -948,7 +1324,8 @@ body {
   transition: all 0.2s ease;
 }
 
-.input-text:focus, .textarea-text:focus {
+.input-text:focus,
+.textarea-text:focus {
   outline: none;
   border-color: var(--accent-primary);
   box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
@@ -1156,6 +1533,7 @@ body {
     opacity: 0;
     transform: translateY(-8px) scale(0.98);
   }
+
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
@@ -1276,7 +1654,8 @@ body {
   width: 100%;
 }
 
-.bullet-checkbox, .bullet-sub-checkbox {
+.bullet-checkbox,
+.bullet-sub-checkbox {
   background: transparent;
   border: none;
   cursor: pointer;
@@ -1308,7 +1687,8 @@ body {
   word-break: break-word;
 }
 
-.bullet-text.strikethrough, .sub-bullet-text.strikethrough {
+.bullet-text.strikethrough,
+.sub-bullet-text.strikethrough {
   text-decoration: line-through;
   color: var(--text-muted);
 }
@@ -1724,5 +2104,3 @@ body {
   margin-right: 0.35rem;
   vertical-align: middle;
 }
-
-

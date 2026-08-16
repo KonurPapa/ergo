@@ -2,20 +2,22 @@
 
 ## Work together with AI
 
-**Ergo** is an AI-powered visual todo list and task workspace designed to align humans and AI in a shared, holistic project environment. 
+**Ergo** is an AI-powered task workspace, designed to align humans and AI in a shared, holistic project environment. 
 
-Rather than treating AI as an invisible black-box agent or burying context inside chat windows, Ergo provides a scannable visual dashboard paired with structured, agentic technical briefs. It acts as an **MCP Host** (Model Context Protocol client) with support for interactive **MCP Apps**, enabling seamless execution of real-world tools across developer and non-developer workflows alike.
+AI is often an invisible black-box agent that you have to micromanage with prompts, or a token-hungry over-thinker that spends too much time planning and not enough time building.
+
+Ergo provides a clean, scannable task list paired alongside rich, technical briefs. This means you and the AI **share the same working model of your project**, enabling the AI to function more like an actual collaborator. Results are more accurate than pure prompting, because the AI is **closer to your understanding of the project**. It also acts as an **MCP Host** (Model Context Protocol client), allowing **seamless execution of real-world tools**.
 
 ---
 
 ## 💡 The Core Vision & Philosophy
 
-Modern AI workflows often suffer from the **"Agent Tax"**: autonomous agents loop indefinitely through hidden planning steps, consuming tokens rapidly while leaving users unable to inspect or redirect wrong directions before execution.
+Modern AI workflows often suffer from the **"Agent Tax"**: autonomous agents loop indefinitely through hidden planning steps, consuming tokens rapidly while leaving users unable to inspect or redirect wrong assumptions before execution.
 
-Ergo decouples planning from execution:
-1. **Shared Context**: Dual-layer task architecture ensures humans see a scannable task list while AI receives complete, dependency-ordered technical briefs (`AGENT_CONTEXT.md`).
-2. **Action → Pause → Review → Execution**: The AI drafts and organizes tasks, giving the user full visibility to tweak or approve before triggering execution.
-3. **Unified Workspace**: Task management and task execution occur in the exact same pane of glass using interactive MCP App widgets.
+Ergo keeps the human in the loop:
+1. **Shared Context**: Dual-layer task architecture ensures humans see a clean, simple task list while AI receives complete, dependency-ordered technical briefs. You're no longer overwhelmed by paragraphs of AI text, and the AI doesn't lose the specificity needed to be effective.
+2. **Action → Pause → Review → Execution**: The AI can draft and organize tasks for you, giving you full visibility to tweak or approve anything before triggering execution. You're always in the driver's seat.
+3. **Unified Workspace**: Task management and task execution occur in the exact same window, so you can manage and execute tasks without ever leaving your workspace.
 
 ---
 
