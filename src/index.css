@@ -222,17 +222,25 @@ body {
   overflow: hidden;
 }
 
-.pane-left {
+.pane-left,
+.obsidian-pane.pane-left {
   width: 100%;
   height: 100%;
   border-right: none;
-  background: rgba(13, 18, 31, 0.4);
+  background:
+    radial-gradient(ellipse 90% 70% at 20% 15%, rgba(6, 182, 212, 0.05) 0%, transparent 70%),
+    radial-gradient(ellipse 90% 70% at 80% 85%, rgba(6, 182, 212, 0.045) 0%, transparent 70%),
+    linear-gradient(175deg, #0c161d 0%, #070e13 100%);
 }
 
-.pane-right {
+.pane-right,
+.obsidian-pane.pane-right {
   width: 100%;
   height: 100%;
-  background: var(--bg-pane);
+  background:
+    radial-gradient(ellipse 90% 70% at 20% 15%, rgba(139, 92, 246, 0.055) 0%, transparent 70%),
+    radial-gradient(ellipse 90% 70% at 80% 85%, rgba(139, 92, 246, 0.025) 0%, transparent 70%),
+    linear-gradient(175deg, #120e1d 0%, #0a0914 100%);
 }
 
 /* Pane Headers */
@@ -241,7 +249,8 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 0.85rem 1.25rem;
-  background: rgba(13, 18, 31, 0.8);
+  background: rgba(13, 18, 31, 0.7);
+  backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -266,11 +275,12 @@ body {
 
 /* ── Obsidian-style Markdown Editor Pane ────────────────────── */
 .obsidian-pane {
-  background: rgba(10, 14, 24, 0.65);
+  position: relative;
 }
 
 .obsidian-header {
-  background: rgba(7, 10, 18, 0.85);
+  background: rgba(7, 10, 18, 0.75);
+  backdrop-filter: blur(12px);
 }
 
 .pane-subtitle {
@@ -682,7 +692,7 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  padding: 0.75rem 4.5rem 0.75rem 4rem;
+  padding: 0.75rem 4.5rem 0.75rem 5.35rem;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
   margin-bottom: 0;
@@ -718,7 +728,7 @@ body {
 .tiptap-editor-root .tiptap ol>li::before {
   content: counter(card-counter) ".";
   position: absolute;
-  left: 0.95rem;
+  left: 2.35rem;
   top: 0.76rem;
   font-weight: 700;
   font-size: 0.88rem;
@@ -730,7 +740,7 @@ body {
 /* ── UI Checkboxes in Task & Subtask Items ── */
 .task-card-checkbox-wrapper {
   position: absolute;
-  left: 2.25rem;
+  left: 3.7rem;
   top: 0.74rem;
   display: inline-flex;
   align-items: center;
@@ -885,6 +895,83 @@ body {
   color: #ffffff;
   box-shadow: 0 2px 8px rgba(244, 63, 94, 0.35);
   transform: scale(1.05);
+}
+
+/* Card Collapse Toggle Button (positioned beside item number on the left) */
+.card-collapse-btn {
+  position: absolute;
+  left: 0.65rem;
+  top: 0.72rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0.65;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+  z-index: 10;
+}
+
+.tiptap-editor-root .tiptap ol>li:hover .card-collapse-btn,
+.card-collapse-btn:hover {
+  opacity: 1;
+  background: rgba(6, 182, 212, 0.16);
+  border-color: rgba(6, 182, 212, 0.35);
+  color: var(--accent-cyan);
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.25);
+  transform: scale(1.08);
+}
+
+.card-collapse-btn .collapse-chevron {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: center;
+}
+
+.card-collapse-btn.is-collapsed .collapse-chevron {
+  transform: rotate(-90deg);
+}
+
+/* Collapsed Card Styling */
+.tiptap-editor-root .tiptap ol>li.card-collapsed {
+  min-height: 2.85rem;
+  padding-top: 0.75rem !important;
+  padding-bottom: 0.75rem !important;
+  display: block;
+}
+
+.tiptap-editor-root .tiptap ol>li.card-collapsed:hover {
+  border-color: var(--border-glow);
+  background: var(--bg-card-hover);
+}
+
+/* In collapsed card: keep the primary paragraph (task title) and action buttons visible, hide nested lists and other child elements */
+.tiptap-editor-root .tiptap ol>li.card-collapsed> :not(p:first-of-type):not(.card-actions-wrapper):not(.task-card-checkbox-wrapper):not(.card-collapse-btn) {
+  display: none !important;
+}
+
+.tiptap-editor-root .tiptap ol>li.card-collapsed>.card-collapse-btn {
+  display: inline-flex !important;
+}
+
+.tiptap-editor-root .tiptap ol>li.card-collapsed>.card-actions-wrapper {
+  display: inline-flex !important;
+}
+
+.tiptap-editor-root .tiptap ol>li.card-collapsed>p:first-of-type {
+  display: block !important;
+  line-height: 1.45;
+  color: var(--text-main);
+  font-weight: 500;
+  white-space: normal;
+  word-break: break-word;
+  padding-right: 0.5rem;
 }
 
 .tiptap-editor-root .tiptap ol>li>p {
@@ -2103,4 +2190,136 @@ body {
   align-items: center;
   margin-right: 0.35rem;
   vertical-align: middle;
+}
+
+/* ── Markdown File Auto-Save & Disk Sync Controls ── */
+.autosave-status-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  padding: 0.42rem 0.75rem;
+  border-radius: var(--radius-md);
+  color: var(--text-main);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  white-space: nowrap;
+}
+
+.autosave-status-btn:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-glow);
+}
+
+.autosave-status-btn.status-saving {
+  border-color: rgba(6, 182, 212, 0.5);
+  background: rgba(6, 182, 212, 0.08);
+  color: var(--accent-cyan);
+}
+
+.autosave-status-btn.status-pending {
+  border-color: rgba(245, 158, 11, 0.5);
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--accent-amber);
+}
+
+.autosave-status-btn.status-saved {
+  border-color: rgba(16, 185, 129, 0.4);
+  background: rgba(16, 185, 129, 0.06);
+  color: var(--accent-emerald);
+}
+
+.autosave-status-btn.status-error {
+  border-color: rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.08);
+  color: #ef4444;
+}
+
+.autosave-label {
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.spin-animate {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.autosave-popover {
+  top: calc(100% + 8px);
+  right: 0;
+  left: auto;
+}
+
+/* Toggle Switch */
+.toggle-switch-btn {
+  width: 38px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+  position: relative;
+  cursor: pointer;
+  border: 1px solid var(--border-subtle);
+  transition: all 0.2s ease;
+  padding: 0;
+}
+
+.toggle-switch-btn.is-active {
+  background: var(--accent-emerald);
+  border-color: var(--accent-emerald);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.4);
+}
+
+.toggle-switch-thumb {
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.toggle-switch-btn.is-active .toggle-switch-thumb {
+  transform: translateX(16px);
+}
+
+/* Delay Preset Pills */
+.delay-preset-pill {
+  padding: 0.35rem 0.4rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 0.73rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: center;
+}
+
+.delay-preset-pill:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.delay-preset-pill.selected {
+  background: rgba(6, 182, 212, 0.16);
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.2);
 }

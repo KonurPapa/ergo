@@ -6,6 +6,7 @@ export interface ProviderMeta {
   shortName: string;
   description: string;
   icon: string;
+  iconUrl?: string;
   badgeColor: string;
   requiresKey: boolean;
   requiresBaseUrl: boolean;
@@ -23,6 +24,7 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     shortName: 'OpenAI',
     description: 'GPT-4o, GPT-4o-mini & o3-mini models via OpenAI API',
     icon: '🤖',
+    iconUrl: '/icons/providers/openai.svg',
     badgeColor: '#10a37f',
     requiresKey: true,
     requiresBaseUrl: false,
@@ -42,6 +44,7 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     shortName: 'Anthropic',
     description: 'Claude 3.7 Sonnet, 3.5 Sonnet & Haiku models',
     icon: '🧠',
+    iconUrl: '/icons/providers/anthropic.svg',
     badgeColor: '#d97706',
     requiresKey: true,
     requiresBaseUrl: false,
@@ -60,6 +63,7 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     shortName: 'Gemini',
     description: 'Gemini 2.5 Flash & 1.5 Pro multimodal models',
     icon: '✨',
+    iconUrl: '/icons/providers/gemini.svg',
     badgeColor: '#3b82f6',
     requiresKey: true,
     requiresBaseUrl: false,
@@ -78,6 +82,7 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     shortName: 'Ollama',
     description: 'Privacy-focused local LLMs running on your machine',
     icon: '💻',
+    iconUrl: '/icons/providers/ollama.svg',
     badgeColor: '#8b5cf6',
     requiresKey: false,
     requiresBaseUrl: true,
@@ -98,6 +103,7 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     shortName: 'Ergo Native',
     description: 'Instant zero-config simulated AI agent workspace',
     icon: '⚡',
+    iconUrl: '/icons/providers/mock.svg',
     badgeColor: '#06b6d4',
     requiresKey: false,
     requiresBaseUrl: false,

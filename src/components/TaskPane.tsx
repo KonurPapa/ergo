@@ -383,6 +383,9 @@ const ToolbarBtn: React.FC<ToolbarBtnProps> = ({ onClick, active, disabled, titl
 // ── Toolbar separator ───────────────────────────────────────────
 const Sep = () => <div className="tiptap-toolbar-sep" />;
 
+// Set of collapsed card keys (persists across decoration rebuilds)
+const collapsedCardsState = new Set<string>();
+
 // ── Main component ──────────────────────────────────────────────
 export const TaskPane: React.FC<TaskPaneProps> = ({
   rawMarkdown,
@@ -434,10 +437,15 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
 
                   const isParentChecked = firstParagraphNode ? isNodeChecked(firstParagraphNode) : false;
 
-                  // 1. Add active-card and card-done class decoration
+                  // Set of collapsed card keys (using node content or position key)
+                  const cardKey = `card-${pos}-${firstParagraphNode?.textContent?.slice(0, 30) || ''}`;
+                  const isCollapsed = collapsedCardsState.has(cardKey);
+
+                  // 1. Add active-card, card-done, and card-collapsed class decoration
                   const cardClasses = [
                     isSelected ? 'is-active-card' : '',
                     isParentChecked ? 'is-card-done' : '',
+                    isCollapsed ? 'card-collapsed' : '',
                   ]
                     .filter(Boolean)
                     .join(' ');
@@ -554,7 +562,42 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                   );
                   decorations.push(parentCheckboxWidget);
 
-                  // 3. Add Card Action Buttons Widget (Add Subtask + Delete Task) at pos + 1
+                  // 3. Add Collapse / Expand Toggle Button Widget at pos + 1 (left side beside item number)
+                  const collapseWidget = Decoration.widget(
+                    pos + 1,
+                    (view) => {
+                      const collapseBtn = document.createElement('button');
+                      collapseBtn.className = `card-collapse-btn ${isCollapsed ? 'is-collapsed' : ''}`;
+                      collapseBtn.setAttribute('contenteditable', 'false');
+                      collapseBtn.type = 'button';
+                      collapseBtn.title = isCollapsed ? 'Expand card' : 'Collapse card';
+                      collapseBtn.setAttribute('aria-label', isCollapsed ? 'Expand card' : 'Collapse card');
+                      collapseBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="collapse-chevron"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+
+                      collapseBtn.addEventListener('mousedown', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      });
+
+                      collapseBtn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (collapsedCardsState.has(cardKey)) {
+                          collapsedCardsState.delete(cardKey);
+                        } else {
+                          collapsedCardsState.add(cardKey);
+                        }
+                        const tr = view.state.tr.setMeta('cardCollapseToggle', true);
+                        view.dispatch(tr);
+                      });
+
+                      return collapseBtn;
+                    },
+                    { side: -1, stopEvent: () => true }
+                  );
+                  decorations.push(collapseWidget);
+
+                  // 4. Add Card Action Buttons Widget (Add Subtask + Delete Task) at pos + 1 (right side)
                   const cardActionsWidget = Decoration.widget(
                     pos + 1,
                     (view, getPos) => {
@@ -574,6 +617,10 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                       addBtn.addEventListener('mousedown', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
+                        // Auto-expand if collapsed when adding a subtask
+                        if (collapsedCardsState.has(cardKey)) {
+                          collapsedCardsState.delete(cardKey);
+                        }
                         const widgetPos = typeof getPos === 'function' ? getPos() : pos + 1;
                         if (widgetPos == null) return;
                         const listItemPos = Number(widgetPos) - 1;
@@ -600,6 +647,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                       deleteBtn.addEventListener('click', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
+                        collapsedCardsState.delete(cardKey);
                         const widgetPos = typeof getPos === 'function' ? getPos() : pos + 1;
                         if (widgetPos == null) return;
                         const listItemPos = Number(widgetPos) - 1;
@@ -811,7 +859,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
             onClick={onOpenDraftModal}
           >
             <Sparkles size={13} />
-            <span>Draft with AI</span>
+            <span>New Task</span>
           </button>
         </div>
       </div>

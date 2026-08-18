@@ -132,8 +132,17 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
   };
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content" style={{ maxWidth: '680px', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+    <div
+      className="modal-overlay"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="modal-content"
+        style={{ maxWidth: '680px', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -141,11 +150,16 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
               <Key size={20} />
             </div>
             <div>
-              <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#fff', margin: 0 }}>
-                AI Engine Screen & Key Setup
-              </h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#fff', margin: 0 }}>
+                  AI Engine Screen & Key Setup
+                </h3>
+                <span className="badge badge-done" style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem' }}>
+                  Stored in config/secrets.json
+                </span>
+              </div>
               <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0 }}>
-                Name and paste your API key to enable AI task drafting & automated execution.
+                Keys are saved directly to your local folder and never sent to a remote database.
               </p>
             </div>
           </div>
@@ -192,8 +206,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                       display: 'flex',
                       flexDirection: 'column',
                       alignItems: 'center',
-                      gap: '0.25rem',
-                      padding: '0.6rem 0.4rem',
+                      gap: '0.35rem',
+                      padding: '0.65rem 0.4rem',
                       borderRadius: 'var(--radius-sm)',
                       border: `1px solid ${isSelected ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
                       background: isSelected ? 'rgba(6, 182, 212, 0.12)' : 'var(--bg-card)',
@@ -202,7 +216,23 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                       transition: 'all 0.15s ease'
                     }}
                   >
-                    <span style={{ fontSize: '1.2rem' }}>{p.icon}</span>
+                    <div style={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      {p.iconUrl ? (
+                        <img
+                          src={p.iconUrl}
+                          alt={p.shortName}
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'contain',
+                            opacity: isSelected ? 1 : 0.75,
+                            transition: 'opacity 0.15s ease'
+                          }}
+                        />
+                      ) : (
+                        <span style={{ fontSize: '1.2rem' }}>{p.icon}</span>
+                      )}
+                    </div>
                     <span style={{ fontSize: '0.76rem', fontWeight: isSelected ? 700 : 500 }}>{p.shortName}</span>
                   </button>
                 );
@@ -362,7 +392,13 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                        <span style={{ fontSize: '1.2rem' }}>{pMeta?.icon || '🔑'}</span>
+                        <div style={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                          {pMeta?.iconUrl ? (
+                            <img src={pMeta.iconUrl} alt={pMeta.shortName} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                          ) : (
+                            <span style={{ fontSize: '1.2rem' }}>{pMeta?.icon || '🔑'}</span>
+                          )}
+                        </div>
                         <div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                             <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff' }}>{k.name}</span>
@@ -463,8 +499,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 }}
                 className="provider-key-link"
               >
-                <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <span>🤖</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                  <img src="/icons/providers/openai.svg" alt="OpenAI" style={{ width: 16, height: 16, objectFit: 'contain' }} />
                   <span>OpenAI API Keys</span>
                 </span>
                 <ExternalLink size={13} color="var(--accent-cyan)" />
@@ -490,8 +526,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 }}
                 className="provider-key-link"
               >
-                <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <span>🧠</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                  <img src="/icons/providers/anthropic.svg" alt="Anthropic" style={{ width: 16, height: 16, objectFit: 'contain' }} />
                   <span>Anthropic Keys</span>
                 </span>
                 <ExternalLink size={13} color="var(--accent-cyan)" />
@@ -517,8 +553,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 }}
                 className="provider-key-link"
               >
-                <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <span>✨</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                  <img src="/icons/providers/gemini.svg" alt="Gemini" style={{ width: 16, height: 16, objectFit: 'contain' }} />
                   <span>Google Gemini Keys</span>
                 </span>
                 <ExternalLink size={13} color="var(--accent-cyan)" />
@@ -544,8 +580,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 }}
                 className="provider-key-link"
               >
-                <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <span>💻</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                  <img src="/icons/providers/ollama.svg" alt="Ollama" style={{ width: 16, height: 16, objectFit: 'contain' }} />
                   <span>Ollama Local AI</span>
                 </span>
                 <ExternalLink size={13} color="var(--accent-cyan)" />

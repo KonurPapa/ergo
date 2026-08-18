@@ -11,6 +11,32 @@
         - but it should always tell the user what it added (and maybe the task is indicated with a 'review' tag or something)
     - Autocomplete for the task input - pull from tags and previous inputs to determine most relevant suggestion
     - make sure what's put in the human task list is succinct, clear and easily readable - make sure the AI side is verbose enough for the AI, but still in human-readable terms
+    - **MCP**:
+        - we also need to figure out how to handle local dev; maybe with manual folder connection?
+            - this could be a standard practice anyway, where the AI can write things like markdown docs, API keys, MCP tokens, etc.
+        - MCP authentication when user clicks 'connect'
+        - auth token storage (how?)
+        - after connection, the app needs to call `tools/list` and store all available tools for that particular MCP
+        - when user creates a task, if there's an MCP connected, show a list of tools from that MCP (use `tools/list` to get the tools) that the user can select to use for that task
+        - only use tools that are actually relevant to the task (ask for clarification if needed, but try to guess based on the task brief and list of tools)
+        - this also helps the AI know which relevant tools are available
+        - we should routinely check for updates. what happens if the MCP receives new updates that our AI doesn't know about because we haven't called `tools/list` again?
+    - rework the 'new task' button for using the AI to perform general tasks on the human workspace
+        - create new task w/ subtasks
+        - refine existing tasks (remove, replace, or edit wording)
+    - implement Larry for custom webpage navigation
+        - this should show in an iframe within the AI Workspace (so the user can watch)
+    - AI is NEVER allowed to delete things from the user's side, but they should ALWAYS keep their agent context side in parity w/ the user's side
+        - I.e. if a user deletes a task or subtask from the human side, or reorders tasks, the AI should also delete it from the agent context side as well, and reorder the tasks there as well
+    - CLI mode for coding agents
+        - connection to coding CLIs like Claude Code, Antigravity, Cursor, Codex, etc.
+        - when the user clicks 'execute' on a task, it spawns a CLI agent that performs the task in a windowed terminal in the AI side
+        - then on completion it writes back to the AI and user's side, and updates the task and subtasks to reflect what happened; the user can then also look back at the terminal to see more details
+        - **terminal persistence**:
+            - Terminal session history is in-memory — when you close or reload the app, the PTY process is killed and the tab is gone. The config (which agent to use) persists. Reconnecting to a live PTY after a page reload would require a full server-side session registry
+    - commands/words in tasks that trigger custom AI logic (skills)
+    - **implement Nostr for remote connection**
+        
 
 
 **UI/UX Features (Future Roadmap)**
@@ -20,4 +46,16 @@
     - **Visual Storytelling**: Use visual cues to show progress and achievements
     - **Customizable Dashboard**: Allow users to customize their dashboard with different widgets and layouts.
     - **Themes**: Dark/Light mode, custom
-    
+    - Card coloring, so user can mark certain cards as different (e.g. red = important)
+        - this should probably add something in markdown to delineate... possibly in the agent context only?
+    - Selecting unchecked checkboxes pops up buttons in the navigation panel: 'mark complete', 'execute', 'remove'
+    - branding info text should emphasize 2 pain points: lack of control over architecture AI is going to implement to solve X task, and the black-box nature of not being able to directly supervise the AI while it's working
+    - **global rules** - these would get added as part of the skill the AI runs when it executes
+    - selecting text and typing quotations, backticks, or other markdown should apply that symbol around the text, instead of the standard text-replacement
+    - using AI to draft new tasks/edit existing should always attempt to mimic the user's writing style based on other tasks the user has written
+    - tasks should be executable w/ keybinding as well as button press
+        - Ctrl+Enter by default for the 'execute' button, maybe Ctrl+Alt+E for the 'new task' button?
+        - this should be configurable
+    - a way in the UI to specify fallback conditions for tasks/subtasks
+    - a 'human review' card _inside_ task cards, created by the AI after it finishes execution of a task
+    - verify 

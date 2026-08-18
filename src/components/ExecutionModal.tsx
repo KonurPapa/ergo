@@ -1,7 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { type TaskItem, type AgentContextItem, type ProjectData, type AIProviderConfig, type MCPServer, type ExecutionStep } from '../types';
+import {
+  type TaskItem,
+  type AgentContextItem,
+  type ProjectData,
+  type AIProviderConfig,
+  type MCPServer,
+  type ExecutionStep,
+  type McpToolPermissionPrompt
+} from '../types';
 import { executeTaskWithAi } from '../lib/ai';
-import { Play, X, CheckCircle2, Loader2, Send, Layers, Code } from 'lucide-react';
+import { Play, X, CheckCircle2, Loader2, Send, Layers, Code, ShieldAlert, ShieldCheck } from 'lucide-react';
 
 interface ExecutionModalProps {
   isOpen: boolean;
@@ -28,6 +36,10 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
   const [isRunning, setIsRunning] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
   const [resultPayload, setResultPayload] = useState<{ updatedTask: TaskItem; updatedBrief: AgentContextItem } | null>(null);
+  const [pendingPermission, setPendingPermission] = useState<{
+    prompt: McpToolPermissionPrompt;
+    resolve: (approved: boolean) => void;
+  } | null>(null);
 
   useEffect(() => {
     if (isOpen && task && !isRunning && !isFinished) {
@@ -42,6 +54,7 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
     setIsRunning(true);
     setIsFinished(false);
     setResultPayload(null);
+    setPendingPermission(null);
 
     try {
       const res = await executeTaskWithAi(
@@ -60,6 +73,11 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
             }
             return [...prev, stepUpdate];
           });
+        },
+        (permissionPrompt) => {
+          return new Promise<boolean>((resolve) => {
+            setPendingPermission({ prompt: permissionPrompt, resolve });
+          });
         }
       );
 
@@ -72,6 +90,13 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
     }
   };
 
+  const handlePermissionChoice = (approved: boolean) => {
+    if (pendingPermission) {
+      pendingPermission.resolve(approved);
+      setPendingPermission(null);
+    }
+  };
+
   const handleApply = () => {
     if (resultPayload) {
       onCompleteExecution(resultPayload.updatedTask, resultPayload.updatedBrief);
@@ -80,8 +105,13 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
   };
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content" style={{ maxWidth: '900px' }}>
+    <div
+      className="modal-overlay"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="modal-content" style={{ maxWidth: '900px' }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <Play size={20} color="var(--accent-emerald)" />
@@ -105,6 +135,40 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
               {brief?.brief?.slice(0, 140) || 'Executing task subtasks & logging build records to AGENT_CONTEXT.md.'}
             </p>
           </div>
+
+          {/* Interactive MCP Permission Prompt Card */}
+          {pendingPermission && (
+            <div
+              style={{
+                background: 'rgba(239, 68, 68, 0.08)',
+                border: '1px solid rgba(239, 68, 68, 0.35)',
+                borderRadius: 'var(--radius-md)',
+                padding: '1.25rem',
+                marginBottom: '1.25rem',
+                animation: 'fadeIn 0.2s ease'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', color: 'var(--accent-rose)', fontWeight: 700, fontSize: '0.95rem', marginBottom: '0.5rem' }}>
+                <ShieldAlert size={20} />
+                <span>Permission Authorization Required</span>
+              </div>
+              <p style={{ fontSize: '0.85rem', color: '#fff', marginBottom: '0.75rem' }}>
+                The AI agent is requesting to execute a restricted tool: <strong style={{ color: 'var(--accent-cyan)' }}>{pendingPermission.prompt.serverName} / {pendingPermission.prompt.toolName}()</strong>
+              </p>
+              <div style={{ background: 'var(--bg-darkest)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+                {pendingPermission.prompt.summary}
+              </div>
+              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                <button className="btn btn-secondary" onClick={() => handlePermissionChoice(false)}>
+                  Skip / Reject
+                </button>
+                <button className="btn btn-emerald" onClick={() => handlePermissionChoice(true)}>
+                  <ShieldCheck size={16} />
+                  <span>Approve Tool Call</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Execution Steps Terminal */}
           <div className="execution-steps">

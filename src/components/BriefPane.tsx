@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { type TaskItem, type AgentContextItem } from '../types';
+import type { SpawnedSession } from './AgentTerminalPane';
 import {
   FileCode,
   Edit3,
@@ -9,8 +10,10 @@ import {
   CheckCircle2,
   Clock,
   CircleDot,
-  CheckCheck
+  CheckCheck,
+  Terminal,
 } from 'lucide-react';
+
 import { RichTextToolbar } from './RichTextToolbar';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
@@ -18,17 +21,29 @@ interface BriefPaneProps {
   activeTask: TaskItem | null;
   activeBrief: AgentContextItem | undefined;
   onSaveBrief: (updatedBrief: AgentContextItem) => void;
+  onLiveBriefChange?: (updatedBrief: AgentContextItem) => void;
   onExecuteTask: (task: TaskItem) => void;
   onUpdateBriefWithAi: (task: TaskItem) => void;
+  autosaveStatus?: 'idle' | 'pending' | 'saving' | 'saved' | 'error';
+  autosaveDelaySec?: number;
+  /** Non-null when a terminal session exists for the currently active task */
+  terminalSessionForTask?: SpawnedSession | null;
+  /** Toggle the terminal pane for this task */
+  onToggleTerminal?: () => void;
 }
+
 
 export const BriefPane: React.FC<BriefPaneProps> = ({
   activeTask,
   activeBrief,
   onSaveBrief,
+  onLiveBriefChange,
   onExecuteTask,
-  onUpdateBriefWithAi
+  onUpdateBriefWithAi,
+  terminalSessionForTask,
+  onToggleTerminal,
 }) => {
+
   const [isEditing, setIsEditing] = useState(false);
   const [humanReviewText, setHumanReviewText] = useState('');
   const [briefText, setBriefText] = useState('');
@@ -74,6 +89,44 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   }
 
   const isExecuted = activeTask.isDone || activeTask.status === 'done';
+
+  const handleFieldChange = (
+    field: 'humanReview' | 'brief' | 'built' | 'validation',
+    value: string
+  ) => {
+    if (!activeTask) return;
+    let newReview = humanReviewText;
+    let newBrief = briefText;
+    let newBuilt = builtText;
+    let newValidation = validationText;
+
+    if (field === 'humanReview') {
+      setHumanReviewText(value);
+      newReview = value;
+    } else if (field === 'brief') {
+      setBriefText(value);
+      newBrief = value;
+    } else if (field === 'built') {
+      setBuiltText(value);
+      newBuilt = value;
+    } else if (field === 'validation') {
+      setValidationText(value);
+      newValidation = value;
+    }
+
+    if (onLiveBriefChange) {
+      onLiveBriefChange({
+        itemNumber: activeTask.id,
+        title: activeTask.title,
+        status: activeTask.status,
+        humanReview: newReview,
+        followUps: newReview,
+        brief: newBrief,
+        built: newBuilt,
+        validation: newValidation,
+      });
+    }
+  };
 
   const handleSave = () => {
     if (!activeTask) return;
@@ -121,7 +174,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
       <div className="pane-header obsidian-header">
         <div className="pane-title">
           <FileCode size={17} color="var(--accent-violet)" />
-          <span>Agent Workspace</span>
+          <span>AI Workspace</span>
           <span className="pane-subtitle">
             Item #{activeTask.id}
           </span>
@@ -141,12 +194,12 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
 
           {isEditing ? (
             <button
-              className="btn btn-emerald"
+              className="btn btn-primary"
               style={{ padding: '0.3rem 0.65rem', fontSize: '0.8rem' }}
               onClick={handleSave}
             >
               <Save size={13} />
-              <span>Save Brief</span>
+              <span>Save</span>
             </button>
           ) : (
             <button
@@ -155,7 +208,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
               onClick={() => setIsEditing(true)}
             >
               <Edit3 size={13} />
-              <span>Edit Brief</span>
+              <span>Edit</span>
             </button>
           )}
 
@@ -214,7 +267,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                     className="obsidian-card-textarea"
                     placeholder="Add follow-up checks, human verification steps, and sign-off notes in Markdown..."
                     value={humanReviewText}
-                    onChange={(e) => setHumanReviewText(e.target.value)}
+                    onChange={(e) => handleFieldChange('humanReview', e.target.value)}
                     onFocus={() => setActiveFocusedRef(humanReviewRef)}
                     rows={4}
                   />
@@ -244,7 +297,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
             <div className="brief-section-header">
               <div className="header-left">
                 <span className="section-title-text">
-                  <span className="section-emoji">📋</span> Brief
+                  <span className="section-emoji">📋</span> Overview
                 </span>
                 <span className="section-subtitle-tag">Done-State, Target Seams, Constraints</span>
               </div>
@@ -265,7 +318,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                   className="obsidian-card-textarea"
                   placeholder="Write detailed brief, done-state goals, code seams, and quality constraints in Markdown..."
                   value={briefText}
-                  onChange={(e) => setBriefText(e.target.value)}
+                  onChange={(e) => handleFieldChange('brief', e.target.value)}
                   onFocus={() => setActiveFocusedRef(briefRef)}
                   rows={6}
                 />
@@ -294,18 +347,53 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
             <div className="brief-section-header">
               <div className="header-left">
                 <span className="section-title-text">
-                  <span className="section-emoji">🛠️</span> Built
+                  <span className="section-emoji">🛠️</span> Build & Verification
                 </span>
                 <span className="section-subtitle-tag">Implementation Log & Decisions Made</span>
               </div>
 
               <div className="header-right">
-                {builtText ? (
+                {terminalSessionForTask ? (
+                  // Show 'View Terminal' button when a session exists for this task
+                  <button
+                    className="btn btn-secondary"
+                    style={{
+                      padding: '0.2rem 0.55rem',
+                      fontSize: '0.75rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.35rem',
+                      border: terminalSessionForTask.session.isActive
+                        ? '1px solid rgba(16,185,129,0.4)'
+                        : '1px solid var(--border-subtle)',
+                    }}
+                    onClick={onToggleTerminal}
+                    title="Toggle agent terminal for this task"
+                  >
+                    <span
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: '50%',
+                        background: terminalSessionForTask.session.isActive
+                          ? 'var(--accent-emerald)'
+                          : 'var(--text-dim)',
+                        display: 'inline-block',
+                        flexShrink: 0,
+                      }}
+                    />
+                    <Terminal size={11} />
+                    <span>
+                      {terminalSessionForTask.session.isActive ? 'Running' : 'View Terminal'}
+                    </span>
+                  </button>
+                ) : builtText ? (
                   <span className="card-item-count">{builtText.split('\n').filter(Boolean).length} lines</span>
                 ) : (
                   <span className="card-item-tag-empty">Not executed</span>
                 )}
               </div>
+
             </div>
 
             <div className="brief-body-wrapper">
@@ -315,7 +403,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                   className="obsidian-card-textarea"
                   placeholder="Log architectural decisions, changed files, and implementation details in Markdown..."
                   value={builtText}
-                  onChange={(e) => setBuiltText(e.target.value)}
+                  onChange={(e) => handleFieldChange('built', e.target.value)}
                   onFocus={() => setActiveFocusedRef(builtRef)}
                   rows={5}
                 />
@@ -344,7 +432,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
             <div className="brief-section-header">
               <div className="header-left">
                 <span className="section-title-text">
-                  <span className="section-emoji">🧪</span> Verification
+                  <span className="section-emoji">🧪</span> Completion
                 </span>
                 <span className="section-subtitle-tag">Automated & Manual Test Output</span>
               </div>
@@ -365,7 +453,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                   className="obsidian-card-textarea"
                   placeholder="Document test runs, verification steps, and browser checks in Markdown..."
                   value={validationText}
-                  onChange={(e) => setValidationText(e.target.value)}
+                  onChange={(e) => handleFieldChange('validation', e.target.value)}
                   onFocus={() => setActiveFocusedRef(validationRef)}
                   rows={4}
                 />

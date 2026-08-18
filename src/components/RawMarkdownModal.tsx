@@ -41,8 +41,13 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
   };
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content" style={{ maxWidth: '1000px', height: '85vh' }}>
+    <div
+      className="modal-overlay"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="modal-content" style={{ maxWidth: '1000px', height: '85vh' }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <Code2 size={22} color="var(--accent-cyan)" />
