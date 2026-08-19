@@ -76,14 +76,40 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
 
   if (!activeTask) {
     return (
-      <div className="pane pane-right obsidian-pane" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-          <FileCode size={48} color="var(--accent-violet)" style={{ opacity: 0.5, marginBottom: '1rem' }} />
-          <h3 style={{ color: '#fff', fontSize: '1.15rem' }}>Select a task item to inspect</h3>
-          <p style={{ fontSize: '0.85rem', marginTop: '0.5rem', maxWidth: '420px', lineHeight: '1.6' }}>
-            Click any task card in TODO.md to view its technical brief, built record, validation notes, and human review items.
-          </p>
+      <div className="pane pane-right obsidian-pane">
+        <div className="pane-header obsidian-header">
+          <div className="pane-title">
+            <FileCode size={17} color="var(--accent-violet)" />
+            <span>AI Workspace</span>
+          </div>
         </div>
+        <div className="pane-content obsidian-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+            <FileCode size={48} color="var(--accent-violet)" style={{ opacity: 0.5, marginBottom: '1rem' }} />
+            <h3 style={{ color: '#fff', fontSize: '1.15rem' }}>Select a task item to inspect</h3>
+            <p style={{ fontSize: '0.85rem', marginTop: '0.5rem', maxWidth: '420px', lineHeight: '1.6' }}>
+              Click any task card in TODO.md to view its technical brief, built record, validation notes, and human review items.
+            </p>
+          </div>
+        </div>
+        {/* <div className="task-pane-footer brief-pane-footer">
+          <button
+            type="button"
+            className="refine-ai-btn"
+            disabled
+          >
+            <Sparkles size={16} />
+            <span>Refine AI</span>
+          </button>
+          <button
+            type="button"
+            className="execute-task-btn"
+            disabled
+          >
+            <Play size={20} />
+            <span>Execute Task</span>
+          </button>
+        </div> */}
       </div>
     );
   }
@@ -182,16 +208,6 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
         </div>
 
         <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
-          <button
-            className="btn btn-secondary"
-            style={{ padding: '0.3rem 0.6rem', fontSize: '0.8rem' }}
-            onClick={() => onUpdateBriefWithAi(activeTask)}
-            title="Refine technical brief using AI context"
-          >
-            <Sparkles size={13} color="var(--accent-cyan)" />
-            <span>Refine AI</span>
-          </button>
-
           {isEditing ? (
             <button
               className="btn btn-primary"
@@ -211,16 +227,6 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
               <span>Edit</span>
             </button>
           )}
-
-          <button
-            className="btn btn-emerald"
-            style={{ padding: '0.3rem 0.75rem', fontSize: '0.8rem' }}
-            onClick={() => onExecuteTask(activeTask)}
-            title="Execute task in sandbox and generate build records"
-          >
-            <Play size={13} />
-            <span>Execute Task</span>
-          </button>
         </div>
       </div>
 
@@ -476,6 +482,28 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
           </div>
 
         </div>
+      </div>
+
+      {/* ── Fixed Footer at Bottom of Screen ── */}
+      <div className="task-pane-footer brief-pane-footer">
+        <button
+          type="button"
+          className="refine-ai-btn"
+          onClick={() => onUpdateBriefWithAi(activeTask)}
+          title="Refine technical brief using AI context"
+        >
+          <Sparkles size={16} />
+          <span>Refine</span>
+        </button>
+        <button
+          type="button"
+          className="execute-task-btn"
+          onClick={() => onExecuteTask(activeTask)}
+          title="Execute task in sandbox and generate build records"
+        >
+          <Play size={20} />
+          <span>Execute Task</span>
+        </button>
       </div>
     </div>
   );

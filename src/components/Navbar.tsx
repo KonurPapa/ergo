@@ -108,29 +108,27 @@ export const Navbar: React.FC<NavbarProps> = ({
 
       <div className="header-center">
         {/* Root Folder / Vault Selector Button */}
-        <button
+        {/* <button
           className="folder-selector-btn"
           onClick={onOpenFolderPicker}
           type="button"
-          title={`Root Folder: ${folderMetadata.name} (${
-            folderMetadata.status === 'connected'
-              ? 'Local Folder Connected'
-              : folderMetadata.status === 'needs_permission'
+          title={`Root Folder: ${folderMetadata.name} (${folderMetadata.status === 'connected'
+            ? 'Local Folder Connected'
+            : folderMetadata.status === 'needs_permission'
               ? 'Permission Required'
               : 'Local Dev Server Workspace'
-          }) - Click to configure`}
+            }) - Click to configure`}
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: '0.45rem',
             background: 'var(--bg-input)',
-            border: `1px solid ${
-              folderMetadata.status === 'connected'
-                ? 'rgba(16, 185, 129, 0.35)'
-                : folderMetadata.status === 'needs_permission'
+            border: `1px solid ${folderMetadata.status === 'connected'
+              ? 'rgba(16, 185, 129, 0.35)'
+              : folderMetadata.status === 'needs_permission'
                 ? 'rgba(245, 158, 11, 0.4)'
                 : 'var(--border-subtle)'
-            }`,
+              }`,
             padding: '0.4rem 0.65rem',
             borderRadius: 'var(--radius-sm)',
             cursor: 'pointer',
@@ -145,8 +143,8 @@ export const Navbar: React.FC<NavbarProps> = ({
               folderMetadata.status === 'connected'
                 ? 'var(--accent-emerald)'
                 : folderMetadata.status === 'needs_permission'
-                ? 'var(--accent-amber)'
-                : 'var(--accent-cyan)'
+                  ? 'var(--accent-amber)'
+                  : 'var(--accent-cyan)'
             }
           />
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', textAlign: 'left', lineHeight: 1.15 }}>
@@ -163,8 +161,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                     folderMetadata.status === 'connected'
                       ? 'var(--accent-emerald)'
                       : folderMetadata.status === 'needs_permission'
-                      ? 'var(--accent-amber)'
-                      : 'var(--accent-cyan)',
+                        ? 'var(--accent-amber)'
+                        : 'var(--accent-cyan)',
                   boxShadow:
                     folderMetadata.status === 'connected'
                       ? '0 0 6px var(--accent-emerald)'
@@ -176,7 +174,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               {folderMetadata.mode === 'file_system_api' ? 'Local-First' : 'Server FS'}
             </span>
           </div>
-        </button>
+        </button> */}
 
         {/* Custom Project Selector Dropdown */}
         <div ref={projectDropdownRef} style={{ position: 'relative' }}>
@@ -408,7 +406,8 @@ export const Navbar: React.FC<NavbarProps> = ({
           <Cpu size={16} color="var(--accent-violet)" />
           {/* <span>Connections</span> */}
           <span className="badge badge-done" style={{ marginLeft: '0.2rem', padding: '0.15rem 0.4rem' }}>
-            {connectedCount} Connected
+            {/* {connectedCount} Connected */}
+            Connections
           </span>
         </button>
 

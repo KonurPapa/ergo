@@ -852,16 +852,6 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
           <span>Human Workspace</span>
           <span className="pane-subtitle">{doneTasks}/{tasks.length} done</span>
         </div>
-        <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
-          <button
-            className="btn btn-primary"
-            style={{ padding: '0.3rem 0.6rem', fontSize: '0.8rem' }}
-            onClick={onOpenDraftModal}
-          >
-            <Sparkles size={13} />
-            <span>New Task</span>
-          </button>
-        </div>
       </div>
 
       {/* ── Formatting Toolbar ── */}
@@ -941,10 +931,17 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
           type="button"
           className="new-card-btn"
           onClick={() => handleAddNewCard(editor)}
-          style={{ width: "50%", margin: "0 auto" }}
         >
           <Plus size={20} />
-          <span style={{ fontSize: "1rem", marginLeft: "0.5rem" }}>New Card</span>
+          <span>New Task</span>
+        </button>
+        <button
+          type="button"
+          className="new-task-btn"
+          onClick={onOpenDraftModal}
+        >
+          <Sparkles size={16} />
+          <span>Generate Task</span>
         </button>
       </div>
     </div>
