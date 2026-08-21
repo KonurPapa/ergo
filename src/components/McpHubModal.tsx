@@ -383,7 +383,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               {activeTab === 'external' && (
                 <button className="btn btn-primary" style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }} onClick={() => setShowAddForm(!showAddForm)}>
                   <Plus size={14} />
-                  <span>Connect MCP Server</span>
+                  <span>Connect Other</span>
                 </button>
               )}
             </div>
@@ -618,7 +618,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                           style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem' }}
                           onClick={() => onToggleConnectServer(server.id)}
                         >
-                          {isConnected ? 'Disconnect' : 'Connect OAuth'}
+                          {isConnected ? 'Disconnect' : 'Connect'}
                         </button>
                       </div>
 

@@ -919,8 +919,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
 
         {/* Footer */}
         <div className="modal-footer">
-          <button className="btn btn-secondary" onClick={onClose}>
-            Save & Close
+          <button className="btn btn-primary" onClick={onClose}>
+            Done
           </button>
         </div>
       </div>

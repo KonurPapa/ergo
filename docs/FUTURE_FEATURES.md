@@ -1,21 +1,23 @@
 **AI/ML Features (Future Roadmap)**
     - **Local LLMs**: Integrate with Ollama, LM Studio, or other local LLM providers for local AI support.
-    - **Real-time AI Assistance**: Implement real-time AI suggestions as the user types or interacts with the canvas (setting to toggle on/off)
-    - **Advanced Brief Generation**: Improve AI brief generation with better context awareness and task decomposition.
     - **Model Adaptivity**: User can select effort level, or let it automatically use the best model based on task complexity
     - **Prompting for Information**: If not enough information is provided in the task brief, the AI should prompt the user for more information as it needs it (similar to how Claude Code pops up multi-choice prompts mid-run)
     - **Human Summaries**: AI should give brief summaries of completed tasks for human review, as well as any action items the human may need to perform (if any)
     - Ask the AI what it thinks a particular task is telling it to do (with a lightweight model), so the user can clarify any bad assumptions BEFORE execution
         - should this just be part of the AGENT_CONTEXT brief's generation process?
+            - yes - this is essentially the Overview card
     - The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with
         - but it should always tell the user what it added (and maybe the task is indicated with a 'review' tag or something)
-    - Autocomplete for the task input - pull from tags and previous inputs to determine most relevant suggestion
+    - **Autocomplete**
+        - pull from other tasks (excluding subtasks for brevity) to determine most relevant suggestion
+        - autocomplete should never start on an empty task/subtask
+        - autocomplete should not start if the user simply moved their cursor to another task, but hasn't started typing anything yet
+        - should have an immediate autocomplete for the current word being typed (after the user has typed 5 chars without a space), and a delayed autocomplete for the rest of the user's sentence if the user pauses for 3+ seconds
+        - autocomplete should keybind to Tab by default - this should be configurable in settings
+        - should be able to be toggled on/off completely in settings
     - make sure what's put in the human task list is succinct, clear and easily readable - make sure the AI side is verbose enough for the AI, but still in human-readable terms
     - **MCP**:
-        - we also need to figure out how to handle local dev; maybe with manual folder connection?
-            - this could be a standard practice anyway, where the AI can write things like markdown docs, API keys, MCP tokens, etc.
         - MCP authentication when user clicks 'connect'
-        - auth token storage (how?)
         - after connection, the app needs to call `tools/list` and store all available tools for that particular MCP
         - when user creates a task, if there's an MCP connected, show a list of tools from that MCP (use `tools/list` to get the tools) that the user can select to use for that task
         - only use tools that are actually relevant to the task (ask for clarification if needed, but try to guess based on the task brief and list of tools)
@@ -24,8 +26,6 @@
     - rework the 'new task' button for using the AI to perform general tasks on the human workspace
         - create new task w/ subtasks
         - refine existing tasks (remove, replace, or edit wording)
-    - implement Larry for custom webpage navigation
-        - this should show in an iframe within the AI Workspace (so the user can watch)
     - AI is NEVER allowed to delete things from the user's side, but they should ALWAYS keep their agent context side in parity w/ the user's side
         - I.e. if a user deletes a task or subtask from the human side, or reorders tasks, the AI should also delete it from the agent context side as well, and reorder the tasks there as well
     - **CLI mode for coding agents**
@@ -38,7 +38,7 @@
             - if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)
     - commands/words in tasks that trigger custom AI logic (skills)
     - **implement Nostr for remote connection**
-    - maybe implement an 'assistance' slider, which determines how much the AI will ask for clarification vs. just autonomously assuming
+    - maybe implement an 'assistance' slider, which determines how much the AI will ask for clarification during task execution vs. just autonomously assuming
     - when the user creates/deletes a task, the same task needs to be created/deleted from the AI side, and the numbers adjusted; this way the AI context doc won't get out of sync and start to drift from the human-side task list
         - this needs to happen IMMEDIATELY so any in-progress tasks don't get thrown off while working
     - AI should be allowed to created its own tasks on the human side, but these should be clearly marked as AI-generated so the user can approve/dismiss them
@@ -46,6 +46,9 @@
     - AI needs to skim task headers, not read the whole task list for every single thing it wants to do
         - it should never read subtasks unless the task name warrants it
         - this should also be done by the discovery AI, not the task AI
+    - an undo button to revert back to the previous diff
+        - how is this handled for non-code tasks?
+        - maybe this starts out in V1 just for code
 
 
 
@@ -76,3 +79,5 @@
     - when a code CLI has paused prompting the user for clarification, this should show up as a status icon on both the humand and AI sides of the task, so the user knows they need to intervene
     - support for codeblocks (not just code lines)
     - copy/cut/delete for tasks needs to be better
+    - ability to create a code-formatting doc
+        - is this just part of global rules?
