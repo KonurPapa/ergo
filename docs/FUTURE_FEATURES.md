@@ -8,6 +8,7 @@
             - yes - this is essentially the Overview card
     - The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with
         - but it should always tell the user what it added (and maybe the task is indicated with a 'review' tag or something)
+        - this should happen primarily when it finds something along the way that's out of scope for its current task
     - **Autocomplete**
         - pull from other tasks (excluding subtasks for brevity) to determine most relevant suggestion
         - autocomplete should never start on an empty task/subtask
@@ -81,3 +82,4 @@
     - copy/cut/delete for tasks needs to be better
     - ability to create a code-formatting doc
         - is this just part of global rules?
+    - microphone access to add/edit tasks

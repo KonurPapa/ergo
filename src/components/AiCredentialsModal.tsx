@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { type AIProviderId, type UserApiKey } from '../types';
-import { SUPPORTED_AI_PROVIDERS, testAiConnection } from '../lib/aiProviders';
+import { SUPPORTED_AI_PROVIDERS, testAiConnection, fetchOllamaModels, type ProviderModel } from '../lib/aiProviders';
 import {
   Key,
   Globe,
@@ -56,10 +56,31 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
   const [keyPendingDelete, setKeyPendingDelete] = useState<UserApiKey | null>(null);
 
+  // Dynamic Model Discovery State for Cloud and Local Providers
+  const [discoveredModels, setDiscoveredModels] = useState<Record<string, ProviderModel[]>>({});
+
+  // Ollama specific connection state
+  const [ollamaModels, setOllamaModels] = useState<ProviderModel[]>([]);
+  const [isOllamaConnected, setIsOllamaConnected] = useState(false);
+  const [isLoadingOllamaModels, setIsLoadingOllamaModels] = useState(false);
+
+  // Custom Model Manual Input Toggle State
+  const [isCustomDiscovery, setIsCustomDiscovery] = useState(false);
+  const [isCustomGeneral, setIsCustomGeneral] = useState(false);
+
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   const providerMeta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === providerId) || SUPPORTED_AI_PROVIDERS[0];
+
+  // Helper to retrieve the current available models for the active provider
+  const getEffectiveModels = (pId: AIProviderId): ProviderModel[] => {
+    if (pId === 'ollama') return ollamaModels;
+    const dynamic = discoveredModels[pId];
+    if (dynamic && dynamic.length > 0) return dynamic;
+    const p = SUPPORTED_AI_PROVIDERS.find((item) => item.id === pId);
+    return p?.models || [];
+  };
 
   const resetForm = (pId: AIProviderId = 'openai') => {
     const p = SUPPORTED_AI_PROVIDERS.find((item) => item.id === pId) || SUPPORTED_AI_PROVIDERS[0];
@@ -68,23 +89,63 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     setApiKey('');
     setProviderId(pId);
     setBaseUrl(p.defaultBaseUrl || '');
-    setDiscoveryModel(p.defaultDiscoveryModel);
-    setGeneralModel(p.defaultGeneralModel);
+    setDiscoveryModel(pId === 'ollama' ? '' : p.defaultDiscoveryModel);
+    setGeneralModel(pId === 'ollama' ? '' : p.defaultGeneralModel);
     setTestResult(null);
     setShowApiKey(false);
+    setOllamaModels([]);
+    setIsOllamaConnected(false);
+    setIsCustomDiscovery(false);
+    setIsCustomGeneral(false);
   };
 
-  const loadKeyForEditing = (k: UserApiKey) => {
+  const loadKeyForEditing = async (k: UserApiKey) => {
     const p = SUPPORTED_AI_PROVIDERS.find((item) => item.id === k.provider) || SUPPORTED_AI_PROVIDERS[0];
     setEditingId(k.id);
     setKeyName(k.name);
     setApiKey(k.apiKey || '');
     setProviderId(k.provider);
-    setBaseUrl(k.baseUrl || p.defaultBaseUrl || '');
-    setDiscoveryModel(k.discoveryModel || p.defaultDiscoveryModel);
-    setGeneralModel(k.generalModel || k.model || p.defaultGeneralModel);
+    const resolvedBaseUrl = k.baseUrl || p.defaultBaseUrl || '';
+    setBaseUrl(resolvedBaseUrl);
+    const currentDisc = k.discoveryModel || (k.provider === 'ollama' ? '' : p.defaultDiscoveryModel);
+    const currentGen = k.generalModel || k.model || (k.provider === 'ollama' ? '' : p.defaultGeneralModel);
+    setDiscoveryModel(currentDisc);
+    setGeneralModel(currentGen);
     setTestResult(null);
     setShowApiKey(false);
+    setIsCustomDiscovery(false);
+    setIsCustomGeneral(false);
+
+    if (k.provider === 'ollama') {
+      setIsLoadingOllamaModels(true);
+      try {
+        const fetched = await fetchOllamaModels(resolvedBaseUrl);
+        setOllamaModels(fetched);
+        setIsOllamaConnected(true);
+        if (fetched.length > 0) {
+          if (!k.discoveryModel || !fetched.some((m) => m.id === k.discoveryModel)) {
+            setDiscoveryModel(fetched[0].id);
+          }
+          if (!k.generalModel || !fetched.some((m) => m.id === (k.generalModel || k.model))) {
+            setGeneralModel(fetched[0].id);
+          }
+        }
+      } catch {
+        setIsOllamaConnected(false);
+        setOllamaModels([]);
+      } finally {
+        setIsLoadingOllamaModels(false);
+      }
+    } else if (k.apiKey && (k.provider === 'openai' || k.provider === 'gemini')) {
+      // Auto-fetch live online models for OpenAI / Gemini on load
+      testAiConnection(k.provider, { apiKey: k.apiKey })
+        .then((res) => {
+          if (res.models && res.models.length > 0) {
+            setDiscoveredModels((prev) => ({ ...prev, [k.provider]: res.models! }));
+          }
+        })
+        .catch(() => { });
+    }
   };
 
   useEffect(() => {
@@ -103,8 +164,32 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     if (!editingId) {
       const p = SUPPORTED_AI_PROVIDERS.find((item) => item.id === providerId);
       if (p) {
-        setDiscoveryModel(p.defaultDiscoveryModel);
-        setGeneralModel(p.defaultGeneralModel);
+        if (providerId === 'ollama') {
+          setDiscoveryModel('');
+          setGeneralModel('');
+          setOllamaModels([]);
+          setIsOllamaConnected(false);
+          // Try background check to see if local Ollama is already running on default endpoint
+          const checkUrl = baseUrl || p.defaultBaseUrl || 'http://localhost:11434';
+          fetchOllamaModels(checkUrl)
+            .then((models) => {
+              setOllamaModels(models);
+              setIsOllamaConnected(true);
+              if (models.length > 0) {
+                setDiscoveryModel(models[0].id);
+                setGeneralModel(models[0].id);
+              }
+            })
+            .catch(() => {
+              setIsOllamaConnected(false);
+              setOllamaModels([]);
+            });
+        } else {
+          setDiscoveryModel(p.defaultDiscoveryModel);
+          setGeneralModel(p.defaultGeneralModel);
+          setIsCustomDiscovery(false);
+          setIsCustomGeneral(false);
+        }
         if (p.defaultBaseUrl) setBaseUrl(p.defaultBaseUrl);
       }
     }
@@ -112,24 +197,40 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Auto-detect provider when user pastes key
+  // Auto-detect provider when user pastes key and auto-fetch live models
   const handleApiKeyChange = (val: string) => {
     setApiKey(val);
     const trimmed = val.trim();
+    let detectedProvider = providerId;
     if (!keyName || keyName.endsWith('Key') || keyName.endsWith('Ollama')) {
       if (trimmed.startsWith('sk-ant-')) {
+        detectedProvider = 'anthropic';
         setProviderId('anthropic');
-        if (!keyName) setKeyName('Anthropic Claude Key');
+        if (!keyName) setKeyName('Claude');
       } else if (trimmed.startsWith('sk-proj-') || trimmed.startsWith('sk-')) {
+        detectedProvider = 'openai';
         setProviderId('openai');
-        if (!keyName) setKeyName('OpenAI Key');
+        if (!keyName) setKeyName('ChatGPT');
       } else if (trimmed.startsWith('AIzaSy')) {
+        detectedProvider = 'gemini';
         setProviderId('gemini');
-        if (!keyName) setKeyName('Google Gemini Key');
+        if (!keyName) setKeyName('Gemini');
       } else if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.includes('11434')) {
+        detectedProvider = 'ollama';
         setProviderId('ollama');
-        if (!keyName) setKeyName('Local Ollama');
+        if (!keyName) setKeyName('Ollama');
       }
+    }
+
+    // Auto-fetch live models from API if key has reasonable length
+    if (trimmed.length > 20 && (detectedProvider === 'openai' || detectedProvider === 'gemini' || detectedProvider === 'anthropic')) {
+      testAiConnection(detectedProvider, { apiKey: trimmed })
+        .then((res) => {
+          if (res.models && res.models.length > 0) {
+            setDiscoveredModels((prev) => ({ ...prev, [detectedProvider]: res.models! }));
+          }
+        })
+        .catch(() => { });
     }
   };
 
@@ -142,20 +243,45 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
       model: generalModel || discoveryModel
     });
     setTestResult(res);
+
+    if (res.models && res.models.length > 0) {
+      if (providerId === 'ollama') {
+        setOllamaModels(res.models);
+        setIsOllamaConnected(true);
+        if (!discoveryModel || !res.models.some((m) => m.id === discoveryModel)) {
+          setDiscoveryModel(res.models[0].id);
+        }
+        if (!generalModel || !res.models.some((m) => m.id === generalModel)) {
+          setGeneralModel(res.models[0].id);
+        }
+      } else {
+        setDiscoveredModels((prev) => ({ ...prev, [providerId]: res.models! }));
+      }
+    } else if (providerId === 'ollama' && !res.success) {
+      setIsOllamaConnected(false);
+      setOllamaModels([]);
+    }
+
     setIsTesting(false);
   };
 
   const handleSave = () => {
     const finalName = keyName.trim() || `${providerMeta.name} Key`;
+    const effectiveList = getEffectiveModels(providerId);
+    const defaultDisc = providerId === 'ollama' ? (effectiveList[0]?.id || '') : providerMeta.defaultDiscoveryModel;
+    const defaultGen = providerId === 'ollama' ? (effectiveList[0]?.id || '') : providerMeta.defaultGeneralModel;
+    const resolvedDiscovery = discoveryModel || defaultDisc;
+    const resolvedGeneral = generalModel || defaultGen;
+
     onSaveUserKey({
       id: editingId || undefined,
       name: finalName,
       provider: providerId,
       apiKey: apiKey.trim(),
       baseUrl: baseUrl.trim(),
-      discoveryModel: discoveryModel || providerMeta.defaultDiscoveryModel,
-      generalModel: generalModel || providerMeta.defaultGeneralModel,
-      model: generalModel || providerMeta.defaultGeneralModel,
+      discoveryModel: resolvedDiscovery,
+      generalModel: resolvedGeneral,
+      model: resolvedGeneral,
       isConnected: true
     });
     resetForm();
@@ -413,14 +539,23 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                   <Sliders size={14} color="var(--accent-cyan)" />
                   <span>Advanced Settings</span>
-                  {/* <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 400 }}>
-                    (Model selection)
-                  </span> */}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   {!showAdvancedSettings && (
                     <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                      {providerMeta.models.find((m) => m.id === (discoveryModel || providerMeta.defaultDiscoveryModel))?.name || discoveryModel} • {providerMeta.models.find((m) => m.id === (generalModel || providerMeta.defaultGeneralModel))?.name || generalModel}
+                      {providerId === 'ollama' ? (
+                        isOllamaConnected ? (
+                          ollamaModels.length > 0 ? (
+                            `${discoveryModel || 'Select model'} • ${generalModel || 'Select model'}`
+                          ) : (
+                            'Connected (No models)'
+                          )
+                        ) : (
+                          'Not connected (Click Test Connection)'
+                        )
+                      ) : (
+                        `${getEffectiveModels(providerId).find((m) => m.id === discoveryModel)?.name || discoveryModel || providerMeta.defaultDiscoveryModel} • ${getEffectiveModels(providerId).find((m) => m.id === generalModel)?.name || generalModel || providerMeta.defaultGeneralModel}`
+                      )}
                     </span>
                   )}
                   <ChevronDown
@@ -449,8 +584,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 >
                   {/* Discovery Model */}
                   <div className="input-group" style={{ margin: 0 }}>
-                    <label className="input-label" style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', marginBottom: '0.4rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                      <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
                         <Zap size={13} color="var(--accent-amber)" />
                         <span style={{ fontWeight: 700, color: '#fff', fontSize: '0.82rem' }}>Discovery Model</span>
                         <span
@@ -465,29 +600,97 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         >
                           Lighter / Fast
                         </span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setIsCustomDiscovery(!isCustomDiscovery)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: 'var(--accent-cyan)',
+                          fontSize: '0.68rem',
+                          cursor: 'pointer',
+                          textDecoration: 'underline',
+                          padding: 0
+                        }}
+                      >
+                        {isCustomDiscovery ? 'Select Preset' : 'Custom ID'}
+                      </button>
+                    </div>
+                    <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.25, display: 'block', marginBottom: '0.4rem' }}>
+                      Used for quick scanning to assemble relevant context
+                    </span>
+
+                    {isCustomDiscovery ? (
+                      <input
+                        type="text"
+                        className="input-text"
+                        placeholder="e.g. gpt-4.5-preview, claude-3-7-sonnet-20250219..."
+                        value={discoveryModel}
+                        onChange={(e) => setDiscoveryModel(e.target.value)}
+                        style={{ fontSize: '0.82rem', fontFamily: 'var(--font-mono)' }}
+                      />
+                    ) : providerId === 'ollama' ? (
+                      <div>
+                        <select
+                          className="input-text"
+                          value={discoveryModel}
+                          onChange={(e) => setDiscoveryModel(e.target.value)}
+                          disabled={!isOllamaConnected || ollamaModels.length === 0 || isLoadingOllamaModels}
+                          style={{
+                            cursor: (!isOllamaConnected || ollamaModels.length === 0) ? 'not-allowed' : 'pointer',
+                            fontSize: '0.82rem',
+                            opacity: (!isOllamaConnected || ollamaModels.length === 0) ? 0.75 : 1
+                          }}
+                        >
+                          {isLoadingOllamaModels ? (
+                            <option value="">Checking local Ollama...</option>
+                          ) : !isOllamaConnected ? (
+                            <option value="">Click 'Test Connection' to discover local models</option>
+                          ) : ollamaModels.length === 0 ? (
+                            <option value="">No models installed locally</option>
+                          ) : (
+                            <>
+                              {!discoveryModel && <option value="">Select a local model...</option>}
+                              {ollamaModels.map((m) => (
+                                <option key={`disc-ollama-${m.id}`} value={m.id}>
+                                  {m.name}
+                                </option>
+                              ))}
+                            </>
+                          )}
+                        </select>
+                        {!isOllamaConnected && !isLoadingOllamaModels && (
+                          <span style={{ display: 'block', fontSize: '0.68rem', color: 'var(--accent-amber)', marginTop: '0.3rem' }}>
+                            Click "Test Connection" to see your local models
+                          </span>
+                        )}
+                        {isOllamaConnected && ollamaModels.length === 0 && (
+                          <span style={{ display: 'block', fontSize: '0.68rem', color: 'var(--accent-amber)', marginTop: '0.3rem' }}>
+                            No models found. Run <code style={{ color: '#fff' }}>ollama pull llama3</code> in terminal.
+                          </span>
+                        )}
                       </div>
-                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.25 }}>
-                        Used for quick scanning to assemble relevant context
-                      </span>
-                    </label>
-                    <select
-                      className="input-text"
-                      value={discoveryModel || providerMeta.defaultDiscoveryModel}
-                      onChange={(e) => setDiscoveryModel(e.target.value)}
-                      style={{ cursor: 'pointer', fontSize: '0.82rem' }}
-                    >
-                      {providerMeta.models.map((m) => (
-                        <option key={`disc-${m.id}`} value={m.id}>
-                          {m.name} {m.id === providerMeta.defaultDiscoveryModel ? '(Default)' : ''}
-                        </option>
-                      ))}
-                    </select>
+                    ) : (
+                      <select
+                        className="input-text"
+                        value={discoveryModel || providerMeta.defaultDiscoveryModel}
+                        onChange={(e) => setDiscoveryModel(e.target.value)}
+                        style={{ cursor: 'pointer', fontSize: '0.82rem' }}
+                      >
+                        {getEffectiveModels(providerId).map((m) => (
+                          <option key={`disc-${m.id}`} value={m.id}>
+                            {m.name} {m.id === providerMeta.defaultDiscoveryModel ? '(Default)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                   </div>
 
                   {/* Tasks Model */}
                   <div className="input-group" style={{ margin: 0 }}>
-                    <label className="input-label" style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', marginBottom: '0.4rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                      <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
                         <Brain size={13} color="var(--accent-cyan)" />
                         <span style={{ fontWeight: 700, color: '#fff', fontSize: '0.82rem' }}>Tasks Model</span>
                         <span
@@ -502,23 +705,91 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         >
                           Mid / High Intelligence
                         </span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setIsCustomGeneral(!isCustomGeneral)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: 'var(--accent-cyan)',
+                          fontSize: '0.68rem',
+                          cursor: 'pointer',
+                          textDecoration: 'underline',
+                          padding: 0
+                        }}
+                      >
+                        {isCustomGeneral ? 'Select Preset' : 'Custom ID'}
+                      </button>
+                    </div>
+                    <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.25, display: 'block', marginBottom: '0.4rem' }}>
+                      Used for planning and running tasks
+                    </span>
+
+                    {isCustomGeneral ? (
+                      <input
+                        type="text"
+                        className="input-text"
+                        placeholder="e.g. gpt-4.5-preview, o3-mini, claude-3-7-sonnet-20250219..."
+                        value={generalModel}
+                        onChange={(e) => setGeneralModel(e.target.value)}
+                        style={{ fontSize: '0.82rem', fontFamily: 'var(--font-mono)' }}
+                      />
+                    ) : providerId === 'ollama' ? (
+                      <div>
+                        <select
+                          className="input-text"
+                          value={generalModel}
+                          onChange={(e) => setGeneralModel(e.target.value)}
+                          disabled={!isOllamaConnected || ollamaModels.length === 0 || isLoadingOllamaModels}
+                          style={{
+                            cursor: (!isOllamaConnected || ollamaModels.length === 0) ? 'not-allowed' : 'pointer',
+                            fontSize: '0.82rem',
+                            opacity: (!isOllamaConnected || ollamaModels.length === 0) ? 0.75 : 1
+                          }}
+                        >
+                          {isLoadingOllamaModels ? (
+                            <option value="">Checking local Ollama...</option>
+                          ) : !isOllamaConnected ? (
+                            <option value="">Click 'Test Connection' to discover local models</option>
+                          ) : ollamaModels.length === 0 ? (
+                            <option value="">No models installed locally</option>
+                          ) : (
+                            <>
+                              {!generalModel && <option value="">Select a local model...</option>}
+                              {ollamaModels.map((m) => (
+                                <option key={`gen-ollama-${m.id}`} value={m.id}>
+                                  {m.name}
+                                </option>
+                              ))}
+                            </>
+                          )}
+                        </select>
+                        {!isOllamaConnected && !isLoadingOllamaModels && (
+                          <span style={{ display: 'block', fontSize: '0.68rem', color: 'var(--accent-amber)', marginTop: '0.3rem' }}>
+                            Click "Test Connection" to see your local models
+                          </span>
+                        )}
+                        {isOllamaConnected && ollamaModels.length === 0 && (
+                          <span style={{ display: 'block', fontSize: '0.68rem', color: 'var(--accent-amber)', marginTop: '0.3rem' }}>
+                            No models found. Run <code style={{ color: '#fff' }}>ollama pull qwen2.5-coder</code> in terminal.
+                          </span>
+                        )}
                       </div>
-                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.25 }}>
-                        Used for planning and running tasks
-                      </span>
-                    </label>
-                    <select
-                      className="input-text"
-                      value={generalModel || providerMeta.defaultGeneralModel}
-                      onChange={(e) => setGeneralModel(e.target.value)}
-                      style={{ cursor: 'pointer', fontSize: '0.82rem' }}
-                    >
-                      {providerMeta.models.map((m) => (
-                        <option key={`gen-${m.id}`} value={m.id}>
-                          {m.name} {m.id === providerMeta.defaultGeneralModel ? '(Default)' : ''}
-                        </option>
-                      ))}
-                    </select>
+                    ) : (
+                      <select
+                        className="input-text"
+                        value={generalModel || providerMeta.defaultGeneralModel}
+                        onChange={(e) => setGeneralModel(e.target.value)}
+                        style={{ cursor: 'pointer', fontSize: '0.82rem' }}
+                      >
+                        {getEffectiveModels(providerId).map((m) => (
+                          <option key={`gen-${m.id}`} value={m.id}>
+                            {m.name} {m.id === providerMeta.defaultGeneralModel ? '(Default)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                   </div>
                 </div>
               )}
@@ -622,10 +893,11 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                   const isActive = k.id === activeKeyId;
                   const isCurrentlyEditing = k.id === editingId;
                   const pMeta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === k.provider);
+                  const effectiveList = getEffectiveModels(k.provider);
                   const effectiveDiscModel = k.discoveryModel || pMeta?.defaultDiscoveryModel || 'Default';
                   const effectiveGenModel = k.generalModel || k.model || pMeta?.defaultGeneralModel || 'Default';
-                  const discModelName = pMeta?.models.find((m) => m.id === effectiveDiscModel)?.name || effectiveDiscModel;
-                  const genModelName = pMeta?.models.find((m) => m.id === effectiveGenModel)?.name || effectiveGenModel;
+                  const discModelName = effectiveList.find((m) => m.id === effectiveDiscModel)?.name || pMeta?.models.find((m) => m.id === effectiveDiscModel)?.name || effectiveDiscModel;
+                  const genModelName = effectiveList.find((m) => m.id === effectiveGenModel)?.name || pMeta?.models.find((m) => m.id === effectiveGenModel)?.name || effectiveGenModel;
 
                   return (
                     <div
