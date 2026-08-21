@@ -3,9 +3,9 @@ import { type ProjectData, type MCPServer, type AIProviderConfig, type UserApiKe
 import { SUPPORTED_AI_PROVIDERS } from '../lib/aiProviders';
 import { type AutosaveStatus } from '../hooks/useAutosave';
 import {
-  Cpu,
+  Unplug,
   Download,
-  Bot,
+  Brain,
   ChevronDown,
   Check,
   Plus,
@@ -16,8 +16,7 @@ import {
   CheckCheck,
   AlertCircle,
   Clock,
-  Settings,
-  FolderOpen
+  Settings
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -25,14 +24,14 @@ interface NavbarProps {
   activeProject: ProjectData;
   onSelectProject: (proj: ProjectData) => void;
   onNewProject: () => void;
-  folderMetadata: FolderMetadata;
-  onOpenFolderPicker: () => void;
+  folderMetadata?: FolderMetadata;
+  onOpenFolderPicker?: () => void;
   mcpServers: MCPServer[];
   onOpenMcpHub: () => void;
   userApiKeys: UserApiKey[];
   activeKeyId: string | null;
   aiConfig: AIProviderConfig;
-  onSelectUserKey: (keyId: string) => void;
+  onSelectUserKey: (keyId: string | null) => void;
   onOpenAiScreen: () => void;
   onOpenRawMarkdownModal: () => void;
   onOpenSettingsModal: () => void;
@@ -48,13 +47,13 @@ export const Navbar: React.FC<NavbarProps> = ({
   activeProject,
   onSelectProject,
   onNewProject,
-  folderMetadata,
-  onOpenFolderPicker,
+  folderMetadata: _folderMetadata,
+  onOpenFolderPicker: _onOpenFolderPicker,
   mcpServers,
   onOpenMcpHub,
   userApiKeys,
   activeKeyId,
-  aiConfig,
+  aiConfig: _aiConfig,
   onSelectUserKey,
   onOpenAiScreen,
   onOpenRawMarkdownModal,
@@ -90,14 +89,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   const activeUserKey = userApiKeys.find((k) => k.id === activeKeyId);
   const activeProviderMeta = activeUserKey
     ? SUPPORTED_AI_PROVIDERS.find((p) => p.id === activeUserKey.provider)
-    : SUPPORTED_AI_PROVIDERS.find((p) => p.id === aiConfig.provider);
+    : undefined;
 
   const activeLabel = activeUserKey
     ? activeUserKey.name
     : 'Select AI Key';
-
-  const activeIcon = activeProviderMeta?.icon;
-  const hasActiveKey = !!activeUserKey || aiConfig.provider === 'mock';
 
   return (
     <header className="app-header">
@@ -184,7 +180,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             type="button"
             title={`Active Directory: ${activeProject?.folderPath || 'projects/default-workspace'}`}
           >
-            <Folder size={16} color="var(--accent-cyan)" />
+            <Folder size={18} color="var(--accent-cyan)" />
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', textAlign: 'left', lineHeight: 1.2 }}>
               <span style={{ fontWeight: 600, fontSize: '0.88rem' }}>{activeProject?.name || 'Default Workspace'}</span>
               <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
@@ -202,42 +198,65 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
 
           {isProjectDropdownOpen && (
-            <div className="custom-dropdown-menu" style={{ minWidth: '260px' }}>
-              <div className="custom-dropdown-header">Switch Project</div>
-              {projects.map((p) => {
-                const isSelected = p.id === activeProject.id;
-                return (
-                  <div
-                    key={p.id}
-                    className={`custom-dropdown-item ${isSelected ? 'selected' : ''}`}
-                    onClick={() => {
-                      onSelectProject(p);
-                      setIsProjectDropdownOpen(false);
-                    }}
-                  >
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <Folder size={14} color={isSelected ? 'var(--accent-cyan)' : 'var(--text-muted)'} />
-                        <span style={{ fontWeight: 600 }}>{p.name}</span>
+            <div className="custom-dropdown-menu" style={{ width: '340px' }}>
+              <div className="custom-dropdown-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Switch Project</span>
+                <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                  {projects.length > 0 ? `${projects.length} Project${projects.length > 1 ? 's' : ''} Configured` : 'No Projects'}
+                </span>
+              </div>
+
+              <div style={{ maxHeight: '260px', overflowY: 'auto' }}>
+                {projects.map((p) => {
+                  const isSelected = p.id === activeProject.id;
+                  return (
+                    <div
+                      key={p.id}
+                      className={`custom-dropdown-item ${isSelected ? 'selected' : ''}`}
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', padding: '0.65rem 0.85rem' }}
+                      onClick={() => {
+                        onSelectProject(p);
+                        setIsProjectDropdownOpen(false);
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flex: 1, minWidth: 0 }}>
+                        <div style={{ width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                          <Folder size={18} color={isSelected ? 'var(--accent-cyan)' : 'var(--text-muted)'} />
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.25, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff' }}>{p.name}</span>
+                            {isSelected && <Check size={14} color="var(--accent-cyan)" />}
+                          </div>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                            {p.folderPath || `projects/${p.id}`}
+                          </span>
+                        </div>
                       </div>
-                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', paddingLeft: '1.4rem' }}>
-                        {p.folderPath || `projects/${p.id}`}
-                      </span>
+
+                      {isSelected && (
+                        <span className="badge badge-done" style={{ fontSize: '0.65rem' }}>
+                          Current
+                        </span>
+                      )}
                     </div>
-                    {isSelected && <Check size={14} color="var(--accent-cyan)" />}
-                  </div>
-                );
-              })}
-              <div className="custom-dropdown-divider" />
-              <div
-                className="custom-dropdown-item create-action"
-                onClick={() => {
-                  onNewProject();
-                  setIsProjectDropdownOpen(false);
-                }}
-              >
-                <Plus size={14} color="var(--accent-emerald)" />
-                <span>Create New Project Directory...</span>
+                  );
+                })}
+              </div>
+
+              <div style={{ padding: '0.65rem 0.75rem', borderTop: '1px solid var(--border-subtle)' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ width: '100%', justifyContent: 'center', fontSize: '0.85rem' }}
+                  onClick={() => {
+                    setIsProjectDropdownOpen(false);
+                    onNewProject();
+                  }}
+                >
+                  <Plus size={15} />
+                  <span>Create New Project...</span>
+                </button>
               </div>
             </div>
           )}
@@ -249,26 +268,22 @@ export const Navbar: React.FC<NavbarProps> = ({
             className="ai-selector-custom"
             onClick={() => setIsAiDropdownOpen(!isAiDropdownOpen)}
             type="button"
-            title={`Active Engine Key: ${activeLabel}`}
+            title={`Current AI Key: ${activeLabel}`}
           >
-            <Bot size={16} color={activeProviderMeta?.badgeColor || 'var(--accent-cyan)'} />
-            <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              {activeProviderMeta?.iconUrl ? (
-                <img
-                  src={activeProviderMeta.iconUrl}
-                  alt={activeProviderMeta.shortName}
-                  style={{ width: 16, height: 16, objectFit: 'contain', display: 'inline-block' }}
-                />
-              ) : (
-                <span>{activeIcon}</span>
-              )}
-              <span style={{ fontWeight: 600 }}>{activeLabel}</span>
-            </span>
-            {hasActiveKey ? (
-              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--accent-emerald)', boxShadow: '0 0 8px var(--accent-emerald)' }} title="Key Active" />
+            {activeProviderMeta?.iconUrl ? (
+              <img
+                src={activeProviderMeta.iconUrl}
+                alt={activeProviderMeta.shortName}
+                style={{ width: 18, height: 18, objectFit: 'contain', display: 'inline-block' }}
+              />
             ) : (
-              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--accent-amber)' }} title="No Key Configured" />
+              <Brain size={18} color={activeUserKey ? 'var(--accent-cyan)' : 'var(--text-muted)'} />
             )}
+            <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <span style={{ fontWeight: activeUserKey ? 600 : 500, color: activeUserKey ? '#fff' : 'var(--text-muted)' }}>
+                {activeLabel}
+              </span>
+            </span>
             <ChevronDown
               size={15}
               style={{
@@ -341,14 +356,16 @@ export const Navbar: React.FC<NavbarProps> = ({
                               {isSelected && <Check size={14} color="var(--accent-cyan)" />}
                             </div>
                             <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                              {pMeta?.shortName || key.provider} ({key.model || pMeta?.defaultModel})
+                              {pMeta?.shortName || key.provider} ({key.generalModel || key.model || pMeta?.defaultGeneralModel})
                             </span>
                           </div>
                         </div>
 
-                        <span className="badge badge-done" style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem' }}>
-                          Active Key
-                        </span>
+                        {isSelected && (
+                          <span className="badge badge-done" style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem' }}>
+                            Active
+                          </span>
+                        )}
                       </div>
                     );
                   })}
@@ -356,20 +373,22 @@ export const Navbar: React.FC<NavbarProps> = ({
               )}
 
               {/* Button at the Bottom of the AI selection dropdown to open AI Screen */}
-              {activeUserKey && <>
-                <div className="custom-dropdown-divider" />
-                <div
-                  className="custom-dropdown-item create-action"
-                  style={{ padding: '0.75rem 0.85rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-                  onClick={() => {
-                    setIsAiDropdownOpen(false);
-                    onOpenAiScreen();
-                  }}
-                >
-                  <Plus size={15} color="var(--accent-emerald)" />
-                  <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>Open AI Screen & Manage Keys...</span>
+              {userApiKeys.length > 0 && (
+                <div style={{ padding: '0.65rem 0.75rem', borderTop: '1px solid var(--border-subtle)' }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    style={{ width: '100%', justifyContent: 'center', fontSize: '0.85rem' }}
+                    onClick={() => {
+                      setIsAiDropdownOpen(false);
+                      onOpenAiScreen();
+                    }}
+                  >
+                    <Settings size={15} />
+                    <span>Manage AI Keys...</span>
+                  </button>
                 </div>
-              </>}
+              )}
             </div>
           )}
         </div>
@@ -379,14 +398,14 @@ export const Navbar: React.FC<NavbarProps> = ({
           className={`autosave-status-btn status-${autosaveStatus}`}
           onClick={onSaveImmediately}
           type="button"
-          title={`Autosave: ${isAutosaveEnabled ? `${autosaveDelaySec}s debounce` : 'Off'} - Click to manually save now`}
+          title={`Autosave: ${isAutosaveEnabled ? `${autosaveDelaySec}s` : 'Off'} - save now`}
         >
-          {autosaveStatus === 'saving' && <RotateCw size={14} className="spin-animate" color="var(--accent-cyan)" />}
-          {autosaveStatus === 'pending' && <Clock size={14} color="var(--accent-amber)" />}
-          {autosaveStatus === 'saved' && <CheckCheck size={14} color="var(--accent-emerald)" />}
-          {autosaveStatus === 'error' && <AlertCircle size={14} color="#ef4444" />}
+          {autosaveStatus === 'saving' && <RotateCw size={16} className="spin-animate" color="var(--accent-cyan)" />}
+          {autosaveStatus === 'pending' && <Clock size={16} color="var(--accent-amber)" />}
+          {autosaveStatus === 'saved' && <CheckCheck size={16} color="var(--accent-emerald)" />}
+          {autosaveStatus === 'error' && <AlertCircle size={16} color="#ef4444" />}
           {autosaveStatus === 'idle' && (
-            <HardDrive size={14} color={isAutosaveEnabled ? 'var(--accent-cyan)' : 'var(--text-muted)'} />
+            <HardDrive size={16} color={isAutosaveEnabled ? 'var(--accent-cyan)' : 'var(--text-muted)'} />
           )}
 
           <span className="autosave-label">
@@ -402,23 +421,23 @@ export const Navbar: React.FC<NavbarProps> = ({
       {/* Right Header Actions */}
       <div className="header-actions">
         {/* Connected MCPs Trigger */}
-        <button className="btn btn-secondary" onClick={onOpenMcpHub} title="Configure Connected MCP Servers">
-          <Cpu size={16} color="var(--accent-violet)" />
+        <button className="btn btn-secondary" onClick={onOpenMcpHub} title="Configure Connections (MCPs, Folders, Coding Agents)">
+          <Unplug size={20} color="var(--accent-violet)" />
           {/* <span>Connections</span> */}
-          <span className="badge badge-done" style={{ marginLeft: '0.2rem', padding: '0.15rem 0.4rem' }}>
-            {/* {connectedCount} Connected */}
-            Connections
+          <span className="badge badge-done" style={{ marginLeft: '-0.2rem', padding: '0.15rem 0.4rem' }}>
+            {/* {connectedCount > 0 ? `${connectedCount} MCP` : 'MCP Hub'} */}
+            {connectedCount > 0 ? 'Connections' : 'Add Connections'}
           </span>
         </button>
 
         {/* Download & Preview Markdown Files Button */}
-        <button className="btn btn-secondary" onClick={onOpenRawMarkdownModal} title="Preview and Download TODO.md & AGENT_CONTEXT.md">
+        <button className="btn btn-secondary btn-icon-only" onClick={onOpenRawMarkdownModal} title="Preview and Download TODO.md & AGENT_CONTEXT.md">
           <Download size={16} color="var(--accent-cyan)" />
           {/* <span>Download</span> */}
         </button>
 
         {/* Settings Button (Gear Icon next to Download Button) */}
-        <button className="btn btn-secondary" onClick={onOpenSettingsModal} title="Workspace Settings (Auto-Save Delay & Disk Sync)">
+        <button className="btn btn-secondary btn-icon-only" onClick={onOpenSettingsModal} title="Workspace Settings (Auto-Save Delay & Disk Sync)">
           <Settings size={16} color="var(--accent-cyan)" />
           {/* <span>Settings</span> */}
         </button>

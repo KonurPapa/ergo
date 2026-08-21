@@ -3,6 +3,7 @@ import { type MCPServer, type McpRootBoundary, type CliAgentConfig, type CliAgen
 
 import { getAllowedRoots, addAllowedRoot, removeAllowedRoot } from '../lib/mcpClient';
 import {
+  Unplug,
   Cpu,
   X,
   Shield,
@@ -19,7 +20,6 @@ import {
   Calendar,
   Zap,
   BookOpen,
-  RefreshCw,
   FolderPlus,
   Trash2,
   Lock,
@@ -150,7 +150,6 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   const [roots, setRoots] = useState<McpRootBoundary[]>([]);
   const [newRootPath, setNewRootPath] = useState('');
   const [newRootName, setNewRootName] = useState('');
-  const [isSyncing, setIsSyncing] = useState(false);
 
   // CLI agent local state
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(cliAgentConfig?.presetId ?? null);
@@ -165,12 +164,6 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   }, [isOpen]);
 
   if (!isOpen) return null;
-
-  const handleSyncAllTools = async () => {
-    setIsSyncing(true);
-    await new Promise((r) => setTimeout(r, 700));
-    setIsSyncing(false);
-  };
 
   const handleAddRootSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -221,44 +214,64 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="modal-content" style={{ maxWidth: '960px' }} onClick={(e) => e.stopPropagation()}>
+      <div className="modal-content" style={{ maxWidth: '920px', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
+        {/* Modal Header */}
         <div className="modal-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            <Cpu size={22} color="var(--accent-violet)" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <div
+              style={{
+                width: '38px',
+                height: '38px',
+                borderRadius: '10px',
+                background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-cyan))',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#fff',
+                boxShadow: '0 2px 8px rgba(99, 102, 241, 0.3)',
+                flexShrink: 0
+              }}
+            >
+              <Unplug size={20} />
+            </div>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Bring Your Own MCP Hub (Model Context Protocol)</h3>
-                <span className="badge badge-done" style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem' }}>
-                  Persisted in config/secrets.json
-                </span>
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#fff', margin: 0 }}>Connections</h3>
               </div>
-              <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                Universal local stdio agent harnesses, safe directory roots, and OAuth 2.1 external tool servers
+              <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0.15rem 0 0 0' }}>
+                Manage local connections & folders, external MCPs, and cloud coding tools
               </p>
             </div>
           </div>
-          <button className="btn btn-secondary" style={{ padding: '0.3rem 0.5rem' }} onClick={onClose}>
+          <button className="btn btn-secondary" style={{ padding: '0.35rem 0.6rem' }} onClick={onClose}>
             <X size={16} />
           </button>
         </div>
 
         {/* Tab Navigation */}
-        <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border-subtle)', padding: '0 1.5rem', background: 'var(--bg-darkest)' }}>
+        <div style={{ display: 'flex', gap: '0.25rem', borderBottom: '1px solid var(--border-subtle)', padding: '0 1.5rem', background: 'var(--bg-darkest)' }}>
           <button
             className={`tab-btn ${activeTab === 'harnesses' ? 'active' : ''}`}
             onClick={() => setActiveTab('harnesses')}
             style={{
               padding: '0.75rem 1rem',
-              borderBottom: activeTab === 'harnesses' ? '2px solid var(--accent-primary)' : '2px solid transparent',
+              border: 'none',
+              borderBottom: activeTab === 'harnesses' ? '2px solid var(--accent-cyan)' : '2px solid transparent',
               color: activeTab === 'harnesses' ? '#fff' : 'var(--text-muted)',
               fontWeight: 600,
-              fontSize: '0.85rem',
+              fontSize: '0.84rem',
               background: 'none',
-              border: 'none',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              transition: 'all 0.15s ease'
             }}
           >
-            Bundled Agent Harnesses ({bundledHarnesses.length})
+            <span>Default Connections</span>
+            <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: activeTab === 'harnesses' ? 'rgba(6, 182, 212, 0.18)' : 'rgba(255, 255, 255, 0.05)', color: activeTab === 'harnesses' ? 'var(--accent-cyan)' : 'var(--text-dim)', fontWeight: 700 }}>
+              {bundledHarnesses.length}
+            </span>
           </button>
 
           <button
@@ -266,16 +279,23 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
             onClick={() => setActiveTab('roots')}
             style={{
               padding: '0.75rem 1rem',
-              borderBottom: activeTab === 'roots' ? '2px solid var(--accent-primary)' : '2px solid transparent',
+              border: 'none',
+              borderBottom: activeTab === 'roots' ? '2px solid var(--accent-cyan)' : '2px solid transparent',
               color: activeTab === 'roots' ? '#fff' : 'var(--text-muted)',
               fontWeight: 600,
-              fontSize: '0.85rem',
+              fontSize: '0.84rem',
               background: 'none',
-              border: 'none',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              transition: 'all 0.15s ease'
             }}
           >
-            Safe Directory Roots ({roots.length})
+            <span>Allowed Folders</span>
+            <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: activeTab === 'roots' ? 'rgba(6, 182, 212, 0.18)' : 'rgba(255, 255, 255, 0.05)', color: activeTab === 'roots' ? 'var(--accent-cyan)' : 'var(--text-dim)', fontWeight: 700 }}>
+              {roots.length}
+            </span>
           </button>
 
           <button
@@ -283,16 +303,23 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
             onClick={() => setActiveTab('external')}
             style={{
               padding: '0.75rem 1rem',
-              borderBottom: activeTab === 'external' ? '2px solid var(--accent-primary)' : '2px solid transparent',
+              border: 'none',
+              borderBottom: activeTab === 'external' ? '2px solid var(--accent-cyan)' : '2px solid transparent',
               color: activeTab === 'external' ? '#fff' : 'var(--text-muted)',
               fontWeight: 600,
-              fontSize: '0.85rem',
+              fontSize: '0.84rem',
               background: 'none',
-              border: 'none',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              transition: 'all 0.15s ease'
             }}
           >
-            External OAuth MCPs ({externalServers.length})
+            <span>External Apps</span>
+            <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: activeTab === 'external' ? 'rgba(6, 182, 212, 0.18)' : 'rgba(255, 255, 255, 0.05)', color: activeTab === 'external' ? 'var(--accent-cyan)' : 'var(--text-dim)', fontWeight: 700 }}>
+              {externalServers.length}
+            </span>
           </button>
 
           <button
@@ -300,33 +327,50 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
             onClick={() => setActiveTab('cli')}
             style={{
               padding: '0.75rem 1rem',
+              border: 'none',
               borderBottom: activeTab === 'cli' ? '2px solid var(--accent-emerald)' : '2px solid transparent',
               color: activeTab === 'cli' ? 'var(--accent-emerald)' : 'var(--text-muted)',
               fontWeight: 600,
-              fontSize: '0.85rem',
+              fontSize: '0.84rem',
               background: 'none',
-              border: 'none',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              transition: 'all 0.15s ease'
             }}
           >
-            <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-              <Terminal size={13} />
-              CLI Coding Agents
-              {cliAgentConfig && <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent-emerald)', display: 'inline-block' }} />}
-            </span>
+            <Terminal size={14} />
+            <span>Coding Agents</span>
+            {cliAgentConfig && <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent-emerald)', display: 'inline-block' }} />}
           </button>
-
         </div>
 
-        <div className="modal-body" style={{ paddingTop: '1.25rem' }}>
+        <div className="modal-body" style={{ overflowY: 'auto', flex: 1, padding: '1.25rem 1.5rem' }}>
           {/* Header Action Bar */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
-            <div style={{ fontSize: '0.88rem', color: 'var(--text-main)' }}>
-              Connected MCP Servers: <strong style={{ color: 'var(--accent-emerald)' }}>{mcpServers.filter((s) => s.status === 'connected').length} / {mcpServers.length} Active</strong>
-            </div>
+            {/* <h4
+              style={{
+                fontSize: '0.85rem',
+                fontWeight: 700,
+                color: 'var(--text-muted)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+                margin: 0,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}
+            >
+              <span>MCP Server Connections</span>
+              <span className="badge badge-done" style={{ fontSize: '0.68rem', textTransform: 'none', letterSpacing: 'normal' }}>
+                {mcpServers.filter((s) => s.status === 'connected').length} / {mcpServers.length} Active
+              </span>
+            </h4> */}
+            <span></span>
 
             <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button
+              {/* <button
                 className="btn btn-secondary"
                 style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem', gap: '0.4rem' }}
                 onClick={handleSyncAllTools}
@@ -334,7 +378,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               >
                 <RefreshCw size={13} className={isSyncing ? 'animate-spin' : ''} />
                 <span>{isSyncing ? 'Syncing tools/list...' : 'Sync tools/list'}</span>
-              </button>
+              </button> */}
 
               {activeTab === 'external' && (
                 <button className="btn btn-primary" style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }} onClick={() => setShowAddForm(!showAddForm)}>
@@ -347,8 +391,8 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
 
           {/* TAB 1: BUNDLED AGENT HARNESSES */}
           {activeTab === 'harnesses' && (
-            <div>
-              <div style={{ background: 'var(--bg-darkest)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '0.85rem 1rem', marginBottom: '1.25rem', fontSize: '0.84rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '0.85rem 1rem', fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
                 <strong style={{ color: '#fff' }}>Open-Source Agent Harnesses:</strong> Ergo bundles standard Node.js MCP servers (<span style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>server-filesystem</span>, <span style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>server-fetch</span>, and <span style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>mcp-server-git</span>) communicating via synchronous Local Stdio IPC. These operate browser-agnostically with zero database required.
               </div>
 
@@ -364,11 +408,11 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                         </div>
 
                         <span className="badge badge-done" style={{ fontSize: '0.7rem' }}>
-                          Built-in Harness
+                          Default Connection
                         </span>
                       </div>
 
-                      <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>{server.description}</p>
+                      <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>{server.description}</p>
 
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-dim)', paddingTop: '0.4rem', borderTop: '1px solid var(--border-subtle)' }}>
                         <span>Transport: <strong style={{ color: 'var(--accent-emerald)' }}>{server.transport}</strong></span>
@@ -377,24 +421,26 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
 
                       {/* Discovered Tools List */}
                       {isConnected && server.tools.length > 0 && (
-                        <div style={{ background: 'var(--bg-darkest)', padding: '0.65rem', borderRadius: 'var(--radius-sm)', marginTop: '0.2rem' }}>
-                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent-cyan)', textTransform: 'uppercase', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                            <Shield size={11} />
+                        <div style={{ background: 'rgba(0, 0, 0, 0.25)', border: '1px solid var(--border-subtle)', padding: '0.65rem 0.75rem', borderRadius: 'var(--radius-sm)', marginTop: '0.2rem' }}>
+                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <Shield size={12} />
                             <span>Tools & Security Auto-Approval Policies</span>
                           </div>
 
                           {server.tools.map((tool) => (
-                            <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.25rem 0' }}>
-                              <span style={{ fontFamily: 'var(--font-mono)', color: '#fff' }}>{tool.name}</span>
+                            <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.3rem 0', borderTop: '1px solid rgba(255, 255, 255, 0.04)' }}>
+                              <span style={{ fontFamily: 'var(--font-mono)', color: '#fff', fontSize: '0.76rem' }}>{tool.name}</span>
                               <button
                                 style={{
                                   background: tool.autoApprove ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
                                   color: tool.autoApprove ? 'var(--accent-emerald)' : 'var(--accent-amber)',
                                   border: '1px solid ' + (tool.autoApprove ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)'),
-                                  padding: '0.1rem 0.4rem',
+                                  padding: '0.15rem 0.5rem',
                                   borderRadius: '4px',
                                   fontSize: '0.7rem',
-                                  cursor: 'pointer'
+                                  cursor: 'pointer',
+                                  fontWeight: 600,
+                                  transition: 'all 0.15s ease'
                                 }}
                                 onClick={() => onToggleToolAutoApprove(server.id, tool.id)}
                               >
@@ -413,95 +459,132 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
 
           {/* TAB 2: SAFE DIRECTORY ROOTS */}
           {activeTab === 'roots' && (
-            <div>
-              <div style={{ background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: 'var(--radius-md)', padding: '1rem', marginBottom: '1.25rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-cyan)', fontWeight: 700, fontSize: '0.9rem', marginBottom: '0.3rem' }}>
-                  <Lock size={16} />
-                  <span>Filesystem MCP Boundary Sandboxing (Roots)</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '0.85rem 1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                  <Lock size={15} color="var(--accent-cyan)" />
+                  <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff' }}>Filesystem MCP Boundary Sandboxing (Roots)</span>
                 </div>
-                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-                  To protect your hard drive, the Filesystem MCP server (<span style={{ fontFamily: 'var(--font-mono)' }}>server-filesystem</span>) is strictly constrained to the directory paths configured below. AI agents cannot read or write outside these approved boundaries.
+                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.5 }}>
+                  To protect your hard drive, the Filesystem MCP server (<span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)' }}>server-filesystem</span>) is strictly constrained to the directory paths configured below. AI agents cannot read or write outside these approved boundaries.
                 </p>
               </div>
 
               {/* Add Root Form */}
-              <form onSubmit={handleAddRootSubmit} style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.25rem' }}>
-                <input
-                  type="text"
-                  className="input-text"
-                  placeholder="Folder Path (e.g. /home/user/my-project or ../other-repo)"
-                  value={newRootPath}
-                  onChange={(e) => setNewRootPath(e.target.value)}
-                  style={{ flex: 2 }}
-                />
-                <input
-                  type="text"
-                  className="input-text"
-                  placeholder="Label / Nickname (optional)"
-                  value={newRootName}
-                  onChange={(e) => setNewRootName(e.target.value)}
-                  style={{ flex: 1 }}
-                />
-                <button type="submit" className="btn btn-primary" disabled={!newRootPath.trim()} style={{ whiteSpace: 'nowrap' }}>
-                  <FolderPlus size={14} />
-                  <span>Add Allowed Root</span>
-                </button>
-              </form>
-
-              {/* Roots List */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-                {roots.map((root) => (
-                  <div
-                    key={root.id}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                  <h4
                     style={{
-                      background: 'var(--bg-card)',
-                      border: '1px solid var(--border-subtle)',
-                      borderRadius: 'var(--radius-sm)',
-                      padding: '0.75rem 1rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between'
+                      fontSize: '0.85rem',
+                      fontWeight: 700,
+                      color: 'var(--text-muted)',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em',
+                      margin: 0
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                      <Folder size={18} color="var(--accent-primary)" />
-                      <div>
-                        <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                          <span>{root.name}</span>
-                          {root.isDefault && (
-                            <span className="badge badge-done" style={{ fontSize: '0.65rem' }}>
-                              Primary Workspace
-                            </span>
-                          )}
-                        </div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-                          {root.path}
+                    Add Allowed Directory Root
+                  </h4>
+                </div>
+                <form onSubmit={handleAddRootSubmit} style={{ display: 'flex', gap: '0.75rem' }}>
+                  <input
+                    type="text"
+                    className="input-text"
+                    placeholder="Folder Path (e.g. /home/user/my-project or ../other-repo)"
+                    value={newRootPath}
+                    onChange={(e) => setNewRootPath(e.target.value)}
+                    style={{ flex: 2 }}
+                  />
+                  <input
+                    type="text"
+                    className="input-text"
+                    placeholder="Label / Nickname (optional)"
+                    value={newRootName}
+                    onChange={(e) => setNewRootName(e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                  <button type="submit" className="btn btn-primary" disabled={!newRootPath.trim()} style={{ whiteSpace: 'nowrap' }}>
+                    <FolderPlus size={14} />
+                    <span>Add Allowed Root</span>
+                  </button>
+                </form>
+              </div>
+
+              {/* Roots List */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                  <h4
+                    style={{
+                      fontSize: '0.85rem',
+                      fontWeight: 700,
+                      color: 'var(--text-muted)',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em',
+                      margin: 0
+                    }}
+                  >
+                    Configured Directory Roots ({roots.length})
+                  </h4>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                  {roots.map((root) => (
+                    <div
+                      key={root.id}
+                      style={{
+                        background: 'var(--bg-card)',
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '0.75rem 1rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <Folder size={18} color="var(--accent-cyan)" />
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <span>{root.name}</span>
+                            {root.isDefault && (
+                              <span className="badge badge-done" style={{ fontSize: '0.65rem' }}>
+                                Default Storage
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', marginTop: '0.1rem' }}>
+                            {root.path}
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    {!root.isDefault && (
-                      <button
-                        className="btn btn-secondary"
-                        style={{ padding: '0.3rem 0.5rem', color: 'var(--accent-rose)' }}
-                        onClick={() => handleRemoveRoot(root.id)}
-                        title="Remove allowed root"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </div>
-                ))}
+                      {!root.isDefault && (
+                        <button
+                          className="btn btn-secondary"
+                          style={{ padding: '0.3rem 0.5rem', color: 'var(--accent-rose)' }}
+                          onClick={() => handleRemoveRoot(root.id)}
+                          title="Remove allowed root"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           )}
 
           {/* TAB 3: EXTERNAL SAAS MCPS */}
           {activeTab === 'external' && (
-            <div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
               {showAddForm && (
-                <form onSubmit={handleAddSubmit} style={{ background: 'var(--bg-darkest)', border: '1px solid var(--border-glow)', borderRadius: 'var(--radius-md)', padding: '1rem', marginBottom: '1.25rem' }}>
-                  <h4 style={{ fontSize: '0.9rem', fontWeight: 700, color: '#fff', marginBottom: '0.75rem' }}>Add Remote MCP Endpoint (OAuth 2.1 PKCE Standard)</h4>
+                <form onSubmit={handleAddSubmit} style={{ background: 'var(--bg-card)', border: '1px solid var(--border-glow)', borderRadius: 'var(--radius-md)', padding: '1.25rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                    <h4 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: 0 }}>
+                      Add Remote MCP Endpoint (OAuth 2.1 PKCE)
+                    </h4>
+                  </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
                     <div>
                       <label className="input-label">Server Name</label>
@@ -512,9 +595,9 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                       <input type="text" className="input-text" placeholder="https://mcp.asana.com/sse" value={newServerEndpoint} onChange={(e) => setNewServerEndpoint(e.target.value)} />
                     </div>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.75rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
                     <button type="button" className="btn btn-secondary" style={{ fontSize: '0.8rem' }} onClick={() => setShowAddForm(false)}>Cancel</button>
-                    <button type="submit" className="btn btn-emerald" style={{ fontSize: '0.8rem' }}>Authorize & Connect</button>
+                    <button type="submit" className="btn btn-primary" style={{ fontSize: '0.8rem' }}>Authorize & Connect</button>
                   </div>
                 </form>
               )}
@@ -539,7 +622,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                         </button>
                       </div>
 
-                      <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>{server.description}</p>
+                      <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>{server.description}</p>
 
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-dim)', paddingTop: '0.4rem', borderTop: '1px solid var(--border-subtle)' }}>
                         <span>Transport: {server.transport}</span>
@@ -548,24 +631,26 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
 
                       {/* Discovered Tools List */}
                       {isConnected && server.tools.length > 0 && (
-                        <div style={{ background: 'var(--bg-darkest)', padding: '0.65rem', borderRadius: 'var(--radius-sm)', marginTop: '0.2rem' }}>
-                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent-cyan)', textTransform: 'uppercase', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                            <Shield size={11} />
+                        <div style={{ background: 'rgba(0, 0, 0, 0.25)', border: '1px solid var(--border-subtle)', padding: '0.65rem 0.75rem', borderRadius: 'var(--radius-sm)', marginTop: '0.2rem' }}>
+                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <Shield size={12} />
                             <span>Available MCP Tools & Security Policies</span>
                           </div>
 
                           {server.tools.map((tool) => (
-                            <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.25rem 0' }}>
-                              <span style={{ fontFamily: 'var(--font-mono)', color: '#fff' }}>{tool.name}</span>
+                            <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.3rem 0', borderTop: '1px solid rgba(255, 255, 255, 0.04)' }}>
+                              <span style={{ fontFamily: 'var(--font-mono)', color: '#fff', fontSize: '0.76rem' }}>{tool.name}</span>
                               <button
                                 style={{
                                   background: tool.autoApprove ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
                                   color: tool.autoApprove ? 'var(--accent-emerald)' : 'var(--accent-amber)',
                                   border: '1px solid ' + (tool.autoApprove ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)'),
-                                  padding: '0.1rem 0.4rem',
+                                  padding: '0.15rem 0.5rem',
                                   borderRadius: '4px',
                                   fontSize: '0.7rem',
-                                  cursor: 'pointer'
+                                  cursor: 'pointer',
+                                  fontWeight: 600,
+                                  transition: 'all 0.15s ease'
                                 }}
                                 onClick={() => onToggleToolAutoApprove(server.id, tool.id)}
                               >
@@ -581,123 +666,154 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               </div>
             </div>
           )}
+
           {/* TAB 4: CLI CODING AGENTS */}
           {activeTab === 'cli' && (
-            <div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
               {/* Explainer */}
-              <div style={{ background: 'rgba(16,185,129,0.07)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 'var(--radius-md)', padding: '1rem', marginBottom: '1.25rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-emerald)', fontWeight: 700, fontSize: '0.9rem', marginBottom: '0.3rem' }}>
-                  <Terminal size={16} />
-                  <span>Native CLI Agent Execution</span>
+              <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '0.85rem 1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                  <Terminal size={15} color="var(--accent-emerald)" />
+                  <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff' }}>Native Agent Execution</span>
                 </div>
-                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: '1.55' }}>
+                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: '1.5' }}>
                   When you click <strong style={{ color: '#fff' }}>Execute Task</strong>, Ergo spawns your chosen coding agent in a real PTY terminal inside the AI Workspace — identical to running it in your IDE's integrated terminal. No custom integrations needed: arrow-key prompts, colors, and interactive widgets all work natively.
                 </p>
               </div>
 
               {/* Preset cards */}
-              <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.75rem' }}>Popular Agents</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '0.75rem', marginBottom: '1.5rem' }}>
-                {CLI_AGENT_PRESETS.map((preset) => {
-                  const isSelected = selectedPresetId === preset.id;
-                  return (
-                    <button
-                      key={preset.id}
-                      onClick={() => {
-                        setSelectedPresetId(preset.id);
-                        setCliCommand(preset.command);
-                        setCliExtraArgs(preset.defaultArgs);
-                        setCliSaved(false);
-                      }}
-                      style={{
-                        textAlign: 'left',
-                        background: isSelected ? 'rgba(16,185,129,0.09)' : 'var(--bg-card)',
-                        border: `1px solid ${isSelected ? 'rgba(16,185,129,0.45)' : 'var(--border-subtle)'}`,
-                        borderRadius: 'var(--radius-md)',
-                        padding: '0.85rem',
-                        cursor: 'pointer',
-                        transition: 'all 0.15s ease',
-                        position: 'relative',
-                      }}
-                    >
-                      {isSelected && (
-                        <span style={{ position: 'absolute', top: '0.5rem', right: '0.5rem' }}>
-                          <Check size={14} color="var(--accent-emerald)" />
-                        </span>
-                      )}
-                      <div style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff', marginBottom: '0.25rem' }}>{preset.label}</div>
-                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent-cyan)', marginBottom: '0.4rem' }}>{preset.command}{preset.defaultArgs ? ' ' + preset.defaultArgs : ''}</div>
-                      <p style={{ fontSize: '0.77rem', color: 'var(--text-muted)', lineHeight: '1.4', margin: 0 }}>{preset.description}</p>
-                      <a
-                        href={preset.docsUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.5rem', fontSize: '0.72rem', color: 'var(--accent-primary)', textDecoration: 'none' }}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                  <h4
+                    style={{
+                      fontSize: '0.85rem',
+                      fontWeight: 700,
+                      color: 'var(--text-muted)',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em',
+                      margin: 0
+                    }}
+                  >
+                    Popular Agent Presets
+                  </h4>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '0.75rem' }}>
+                  {CLI_AGENT_PRESETS.map((preset) => {
+                    const isSelected = selectedPresetId === preset.id;
+                    return (
+                      <button
+                        key={preset.id}
+                        onClick={() => {
+                          setSelectedPresetId(preset.id);
+                          setCliCommand(preset.command);
+                          setCliExtraArgs(preset.defaultArgs);
+                          setCliSaved(false);
+                        }}
+                        style={{
+                          textAlign: 'left',
+                          background: isSelected ? 'rgba(6, 182, 212, 0.08)' : 'var(--bg-card)',
+                          border: `1px solid ${isSelected ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
+                          borderRadius: 'var(--radius-md)',
+                          padding: '0.85rem 1rem',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                          position: 'relative',
+                        }}
                       >
-                        <ExternalLink size={10} /> Docs
-                      </a>
-                    </button>
-                  );
-                })}
+                        {isSelected && (
+                          <span style={{ position: 'absolute', top: '0.65rem', right: '0.65rem' }}>
+                            <Check size={14} color="var(--accent-cyan)" />
+                          </span>
+                        )}
+                        <div style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff', marginBottom: '0.25rem' }}>{preset.label}</div>
+                        <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent-cyan)', marginBottom: '0.4rem' }}>{preset.command}{preset.defaultArgs ? ' ' + preset.defaultArgs : ''}</div>
+                        <p style={{ fontSize: '0.77rem', color: 'var(--text-muted)', lineHeight: '1.4', margin: 0 }}>{preset.description}</p>
+                        <a
+                          href={preset.docsUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', marginTop: '0.6rem', fontSize: '0.72rem', color: 'var(--accent-primary)', textDecoration: 'none' }}
+                        >
+                          <ExternalLink size={10} /> Docs
+                        </a>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               {/* Custom / override fields */}
-              <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.65rem' }}>Command Configuration</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem', marginBottom: '1rem' }}>
-                <div>
-                  <label className="input-label">Shell Command</label>
-                  <input
-                    type="text"
-                    className="input-text"
-                    placeholder="e.g. claude, agy, aider"
-                    value={cliCommand}
-                    onChange={(e) => { setCliCommand(e.target.value); setSelectedPresetId(null); setCliSaved(false); }}
-                  />
-                </div>
-                <div>
-                  <label className="input-label">Extra Flags (optional)</label>
-                  <input
-                    type="text"
-                    className="input-text"
-                    placeholder="e.g. --model gpt-4o --verbose"
-                    value={cliExtraArgs}
-                    onChange={(e) => { setCliExtraArgs(e.target.value); setCliSaved(false); }}
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-                <button
-                  className="btn btn-emerald"
-                  disabled={!cliCommand.trim()}
-                  onClick={() => {
-                    const config: CliAgentConfig = {
-                      presetId: selectedPresetId ?? undefined,
-                      command: cliCommand.trim(),
-                      extraArgs: cliExtraArgs.trim(),
-                    };
-                    onSaveCliAgent(config);
-                    setCliSaved(true);
-                  }}
-                >
-                  <Check size={14} />
-                  <span>Save Agent Config</span>
-                </button>
-                {cliAgentConfig && (
-                  <button
-                    className="btn btn-secondary"
-                    style={{ color: 'var(--accent-rose)', fontSize: '0.8rem' }}
-                    onClick={() => { onSaveCliAgent(null); setCliCommand(''); setCliExtraArgs(''); setSelectedPresetId(null); setCliSaved(false); }}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                  <h4
+                    style={{
+                      fontSize: '0.85rem',
+                      fontWeight: 700,
+                      color: 'var(--text-muted)',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em',
+                      margin: 0
+                    }}
                   >
-                    Clear
+                    Command Configuration
+                  </h4>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem', marginBottom: '1rem' }}>
+                  <div>
+                    <label className="input-label">Shell Command</label>
+                    <input
+                      type="text"
+                      className="input-text"
+                      placeholder="e.g. claude, agy, aider"
+                      value={cliCommand}
+                      onChange={(e) => { setCliCommand(e.target.value); setSelectedPresetId(null); setCliSaved(false); }}
+                    />
+                  </div>
+                  <div>
+                    <label className="input-label">Extra Flags (optional)</label>
+                    <input
+                      type="text"
+                      className="input-text"
+                      placeholder="e.g. --model gpt-4o --verbose"
+                      value={cliExtraArgs}
+                      onChange={(e) => { setCliExtraArgs(e.target.value); setCliSaved(false); }}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                  <button
+                    className="btn btn-primary"
+                    disabled={!cliCommand.trim()}
+                    onClick={() => {
+                      const config: CliAgentConfig = {
+                        presetId: selectedPresetId ?? undefined,
+                        command: cliCommand.trim(),
+                        extraArgs: cliExtraArgs.trim(),
+                      };
+                      onSaveCliAgent(config);
+                      setCliSaved(true);
+                    }}
+                  >
+                    <Check size={14} />
+                    <span>Save Agent Config</span>
                   </button>
-                )}
-                {cliSaved && (
-                  <span style={{ fontSize: '0.82rem', color: 'var(--accent-emerald)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                    <CheckCircle2 size={14} /> Saved
-                  </span>
-                )}
+                  {cliAgentConfig && (
+                    <button
+                      className="btn btn-secondary"
+                      style={{ color: 'var(--accent-rose)', fontSize: '0.8rem' }}
+                      onClick={() => { onSaveCliAgent(null); setCliCommand(''); setCliExtraArgs(''); setSelectedPresetId(null); setCliSaved(false); }}
+                    >
+                      Clear
+                    </button>
+                  )}
+                  {cliSaved && (
+                    <span style={{ fontSize: '0.82rem', color: 'var(--accent-emerald)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                      <CheckCircle2 size={14} /> Saved
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           )}

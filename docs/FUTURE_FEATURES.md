@@ -28,20 +28,29 @@
         - this should show in an iframe within the AI Workspace (so the user can watch)
     - AI is NEVER allowed to delete things from the user's side, but they should ALWAYS keep their agent context side in parity w/ the user's side
         - I.e. if a user deletes a task or subtask from the human side, or reorders tasks, the AI should also delete it from the agent context side as well, and reorder the tasks there as well
-    - CLI mode for coding agents
+    - **CLI mode for coding agents**
         - connection to coding CLIs like Claude Code, Antigravity, Cursor, Codex, etc.
         - when the user clicks 'execute' on a task, it spawns a CLI agent that performs the task in a windowed terminal in the AI side
         - then on completion it writes back to the AI and user's side, and updates the task and subtasks to reflect what happened; the user can then also look back at the terminal to see more details
         - **terminal persistence**:
             - Terminal session history is in-memory — when you close or reload the app, the PTY process is killed and the tab is gone. The config (which agent to use) persists. Reconnecting to a live PTY after a page reload would require a full server-side session registry
+        - can it write out to the user's IDE?
+            - if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)
     - commands/words in tasks that trigger custom AI logic (skills)
     - **implement Nostr for remote connection**
-        
+    - maybe implement an 'assistance' slider, which determines how much the AI will ask for clarification vs. just autonomously assuming
+    - when the user creates/deletes a task, the same task needs to be created/deleted from the AI side, and the numbers adjusted; this way the AI context doc won't get out of sync and start to drift from the human-side task list
+        - this needs to happen IMMEDIATELY so any in-progress tasks don't get thrown off while working
+    - AI should be allowed to created its own tasks on the human side, but these should be clearly marked as AI-generated so the user can approve/dismiss them
+    - look for an `AGENTS.md` or `CLAUDE.md` file at the project folder and use it as the AI's baseline agent context if found
+    - AI needs to skim task headers, not read the whole task list for every single thing it wants to do
+        - it should never read subtasks unless the task name warrants it
+        - this should also be done by the discovery AI, not the task AI
+
 
 
 **UI/UX Features (Future Roadmap)**
     - **Organization Redesign**: Better task/subtask draggability/regrouping
-    - **Styling**: Allow users to style tasks and subtasks w/ standard text-formatting options
     - **Scheduling Tasks**: Add due dates and reminders for tasks, and allow users to schedule tasks to run at specific times.
     - **Visual Storytelling**: Use visual cues to show progress and achievements
     - **Customizable Dashboard**: Allow users to customize their dashboard with different widgets and layouts.
@@ -58,4 +67,12 @@
         - this should be configurable
     - a way in the UI to specify fallback conditions for tasks/subtasks
     - a 'human review' card _inside_ task cards, created by the AI after it finishes execution of a task
-    - verify 
+    - make sure AI is instructed explicitly on _how_ it should return human review and other text
+    - **Attaching Screenshots**: User needs to be able to attach screenshots somehow to tasks (maybe a 'gallery' dropdown?)
+    - **give the user a 'how-to' of best practices**
+        - how to structure tasks
+        - putting down a number of tasks first before running, so the AI has enough context to work effectively
+        - for the optimal workflow, the user should verify tasks the AI kicked back for human review _while_ a task is executing, so that the user is always doing the higher-level architecting/verification, while the AI is doing the lower-level task execution
+    - when a code CLI has paused prompting the user for clarification, this should show up as a status icon on both the humand and AI sides of the task, so the user knows they need to intervene
+    - support for codeblocks (not just code lines)
+    - copy/cut/delete for tasks needs to be better

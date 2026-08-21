@@ -5,7 +5,6 @@ import {
   Folder,
   FileText,
   CheckSquare,
-  Copy,
   AlertCircle,
   CheckCircle2,
   FolderOpen
@@ -292,9 +291,23 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
         <form onSubmit={handleSubmit}>
           <div className="modal-body" style={{ gap: '1.2rem', display: 'flex', flexDirection: 'column' }}>
             <div>
-              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-bright)', marginBottom: '0.4rem' }}>
+              {/* <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-bright)', marginBottom: '0.4rem' }}>
                 Project Name
-              </label>
+              </label> */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                <h4
+                  style={{
+                    fontSize: '0.85rem',
+                    fontWeight: 700,
+                    color: 'var(--text-muted)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    margin: 0
+                  }}
+                >
+                  Project Name
+                </h4>
+              </div>
               <input
                 type="text"
                 className="input-text"
@@ -307,10 +320,27 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
             </div>
 
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+              {/* <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
                 <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-bright)' }}>
                   Folder Path
                 </label>
+                <span style={{ fontSize: '0.72rem', color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>
+                  Mount: {mountPoint}
+                </span>
+              </div> */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                <h4
+                  style={{
+                    fontSize: '0.85rem',
+                    fontWeight: 700,
+                    color: 'var(--text-muted)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    margin: 0
+                  }}
+                >
+                  Project Path
+                </h4>
                 <span style={{ fontSize: '0.72rem', color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>
                   Mount: {mountPoint}
                 </span>
@@ -351,21 +381,30 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
             </div>
 
             {/* Optional Project Duplication Section */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '-0.5rem' }}>
+              <h4
+                style={{
+                  fontSize: '0.85rem',
+                  fontWeight: 700,
+                  color: 'var(--text-muted)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                  margin: 0
+                }}
+              >
+                Duplicate from Existing Project (Optional)
+              </h4>
+            </div>
             <div
               style={{
                 background: 'rgba(255, 255, 255, 0.02)',
                 border: '1px solid var(--border-subtle)',
                 borderRadius: '8px',
-                padding: '0.85rem'
+                padding: '0.85rem',
+                paddingTop: '0.25rem'
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                  <Copy size={15} color="var(--accent-violet)" />
-                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#fff' }}>
-                    Duplicate from Existing Project (Optional)
-                  </span>
-                </div>
                 {duplicatedSource && (
                   <button
                     type="button"
@@ -401,7 +440,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
                   </select>
                 )}
 
-                {/* <button
+                <button
                   type="button"
                   className="btn btn-secondary"
                   style={{
@@ -418,7 +457,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
                 >
                   <FolderOpen size={15} color="var(--accent-cyan)" />
                   <span>{isPicking ? 'Opening...' : 'Browse...'}</span>
-                </button> */}
+                </button>
               </div>
 
               {/* Hidden Native Directory Input */}

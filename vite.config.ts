@@ -106,14 +106,123 @@ function sendJson(res: ServerResponse, statusCode: number, data: any) {
   res.end(JSON.stringify(data));
 }
 
+// Set of active SSE clients listening for file changes
+const sseClients = new Set<ServerResponse>();
+// Recent server-side writes with timestamp to suppress self-notifications in the originating client
+const recentWrites = new Map<string, number>();
+
+function broadcastFileChange(payload: {
+  filePath: string;
+  relativePath: string;
+  projectId: string;
+  fileType: 'todo' | 'agent' | 'other';
+  content: string;
+  updatedAt: string;
+}) {
+  const data = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const client of sseClients) {
+    try {
+      client.write(data);
+    } catch {
+      sseClients.delete(client);
+    }
+  }
+}
+
+let fileWatcher: fsSync.FSWatcher | null = null;
+let watchDebounceTimer: NodeJS.Timeout | null = null;
+
+function setupProjectWatcher(storageDir: string) {
+  if (fileWatcher) {
+    try {
+      fileWatcher.close();
+    } catch {}
+    fileWatcher = null;
+  }
+
+  const projectsDir = path.join(storageDir, 'projects');
+  try {
+    if (!fsSync.existsSync(projectsDir)) {
+      fsSync.mkdirSync(projectsDir, { recursive: true });
+    }
+
+    fileWatcher = fsSync.watch(projectsDir, { recursive: true }, (_eventType, filename) => {
+      if (!filename) return;
+      const normalizedFilename = filename.replace(/\\/g, '/');
+      if (!normalizedFilename.endsWith('.md')) return;
+
+      if (watchDebounceTimer) {
+        clearTimeout(watchDebounceTimer);
+      }
+
+      watchDebounceTimer = setTimeout(async () => {
+        try {
+          const fullPath = path.join(projectsDir, normalizedFilename);
+          const relativeToStorage = path.join('projects', normalizedFilename).replace(/\\/g, '/');
+
+          // Check if this file was recently written via Ergo's internal write API (within 1.5s)
+          const lastWrite = recentWrites.get(relativeToStorage) || recentWrites.get(fullPath);
+          if (lastWrite && Date.now() - lastWrite < 1500) {
+            return;
+          }
+
+          if (!fsSync.existsSync(fullPath)) return;
+          const stat = await fs.stat(fullPath);
+          if (!stat.isFile()) return;
+
+          const content = await fs.readFile(fullPath, 'utf-8');
+          const pathParts = normalizedFilename.split('/');
+          const projectId = pathParts[0] || 'default-workspace';
+          const baseName = path.basename(normalizedFilename);
+          const fileType: 'todo' | 'agent' | 'other' =
+            baseName === 'TODO.md' ? 'todo' : baseName === 'AGENT_CONTEXT.md' ? 'agent' : 'other';
+
+          broadcastFileChange({
+            filePath: fullPath,
+            relativePath: relativeToStorage,
+            projectId,
+            fileType,
+            content,
+            updatedAt: stat.mtime.toISOString(),
+          });
+        } catch (err) {
+          console.warn('[Ergo Watcher] Error reading changed file:', err);
+        }
+      }, 150);
+    });
+  } catch (err) {
+    console.warn('[Ergo Watcher] Could not initialize file watcher:', err);
+  }
+}
+
 function ergoFileSystemPlugin(): Plugin {
   const attachMiddleware = (server: { middlewares: { use: Function } }) => {
+    const storageDir = getActiveStorageDir();
     // Initialize default ~/.ergo directory on startup
-    ensureStorageInitialized(getActiveStorageDir());
+    ensureStorageInitialized(storageDir);
+    setupProjectWatcher(storageDir);
 
     server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: Function) => {
       const url = req.url?.split('?')[0];
       const storageDir = getActiveStorageDir();
+
+      // ─────────────────────────────────────────────────────────────
+      // SSE Real-time File Change Subscription Endpoint
+      // ─────────────────────────────────────────────────────────────
+      if (url === '/api/files/events' && req.method === 'GET') {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache, no-transform',
+          'Connection': 'keep-alive',
+        });
+        res.write('data: {"type":"connected"}\n\n');
+        sseClients.add(res);
+
+        req.on('close', () => {
+          sseClients.delete(res);
+        });
+        return;
+      }
 
       // ─────────────────────────────────────────────────────────────
       // App Storage Directory Config Endpoints
@@ -136,6 +245,7 @@ function ergoFileSystemPlugin(): Plugin {
           activeStoragePath = newPath;
           const resolved = resolveStoragePath(newPath);
           await ensureStorageInitialized(resolved);
+          setupProjectWatcher(resolved);
 
           return sendJson(res, 200, {
             success: true,
@@ -159,12 +269,15 @@ function ergoFileSystemPlugin(): Plugin {
           }
 
           const writtenFiles: string[] = [];
+          const now = Date.now();
           for (const item of files) {
             if (!item.filePath || typeof item.content !== 'string') continue;
             const fullPath = path.resolve(storageDir, item.filePath);
             await fs.mkdir(path.dirname(fullPath), { recursive: true });
             await fs.writeFile(fullPath, item.content, 'utf-8');
             writtenFiles.push(item.filePath);
+            recentWrites.set(item.filePath, now);
+            recentWrites.set(fullPath, now);
           }
 
           return sendJson(res, 200, {
@@ -408,7 +521,7 @@ function ergoFileSystemPlugin(): Plugin {
               try {
                 const content = await fs.readFile(fullPath, 'utf-8');
                 return sendJson(res, 200, { success: true, data: { content, path: targetPath } });
-              } catch (err: any) {
+              } catch {
                 return sendJson(res, 404, { error: `File not found: ${targetPath}` });
               }
             }
@@ -429,7 +542,7 @@ function ergoFileSystemPlugin(): Plugin {
                   isFile: e.isFile()
                 }));
                 return sendJson(res, 200, { success: true, data: { path: targetPath, entries: items } });
-              } catch (err: any) {
+              } catch {
                 return sendJson(res, 404, { error: `Directory not found: ${targetPath}` });
               }
             }
@@ -452,7 +565,7 @@ function ergoFileSystemPlugin(): Plugin {
                     modifiedAt: stat.mtime.toISOString()
                   }
                 });
-              } catch (err: any) {
+              } catch {
                 return sendJson(res, 404, { error: `File not found: ${targetPath}` });
               }
             }
@@ -630,6 +743,17 @@ function ergoPtyPlugin(): Plugin {
         wss.on('connection', (ws: any) => {
           let ptyProcess: ReturnType<typeof pty.spawn> | null = null;
 
+          const safeKillPty = () => {
+            if (ptyProcess) {
+              try {
+                if (typeof ptyProcess.pid === 'number' && ptyProcess.pid > 0) {
+                  ptyProcess.kill();
+                }
+              } catch {}
+              ptyProcess = null;
+            }
+          };
+
           const send = (obj: Record<string, unknown>) => {
             if (ws.readyState === 1 /* OPEN */) {
               ws.send(JSON.stringify(obj));
@@ -645,10 +769,7 @@ function ergoPtyPlugin(): Plugin {
             }
 
             if (msg.type === 'spawn') {
-              if (ptyProcess) {
-                try { ptyProcess.kill(); } catch {}
-                ptyProcess = null;
-              }
+              safeKillPty();
 
               const cmd: string = msg.cmd || 'bash';
               const args: string[] = Array.isArray(msg.args) ? msg.args : [];
@@ -698,27 +819,20 @@ function ergoPtyPlugin(): Plugin {
               }
 
             } else if (msg.type === 'kill') {
-              if (ptyProcess) {
-                try { ptyProcess.kill(); } catch {}
-                ptyProcess = null;
-              }
+              safeKillPty();
             }
           });
 
           ws.on('close', () => {
             if (ptyProcess) {
               console.log('[Ergo PTY] WebSocket closed — killing PTY process');
-              try { ptyProcess.kill(); } catch {}
-              ptyProcess = null;
+              safeKillPty();
             }
           });
 
           ws.on('error', (err: Error) => {
             console.error('[Ergo PTY] WebSocket error:', err);
-            if (ptyProcess) {
-              try { ptyProcess.kill(); } catch {}
-              ptyProcess = null;
-            }
+            safeKillPty();
           });
         });
 

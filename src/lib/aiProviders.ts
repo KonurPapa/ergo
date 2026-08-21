@@ -1,5 +1,12 @@
 import { type AIProviderId, type ProviderCredentials } from '../types';
 
+export interface ProviderModel {
+  id: string;
+  name: string;
+  description: string;
+  tier?: 'light' | 'standard' | 'advanced' | 'reasoning';
+}
+
 export interface ProviderMeta {
   id: AIProviderId;
   name: string;
@@ -11,10 +18,12 @@ export interface ProviderMeta {
   requiresKey: boolean;
   requiresBaseUrl: boolean;
   defaultModel: string;
+  defaultDiscoveryModel: string;
+  defaultGeneralModel: string;
   defaultBaseUrl?: string;
   keyPlaceholder?: string;
   keyDocUrl?: string;
-  models: { id: string; name: string; description: string }[];
+  models: ProviderModel[];
 }
 
 export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
@@ -29,13 +38,15 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     requiresKey: true,
     requiresBaseUrl: false,
     defaultModel: 'gpt-4o',
+    defaultDiscoveryModel: 'gpt-4o-mini',
+    defaultGeneralModel: 'gpt-4o',
     keyPlaceholder: 'sk-proj-...',
     keyDocUrl: 'https://platform.openai.com/api-keys',
     models: [
-      { id: 'gpt-4o', name: 'GPT-4o', description: 'Flagship high-intelligence multimodal model' },
-      { id: 'gpt-4o-mini', name: 'GPT-4o mini', description: 'Fast, cost-efficient small model' },
-      { id: 'o3-mini', name: 'o3-mini', description: 'High-reasoning small model for complex logic' },
-      { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', description: 'Previous generation high-capability model' }
+      { id: 'gpt-4o-mini', name: 'GPT-4o mini', description: 'Fast, cost-efficient & responsive (Ideal for Discovery)', tier: 'light' },
+      { id: 'gpt-4o', name: 'GPT-4o', description: 'Flagship high-intelligence multimodal model (Ideal for General Tasks)', tier: 'standard' },
+      { id: 'o3-mini', name: 'o3-mini', description: 'High-reasoning small model for complex logic', tier: 'reasoning' },
+      { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', description: 'Previous generation high-capability model', tier: 'standard' }
     ]
   },
   {
@@ -49,12 +60,14 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     requiresKey: true,
     requiresBaseUrl: false,
     defaultModel: 'claude-3-7-sonnet-20250219',
+    defaultDiscoveryModel: 'claude-3-5-haiku-20241022',
+    defaultGeneralModel: 'claude-3-7-sonnet-20250219',
     keyPlaceholder: 'sk-ant-api03-...',
     keyDocUrl: 'https://console.anthropic.com/settings/keys',
     models: [
-      { id: 'claude-3-7-sonnet-20250219', name: 'Claude 3.7 Sonnet', description: 'Hybrid reasoning and leading coding capabilities' },
-      { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', description: 'High performance for broad tasks and code' },
-      { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', description: 'Blazing fast intelligence for quick tasks' }
+      { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', description: 'Blazing fast intelligence for quick tasks (Ideal for Discovery)', tier: 'light' },
+      { id: 'claude-3-7-sonnet-20250219', name: 'Claude 3.7 Sonnet', description: 'Hybrid reasoning and leading coding (Ideal for General Tasks)', tier: 'advanced' },
+      { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', description: 'High performance for broad tasks and code', tier: 'standard' }
     ]
   },
   {
@@ -68,12 +81,14 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     requiresKey: true,
     requiresBaseUrl: false,
     defaultModel: 'gemini-2.5-flash',
+    defaultDiscoveryModel: 'gemini-2.5-flash',
+    defaultGeneralModel: 'gemini-1.5-pro',
     keyPlaceholder: 'AIzaSy...',
     keyDocUrl: 'https://aistudio.google.com/app/apikey',
     models: [
-      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Ultra-fast, next-gen multimodal AI' },
-      { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', description: 'Complex reasoning with 2M token window' },
-      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', description: 'High speed and low latency' }
+      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Ultra-fast, next-gen multimodal AI (Ideal for Discovery)', tier: 'light' },
+      { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', description: 'Complex reasoning with 2M token context (Ideal for General Tasks)', tier: 'advanced' },
+      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', description: 'High speed and low latency', tier: 'light' }
     ]
   },
   {
@@ -87,29 +102,16 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     requiresKey: false,
     requiresBaseUrl: true,
     defaultModel: 'llama3.2',
+    defaultDiscoveryModel: 'llama3.2',
+    defaultGeneralModel: 'qwen2.5-coder',
     defaultBaseUrl: 'http://localhost:11434',
     keyDocUrl: 'https://ollama.com',
     models: [
-      { id: 'llama3.2', name: 'Llama 3.2', description: 'Meta lightweight local open model' },
-      { id: 'mistral', name: 'Mistral 7B', description: 'Fast and high capability open weights' },
-      { id: 'deepseek-r1', name: 'DeepSeek R1', description: 'Advanced open reasoning model' },
-      { id: 'codellama', name: 'CodeLlama', description: 'Fine-tuned for code generation and refactoring' },
-      { id: 'qwen2.5-coder', name: 'Qwen 2.5 Coder', description: 'Specialized high-accuracy coding model' }
-    ]
-  },
-  {
-    id: 'mock',
-    name: 'Ergo Native Engine (Simulated)',
-    shortName: 'Ergo Native',
-    description: 'Instant zero-config simulated AI agent workspace',
-    icon: '⚡',
-    iconUrl: '/icons/providers/mock.svg',
-    badgeColor: '#06b6d4',
-    requiresKey: false,
-    requiresBaseUrl: false,
-    defaultModel: 'ergo-native-v1',
-    models: [
-      { id: 'ergo-native-v1', name: 'Ergo Native Simulated Engine', description: 'Built-in deterministic agent simulator' }
+      { id: 'llama3.2', name: 'Llama 3.2', description: 'Meta lightweight local open model (Ideal for Discovery)', tier: 'light' },
+      { id: 'qwen2.5-coder', name: 'Qwen 2.5 Coder', description: 'Specialized high-accuracy coding model (Ideal for General Tasks)', tier: 'standard' },
+      { id: 'deepseek-r1', name: 'DeepSeek R1', description: 'Advanced open reasoning model', tier: 'reasoning' },
+      { id: 'mistral', name: 'Mistral 7B', description: 'Fast and high capability open weights', tier: 'standard' },
+      { id: 'codellama', name: 'CodeLlama', description: 'Fine-tuned for code generation and refactoring', tier: 'standard' }
     ]
   }
 ];
@@ -122,8 +124,8 @@ export async function testAiConnection(
   credentials: ProviderCredentials
 ): Promise<{ success: boolean; message: string }> {
   try {
-    if (providerId === 'mock') {
-      return { success: true, message: 'Ergo Native engine is active and ready out of the box.' };
+    if (providerId === 'mock' || providerId === 'none') {
+      return { success: false, message: 'No active AI provider selected.' };
     }
 
     if (providerId === 'openai') {

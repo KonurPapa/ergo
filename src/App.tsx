@@ -21,14 +21,15 @@ import { Navbar } from './components/Navbar';
 import { TaskPane } from './components/TaskPane';
 import { BriefPane } from './components/BriefPane';
 import { DraftTaskModal } from './components/DraftTaskModal';
-import { ExecutionModal } from './components/ExecutionModal';
 import { McpHubModal } from './components/McpHubModal';
 import { RawMarkdownModal } from './components/RawMarkdownModal';
 import { CreateProjectModal } from './components/CreateProjectModal';
 import { AiCredentialsModal } from './components/AiCredentialsModal';
 import { SettingsModal } from './components/SettingsModal';
 import { FolderPickerModal } from './components/FolderPickerModal';
-import { AgentTerminalPane, type SpawnedSession } from './components/AgentTerminalPane';
+import { ToastContainer, type ToastMessage } from './components/Toast';
+import { type SpawnedSession, type ExecutionStep, type McpToolPermissionPrompt } from './types';
+import { executeTaskWithAi } from './lib/ai';
 
 
 export function App() {
@@ -122,15 +123,24 @@ export function App() {
 
   const [editingKey, setEditingKey] = useState<UserApiKey | null>(null);
 
+  // Toast Notifications State
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+  const showToast = useCallback((toast: Omit<ToastMessage, 'id'>) => {
+    const id = `toast-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    setToasts((prev) => [...prev, { ...toast, id }]);
+  }, []);
+
+  const handleDismissToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
   // ─── CLI Agent Terminal State ───────────────────────────────────────────────────────
   // CLI agent config (command + flags), persisted to config/secrets.json
   const [cliAgentConfig, setCliAgentConfig] = useState<CliAgentConfig | null>(null);
   // Live spawned terminal sessions, one per task
   const [terminalSessions, setTerminalSessions] = useState<SpawnedSession[]>([]);
-  // Which task's terminal is currently focused in the pane
-  const [activeTerminalTaskId, setActiveTerminalTaskId] = useState<number | null>(null);
-  // Whether the terminal pane is visible at all
-  const [isTerminalPaneOpen, setIsTerminalPaneOpen] = useState(false);
+  const [_activeTerminalTaskId, setActiveTerminalTaskId] = useState<number | null>(null);
 
 
   // Initialize Storage Layer on mount (IndexedDB handle & config loading)
@@ -200,20 +210,23 @@ export function App() {
 
   // Active AI Provider Config
   const [aiConfig, setAiConfig] = useState<AIProviderConfig>(() => {
-    const activeKey = userApiKeys.find((k) => k.id === activeKeyId) || userApiKeys[0];
+    const activeKey = userApiKeys.find((k) => k.id === activeKeyId);
     if (activeKey) {
+      const pMeta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === activeKey.provider);
       return {
         provider: activeKey.provider,
-        model: activeKey.model || 'gpt-4o',
+        model: activeKey.generalModel || activeKey.model || pMeta?.defaultGeneralModel || 'gpt-4o',
+        discoveryModel: activeKey.discoveryModel || pMeta?.defaultDiscoveryModel || 'gpt-4o-mini',
+        generalModel: activeKey.generalModel || activeKey.model || pMeta?.defaultGeneralModel || 'gpt-4o',
         apiKey: activeKey.apiKey,
         baseUrl: activeKey.baseUrl,
         isConnected: true
       };
     }
     return {
-      provider: 'mock',
-      model: 'ergo-native-v1',
-      isConnected: true
+      provider: 'none',
+      model: '',
+      isConnected: false
     };
   });
 
@@ -224,16 +237,18 @@ export function App() {
       const pMeta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === activeKey.provider);
       setAiConfig({
         provider: activeKey.provider,
-        model: activeKey.model || pMeta?.defaultModel || 'gpt-4o',
+        model: activeKey.generalModel || activeKey.model || pMeta?.defaultGeneralModel || pMeta?.defaultModel || 'gpt-4o',
+        discoveryModel: activeKey.discoveryModel || pMeta?.defaultDiscoveryModel || 'gpt-4o-mini',
+        generalModel: activeKey.generalModel || activeKey.model || pMeta?.defaultGeneralModel || pMeta?.defaultModel || 'gpt-4o',
         apiKey: activeKey.apiKey,
         baseUrl: activeKey.baseUrl,
         isConnected: true
       });
     } else {
       setAiConfig({
-        provider: 'mock',
-        model: 'ergo-native-v1',
-        isConnected: true
+        provider: 'none',
+        model: '',
+        isConnected: false
       });
     }
   }, [activeKeyId, userApiKeys]);
@@ -253,13 +268,14 @@ export function App() {
 
   // Modal Open States
   const [isDraftModalOpen, setIsDraftModalOpen] = useState(false);
-  const [isExecutionModalOpen, setIsExecutionModalOpen] = useState(false);
   const [isMcpHubOpen, setIsMcpHubOpen] = useState(false);
   const [isRawMarkdownOpen, setIsRawMarkdownOpen] = useState(false);
   const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
   const [isAiScreenOpen, setIsAiScreenOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [executingTask, setExecutingTask] = useState<TaskItem | null>(null);
+  const [executingTaskId, setExecutingTaskId] = useState<number | null>(null);
+  const [taskExecutionSteps, setTaskExecutionSteps] = useState<Record<number, ExecutionStep[]>>({});
+  const [pendingPermissions, setPendingPermissions] = useState<Record<number, { prompt: McpToolPermissionPrompt; resolve: (approved: boolean) => void }>>({});
 
 
   // Folder management handlers
@@ -359,7 +375,7 @@ export function App() {
     }
   };
 
-  const handleSelectUserKey = (keyId: string) => {
+  const handleSelectUserKey = (keyId: string | null) => {
     setActiveKeyId(keyId);
   };
 
@@ -432,13 +448,14 @@ export function App() {
 
       const parsedTodo = parseTodoMarkdown(effectiveTodoMd);
       const parsedBriefs = parseAgentContextMarkdown(effectiveAgentMd);
+      const alignedBriefs = syncBriefsWithTasks(parsedBriefs, parsedTodo.items);
 
       setTasks(parsedTodo.items);
       setHeaderComments(parsedTodo.headerComments);
-      setBriefs(parsedBriefs);
+      setBriefs(alignedBriefs);
 
       if (parsedTodo.items.length > 0) {
-        setSelectedTaskId(parsedTodo.items[0].id);
+        setSelectedTaskId((prev) => (prev !== null && parsedTodo.items.some((t) => t.id === prev) ? prev : parsedTodo.items[0].id));
       } else {
         setSelectedTaskId(null);
       }
@@ -465,6 +482,79 @@ export function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProjectId]);
+
+  // Real-time disk file watcher subscription (SSE): updates UI instantly when markdown files change externally
+  useEffect(() => {
+    let eventSource: EventSource | null = null;
+
+    try {
+      eventSource = new EventSource('/api/files/events');
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (!data || data.type === 'connected') return;
+
+          const { projectId, fileType, content, relativePath } = data;
+          if (!fileType || typeof content !== 'string') return;
+
+          // Update projects state array for the changed project
+          setProjects((prevProjects) =>
+            prevProjects.map((p) => {
+              const isMatch =
+                p.id === projectId ||
+                p.folderPath === `projects/${projectId}` ||
+                p.todoFilePath === relativePath ||
+                p.agentContextFilePath === relativePath;
+
+              if (!isMatch) return p;
+
+              if (fileType === 'todo') {
+                return { ...p, todoMarkdown: content };
+              } else if (fileType === 'agent') {
+                return { ...p, agentContextMarkdown: content };
+              }
+              return p;
+            })
+          );
+
+          // If the changed file belongs to the active project, update active tasks/briefs immediately
+          const isActiveProject =
+            activeProject &&
+            (activeProject.id === projectId ||
+              activeProject.folderPath === `projects/${projectId}` ||
+              activeProject.todoFilePath === relativePath ||
+              activeProject.agentContextFilePath === relativePath);
+
+          if (isActiveProject) {
+            if (fileType === 'todo') {
+              const parsedTodo = parseTodoMarkdown(content);
+              setTasks(parsedTodo.items);
+              setHeaderComments(parsedTodo.headerComments);
+              setBriefs((prevBriefs) => syncBriefsWithTasks(prevBriefs, parsedTodo.items));
+            } else if (fileType === 'agent') {
+              const parsedBriefs = parseAgentContextMarkdown(content);
+              setBriefs(() => syncBriefsWithTasks(parsedBriefs, tasks));
+            }
+          }
+        } catch (err) {
+          console.warn('[App SSE] Error handling file change event:', err);
+        }
+      };
+
+      eventSource.onerror = () => {
+        // EventSource will automatically retry connecting
+      };
+    } catch (err) {
+      console.warn('[App SSE] Failed to initialize SSE EventSource:', err);
+    }
+
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
+  }, [activeProject, tasks]);
 
   // Save projects to localStorage on change
   useEffect(() => {
@@ -526,16 +616,21 @@ export function App() {
       createdTasks.push(fullTask);
 
       const nb = newBriefs[idx];
-      const reviewText = nb?.humanReview || nb?.followUps || '';
+      const overviewText = nb?.overview || nb?.brief || `Overview for ${fullTask.title}`;
+      const buildText = nb?.buildAndVerification || nb?.built || '';
+      const completionText = nb?.completion || nb?.validation || nb?.humanReview || nb?.followUps || '';
       createdBriefs.push({
         itemNumber: currentId,
         title: fullTask.title,
         status: 'not started',
-        brief: nb?.brief || `Brief for ${fullTask.title}`,
-        built: nb?.built || '',
-        validation: nb?.validation || '',
-        humanReview: reviewText,
-        followUps: reviewText
+        overview: overviewText,
+        buildAndVerification: buildText,
+        completion: completionText,
+        brief: overviewText,
+        built: buildText,
+        validation: completionText,
+        humanReview: completionText,
+        followUps: completionText
       });
     });
 
@@ -548,12 +643,32 @@ export function App() {
     syncAndSaveProject(nextTasks, nextBriefs, true);
   };
 
-  // Trigger Task Execution
-  // If a CLI agent is configured, spawn a terminal session for this task.
-  // Otherwise, fall back to the built-in ExecutionModal.
-  const handleExecuteTask = (task: TaskItem) => {
+  // Trigger In-Place Task Execution
+  // If a CLI agent is configured, spawn a terminal session inside the Build & Verification card.
+  // Otherwise, run executeTaskWithAi in place and stream logs directly into Build & Verification and Completion.
+  const handleExecuteTask = async (task: TaskItem) => {
+    setSelectedTaskId(task.id);
+
+    // If using in-place AI execution (no CLI agent configured), verify active API key
+    if (!cliAgentConfig?.command) {
+      const activeKey = userApiKeys.find((k) => k.id === activeKeyId);
+      const hasValidKey = !!(activeKey && activeKey.apiKey && activeKey.apiKey.trim().length > 0);
+
+      if (!hasValidKey) {
+        showToast({
+          type: 'warning',
+          title: 'AI API Key Required',
+          message: 'No active AI API key selected. Please select or add an API key to execute tasks with AI.',
+          actionLabel: 'Set Up Key',
+          onAction: () => setIsAiScreenOpen(true),
+          duration: 6000,
+        });
+        return;
+      }
+    }
+
     if (cliAgentConfig?.command) {
-      // Resolve working directory: use the first MCP root or fall back to storage dir
+      // Resolve working directory: use the project folder path or home
       const cwd = activeProject?.folderPath
         ? (storageManager as any).resolvedStoragePath
           ? `${(storageManager as any).resolvedStoragePath}/${activeProject.folderPath}`
@@ -584,21 +699,153 @@ export function App() {
         const filtered = prev.filter((s) => s.session.taskId !== task.id);
         return [...filtered, spawned];
       });
+
       setActiveTerminalTaskId(task.id);
-      setIsTerminalPaneOpen(true);
+
+      // Update task status to in_progress if not already done
+      if (!task.isDone && task.status !== 'done') {
+        const nextTasks = tasks.map((t) => (t.id === task.id ? { ...t, status: 'in_progress' as const } : t));
+        syncAndSaveProject(nextTasks, briefs, true);
+      }
     } else {
-      // No CLI agent configured — use built-in execution modal
-      setExecutingTask(task);
-      setIsExecutionModalOpen(true);
+      // In-Place AI Task Execution
+      setExecutingTaskId(task.id);
+      setTaskExecutionSteps((prev) => ({ ...prev, [task.id]: [] }));
+
+      const currentTask = tasks.find((t) => t.id === task.id) || task;
+      const currentBrief = briefs.find((b) => b.itemNumber === task.id);
+
+      // Set task status to in_progress
+      const inProgressTasks = tasks.map((t) => (t.id === task.id ? { ...t, status: 'in_progress' as const } : t));
+      setTasks(inProgressTasks);
+
+      try {
+        const res = await executeTaskWithAi(
+          currentTask,
+          currentBrief,
+          activeProject,
+          aiConfig,
+          mcpServers,
+          (stepUpdate) => {
+            setTaskExecutionSteps((prev) => {
+              const existing = prev[task.id] || [];
+              const idx = existing.findIndex((s) => s.id === stepUpdate.id);
+              let next: ExecutionStep[];
+              if (idx !== -1) {
+                next = [...existing];
+                next[idx] = stepUpdate;
+              } else {
+                next = [...existing, stepUpdate];
+              }
+              return { ...prev, [task.id]: next };
+            });
+          },
+          (permissionPrompt) => {
+            return new Promise<boolean>((resolve) => {
+              setPendingPermissions((prev) => ({
+                ...prev,
+                [task.id]: { prompt: permissionPrompt, resolve },
+              }));
+            });
+          }
+        );
+
+        // Completed execution: apply results & persist to TODO.md and AGENT_CONTEXT.md
+        const nextTasks = tasks.map((t) => (t.id === res.updatedTask.id ? res.updatedTask : t));
+        const existingBriefIdx = briefs.findIndex((b) => b.itemNumber === res.updatedBrief.itemNumber);
+        let nextBriefs: AgentContextItem[];
+        if (existingBriefIdx !== -1) {
+          nextBriefs = briefs.map((b) => (b.itemNumber === res.updatedBrief.itemNumber ? res.updatedBrief : b));
+        } else {
+          nextBriefs = [...briefs, res.updatedBrief];
+        }
+        syncAndSaveProject(nextTasks, nextBriefs, true);
+      } catch (err) {
+        console.error('Task execution error:', err);
+      } finally {
+        setExecutingTaskId((cur) => (cur === task.id ? null : cur));
+      }
     }
   };
 
+  const handlePermissionChoice = (taskId: number, approved: boolean) => {
+    const pending = pendingPermissions[taskId];
+    if (pending) {
+      pending.resolve(approved);
+      setPendingPermissions((prev) => {
+        const next = { ...prev };
+        delete next[taskId];
+        return next;
+      });
+    }
+  };
 
-  // Complete Execution & Apply Build Record
-  const handleCompleteExecution = (updatedTask: TaskItem, updatedBrief: AgentContextItem) => {
-    const nextTasks = tasks.map((t) => (t.id === updatedTask.id ? updatedTask : t));
-    const nextBriefs = briefs.map((b) => (b.itemNumber === updatedBrief.itemNumber ? updatedBrief : b));
-    syncAndSaveProject(nextTasks, nextBriefs, true);
+  const handleSessionExit = (taskId: number, code: number) => {
+    setTerminalSessions((prev) =>
+      prev.map((s) =>
+        s.session.taskId === taskId
+          ? { ...s, session: { ...s.session, isActive: false, exitCode: code } }
+          : s
+      )
+    );
+
+    // If CLI process completed successfully (exit code 0), mark task as done and update brief
+    if (code === 0) {
+      setSelectedTaskId(taskId);
+      const task = tasks.find((t) => t.id === taskId);
+      if (task) {
+        const updatedTask: TaskItem = {
+          ...task,
+          status: 'done',
+          isDone: true,
+          subtasks: task.subtasks.map((s) => ({ ...s, isDone: true })),
+        };
+        const nextTasks = tasks.map((t) => (t.id === taskId ? updatedTask : t));
+
+        const buildDate = new Date().toISOString().split('T')[0];
+        const existingBrief = briefs.find((b) => b.itemNumber === taskId);
+        const fallbackCompletion = `**Completion Summary (${buildDate}):**\n- CLI Agent completed task execution successfully (exit code 0).\n- Status: Done / Verified.`;
+        const completionText: string = (existingBrief?.completion || existingBrief?.validation) || fallbackCompletion;
+
+        const updatedBrief: AgentContextItem = existingBrief
+          ? {
+              ...existingBrief,
+              overview: existingBrief.overview || '',
+              buildAndVerification: existingBrief.buildAndVerification || '',
+              status: 'done',
+              completion: completionText,
+              validation: completionText,
+            }
+          : {
+              itemNumber: taskId,
+              title: task.title,
+              status: 'done',
+              overview: `Task #${taskId} (${task.title})`,
+              buildAndVerification: `Executed in CLI agent terminal.`,
+              completion: completionText,
+            };
+
+        const existingIdx = briefs.findIndex((b) => b.itemNumber === taskId);
+        let nextBriefs: AgentContextItem[];
+        if (existingIdx !== -1) {
+          nextBriefs = briefs.map((b) => (b.itemNumber === taskId ? updatedBrief : b));
+        } else {
+          nextBriefs = [...briefs, updatedBrief];
+        }
+
+        syncAndSaveProject(nextTasks, nextBriefs, true);
+      }
+    }
+  };
+
+  const handleKillSession = (taskId: number) => {
+    setTerminalSessions((prev) =>
+      prev.map((s) =>
+        s.session.taskId === taskId
+          ? { ...s, session: { ...s.session, isActive: false, exitCode: -1 } }
+          : s
+      )
+    );
   };
 
   // Immediate Save Brief Edits
@@ -647,25 +894,33 @@ export function App() {
   // Refine Brief with AI
   const handleUpdateBriefWithAi = (task: TaskItem) => {
     const existingBrief = briefs.find((b) => b.itemNumber === task.id);
-    const existingReview = existingBrief?.humanReview || existingBrief?.followUps || '';
+    const existingOverview = existingBrief?.overview || existingBrief?.brief || '';
+    const updatedOverview = existingOverview
+      ? `${existingOverview}\n\n**AI Context Notes (${new Date().toLocaleDateString()}):**\n- Target Folder: \`${activeProject.folderPath}\`\n- Architecture & Seams: Additive changes in dependency order\n- Constraints: Evaluated in context of other tasks`
+      : `**AI Context Notes (${new Date().toLocaleDateString()}):**\n- Target Folder: \`${activeProject.folderPath}\`\n- Architecture & Seams: Additive changes in dependency order\n- Constraints: Evaluated in context of other tasks`;
+
     const updatedBrief: AgentContextItem = {
       itemNumber: task.id,
       title: task.title,
       status: task.status,
-      brief: `${existingBrief?.brief || ''}\n\n**AI Refinement (${new Date().toLocaleDateString()}):**\nTarget Folder: \`${activeProject.folderPath}\`.\nData Model: Additive property flags. Constraints: Must pass automated verification without cross-project leakage.`,
+      overview: updatedOverview,
+      buildAndVerification: existingBrief?.buildAndVerification || existingBrief?.built || '',
+      completion: existingBrief?.completion || existingBrief?.validation || existingBrief?.humanReview || existingBrief?.followUps || '',
+      brief: updatedOverview,
       built: existingBrief?.built || '',
-      validation: existingBrief?.validation || '',
-      humanReview: existingReview,
-      followUps: existingReview
+      validation: existingBrief?.validation || ''
     };
     handleSaveBrief(updatedBrief);
   };
 
   // Live edit handler from Obsidian-style TaskPane editor (Triggers Debounced Autosave to disk)
-  const handleRawTodoEdit = (newTodoMd: string) => {
-    const parsedTodo = parseTodoMarkdown(newTodoMd);
+  const handleRawTodoEdit = (newBodyMd: string) => {
+    const fullTodoMd = headerComments && headerComments.trim() ? `${headerComments.trim()}\n\n${newBodyMd}` : newBodyMd;
+    const parsedTodo = parseTodoMarkdown(fullTodoMd);
     setTasks(parsedTodo.items);
-    setHeaderComments(parsedTodo.headerComments);
+    if (parsedTodo.headerComments) {
+      setHeaderComments(parsedTodo.headerComments);
+    }
 
     // Sync and renumber briefs matching the updated tasks
     const updatedBriefs = syncBriefsWithTasks(briefs, parsedTodo.items);
@@ -676,7 +931,7 @@ export function App() {
     setProjects((prev) =>
       prev.map((p) =>
         p.id === activeProjectId
-          ? { ...p, todoMarkdown: newTodoMd, agentContextMarkdown: updatedBriefsMd }
+          ? { ...p, todoMarkdown: fullTodoMd, agentContextMarkdown: updatedBriefsMd }
           : p
       )
     );
@@ -685,7 +940,7 @@ export function App() {
     const agentPath = activeProject?.agentContextFilePath || `${activeProject?.folderPath}/AGENT_CONTEXT.md`;
 
     autosave.queueSave([
-      { filePath: todoPath, content: newTodoMd },
+      { filePath: todoPath, content: fullTodoMd },
       { filePath: agentPath, content: updatedBriefsMd }
     ]);
   };
@@ -770,8 +1025,18 @@ export function App() {
     ]);
   };
 
-  const activeTask = tasks.find((t) => t.id === selectedTaskId) || tasks[0] || null;
-  const activeBrief = briefs.find((b) => b.itemNumber === activeTask?.id);
+  const runningTaskIds = useMemo(() => {
+    const ids: number[] = [];
+    terminalSessions.forEach((s) => {
+      if (s.session.isActive && !ids.includes(s.session.taskId)) {
+        ids.push(s.session.taskId);
+      }
+    });
+    if (executingTaskId !== null && !ids.includes(executingTaskId)) {
+      ids.push(executingTaskId);
+    }
+    return ids;
+  }, [terminalSessions, executingTaskId]);
 
   return (
     <div className="app-container">
@@ -809,6 +1074,7 @@ export function App() {
             rawMarkdown={activeProject?.todoMarkdown || ''}
             tasks={tasks}
             selectedTaskId={selectedTaskId}
+            runningTaskIds={runningTaskIds}
             onSelectTask={(id) => setSelectedTaskId(id)}
             onOpenDraftModal={() => setIsDraftModalOpen(true)}
             onMarkdownChange={handleRawTodoEdit}
@@ -824,61 +1090,28 @@ export function App() {
           <div className="resize-handle-bar" />
         </div>
 
-        {/* Right Pane: AI Canvas — vertical split: BriefPane top + AgentTerminalPane bottom */}
+        {/* Right Pane: AI Workspace */}
         <div style={{ width: `${100 - splitWidth}%`, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-          {/* BriefPane takes remaining space above the terminal pane */}
-          <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
-            <BriefPane
-              activeTask={activeTask}
-              activeBrief={activeBrief}
-              onSaveBrief={handleSaveBrief}
-              onLiveBriefChange={handleLiveBriefChange}
-              onExecuteTask={handleExecuteTask}
-              onUpdateBriefWithAi={handleUpdateBriefWithAi}
-              autosaveStatus={autosave.status}
-              autosaveDelaySec={autosave.delaySec}
-              terminalSessionForTask={
-                activeTask
-                  ? terminalSessions.find((s) => s.session.taskId === activeTask.id) ?? null
-                  : null
-              }
-              onToggleTerminal={() => {
-                if (activeTask) {
-                  setActiveTerminalTaskId(activeTask.id);
-                  setIsTerminalPaneOpen((open) => !open);
-                }
-              }}
-            />
-          </div>
-
-          {/* Agent Terminal Pane — docks to the bottom, resizable */}
-          <AgentTerminalPane
-            isOpen={isTerminalPaneOpen}
-            onClose={() => setIsTerminalPaneOpen(false)}
-            sessions={terminalSessions}
-            activeTaskId={activeTerminalTaskId}
-            onSelectSession={(taskId) => setActiveTerminalTaskId(taskId)}
-            onCloseSession={(taskId) => {
-              setTerminalSessions((prev) => prev.filter((s) => s.session.taskId !== taskId));
-              setActiveTerminalTaskId((cur) => {
-                if (cur === taskId) {
-                  const remaining = terminalSessions.filter((s) => s.session.taskId !== taskId);
-                  return remaining.length > 0 ? remaining[remaining.length - 1].session.taskId : null;
-                }
-                return cur;
-              });
-              if (terminalSessions.length <= 1) setIsTerminalPaneOpen(false);
-            }}
-            onSessionExit={(taskId, code) => {
-              setTerminalSessions((prev) =>
-                prev.map((s) =>
-                  s.session.taskId === taskId
-                    ? { ...s, session: { ...s.session, isActive: false, exitCode: code } }
-                    : s
-                )
-              );
-            }}
-            cliConfig={cliAgentConfig}
+          <BriefPane
+            tasks={tasks}
+            briefs={briefs}
+            selectedTaskId={selectedTaskId}
+            runningTaskIds={runningTaskIds}
+            onSelectTask={(id) => setSelectedTaskId(id)}
+            onSaveBrief={handleSaveBrief}
+            onLiveBriefChange={handleLiveBriefChange}
+            onExecuteTask={handleExecuteTask}
+            onUpdateBriefWithAi={handleUpdateBriefWithAi}
+            autosaveStatus={autosave.status}
+            autosaveDelaySec={autosave.delaySec}
+            terminalSessions={terminalSessions}
+            executingTaskId={executingTaskId}
+            taskExecutionSteps={taskExecutionSteps}
+            pendingPermissions={pendingPermissions}
+            onPermissionChoice={handlePermissionChoice}
+            onSessionExit={handleSessionExit}
+            onRestartSession={handleExecuteTask}
+            onKillSession={handleKillSession}
           />
         </div>
 
@@ -903,18 +1136,6 @@ export function App() {
         onCommitDraftedTasks={handleCommitDraftedTasks}
       />
 
-      {/* Modal 3: Task Execution Runner */}
-      <ExecutionModal
-        isOpen={isExecutionModalOpen}
-        onClose={() => setIsExecutionModalOpen(false)}
-        task={executingTask}
-        brief={briefs.find((b) => b.itemNumber === executingTask?.id)}
-        project={activeProject}
-        aiConfig={aiConfig}
-        mcpServers={mcpServers}
-        onCompleteExecution={handleCompleteExecution}
-      />
-
       {/* Modal 4: MCP Connections Hub */}
       <McpHubModal
         isOpen={isMcpHubOpen}
@@ -922,7 +1143,11 @@ export function App() {
         mcpServers={mcpServers}
         onToggleConnectServer={(serverId) =>
           setMcpServers((prev) =>
-            prev.map((s) => (s.id === serverId ? { ...s, status: s.status === 'connected' ? 'disconnected' : 'connected' } : s))
+            prev.map((s) => {
+              if (s.id !== serverId) return s;
+              if (s.serverType === 'bundled_harness' || s.transport === 'Local Stdio') return s;
+              return { ...s, status: s.status === 'connected' ? 'disconnected' : 'connected' };
+            })
           )
         }
         onToggleToolAutoApprove={(serverId, toolId) =>
@@ -947,8 +1172,8 @@ export function App() {
       <RawMarkdownModal
         isOpen={isRawMarkdownOpen}
         onClose={() => setIsRawMarkdownOpen(false)}
-        todoMarkdown={serializeTodoMarkdown(tasks, headerComments)}
-        agentContextMarkdown={serializeAgentContextMarkdown(briefs)}
+        todoMarkdown={activeProject?.todoMarkdown || serializeTodoMarkdown(tasks, headerComments)}
+        agentContextMarkdown={activeProject?.agentContextMarkdown || serializeAgentContextMarkdown(briefs)}
         folderPath={activeProject?.folderPath}
         todoFilePath={activeProject?.todoFilePath}
         agentContextFilePath={activeProject?.agentContextFilePath}
@@ -995,6 +1220,9 @@ export function App() {
         onRequestPermission={handleRequestHandlePermission}
         onUseServerFallback={handleUseServerFallback}
       />
+
+      {/* Global Toast Notifications */}
+      <ToastContainer toasts={toasts} onDismiss={handleDismissToast} />
     </div>
   );
 }

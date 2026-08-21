@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Code2, X, Save, FileText, CheckSquare, Download } from 'lucide-react';
+import { handleMarkdownAutoWrap } from '../lib/markdownEditorUtils';
 
 interface RawMarkdownModalProps {
   isOpen: boolean;
@@ -52,7 +53,7 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <Code2 size={22} color="var(--accent-cyan)" />
             <div>
-              <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Preview & Sync Raw Markdown</h3>
+              <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Download Task Files</h3>
               {folderPath && (
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
                   Main Folder: <span style={{ color: 'var(--accent-cyan)' }}>{folderPath}</span>
@@ -84,7 +85,7 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
             onClick={() => setActiveTab('todo')}
           >
             <CheckSquare size={16} color="var(--accent-cyan)" />
-            <span>{todoFilePath || 'TODO.md'} (Your Tasks)</span>
+            <span>{todoFilePath || 'TODO.md'}</span>
           </button>
 
           <button
@@ -104,7 +105,7 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
             onClick={() => setActiveTab('agent')}
           >
             <FileText size={16} color="var(--accent-violet)" />
-            <span>{agentContextFilePath || 'AGENT_CONTEXT.md'} (AI Canvas)</span>
+            <span>{agentContextFilePath || 'AGENT_CONTEXT.md'}</span>
           </button>
         </div>
 
@@ -115,6 +116,7 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
               style={{ flex: 1, border: 'none', borderRadius: 0, padding: '1.25rem', fontFamily: 'var(--font-mono)', fontSize: '0.88rem', lineHeight: '1.6', background: 'var(--bg-darkest)' }}
               value={todoVal}
               onChange={(e) => setTodoVal(e.target.value)}
+              onKeyDown={(e) => handleMarkdownAutoWrap(e, setTodoVal)}
             />
           ) : (
             <textarea
@@ -122,6 +124,7 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
               style={{ flex: 1, border: 'none', borderRadius: 0, padding: '1.25rem', fontFamily: 'var(--font-mono)', fontSize: '0.88rem', lineHeight: '1.6', background: 'var(--bg-darkest)' }}
               value={agentVal}
               onChange={(e) => setAgentVal(e.target.value)}
+              onKeyDown={(e) => handleMarkdownAutoWrap(e, setAgentVal)}
             />
           )}
         </div>

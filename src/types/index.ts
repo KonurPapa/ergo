@@ -11,6 +11,11 @@ export interface TaskItem {
   id: number; // e.g. 1, 2, 3
   title: string;
   category: string;
+  categoryHeadingPrefix?: string; // e.g. "##", "#", "###"
+  categoryHasColon?: boolean; // whether heading originally ended with ':'
+  listIndex?: number; // 1-based index within its specific section / list
+  listType?: 'ordered' | 'bullet'; // whether the task list item is ordered or bullet
+  isUnordered?: boolean; // true if item is from an unnumbered bullet list
   status: TaskStatus;
   isDone: boolean;
   subtasks: Subtask[];
@@ -22,12 +27,17 @@ export interface TaskItem {
 export interface AgentContextItem {
   itemNumber: number;
   title: string;
+  isUnordered?: boolean;
   status: TaskStatus | string;
+  overview: string;
+  buildAndVerification: string;
+  completion: string;
+  // Compatibility fields
+  brief?: string;
+  built?: string;
+  validation?: string;
   humanReview?: string;
   followUps?: string;
-  brief: string;
-  built: string;
-  validation: string;
   rawContent?: string;
   passes?: Array<{ title: string; content: string }>;
 }
@@ -87,11 +97,13 @@ export interface McpToolExecutionResult {
 }
 
 
-export type AIProviderId = 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'mock';
+export type AIProviderId = 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'none' | 'mock';
 
 export interface AIProviderConfig {
   provider: AIProviderId;
   model: string;
+  discoveryModel?: string;
+  generalModel?: string;
   apiKey?: string;
   baseUrl?: string;
   isCustomKey?: boolean;
@@ -102,6 +114,8 @@ export interface ProviderCredentials {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  discoveryModel?: string;
+  generalModel?: string;
   isConnected?: boolean;
 }
 
@@ -114,6 +128,8 @@ export interface UserApiKey {
   apiKey: string;
   baseUrl?: string;
   model?: string;
+  discoveryModel?: string;
+  generalModel?: string;
   isConnected?: boolean;
   createdAt?: string;
 }
@@ -218,6 +234,15 @@ export interface TerminalSession {
   isActive: boolean;   // PTY process still alive
   exitCode?: number;
   spawnedAt: string;   // ISO string
+}
+
+export interface SpawnedSession {
+  session: TerminalSession;
+  /** working directory the agent was launched in */
+  cwd: string;
+  /** resolved command + args */
+  cmd: string;
+  args: string[];
 }
 
 

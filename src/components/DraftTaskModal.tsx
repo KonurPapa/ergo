@@ -9,6 +9,7 @@ import {
 } from '../types';
 import { draftTasksWithAi } from '../lib/ai';
 import { guessRelevantTools } from '../lib/mcpClient';
+import { handleMarkdownAutoWrap } from '../lib/markdownEditorUtils';
 import { Sparkles, X, Check, Loader2, Cpu, RefreshCw, ChevronDown, ChevronUp, CheckSquare, Square } from 'lucide-react';
 
 interface DraftTaskModalProps {
@@ -142,6 +143,7 @@ export const DraftTaskModal: React.FC<DraftTaskModalProps> = ({
               placeholder="e.g., Implement automated scale detection from high-DPI PDF title blocks, and add layered PDF export for revision diffs..."
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => handleMarkdownAutoWrap(e, setPrompt)}
             />
           </div>
 

@@ -24,11 +24,10 @@ export function createNewProjectData(
 
   const defaultTodoMarkdown = `<!-- Project: ${name} | Folder: ${folderPath} -->
 <!-- Linked Context: ${agentContextFilePath} -->
-<!-- Keep this file scannable. Full briefs, build records and test notes live in ${agentContextFilePath}, keyed by item number. -->
 
-# ${name} Tasks:
+## ${name} Tasks
 
-1. **Initial Task Setup:**
+1. Initial Task Setup
     - Define project scope and task list
     - Verify bi-directional link with ${agentContextFilePath}`;
 
@@ -36,7 +35,7 @@ export function createNewProjectData(
 <!-- Linked Tasks: ${todoFilePath} -->
 # ${name} Context — the verbose half of \`${todoFilePath}\`
 
-\`TODO.md\` is the **human** view for ${name}. This file is the **agent** view: the full brief for an item before it's built, and the full record of what was built after.
+\`TODO.md\` is the **human** view for ${name}. This file is the **agent** view: the full overview for an item before it's built, mid-task build & verification notes, and the completion record of what was built and where the task stands.
 
 Rules of the split:
 - Sections here mirror \`${todoFilePath}\` **by item number and title** — same numbers, same order.
@@ -48,14 +47,14 @@ Rules of the split:
 
 **Status:** not started
 
-**Brief**
+**Overview**
 Setup initial project structure and link human task list with agent context briefs.
 
-**Built**
-Created project folder structure under ${folderPath} with isolated TODO.md and AGENT_CONTEXT.md.
+**Build & Verification**
+Created project folder structure under ${folderPath} with isolated TODO.md and AGENT_CONTEXT.md. Verified directory paths and unique markdown file references.
 
-**Validation**
-Verified directory paths and unique markdown file references.`;
+**Completion**
+Initial project structure initialized. All core file links verified.`;
 
   return {
     id,
@@ -66,7 +65,7 @@ Verified directory paths and unique markdown file references.`;
     agentContextFilePath,
     todoMarkdown: initialTodoMarkdown || defaultTodoMarkdown,
     agentContextMarkdown: initialAgentContextMarkdown || defaultAgentContextMarkdown,
-    connectedMcps: ['mcp-salesforce', 'mcp-gcal', 'mcp-slack', 'mcp-github', 'mcp-notion', 'mcp-zapier']
+    connectedMcps: ['mcp-filesystem', 'mcp-fetch', 'mcp-git']
   };
 }
 
@@ -78,21 +77,20 @@ export const INITIAL_PROJECTS: ProjectData[] = [
     folderPath: 'projects/default-workspace',
     todoFilePath: 'projects/default-workspace/TODO.md',
     agentContextFilePath: 'projects/default-workspace/AGENT_CONTEXT.md',
-    connectedMcps: ['mcp-salesforce', 'mcp-gcal', 'mcp-slack', 'mcp-github', 'mcp-notion', 'mcp-zapier'],
+    connectedMcps: ['mcp-filesystem', 'mcp-fetch', 'mcp-git'],
     todoMarkdown: `<!-- Project: Default Workspace | Folder: projects/default-workspace -->
 <!-- Linked Context: projects/default-workspace/AGENT_CONTEXT.md -->
-<!-- Keep this file scannable. Full briefs, build records and test notes live in AGENT_CONTEXT.md, keyed by item number. -->
 
-# Core Tasks:
+## Core Tasks
 
-1. **Initial Task Setup:**
+1. Initial Task Setup
     - Define project scope and task list
     - Verify bi-directional link with AGENT_CONTEXT.md`,
     agentContextMarkdown: `<!-- Project: Default Workspace | Folder: projects/default-workspace -->
 <!-- Linked Tasks: projects/default-workspace/TODO.md -->
 # Default Workspace Context — the verbose half of \`projects/default-workspace/TODO.md\`
 
-\`TODO.md\` is the **human** view for Default Workspace. This file is the **agent** view: the full brief for an item before it's built, and the full record of what was built after.
+\`TODO.md\` is the **human** view for Default Workspace. This file is the **agent** view: the full overview for an item before it's built, mid-task build & verification notes, and the completion record of what was built and where the task stands.
 
 Rules of the split:
 - Sections here mirror \`projects/default-workspace/TODO.md\` **by item number and title** — same numbers, same order.
@@ -104,14 +102,14 @@ Rules of the split:
 
 **Status:** not started
 
-**Brief**
+**Overview**
 Setup initial project structure and link human task list with agent context briefs.
 
-**Built**
-Created project folder structure under projects/default-workspace with isolated TODO.md and AGENT_CONTEXT.md.
+**Build & Verification**
+Created project folder structure under projects/default-workspace with isolated TODO.md and AGENT_CONTEXT.md. Verified directory paths and unique markdown file references.
 
-**Validation**
-Verified directory paths and unique markdown file references.`
+**Completion**
+Initial project structure initialized. All core file links verified.`
   }
 ];
 
@@ -179,7 +177,7 @@ export const INITIAL_MCP_SERVERS: MCPServer[] = [
     iconName: 'Github',
     iconUrl: '/icons/github.svg',
     category: 'developer',
-    status: 'connected',
+    status: 'disconnected',
     transport: 'OAuth 2.1',
     endpoint: 'https://mcp.github.com/v1',
     serverType: 'external_oauth',
@@ -196,7 +194,7 @@ export const INITIAL_MCP_SERVERS: MCPServer[] = [
     iconName: 'Calendar',
     iconUrl: '/icons/googlecalendar.svg',
     category: 'productivity',
-    status: 'connected',
+    status: 'disconnected',
     transport: 'OAuth 2.1',
     endpoint: 'https://mcp.google.com/calendar/v3',
     serverType: 'external_oauth',
@@ -213,7 +211,7 @@ export const INITIAL_MCP_SERVERS: MCPServer[] = [
     iconName: 'Cloud',
     iconUrl: '/icons/salesforce.svg',
     category: 'productivity',
-    status: 'connected',
+    status: 'disconnected',
     transport: 'OAuth 2.1',
     endpoint: 'https://mcp.salesforce.com/services/oauth2',
     serverType: 'external_oauth',
@@ -230,7 +228,7 @@ export const INITIAL_MCP_SERVERS: MCPServer[] = [
     iconName: 'MessageSquare',
     iconUrl: '/icons/slack.svg',
     category: 'productivity',
-    status: 'connected',
+    status: 'disconnected',
     transport: 'OAuth 2.1',
     endpoint: 'https://mcp.slack.com/sse',
     serverType: 'external_oauth',
@@ -247,7 +245,7 @@ export const INITIAL_MCP_SERVERS: MCPServer[] = [
     iconName: 'BookOpen',
     iconUrl: '/icons/notion.svg',
     category: 'productivity',
-    status: 'connected',
+    status: 'disconnected',
     transport: 'OAuth 2.1',
     endpoint: 'https://mcp.notion.com/v1',
     serverType: 'external_oauth',
@@ -264,7 +262,7 @@ export const INITIAL_MCP_SERVERS: MCPServer[] = [
     iconName: 'Zap',
     iconUrl: '/icons/zapier.svg',
     category: 'productivity',
-    status: 'connected',
+    status: 'disconnected',
     transport: 'OAuth 2.1',
     endpoint: 'https://mcp.zapier.com/actions/v1',
     serverType: 'external_oauth',

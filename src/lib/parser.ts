@@ -1,12 +1,34 @@
 import { type TaskItem, type AgentContextItem, type TaskStatus } from '../types';
 
 /**
+ * Strips leading HTML comments and blank lines to provide clean markdown body for UI editor
+ */
+export function stripHeaderComments(markdown: string): string {
+  const lines = markdown.split('\n');
+  let firstContentIndex = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (trimmed.startsWith('<!--') || trimmed === '') {
+      firstContentIndex = i + 1;
+    } else {
+      break;
+    }
+  }
+  return lines.slice(firstContentIndex).join('\n');
+}
+
+/**
  * Parses TODO.md content into structured TaskItem array
  */
-export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; headerComments: string } {
+export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; headerComments: string; bodyMarkdown: string } {
   const lines = markdown.split('\n');
   const items: TaskItem[] = [];
-  let currentCategory = 'General TODOs';
+  let currentHeading: string | null = null;
+  let currentHeadingPrefix = '##';
+  let currentHeadingHasColon = false;
+  let isHeadingActive = false;
+  let currentCategory = 'Untitled';
+  let categoryCounter = 0;
   let currentTask: TaskItem | null = null;
   const commentLines: string[] = [];
 
@@ -14,19 +36,23 @@ export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; header
     const line = lines[i];
 
     // Capture header comments
-    if (line.trim().startsWith('<!--') || (i < 5 && line.trim().startsWith('#') && !line.match(/^##?\s+\w+/))) {
-      if (line.trim().startsWith('<!--')) {
-        commentLines.push(line);
-      }
+    if (line.trim().startsWith('<!--')) {
+      commentLines.push(line);
+      continue;
     }
 
-    // Category headers (e.g. # Major TODOs for beta: or ## Missing features todos:)
-    const categoryMatch = line.match(/^(?:#{1,6})\s+(.+):?$/);
+    // Category / Section headers (e.g. # General TODOs: or ## other todos)
+    const categoryMatch = line.match(/^(#{1,6})\s+(.+?)(:?)$/);
     if (categoryMatch && !line.trim().startsWith('<!--')) {
-      const catText = categoryMatch[1].trim().replace(/:$/, '');
-      if (catText.toLowerCase() !== 'todos') {
-        currentCategory = catText;
-      }
+      const headingPrefix = categoryMatch[1];
+      const catText = categoryMatch[2].trim();
+      const hasColon = categoryMatch[3] === ':';
+      currentHeading = catText || 'Untitled';
+      currentHeadingPrefix = headingPrefix;
+      currentHeadingHasColon = hasColon;
+      isHeadingActive = true;
+      currentCategory = currentHeading;
+      categoryCounter = 0;
       currentTask = null;
       continue;
     }
@@ -34,85 +60,131 @@ export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; header
     // Horizontal rule separator
     if (line.trim().match(/^(-{3,}|\*{3,}|_{3,})$/)) {
       currentTask = null;
+      isHeadingActive = false;
+      currentCategory = 'Untitled';
+      categoryCounter = 0;
       continue;
     }
 
-    // Task item line (e.g. 1. **conditions:** or 2. ~~**AI features:**~~ or - ~~zones~~)
-    // Matches numbered items: 1. **title:** or 1. ~~**title:**~~ or 1. title
-    const numberedMatch = line.match(/^(\d+)\.\s+(?:~~)?(?:\*\*)?(.*?)(?:\*\*)?(?:~~)?\s*:?\s*$/);
-    const bulletMatch = line.match(/^[-*]\s+(?:~~)?(?:\*\*)?(.*?)(?:\*\*)?(?:~~)?\s*$/);
-
-    if (numberedMatch) {
-      let rawTitle = numberedMatch[2].trim();
-      const isDone = line.includes('~~');
-      const isHumanReview = line.includes('**human review**');
-      
-      // Clean title
-      rawTitle = rawTitle.replace(/\*\*/g, '').replace(/~~/g, '').replace(/:$/, '').trim();
-
-      const nextId = items.length + 1;
-      currentTask = {
-        id: nextId,
-        title: rawTitle || `Task ${nextId}`,
-        category: currentCategory,
-        status: isDone ? 'done' : 'not_started',
-        isDone,
-        subtasks: [],
-        isHumanReview,
-        mcpRequired: extractMcpTags(rawTitle)
-      };
-      items.push(currentTask);
-      continue;
-    }
-
-    if (bulletMatch && !currentTask) {
-      // Top-level bullet task without number
-      let rawTitle = bulletMatch[1].trim();
-      const isDone = line.includes('~~');
-      const isHumanReview = line.includes('**human review**');
-      rawTitle = rawTitle.replace(/\*\*/g, '').replace(/~~/g, '').replace(/:$/, '').trim();
-
-      const nextId = items.length + 1;
-      currentTask = {
-        id: nextId,
-        title: rawTitle || `Task ${nextId}`,
-        category: currentCategory,
-        status: isDone ? 'done' : 'not_started',
-        isDone,
-        subtasks: [],
-        isHumanReview,
-        mcpRequired: extractMcpTags(rawTitle)
-      };
-      items.push(currentTask);
-      continue;
-    }
-
-    // Subtask bullet lines under an existing item (e.g. - search feature in schedules panel)
-    const subtaskMatch = line.match(/^\s{2,4}[-*]\s+(.*)$/);
+    // Subtask bullet lines (indented bullet or numbered item under currentTask)
+    const subtaskMatch = line.match(/^(\t+|\s{2,})([*+-]|\d+\.)\s+(.*)$/);
     if (subtaskMatch && currentTask) {
-      let subtext = subtaskMatch[1].trim();
-      const subDone = subtext.includes('~~');
-      const subHuman = subtext.includes('**human review**');
+      let subtext = subtaskMatch[3].trim();
+      // Check if item is marked done via unescaped strikethrough or checkbox
+      const isDone = isUnescapedDone(subtext);
+      const subHuman = isUnescapedHumanReview(subtext);
 
-      subtext = subtext.replace(/~~/g, '').replace(/\*\*human review\*\*\s*-\s*/i, '').replace(/\*\*/g, '').trim();
+      subtext = cleanAndUnescapeMarkdown(subtext);
 
       currentTask.subtasks.push({
         id: `${currentTask.id}-${currentTask.subtasks.length + 1}`,
         text: subtext,
-        isDone: subDone,
+        isDone: isDone,
         isHumanReview: subHuman
       });
 
-      // Update status if partially done
-      if (subDone && currentTask.status === 'not_started') {
+      if (isDone && currentTask.status === 'not_started') {
         currentTask.status = 'in_progress';
       }
+      continue;
+    }
+
+    // Top-level numbered task item line (e.g. 1. Run bash terminal script or 1. ~~Run bash terminal script~~)
+    const numberedMatch = line.match(/^(\d+)\.\s+(.*)$/);
+    if (numberedMatch) {
+      const parsedNum = parseInt(numberedMatch[1], 10);
+      if (parsedNum === 1) {
+        if (isHeadingActive) {
+          currentCategory = currentHeading || 'Untitled';
+          isHeadingActive = false;
+          categoryCounter = 1;
+        } else {
+          currentCategory = 'Untitled';
+        }
+      } else {
+        categoryCounter += 1;
+      }
+
+      let rawTitle = numberedMatch[2].trim();
+      const isDone = isUnescapedDone(rawTitle);
+      const isHumanReview = isUnescapedHumanReview(rawTitle);
+
+      // Clean title and unescape
+      const cleanedTitle = cleanAndUnescapeMarkdown(rawTitle);
+
+      const nextId = items.length + 1;
+      currentTask = {
+        id: nextId,
+        title: cleanedTitle || `Task ${nextId}`,
+        category: currentCategory,
+        categoryHeadingPrefix: currentHeadingPrefix,
+        categoryHasColon: currentHeadingHasColon,
+        listIndex: categoryCounter,
+        listType: 'ordered',
+        isUnordered: false,
+        status: isDone ? 'done' : 'not_started',
+        isDone,
+        subtasks: [],
+        isHumanReview,
+        mcpRequired: extractMcpTags(cleanedTitle)
+      };
+      items.push(currentTask);
+      continue;
+    }
+
+    // Top-level unnumbered bullet task (e.g. - title or - ~~title~~)
+    const bulletMatch = line.match(/^[-*+]\s+(.*)$/);
+    if (bulletMatch) {
+      if (isHeadingActive) {
+        currentCategory = currentHeading || 'Untitled';
+        isHeadingActive = false;
+        categoryCounter = 1;
+      } else if (categoryCounter === 0) {
+        currentCategory = 'Untitled';
+        categoryCounter = 1;
+      } else {
+        categoryCounter += 1;
+      }
+
+      let rawTitle = bulletMatch[1].trim();
+      const isDone = isUnescapedDone(rawTitle);
+      const isHumanReview = isUnescapedHumanReview(rawTitle);
+
+      const cleanedTitle = cleanAndUnescapeMarkdown(rawTitle);
+
+      const nextId = items.length + 1;
+      currentTask = {
+        id: nextId,
+        title: cleanedTitle || `Task ${nextId}`,
+        category: currentCategory,
+        categoryHeadingPrefix: currentHeadingPrefix,
+        categoryHasColon: currentHeadingHasColon,
+        listIndex: categoryCounter,
+        listType: 'bullet',
+        isUnordered: true,
+        status: isDone ? 'done' : 'not_started',
+        isDone,
+        subtasks: [],
+        isHumanReview,
+        mcpRequired: extractMcpTags(cleanedTitle)
+      };
+      items.push(currentTask);
+      continue;
+    }
+
+    // Generic paragraph text outside of lists and headings
+    if (line.trim() !== '') {
+      currentTask = null;
+      isHeadingActive = false;
+      currentCategory = 'Untitled';
+      categoryCounter = 0;
     }
   }
 
   return {
     items,
-    headerComments: commentLines.join('\n') || '<!-- Keep this file scannable. Full briefs, build records and test notes live in AGENT_CONTEXT.md, keyed by item number. -->'
+    headerComments: commentLines.join('\n'),
+    bodyMarkdown: stripHeaderComments(markdown)
   };
 }
 
@@ -120,7 +192,7 @@ export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; header
  * Serializes TaskItem array back to TODO.md format
  */
 export function serializeTodoMarkdown(items: TaskItem[], headerComment?: string): string {
-  let md = headerComment || '<!-- Keep this file scannable. Full briefs, build records and test notes live in AGENT_CONTEXT.md, keyed by item number. -->\n\n';
+  let md = headerComment && headerComment.trim() ? `${headerComment.trim()}\n\n` : '';
 
   // Group by categories
   const categoriesMap = new Map<string, TaskItem[]>();
@@ -133,12 +205,21 @@ export function serializeTodoMarkdown(items: TaskItem[], headerComment?: string)
   }
 
   categoriesMap.forEach((catItems, catName) => {
-    md += `# ${catName}:\n\n`;
+    if (catName && catName !== 'Untitled') {
+      const firstItem = catItems[0];
+      const prefix = firstItem?.categoryHeadingPrefix || '##';
+      const colon = firstItem?.categoryHasColon ? ':' : '';
+      md += `${prefix} ${catName}${colon}\n\n`;
+    }
     let catIndex = 1;
     for (const item of catItems) {
-      const titleFormatted = item.isDone ? `~~**${item.title}:**~~` : `**${item.title}:**`;
-      md += `${catIndex}. ${titleFormatted}\n`;
-      catIndex++;
+      const titleFormatted = item.isDone ? `~~${item.title}~~` : item.title;
+      if (item.isUnordered) {
+        md += `- ${titleFormatted}\n`;
+      } else {
+        md += `${catIndex}. ${titleFormatted}\n`;
+        catIndex++;
+      }
 
       for (const sub of item.subtasks) {
         const subFormatted = sub.isDone ? `~~${sub.text}~~` : sub.text;
@@ -154,9 +235,9 @@ export function serializeTodoMarkdown(items: TaskItem[], headerComment?: string)
 /**
  * Synchronizes AgentContextItem array with updated TaskItem array:
  * - Renumbers briefs to mirror task item numbers and titles (1, 2, 3...)
- * - Preserves existing brief, built, validation, humanReview contents for matching tasks
+ * - Preserves existing brief, built, validation, humanReview contents for matching tasks by title
  * - Removes briefs for deleted tasks
- * - Creates default briefs for newly added tasks
+ * - Creates clean default briefs for newly added tasks without cross-polluting other tasks
  */
 export function syncBriefsWithTasks(
   prevBriefs: AgentContextItem[],
@@ -173,24 +254,34 @@ export function syncBriefsWithTasks(
       (b) => b.title.trim().toLowerCase() === task.title.trim().toLowerCase()
     );
 
-    // If not found by title, try finding by previous index if available
-    if (!match && prevBriefs[i]) {
-      match = prevBriefs[i];
-    }
-
     if (match) {
+      const overview = match.overview || match.brief || `Overview for ${task.title}`;
+      const buildAndVerification = match.buildAndVerification || match.built || '';
+      const completion = match.completion || match.validation || match.humanReview || match.followUps || '';
       updatedBriefs.push({
         ...match,
         itemNumber: newNumber,
         title: task.title,
+        isUnordered: task.isUnordered,
         status: task.status,
+        overview,
+        buildAndVerification,
+        completion,
+        brief: overview,
+        built: buildAndVerification,
+        validation: completion,
       });
     } else {
+      const overview = `Overview for ${task.title}`;
       updatedBriefs.push({
         itemNumber: newNumber,
         title: task.title,
+        isUnordered: task.isUnordered,
         status: task.status,
-        brief: `Brief for ${task.title}`,
+        overview,
+        buildAndVerification: '',
+        completion: '',
+        brief: overview,
         built: '',
         validation: '',
         humanReview: '',
@@ -206,35 +297,48 @@ export function syncBriefsWithTasks(
  * Parses AGENT_CONTEXT.md content into structured AgentContextItem array
  */
 export function parseAgentContextMarkdown(markdown: string): AgentContextItem[] {
-  const sections = markdown.split(/(?=^###\s+\d+\.)/m);
+  const sections = markdown.split(/(?=^###\s+)/m);
   const items: AgentContextItem[] = [];
 
   for (const section of sections) {
-    const headerMatch = section.match(/^###\s+(\d+)\.\s+(.+)$/m);
+    const headerMatch = section.match(/^###\s+(?:(\d+)\.\s+)?(.+)$/m);
     if (!headerMatch) continue;
 
-    const itemNumber = parseInt(headerMatch[1], 10);
+    const isUnordered = !headerMatch[1];
+    const itemNumber = headerMatch[1] ? parseInt(headerMatch[1], 10) : items.length + 1;
     const title = headerMatch[2].trim();
 
     // Extract Status
     const statusMatch = section.match(/\*\*Status:\*\*\s*(.+)$/m);
     const statusStr = statusMatch ? statusMatch[1].trim() : 'not started';
 
-    // Parse sub-sections: Human Review (or Follow-ups), Brief, Built, Validation
-    const humanReview = extractSectionContent(section, 'Human Review') || extractSectionContent(section, 'Follow-ups') || extractSectionContent(section, 'Followups');
-    const brief = extractSectionContent(section, 'Brief');
-    const built = extractSectionContent(section, 'Built');
-    const validation = extractSectionContent(section, 'Validation');
+    // Parse sub-sections: Overview, Build & Verification, Completion (with backwards-compatibility)
+    const overview = extractSectionContent(section, 'Overview') || extractSectionContent(section, 'Brief');
+    const buildAndVerification =
+      extractSectionContent(section, 'Build & Verification') ||
+      extractSectionContent(section, 'Build and Verification') ||
+      extractSectionContent(section, 'Built & Verification') ||
+      extractSectionContent(section, 'Built');
+    const completion =
+      extractSectionContent(section, 'Completion') ||
+      extractSectionContent(section, 'Validation') ||
+      extractSectionContent(section, 'Human Review') ||
+      extractSectionContent(section, 'Follow-ups') ||
+      extractSectionContent(section, 'Followups');
 
     items.push({
       itemNumber,
       title,
+      isUnordered,
       status: mapStatusString(statusStr),
-      humanReview,
-      followUps: humanReview,
-      brief,
-      built,
-      validation,
+      overview,
+      buildAndVerification,
+      completion,
+      brief: overview,
+      built: buildAndVerification,
+      validation: completion,
+      humanReview: completion,
+      followUps: completion,
       rawContent: section
     });
   }
@@ -247,25 +351,28 @@ export function parseAgentContextMarkdown(markdown: string): AgentContextItem[] 
  */
 export function serializeAgentContextMarkdown(items: AgentContextItem[]): string {
   let md = `# TODO context — the verbose half of \`TODO.md\`\n\n`;
-  md += `\`TODO.md\` is the **human** view: the ask in Konur's words, scannable in seconds, with at most a one-line \`DONE:\` per finished item. This file is the **agent** view: the full brief for an item before it's built, and the full record of what was built after.\n\n`;
+  md += `\`TODO.md\` is the **human** view: the ask in Konur's words, scannable in seconds, with at most a one-line \`DONE:\` per finished item. This file is the **agent** view: the full overview for an item before it's built, mid-task build & verification notes, and the completion record of what was built and where the task stands.\n\n`;
   md += `Rules of the split:\n- Sections here mirror \`TODO.md\` **by item number and title** — same numbers, same order.\n- Not every item needs a section here — only ones that have been fleshed out or worked.\n- Verbosity is fine here. It lives here and only here.\n\n---\n\n`;
 
   for (const item of items) {
-    md += `### ${item.itemNumber}. ${item.title}\n\n`;
+    if (item.isUnordered) {
+      md += `### ${item.title}\n\n`;
+    } else {
+      md += `### ${item.itemNumber}. ${item.title}\n\n`;
+    }
     md += `**Status:** ${item.status}\n\n`;
 
-    const reviewContent = item.humanReview || item.followUps;
-    if (reviewContent && reviewContent.trim()) {
-      md += `**Human Review**\n\n${reviewContent.trim()}\n\n`;
+    const overviewContent = item.overview || item.brief;
+    if (overviewContent && overviewContent.trim()) {
+      md += `**Overview**\n\n${overviewContent.trim()}\n\n`;
     }
-    if (item.brief && item.brief.trim()) {
-      md += `**Brief**\n\n${item.brief.trim()}\n\n`;
+    const buildContent = item.buildAndVerification || item.built;
+    if (buildContent && buildContent.trim()) {
+      md += `**Build & Verification**\n\n${buildContent.trim()}\n\n`;
     }
-    if (item.built && item.built.trim()) {
-      md += `**Built**\n\n${item.built.trim()}\n\n`;
-    }
-    if (item.validation && item.validation.trim()) {
-      md += `**Validation**\n\n${item.validation.trim()}\n\n`;
+    const completionContent = item.completion || item.validation || item.humanReview || item.followUps;
+    if (completionContent && completionContent.trim()) {
+      md += `**Completion**\n\n${completionContent.trim()}\n\n`;
     }
 
     md += `---\n\n`;
@@ -274,17 +381,22 @@ export function serializeAgentContextMarkdown(items: AgentContextItem[]): string
   return md.trim();
 }
 
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function extractSectionContent(text: string, sectionName: string): string {
-  // Custom parsing strategy for markdown sections
-  const secStart = text.search(new RegExp(`\\*\\*${sectionName}\\*\\*`, 'i'));
+  // Custom parsing strategy for markdown sections (matching only unescaped section markers)
+  const escapedName = escapeRegex(sectionName);
+  const secStart = text.search(new RegExp(`(?<!\\\\)\\*\\*${escapedName}(?<!\\\\)\\*\\*`, 'i'));
   if (secStart === -1) return '';
 
   const afterSec = text.slice(secStart);
-  const nextSecOffset = afterSec.slice(1).search(/\n\*\*(Status|Human Review|Brief|Built|Validation|Follow-ups|Followups)\*\*|\n### |\n---/i);
+  const nextSecOffset = afterSec.slice(1).search(/\n(?<!\\)\*\*(Status|Overview|Build\s*(?:&|and)\s*Verification|Completion|Human Review|Brief|Built|Validation|Follow-ups|Followups)\*\*|\n### |\n---/i);
 
   let content = nextSecOffset !== -1 ? afterSec.slice(0, nextSecOffset + 1) : afterSec;
   // Remove section title heading line
-  content = content.replace(new RegExp(`^\\*\\*${sectionName}\\*\\*\\s*(?:—\\s*)?`, 'i'), '').trim();
+  content = content.replace(new RegExp(`^(?<!\\\\)\\*\\*${escapedName}(?<!\\\\)\\*\\*\\s*(?:—\\s*)?`, 'i'), '').trim();
   return content;
 }
 
@@ -294,6 +406,47 @@ function mapStatusString(statusStr: string): TaskStatus | string {
   if (lower.includes('in progress')) return 'in_progress';
   if (lower.includes('partly') || lower.includes('first pass')) return 'partly_done';
   return 'not_started';
+}
+
+function isUnescapedDone(text: string): boolean {
+  if (/^\[[xX]\]/.test(text)) return true;
+  // Match unescaped ~~...~~ (where the first ~ is not preceded by a backslash)
+  // Negative lookbehind for backslash
+  const strikethroughRegex = /(?<!\\)~~.*?(\\\\)*~~/s;
+  if (strikethroughRegex.test(text)) return true;
+  if (/<s>.*?<\/s>|<del>.*?<\/del>/i.test(text)) return true;
+  return false;
+}
+
+function isUnescapedHumanReview(text: string): boolean {
+  const hrRegex = /(?<!\\)\*\*human review(?<!\\)\*\*/i;
+  return hrRegex.test(text);
+}
+
+function cleanAndUnescapeMarkdown(text: string): string {
+  let cleaned = text;
+
+  // Strip leading checkbox syntax if any
+  cleaned = cleaned.replace(/^\[[ xX]\]\s*/, '');
+  cleaned = cleaned.replace(/^#{1,6}\s+/, '');
+  cleaned = cleaned.replace(/^>\s+/, '');
+
+  // Strip unescaped human review tags
+  cleaned = cleaned.replace(/(?<!\\)\*\*human review(?<!\\)\*\*\s*-\s*/gi, '');
+
+  // Strip unescaped bold/italic tags and strikethrough
+  cleaned = cleaned.replace(/(?<!\\)~~/g, '');
+  cleaned = cleaned.replace(/(?<!\\)\*\*/g, '');
+  cleaned = cleaned.replace(/<s>/gi, '');
+  cleaned = cleaned.replace(/<\/s>/gi, '');
+  cleaned = cleaned.replace(/<del>/gi, '');
+  cleaned = cleaned.replace(/<\/del>/gi, '');
+  cleaned = cleaned.replace(/:$/, '');
+
+  // Unescape escaped markdown punctuation (\*, \_, \~, \`, \#, \[, \], \\, etc.)
+  cleaned = cleaned.replace(/\\([*~_`#\[\]()>+\-.!\\])/g, '$1');
+
+  return cleaned.trim();
 }
 
 function extractMcpTags(text: string): string[] {

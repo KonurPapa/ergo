@@ -7,7 +7,7 @@ import {
   type ExecutionStep,
   type McpToolPermissionPrompt
 } from '../types';
-import { callMcpTool } from './mcpClient';
+import { callMcpTool, formatConnectionsForAiPrompt } from './mcpClient';
 
 /**
  * Drafts new scannable tasks for TODO.md and verbose briefs for AGENT_CONTEXT.md
@@ -15,8 +15,16 @@ import { callMcpTool } from './mcpClient';
 /**
  * Generic API call handler for Bring-Your-Own-AI providers (OpenAI, Anthropic, Gemini, Ollama)
  */
-export async function callAiEngine(prompt: string, systemPrompt: string, config: AIProviderConfig): Promise<string> {
-  const { provider, apiKey, baseUrl, model } = config;
+export async function callAiEngine(
+  prompt: string,
+  systemPrompt: string,
+  config: AIProviderConfig,
+  taskType: 'discovery' | 'general' = 'general'
+): Promise<string> {
+  const { provider, apiKey, baseUrl } = config;
+  const targetModel = taskType === 'discovery'
+    ? (config.discoveryModel || config.generalModel || config.model)
+    : (config.generalModel || config.model);
 
   if (provider === 'openai') {
     if (!apiKey) throw new Error('OpenAI API key missing.');
@@ -27,7 +35,7 @@ export async function callAiEngine(prompt: string, systemPrompt: string, config:
         Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: model || 'gpt-4o',
+        model: targetModel || (taskType === 'discovery' ? 'gpt-4o-mini' : 'gpt-4o'),
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: prompt }
@@ -54,7 +62,7 @@ export async function callAiEngine(prompt: string, systemPrompt: string, config:
         'anthropic-dangerous-direct-browser-access': 'true'
       },
       body: JSON.stringify({
-        model: model || 'claude-3-7-sonnet-20250219',
+        model: targetModel || (taskType === 'discovery' ? 'claude-3-5-haiku-20241022' : 'claude-3-7-sonnet-20250219'),
         max_tokens: 3000,
         system: systemPrompt,
         messages: [{ role: 'user', content: prompt }]
@@ -70,9 +78,9 @@ export async function callAiEngine(prompt: string, systemPrompt: string, config:
 
   if (provider === 'gemini') {
     if (!apiKey) throw new Error('Google Gemini API key missing.');
-    const targetModel = model || 'gemini-2.5-flash';
+    const geminiModel = targetModel || (taskType === 'discovery' ? 'gemini-2.5-flash' : 'gemini-1.5-pro');
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -95,7 +103,7 @@ export async function callAiEngine(prompt: string, systemPrompt: string, config:
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: model || 'llama3.2',
+        model: targetModel || (taskType === 'discovery' ? 'llama3.2' : 'qwen2.5-coder'),
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: prompt }
@@ -125,14 +133,19 @@ export async function draftTasksWithAi(
   connectedMcps: MCPServer[]
 ): Promise<{ newTasks: Partial<TaskItem>[]; newBriefs: Partial<AgentContextItem>[] }> {
   const mcpNames = connectedMcps.filter((m) => m.status === 'connected').map((m) => m.name);
+  const runtimeConnectionsPrompt = formatConnectionsForAiPrompt(connectedMcps);
 
   // If real AI credentials are set for OpenAI, Anthropic, Gemini, or Ollama, make live call to provider
-  if (aiConfig.provider !== 'mock' && (aiConfig.apiKey || aiConfig.provider === 'ollama')) {
+  if (aiConfig.provider !== 'none' && aiConfig.provider !== 'mock' && (aiConfig.apiKey || aiConfig.provider === 'ollama')) {
     try {
       const systemPrompt = `You are Ergo AI, an agentic workspace task architect.
 Given a user project goal, generate dual-layer project tasks:
 1) Scannable TODO task items for TODO.md
-2) Detailed technical context briefs for AGENT_CONTEXT.md.
+2) Detailed technical context briefs for AGENT_CONTEXT.md with Overview, Build & Verification, and Completion sections.
+
+${runtimeConnectionsPrompt}
+
+Select appropriate tools from the active runtime connections listed above for each task's "mcpRequired" array where relevant.
 
 Respond strictly with valid JSON matching this schema:
 {
@@ -151,20 +164,27 @@ Respond strictly with valid JSON matching this schema:
   "briefs": [
     {
       "title": "Task title",
-      "brief": "**Goal:** Goal description\\n\\n**Seams:** Affected code files\\n\\n**Connected MCPs:** Tool list",
-      "built": "",
-      "validation": "",
-      "humanReview": "Next steps & verification checklist"
+      "overview": "**Done-State:** User visible behavior\\n\\n**In Context:** Evaluated in relationship to overall project goals and other tasks\\n\\n**Seams:** Affected code files & constraints",
+      "buildAndVerification": "",
+      "completion": ""
     }
   ]
 }`;
-      const responseText = await callAiEngine(userPrompt, systemPrompt, aiConfig);
+      const responseText = await callAiEngine(userPrompt, systemPrompt, aiConfig, 'discovery');
       const cleanJson = responseText.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
       const parsed = JSON.parse(cleanJson);
       if (parsed.tasks && parsed.briefs && Array.isArray(parsed.tasks)) {
         return {
           newTasks: parsed.tasks,
-          newBriefs: parsed.briefs
+          newBriefs: parsed.briefs.map((b: any) => ({
+            ...b,
+            overview: b.overview || b.brief || '',
+            buildAndVerification: b.buildAndVerification || b.built || '',
+            completion: b.completion || b.validation || b.humanReview || '',
+            brief: b.overview || b.brief || '',
+            built: b.buildAndVerification || b.built || '',
+            validation: b.completion || b.validation || ''
+          }))
         };
       }
     } catch (e: any) {
@@ -195,14 +215,15 @@ Respond strictly with valid JSON matching this schema:
         {
           title: 'VS Code Editor Live Document Sync & Edit Automation',
           status: 'not started',
-          brief: `**Goal:** Enable Ergo to drive live edits inside VS Code active document buffer and sync plain markdown files (\`TODO.md\` and \`AGENT_CONTEXT.md\`) in real-time.\n\n` +
-                 `**Seams:** \`vscode-ipc://ergo-vscode-bridge\`, \`edit_active_document\`, \`sync_markdown_files\`.\n` +
-                 `**Behavior:** Functions identically to plain markdown files in the user's VS Code project.\n` +
-                 `**Connected MCPs:** ${mcpNames.join(', ') || 'VS Code Editor MCP'}`,
+          overview: `**Done-State:** Enable Ergo to drive live edits inside VS Code active document buffer and sync plain markdown files (\`TODO.md\` and \`AGENT_CONTEXT.md\`) in real-time.\n\n` +
+                    `**In Context:** Evaluated alongside workspace editor tools to ensure non-destructive live synchronization.\n\n` +
+                    `**Seams:** \`vscode-ipc://ergo-vscode-bridge\`, \`edit_active_document\`, \`sync_markdown_files\`.\n` +
+                    `**Connected MCPs:** ${mcpNames.join(', ') || 'VS Code Editor MCP'}`,
+          buildAndVerification: '',
+          completion: '',
+          brief: `**Done-State:** Enable Ergo to drive live edits inside VS Code active document buffer and sync plain markdown files in real-time.`,
           built: '',
-          validation: '',
-          humanReview: 'Verify selection highlighting and auto-save triggers in active VS Code tabs.',
-          followUps: 'Verify selection highlighting and auto-save triggers in active VS Code tabs.'
+          validation: ''
         }
       ]
     };
@@ -516,27 +537,28 @@ export async function executeTaskWithAi(
   await new Promise((r) => setTimeout(r, 800));
 
   const buildDate = new Date().toISOString().split('T')[0];
-  const builtContent = brief?.built
-    ? `${brief.built}\n\n**Execution Pass (${buildDate}):**\nImplemented task #${task.id} (${task.title}). Updated seams and verified parameters.`
-    : `**Execution Pass (${buildDate}):**\nImplemented task #${task.id} (${task.title}). All subtasks processed.`;
+  const overviewContent = brief?.overview || brief?.brief || `Task #${task.id} (${task.title}) overview in context.`;
 
-  const validationContent = brief?.validation
-    ? `${brief.validation}\n\nAutomated execution suite verified 100% pass rate. 0 regressions.`
-    : `Verified via automated step runner. Unit checks passed clean.`;
+  const buildVerificationContent = brief?.buildAndVerification || brief?.built
+    ? `${brief.buildAndVerification || brief.built}\n\n**Mid-Task Build Journey (${buildDate}):**\n1. Inspected seams and context for #${task.id} (${task.title}).\n2. Applied implementation changes in dependency order.\n3. Ran automated verification suite.`
+    : `**Mid-Task Build Journey (${buildDate}):**\n1. Inspected seams and context for #${task.id} (${task.title}).\n2. Applied implementation changes in dependency order.\n3. Ran automated verification suite.`;
 
-  const reviewContent = brief?.humanReview || brief?.followUps
-    ? `${brief.humanReview || brief.followUps}\n\n**AI Follow-up (${buildDate}):**\n- [ ] Review implementation log in the Built section.\n- [ ] Confirm automated validation pass rate.\n- [ ] Perform browser verification on updated components.`
-    : `**AI Follow-up (${buildDate}):**\n- [ ] Review implementation log in the Built section.\n- [ ] Confirm automated validation pass rate.\n- [ ] Perform browser verification on updated components.`;
+  const completionContent = brief?.completion || brief?.validation || brief?.humanReview || brief?.followUps
+    ? `${brief.completion || brief.validation || brief.humanReview || brief.followUps}\n\n**Completion Summary (${buildDate}):**\n- Implemented all subtasks for task #${task.id}.\n- Verified 100% pass rate with 0 regressions.\n- Current Status: Done / Verified.`
+    : `**Completion Summary (${buildDate}):**\n- Implemented all subtasks for task #${task.id}.\n- Verified 100% pass rate with 0 regressions.\n- Current Status: Done / Verified.`;
 
   const updatedBrief: AgentContextItem = {
     itemNumber: task.id,
     title: task.title,
     status: 'done',
-    humanReview: reviewContent,
-    followUps: reviewContent,
-    brief: brief?.brief || `Task #${task.id} brief details.`,
-    built: builtContent,
-    validation: validationContent
+    overview: overviewContent,
+    buildAndVerification: buildVerificationContent,
+    completion: completionContent,
+    brief: overviewContent,
+    built: buildVerificationContent,
+    validation: completionContent,
+    humanReview: completionContent,
+    followUps: completionContent
   };
 
   const updatedTask: TaskItem = {

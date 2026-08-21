@@ -62,7 +62,7 @@ export async function getAllowedRoots(): Promise<McpRootBoundary[]> {
   }
 
   return [
-    { id: 'root-default', path: '.', name: 'Workspace Root', isDefault: true }
+    { id: 'root-default', path: '~/.ergo', name: 'Default Storage (~/.ergo)', isDefault: true }
   ];
 }
 
@@ -221,4 +221,109 @@ export function guessRelevantTools(prompt: string, availableTools: MCPTool[]): s
   }
 
   return Array.from(selected);
+}
+
+export interface McpRuntimeConnection {
+  serverId: string;
+  serverName: string;
+  category: string;
+  status: 'connected' | 'disconnected' | 'authenticating';
+  transport: string;
+  serverType: 'bundled_harness' | 'external_oauth';
+  isDefault: boolean;
+  tools: MCPTool[];
+}
+
+export interface McpRuntimeSummary {
+  connectedServers: McpRuntimeConnection[];
+  availableTools: MCPTool[];
+  allowedRoots: McpRootBoundary[];
+  totalConnectedServers: number;
+  totalAvailableTools: number;
+}
+
+/**
+ * Returns a straightforward array of all active connected MCP servers and their tools.
+ * Bundled harnesses (Filesystem, Fetch, Git) are always marked as default connections.
+ */
+export function getAvailableConnections(mcpServers: MCPServer[]): McpRuntimeConnection[] {
+  return mcpServers
+    .filter((s) => s.status === 'connected')
+    .map((s) => ({
+      serverId: s.id,
+      serverName: s.name,
+      category: s.category,
+      status: s.status,
+      transport: s.transport,
+      serverType: s.serverType || (s.transport === 'Local Stdio' ? 'bundled_harness' : 'external_oauth'),
+      isDefault: s.serverType === 'bundled_harness' || s.transport === 'Local Stdio',
+      tools: s.tools.map((t) => ({ ...t, serverId: s.id }))
+    }));
+}
+
+/**
+ * Returns a straightforward flat array of all tools available at runtime from connected MCP servers.
+ */
+export function getAvailableTools(mcpServers: MCPServer[]): MCPTool[] {
+  const tools: MCPTool[] = [];
+  mcpServers
+    .filter((s) => s.status === 'connected')
+    .forEach((s) => {
+      s.tools.forEach((t) => {
+        tools.push({
+          ...t,
+          serverId: s.id
+        });
+      });
+    });
+  return tools;
+}
+
+/**
+ * Returns a complete runtime summary containing active connections, available tools, and allowed folders.
+ * Useful for runtime inspection, debugging, and passing state directly to agentic execution loops.
+ */
+export function getAllConnectionsSummary(
+  mcpServers: MCPServer[],
+  roots: McpRootBoundary[] = [{ id: 'root-default', path: '~/.ergo', name: 'Default Storage (~/.ergo)', isDefault: true }]
+): McpRuntimeSummary {
+  const connectedServers = getAvailableConnections(mcpServers);
+  const availableTools = getAvailableTools(mcpServers);
+
+  return {
+    connectedServers,
+    availableTools,
+    allowedRoots: roots,
+    totalConnectedServers: connectedServers.length,
+    totalAvailableTools: availableTools.length
+  };
+}
+
+/**
+ * Formats all active connections, tools, and directory boundaries into a clear text prompt block
+ * for the AI at runtime so it can determine which tool(s) to use.
+ */
+export function formatConnectionsForAiPrompt(
+  mcpServers: MCPServer[],
+  roots: McpRootBoundary[] = [{ id: 'root-default', path: '~/.ergo', name: 'Default Storage (~/.ergo)', isDefault: true }]
+): string {
+  const connected = getAvailableConnections(mcpServers);
+  if (connected.length === 0) {
+    return 'AVAILABLE TOOLS: None (All MCP connections currently inactive).';
+  }
+
+  const lines: string[] = ['AVAILABLE RUNTIME TOOLS & ACTIVE MCP CONNECTIONS:'];
+
+  if (roots.length > 0) {
+    lines.push(`ALLOWED DIRECTORY ROOTS (Filesystem Boundaries): ${roots.map((r) => `${r.name} (\`${r.path}\`)`).join(', ')}`);
+  }
+
+  connected.forEach((conn) => {
+    lines.push(`\n- ${conn.serverName} [${conn.transport}] (${conn.isDefault ? 'Default Local Harness' : 'External App'}):`);
+    conn.tools.forEach((tool) => {
+      lines.push(`  * ${tool.name}: ${tool.description} (Auto-Approve: ${tool.autoApprove ? 'Yes' : 'Requires User Confirmation'})`);
+    });
+  });
+
+  return lines.join('\n');
 }

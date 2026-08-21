@@ -1,7 +1,28 @@
 import React, { useState, useEffect } from 'react';
 import { type AIProviderId, type UserApiKey } from '../types';
 import { SUPPORTED_AI_PROVIDERS, testAiConnection } from '../lib/aiProviders';
-import { Key, Globe, X, CheckCircle2, AlertCircle, Loader2, ExternalLink, Eye, EyeOff, ShieldCheck, Plus, Trash2, Check, HelpCircle, Tag } from 'lucide-react';
+import {
+  Key,
+  Globe,
+  X,
+  CheckCircle2,
+  AlertCircle,
+  Loader2,
+  ExternalLink,
+  Eye,
+  EyeOff,
+  ShieldCheck,
+  Trash2,
+  Check,
+  HelpCircle,
+  Tag,
+  Zap,
+  Brain,
+  Edit3,
+  ChevronDown,
+  Sliders,
+  AlertTriangle
+} from 'lucide-react';
 
 interface AiCredentialsModalProps {
   isOpen: boolean;
@@ -28,9 +49,12 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
   const [apiKey, setApiKey] = useState('');
   const [providerId, setProviderId] = useState<AIProviderId>('openai');
   const [baseUrl, setBaseUrl] = useState('');
-  const [model, setModel] = useState('');
+  const [discoveryModel, setDiscoveryModel] = useState('');
+  const [generalModel, setGeneralModel] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
+  const [keyPendingDelete, setKeyPendingDelete] = useState<UserApiKey | null>(null);
 
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -44,7 +68,21 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     setApiKey('');
     setProviderId(pId);
     setBaseUrl(p.defaultBaseUrl || '');
-    setModel(p.defaultModel);
+    setDiscoveryModel(p.defaultDiscoveryModel);
+    setGeneralModel(p.defaultGeneralModel);
+    setTestResult(null);
+    setShowApiKey(false);
+  };
+
+  const loadKeyForEditing = (k: UserApiKey) => {
+    const p = SUPPORTED_AI_PROVIDERS.find((item) => item.id === k.provider) || SUPPORTED_AI_PROVIDERS[0];
+    setEditingId(k.id);
+    setKeyName(k.name);
+    setApiKey(k.apiKey || '');
+    setProviderId(k.provider);
+    setBaseUrl(k.baseUrl || p.defaultBaseUrl || '');
+    setDiscoveryModel(k.discoveryModel || p.defaultDiscoveryModel);
+    setGeneralModel(k.generalModel || k.model || p.defaultGeneralModel);
     setTestResult(null);
     setShowApiKey(false);
   };
@@ -52,12 +90,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       if (editingKey) {
-        setEditingId(editingKey.id);
-        setKeyName(editingKey.name);
-        setApiKey(editingKey.apiKey);
-        setProviderId(editingKey.provider);
-        setBaseUrl(editingKey.baseUrl || '');
-        setModel(editingKey.model || SUPPORTED_AI_PROVIDERS.find((p) => p.id === editingKey.provider)?.defaultModel || '');
+        loadKeyForEditing(editingKey);
       } else {
         resetForm('openai');
       }
@@ -70,11 +103,12 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     if (!editingId) {
       const p = SUPPORTED_AI_PROVIDERS.find((item) => item.id === providerId);
       if (p) {
-        setModel(p.defaultModel);
+        setDiscoveryModel(p.defaultDiscoveryModel);
+        setGeneralModel(p.defaultGeneralModel);
         if (p.defaultBaseUrl) setBaseUrl(p.defaultBaseUrl);
       }
     }
-  }, [providerId]);
+  }, [providerId, editingId]);
 
   if (!isOpen) return null;
 
@@ -105,7 +139,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     const res = await testAiConnection(providerId, {
       apiKey: apiKey.trim(),
       baseUrl: baseUrl.trim(),
-      model
+      model: generalModel || discoveryModel
     });
     setTestResult(res);
     setIsTesting(false);
@@ -119,7 +153,9 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
       provider: providerId,
       apiKey: apiKey.trim(),
       baseUrl: baseUrl.trim(),
-      model,
+      discoveryModel: discoveryModel || providerMeta.defaultDiscoveryModel,
+      generalModel: generalModel || providerMeta.defaultGeneralModel,
+      model: generalModel || providerMeta.defaultGeneralModel,
       isConnected: true
     });
     resetForm();
@@ -140,26 +176,38 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     >
       <div
         className="modal-content"
-        style={{ maxWidth: '680px', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}
+        style={{ maxWidth: '720px', maxHeight: '92vh', display: 'flex', flexDirection: 'column' }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <div style={{ width: '38px', height: '38px', borderRadius: '10px', background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-cyan))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
+            <div
+              style={{
+                width: '38px',
+                height: '38px',
+                borderRadius: '10px',
+                background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-cyan))',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#fff',
+                boxShadow: '0 2px 8px rgba(99, 102, 241, 0.3)'
+              }}
+            >
               <Key size={20} />
             </div>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#fff', margin: 0 }}>
-                  AI Engine Screen & Key Setup
+                  Manage AI Keys
                 </h3>
-                <span className="badge badge-done" style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem' }}>
+                {/* <span className="badge badge-done" style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem' }}>
                   Stored in config/secrets.json
-                </span>
+                </span> */}
               </div>
               <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0 }}>
-                Keys are saved directly to your local folder and never sent to a remote database.
+                Keys are stored locally in your secrets file and never sent to a cloud database.
               </p>
             </div>
           </div>
@@ -169,25 +217,51 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
         </div>
 
         {/* Body */}
-        <div className="modal-body" style={{ overflowY: 'auto', flex: 1, padding: '1.25rem 1.5rem' }}>
-          {/* Key Form Card */}
-          <div style={{ background: 'var(--bg-dark)', border: '1px solid var(--border-glow)', borderRadius: 'var(--radius-md)', padding: '1.25rem', marginBottom: '1.5rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-              <span style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                <Plus size={16} />
-                {editingId ? 'Edit Configured API Key' : 'Add New API Key'}
-              </span>
-              {editingId && (
-                <button
-                  type="button"
-                  onClick={() => resetForm()}
-                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '0.75rem', cursor: 'pointer', textDecoration: 'underline' }}
-                >
-                  Cancel Edit
-                </button>
-              )}
-            </div>
-
+        <div className="modal-body" style={{ overflowY: 'auto', flex: 1, padding: '1.25rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          {/* Card 1: Add New / Edit API Key Form Card */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '-0.75rem' }}>
+            <h4
+              style={{
+                fontSize: '0.85rem',
+                fontWeight: 700,
+                color: 'var(--text-muted)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+                margin: 0
+              }}
+            >
+              {/* {editingId ? <Edit3 size={17} color="var(--accent-cyan)" /> : <Plus size={17} color="var(--accent-cyan)" />} */}
+              {editingId ? 'Edit Configured API Key' : 'Add New API Key'}
+            </h4>
+            {editingId && (
+              <button
+                type="button"
+                onClick={() => resetForm()}
+                style={{
+                  background: 'rgba(244, 63, 94, 0.1)',
+                  border: '1px solid rgba(244, 63, 94, 0.3)',
+                  color: 'var(--accent-rose)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '0.2rem 0.6rem',
+                  fontSize: '0.75rem',
+                  cursor: 'pointer',
+                  fontWeight: 600
+                }}
+              >
+                Cancel Edit
+              </button>
+            )}
+          </div>
+          <div
+            style={{
+              background: 'var(--bg-dark)',
+              border: editingId ? '1px solid var(--accent-cyan)' : '1px solid var(--border-glow)',
+              borderRadius: 'var(--radius-md)',
+              padding: '1.25rem',
+              boxShadow: editingId ? '0 0 16px rgba(6, 182, 212, 0.15)' : 'none',
+              transition: 'all 0.2s ease'
+            }}
+          >
             {/* Provider Selector Tabs */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem', marginBottom: '1.1rem' }}>
               {SUPPORTED_AI_PROVIDERS.filter((p) => p.id !== 'mock').map((p) => {
@@ -198,8 +272,13 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                     type="button"
                     onClick={() => {
                       setProviderId(p.id);
-                      if (!keyName || keyName.endsWith('Key')) {
-                        setKeyName(`${p.shortName} Key`);
+                      if (!keyName || keyName.endsWith('Key') || keyName.endsWith('Ollama')) {
+                        setKeyName(p.id === 'ollama' ? 'Local Ollama' : `${p.shortName} Key`);
+                      }
+                      if (!editingId) {
+                        setDiscoveryModel(p.defaultDiscoveryModel);
+                        setGeneralModel(p.defaultGeneralModel);
+                        if (p.defaultBaseUrl) setBaseUrl(p.defaultBaseUrl);
                       }
                     }}
                     style={{
@@ -210,7 +289,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                       padding: '0.65rem 0.4rem',
                       borderRadius: 'var(--radius-sm)',
                       border: `1px solid ${isSelected ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
-                      background: isSelected ? 'rgba(6, 182, 212, 0.12)' : 'var(--bg-card)',
+                      background: isSelected ? 'rgba(6, 182, 212, 0.14)' : 'var(--bg-card)',
                       color: isSelected ? '#fff' : 'var(--text-muted)',
                       cursor: 'pointer',
                       transition: 'all 0.15s ease'
@@ -240,11 +319,11 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
             </div>
 
             {/* Field 1: Key Name */}
-            <div className="input-group">
-              <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <div className="input-group" style={{ marginBottom: '0.85rem' }}>
+              <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
                 <Tag size={13} color="var(--accent-cyan)" />
-                <span>Key Name</span>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>(Give this key a label to recognize it)</span>
+                <span style={{ fontWeight: 600, color: '#e2e8f0' }}>Key Label</span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>(Name to identify this key)</span>
               </label>
               <input
                 type="text"
@@ -257,10 +336,10 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
 
             {/* Field 2: API Key */}
             {providerMeta.requiresKey && (
-              <div className="input-group">
-                <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <div className="input-group" style={{ marginBottom: '0.85rem' }}>
+                <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
                   <Key size={13} color="var(--accent-amber)" />
-                  <span>Paste API Key</span>
+                  <span style={{ fontWeight: 600, color: '#e2e8f0' }}>API Key</span>
                 </label>
                 <div style={{ position: 'relative' }}>
                   <input
@@ -274,7 +353,16 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setShowApiKey(!showApiKey)}
-                    style={{ position: 'absolute', right: '0.75rem', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                    style={{
+                      position: 'absolute',
+                      right: '0.75rem',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--text-muted)',
+                      cursor: 'pointer'
+                    }}
                     title={showApiKey ? 'Hide Key' : 'Show Key'}
                   >
                     {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -285,10 +373,10 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
 
             {/* Field 3: Base URL for Ollama */}
             {providerMeta.requiresBaseUrl && (
-              <div className="input-group">
-                <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <div className="input-group" style={{ marginBottom: '0.85rem' }}>
+                <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
                   <Globe size={13} color="var(--accent-violet)" />
-                  <span>Ollama Host Endpoint</span>
+                  <span style={{ fontWeight: 600, color: '#e2e8f0' }}>Ollama Host Endpoint</span>
                 </label>
                 <input
                   type="text"
@@ -301,30 +389,149 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
               </div>
             )}
 
-            {/* Field 4: Model Selection */}
-            <div className="input-group">
-              <label className="input-label">Target Model</label>
-              <select
-                className="input-text"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                style={{ cursor: 'pointer' }}
+            {/* Field 4 & 5: Advanced Settings (Dual Model Configuration) */}
+            <div style={{ marginTop: '0.85rem' }}>
+              <button
+                type="button"
+                onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  width: '100%',
+                  background: 'rgba(15, 23, 42, 0.4)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '0.55rem 0.75rem',
+                  color: '#cbd5e1',
+                  cursor: 'pointer',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  transition: 'all 0.15s ease'
+                }}
               >
-                {providerMeta.models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name} — {m.description}
-                  </option>
-                ))}
-              </select>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                  <Sliders size={14} color="var(--accent-cyan)" />
+                  <span>Advanced Settings</span>
+                  {/* <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 400 }}>
+                    (Model selection)
+                  </span> */}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  {!showAdvancedSettings && (
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      {providerMeta.models.find((m) => m.id === (discoveryModel || providerMeta.defaultDiscoveryModel))?.name || discoveryModel} • {providerMeta.models.find((m) => m.id === (generalModel || providerMeta.defaultGeneralModel))?.name || generalModel}
+                    </span>
+                  )}
+                  <ChevronDown
+                    size={14}
+                    style={{
+                      transform: showAdvancedSettings ? 'rotate(180deg)' : 'rotate(0deg)',
+                      transition: 'transform 0.2s ease',
+                      color: 'var(--text-muted)'
+                    }}
+                  />
+                </div>
+              </button>
+
+              {showAdvancedSettings && (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(2, 1fr)',
+                    gap: '0.85rem',
+                    marginTop: '0.5rem',
+                    padding: '0.85rem',
+                    background: 'rgba(15, 23, 42, 0.5)',
+                    border: '1px solid var(--border-subtle)',
+                    borderRadius: 'var(--radius-sm)'
+                  }}
+                >
+                  {/* Discovery Model */}
+                  <div className="input-group" style={{ margin: 0 }}>
+                    <label className="input-label" style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', marginBottom: '0.4rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <Zap size={13} color="var(--accent-amber)" />
+                        <span style={{ fontWeight: 700, color: '#fff', fontSize: '0.82rem' }}>Discovery Model</span>
+                        <span
+                          style={{
+                            fontSize: '0.62rem',
+                            padding: '0.05rem 0.35rem',
+                            borderRadius: '4px',
+                            background: 'rgba(245, 158, 11, 0.15)',
+                            color: 'var(--accent-amber)',
+                            fontWeight: 600
+                          }}
+                        >
+                          Lighter / Fast
+                        </span>
+                      </div>
+                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.25 }}>
+                        Used for quick scanning to assemble relevant context
+                      </span>
+                    </label>
+                    <select
+                      className="input-text"
+                      value={discoveryModel || providerMeta.defaultDiscoveryModel}
+                      onChange={(e) => setDiscoveryModel(e.target.value)}
+                      style={{ cursor: 'pointer', fontSize: '0.82rem' }}
+                    >
+                      {providerMeta.models.map((m) => (
+                        <option key={`disc-${m.id}`} value={m.id}>
+                          {m.name} {m.id === providerMeta.defaultDiscoveryModel ? '(Default)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Tasks Model */}
+                  <div className="input-group" style={{ margin: 0 }}>
+                    <label className="input-label" style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', marginBottom: '0.4rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <Brain size={13} color="var(--accent-cyan)" />
+                        <span style={{ fontWeight: 700, color: '#fff', fontSize: '0.82rem' }}>Tasks Model</span>
+                        <span
+                          style={{
+                            fontSize: '0.62rem',
+                            padding: '0.05rem 0.35rem',
+                            borderRadius: '4px',
+                            background: 'rgba(6, 182, 212, 0.15)',
+                            color: 'var(--accent-cyan)',
+                            fontWeight: 600
+                          }}
+                        >
+                          Mid / High Intelligence
+                        </span>
+                      </div>
+                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.25 }}>
+                        Used for planning and running tasks
+                      </span>
+                    </label>
+                    <select
+                      className="input-text"
+                      value={generalModel || providerMeta.defaultGeneralModel}
+                      onChange={(e) => setGeneralModel(e.target.value)}
+                      style={{ cursor: 'pointer', fontSize: '0.82rem' }}
+                    >
+                      {providerMeta.models.map((m) => (
+                        <option key={`gen-${m.id}`} value={m.id}>
+                          {m.name} {m.id === providerMeta.defaultGeneralModel ? '(Default)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Action Bar inside form */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1.1rem' }}>
               <button
                 className="btn btn-secondary"
                 type="button"
                 onClick={handleTestConnection}
                 disabled={isTesting || !isConfigValid()}
+                style={{ fontSize: '0.82rem' }}
               >
                 {isTesting ? (
                   <>
@@ -340,9 +547,10 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 type="button"
                 onClick={handleSave}
                 disabled={!isConfigValid()}
+                style={{ fontSize: '0.82rem' }}
               >
                 <ShieldCheck size={16} />
-                <span>{editingId ? 'Save Changes' : 'Save & Set Active Key'}</span>
+                <span>{editingId ? 'Save Changes' : 'Save AI Key'}</span>
               </button>
             </div>
 
@@ -368,99 +576,218 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
             )}
           </div>
 
-          {/* Configured Keys List */}
-          {userApiKeys.length > 0 && (
-            <div style={{ marginBottom: '1.5rem' }}>
-              <h4 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.75rem' }}>
-                Your Specified API Keys ({userApiKeys.length})
+          {/* Card 2: Configured API Keys List (Listed Directly Below the Add Form Card) */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+              <h4
+                style={{
+                  fontSize: '0.85rem',
+                  fontWeight: 700,
+                  color: 'var(--text-muted)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                  margin: 0
+                }}
+              >
+                Configured API Keys ({userApiKeys.length})
               </h4>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {userApiKeys.length > 0 && (
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                  Click 'Edit' to adjust discovery/general models
+                </span>
+              )}
+            </div>
+
+            {userApiKeys.length === 0 ? (
+              <div
+                style={{
+                  padding: '1.5rem',
+                  textAlign: 'center',
+                  background: 'var(--bg-dark)',
+                  border: '1px dashed var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)'
+                }}
+              >
+                <Key size={28} color="var(--text-muted)" style={{ margin: '0 auto 0.5rem auto', opacity: 0.6 }} />
+                <p style={{ fontSize: '0.84rem', color: '#fff', fontWeight: 600, margin: '0 0 0.25rem 0' }}>
+                  No API keys added yet
+                </p>
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: 0 }}>
+                  Add your OpenAI, Anthropic, Gemini, or Ollama credentials in the card above to activate AI features.
+                </p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
                 {userApiKeys.map((k) => {
                   const isActive = k.id === activeKeyId;
+                  const isCurrentlyEditing = k.id === editingId;
                   const pMeta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === k.provider);
+                  const effectiveDiscModel = k.discoveryModel || pMeta?.defaultDiscoveryModel || 'Default';
+                  const effectiveGenModel = k.generalModel || k.model || pMeta?.defaultGeneralModel || 'Default';
+                  const discModelName = pMeta?.models.find((m) => m.id === effectiveDiscModel)?.name || effectiveDiscModel;
+                  const genModelName = pMeta?.models.find((m) => m.id === effectiveGenModel)?.name || effectiveGenModel;
+
                   return (
                     <div
                       key={k.id}
                       style={{
                         display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '0.75rem 1rem',
+                        flexDirection: 'column',
+                        gap: '0.6rem',
+                        padding: '0.85rem 1rem',
                         background: 'var(--bg-dark)',
-                        border: `1px solid ${isActive ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
-                        borderRadius: 'var(--radius-md)'
+                        border: `1px solid ${isCurrentlyEditing
+                          ? 'var(--accent-cyan)'
+                          : isActive
+                            ? 'rgba(6, 182, 212, 0.4)'
+                            : 'var(--border-subtle)'
+                          }`,
+                        borderRadius: 'var(--radius-md)',
+                        boxShadow: isActive ? '0 0 10px rgba(6, 182, 212, 0.08)' : 'none',
+                        transition: 'all 0.15s ease'
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                        <div style={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                          {pMeta?.iconUrl ? (
-                            <img src={pMeta.iconUrl} alt={pMeta.shortName} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                          ) : (
-                            <span style={{ fontSize: '1.2rem' }}>{pMeta?.icon || '🔑'}</span>
-                          )}
-                        </div>
-                        <div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                            <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff' }}>{k.name}</span>
-                            <span className="badge badge-done" style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem' }}>
-                              {pMeta?.shortName || k.provider}
-                            </span>
-                            {isActive && (
-                              <span className="badge badge-done" style={{ fontSize: '0.65rem', background: 'rgba(6, 182, 212, 0.2)', color: 'var(--accent-cyan)', borderColor: 'var(--accent-cyan)' }}>
-                                Active
-                              </span>
+                      {/* Top Row: Provider info, Name, Active Badge & Action Buttons */}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          <div style={{ width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                            {pMeta?.iconUrl ? (
+                              <img src={pMeta.iconUrl} alt={pMeta.shortName} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                            ) : (
+                              <span style={{ fontSize: '1.2rem' }}>{pMeta?.icon || '🔑'}</span>
                             )}
                           </div>
-                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                            {k.provider === 'ollama' ? k.baseUrl : (k.apiKey ? `${k.apiKey.slice(0, 7)}...${k.apiKey.slice(-4)}` : 'No Key')} • {k.model}
-                          </span>
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                              <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff' }}>{k.name}</span>
+                              <span
+                                className="badge"
+                                style={{
+                                  fontSize: '0.65rem',
+                                  padding: '0.1rem 0.4rem',
+                                  background: 'rgba(255, 255, 255, 0.06)',
+                                  color: '#cbd5e1',
+                                  borderColor: 'var(--border-subtle)'
+                                }}
+                              >
+                                {pMeta?.shortName || k.provider}
+                              </span>
+                              {isActive && (
+                                <span
+                                  className="badge badge-done"
+                                  style={{
+                                    fontSize: '0.65rem',
+                                    background: 'rgba(6, 182, 212, 0.2)',
+                                    color: 'var(--accent-cyan)',
+                                    borderColor: 'var(--accent-cyan)'
+                                  }}
+                                >
+                                  Active Key
+                                </span>
+                              )}
+                              {isCurrentlyEditing && (
+                                <span
+                                  className="badge"
+                                  style={{
+                                    fontSize: '0.65rem',
+                                    background: 'rgba(245, 158, 11, 0.2)',
+                                    color: 'var(--accent-amber)',
+                                    borderColor: 'var(--accent-amber)'
+                                  }}
+                                >
+                                  Editing Above
+                                </span>
+                              )}
+                            </div>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                              {k.provider === 'ollama'
+                                ? k.baseUrl || 'http://localhost:11434'
+                                : k.apiKey
+                                  ? `${k.apiKey.slice(0, 7)}...${k.apiKey.slice(-4)}`
+                                  : 'No Key'}
+                            </span>
+                          </div>
                         </div>
-                      </div>
 
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        {!isActive && (
+                        {/* Action Buttons */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                          {!isActive && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              style={{ padding: '0.25rem 0.55rem', fontSize: '0.75rem' }}
+                              onClick={() => onSelectActiveKey(k.id)}
+                            >
+                              <Check size={12} />
+                              Use Key
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="btn btn-secondary"
-                            style={{ padding: '0.25rem 0.55rem', fontSize: '0.75rem' }}
-                            onClick={() => onSelectActiveKey(k.id)}
+                            style={{
+                              padding: '0.25rem 0.55rem',
+                              fontSize: '0.75rem',
+                              background: isCurrentlyEditing ? 'rgba(6, 182, 212, 0.15)' : undefined,
+                              borderColor: isCurrentlyEditing ? 'var(--accent-cyan)' : undefined,
+                              color: isCurrentlyEditing ? 'var(--accent-cyan)' : undefined
+                            }}
+                            onClick={() => loadKeyForEditing(k)}
                           >
-                            <Check size={12} />
-                            Use Key
+                            <Edit3 size={12} />
+                            Edit
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          style={{ padding: '0.25rem 0.45rem', fontSize: '0.75rem' }}
-                          onClick={() => {
-                            setEditingId(k.id);
-                            setKeyName(k.name);
-                            setApiKey(k.apiKey);
-                            setProviderId(k.provider);
-                            setBaseUrl(k.baseUrl || '');
-                            setModel(k.model || pMeta?.defaultModel || '');
-                          }}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          style={{ padding: '0.25rem 0.45rem', fontSize: '0.75rem', color: 'var(--accent-rose)', borderColor: 'rgba(244, 63, 94, 0.3)' }}
-                          onClick={() => onDeleteUserKey(k.id)}
-                        >
-                          <Trash2 size={13} />
-                        </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{
+                              padding: '0.25rem 0.45rem',
+                              fontSize: '0.75rem',
+                              color: 'var(--accent-rose)',
+                              borderColor: 'rgba(244, 63, 94, 0.3)'
+                            }}
+                            onClick={() => setKeyPendingDelete(k)}
+                            title="Delete Key"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Bottom Row: Configured Models Display */}
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.75rem',
+                          paddingTop: '0.4rem',
+                          borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+                          fontSize: '0.72rem'
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--text-muted)' }}>
+                          <Zap size={12} color="var(--accent-amber)" />
+                          <span>Discovery:</span>
+                          <span style={{ fontWeight: 600, color: '#e2e8f0', background: 'rgba(255, 255, 255, 0.06)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
+                            {discModelName}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--text-muted)' }}>
+                          <Brain size={12} color="var(--accent-cyan)" />
+                          <span>General Tasks:</span>
+                          <span style={{ fontWeight: 600, color: '#e2e8f0', background: 'rgba(255, 255, 255, 0.06)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
+                            {genModelName}
+                          </span>
+                        </div>
                       </div>
                     </div>
                   );
                 })}
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
-          {/* Dedicated Section: Don't know where to get an API key? */}
+          {/* Card 3: Dedicated Section: Don't know where to get an API key? */}
           <div
             style={{
               padding: '1.1rem 1.25rem',
@@ -476,7 +803,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
               </h4>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0 0 0.85rem 0' }}>
-              Create an account or access your developer dashboard directly with official providers:
+              Access the developer dashboard of your AI provider to create or copy an API key:
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.6rem' }}>
               <a
@@ -593,10 +920,125 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
         {/* Footer */}
         <div className="modal-footer">
           <button className="btn btn-secondary" onClick={onClose}>
-            Close AI Screen
+            Save & Close
           </button>
         </div>
       </div>
+
+      {/* Irreversible Delete Warning Confirmation Dialog */}
+      {keyPendingDelete && (
+        <div
+          className="modal-overlay"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.8)',
+            backdropFilter: 'blur(5px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1200
+          }}
+          onClick={() => setKeyPendingDelete(null)}
+        >
+          <div
+            className="modal-content"
+            style={{
+              maxWidth: '450px',
+              width: '90%',
+              background: 'var(--bg-card)',
+              border: '1px solid rgba(244, 63, 94, 0.45)',
+              borderRadius: 'var(--radius-md)',
+              padding: '1.5rem',
+              boxShadow: '0 20px 40px rgba(0, 0, 0, 0.7), 0 0 25px rgba(244, 63, 94, 0.2)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', marginBottom: '1rem' }}>
+              <div
+                style={{
+                  width: '42px',
+                  height: '42px',
+                  borderRadius: '10px',
+                  background: 'rgba(244, 63, 94, 0.15)',
+                  border: '1px solid rgba(244, 63, 94, 0.35)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--accent-rose)',
+                  flexShrink: 0
+                }}
+              >
+                <AlertTriangle size={22} />
+              </div>
+              <div>
+                <h4 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff', margin: 0 }}>
+                  Delete API Key?
+                </h4>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                  Irreversible action confirmation
+                </span>
+              </div>
+            </div>
+
+            <p style={{ fontSize: '0.86rem', color: 'var(--text-main)', margin: '0 0 0.85rem 0', lineHeight: 1.45 }}>
+              Are you sure you want to disconnect and delete <strong style={{ color: '#fff' }}>"{keyPendingDelete.name}"</strong>?
+            </p>
+
+            <div
+              style={{
+                padding: '0.75rem 0.95rem',
+                borderRadius: 'var(--radius-sm)',
+                background: 'rgba(244, 63, 94, 0.1)',
+                border: '1px solid rgba(244, 63, 94, 0.3)',
+                fontSize: '0.78rem',
+                color: '#fca5a5',
+                lineHeight: 1.45,
+                marginBottom: '1.25rem'
+              }}
+            >
+              ⚠️ <strong>This action is irreversible.</strong> The stored API key credentials and model configurations will be permanently removed from your workspace settings (<code style={{ color: '#fff', fontSize: '0.74rem' }}>config/secrets.json</code>).
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.65rem' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setKeyPendingDelete(null)}
+                style={{ padding: '0.45rem 0.9rem', fontSize: '0.82rem' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn"
+                style={{
+                  background: 'var(--accent-rose)',
+                  borderColor: 'var(--accent-rose)',
+                  color: '#fff',
+                  padding: '0.45rem 1rem',
+                  fontSize: '0.82rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+                onClick={() => {
+                  onDeleteUserKey(keyPendingDelete.id);
+                  if (editingId === keyPendingDelete.id) {
+                    resetForm();
+                  }
+                  setKeyPendingDelete(null);
+                }}
+              >
+                <Trash2 size={14} />
+                <span>Delete Permanently</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
