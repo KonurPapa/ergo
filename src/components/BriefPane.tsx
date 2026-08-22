@@ -951,7 +951,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
               <ListTodo size={48} color="var(--accent-violet)" style={{ opacity: 0.45, marginBottom: '1rem' }} />
               <h3 style={{ color: '#fff', fontSize: '1.15rem' }}>No tasks in workspace</h3>
               <p style={{ fontSize: '0.85rem', marginTop: '0.5rem', maxWidth: '420px', lineHeight: '1.6' }}>
-                Add tasks in the Human Workspace using <strong>New Task</strong> or <strong>Generate Task</strong>.
+                Add tasks in the Human Workspace using <strong>New Task</strong> or <strong>AI Assistant</strong>.
               </p>
             </div>
           </div>

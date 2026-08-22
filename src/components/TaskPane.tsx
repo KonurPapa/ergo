@@ -1,5 +1,11 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { type TaskItem as TaskItemType } from '../types';
+import {
+  type TaskItem as TaskItemType,
+  type ProjectData,
+  type AIProviderConfig,
+  type MCPServer,
+  type HumanAiAssistantResult
+} from '../types';
 import { useEditor, EditorContent } from '@tiptap/react';
 import ListItem from '@tiptap/extension-list-item';
 import StarterKit from '@tiptap/starter-kit';
@@ -8,6 +14,7 @@ import Link from '@tiptap/extension-link';
 import Typography from '@tiptap/extension-typography';
 import { Markdown } from 'tiptap-markdown';
 import { stripHeaderComments } from '../lib/parser';
+import { HumanAiAssistantModal } from './HumanAiAssistantModal';
 
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state';
@@ -492,6 +499,13 @@ interface TaskPaneProps {
   onSelectTask?: (taskId: number) => void;
   onMarkdownChange: (newMarkdown: string) => void;
   onOpenDraftModal: () => void;
+  isAssistantOpen?: boolean;
+  onCloseAssistant?: () => void;
+  project?: ProjectData | null;
+  agentContextMarkdown?: string;
+  aiConfig?: AIProviderConfig;
+  mcpServers?: MCPServer[];
+  onApplyAssistantResult?: (result: HumanAiAssistantResult, confirmedDeletions: boolean) => void;
 }
 
 // Module-level persistent Set to remember collapsed cards across re-renders
@@ -530,6 +544,13 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   onSelectTask,
   onMarkdownChange,
   onOpenDraftModal,
+  isAssistantOpen = false,
+  onCloseAssistant = () => {},
+  project,
+  agentContextMarkdown = '',
+  aiConfig,
+  mcpServers = [],
+  onApplyAssistantResult = () => {},
 }) => {
   const selectedTaskIdRef = React.useRef(selectedTaskId);
   selectedTaskIdRef.current = selectedTaskId;
@@ -542,6 +563,9 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
 
   const onSelectTaskRef = React.useRef(onSelectTask);
   onSelectTaskRef.current = onSelectTask;
+
+  // Track assistant drawer height dynamically to ensure task list is fully scrollable above the panel
+  const [assistantDrawerHeight, setAssistantDrawerHeight] = React.useState<number>(0);
 
   // ProseMirror decoration extension for UI Checkboxes, Add Subtask, and Active Card highlighting
   const TaskCheckboxDecorationExtension = Extension.create({
@@ -988,7 +1012,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
               doc.descendants((node: any, pos: number) => {
                 if (node.isText && node.text) {
                   const text = node.text;
-                  const escapeRegex = /\\([*~_`#\[\]()>+\-.!])/g;
+                  const escapeRegex = /\\([*~_`#[\]()>+\-.!])/g;
                   let match: RegExpExecArray | null;
                   while ((match = escapeRegex.exec(text)) !== null) {
                     const slashPos = pos + match.index;
@@ -1258,9 +1282,31 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
       )}
 
       {/* ── Editor canvas ── */}
-      <div className="obsidian-body tiptap-body" style={{ position: 'relative' }}>
+      <div
+        className="obsidian-body tiptap-body"
+        style={{
+          position: 'relative',
+          paddingBottom: isAssistantOpen && assistantDrawerHeight > 0 ? `${assistantDrawerHeight + 30}px` : undefined,
+          transition: 'padding-bottom 0.2s ease'
+        }}
+      >
         <EditorContent editor={editor} className="tiptap-editor-root" />
       </div>
+
+      {/* ── Human AI Assistant Slide-up Bar / Drawer ── */}
+      {project && aiConfig && (
+        <HumanAiAssistantModal
+          isOpen={isAssistantOpen}
+          onClose={onCloseAssistant}
+          project={project}
+          todoMarkdown={rawMarkdown}
+          agentContextMarkdown={agentContextMarkdown}
+          aiConfig={aiConfig}
+          mcpServers={mcpServers}
+          onApplyAssistantResult={onApplyAssistantResult}
+          onHeightChange={setAssistantDrawerHeight}
+        />
+      )}
 
       {/* ── Fixed Footer at Bottom of Screen ── */}
       <div className="task-pane-footer">
@@ -1274,11 +1320,12 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
         </button>
         <button
           type="button"
-          className="new-task-btn"
-          onClick={onOpenDraftModal}
+          className={`new-task-btn ai-assistant-footer-btn ${isAssistantOpen ? 'active' : ''}`}
+          onClick={isAssistantOpen ? onCloseAssistant : onOpenDraftModal}
+          title={isAssistantOpen ? 'Close Human AI Assistant' : 'Activate Human AI Assistant: Task mode (flesh out single task) or Architect mode (plan multi-task roadmap)'}
         >
           <Sparkles size={16} />
-          <span>Generate Task</span>
+          <span>{isAssistantOpen ? 'Hide Assistant' : 'AI Assistant'}</span>
         </button>
       </div>
     </div>

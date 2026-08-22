@@ -245,5 +245,15 @@ export interface SpawnedSession {
   args: string[];
 }
 
+// ─── Human Workspace AI Assistant Types ──────────────────────────────────────
 
+export type HumanAiIntent = 'task' | 'architect';
 
+export interface HumanAiAssistantResult {
+  summary: string;
+  todoMarkdown?: string;
+  agentContextMarkdown?: string;
+  requiresDeletionApproval?: boolean;
+  deletionReason?: string;
+  aggregatedReport?: string;
+}

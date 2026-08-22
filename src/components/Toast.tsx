@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Key, AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
+import { Key, AlertCircle, CheckCircle2, Info, X, Undo2 } from 'lucide-react';
 
 export interface ToastMessage {
   id: string;
@@ -77,7 +77,7 @@ const ToastItem: React.FC<{ toast: ToastMessage; onDismiss: (id: string) => void
               onDismiss(toast.id);
             }}
           >
-            <Key size={13} />
+            {toast.actionLabel.toLowerCase().includes('undo') ? <Undo2 size={13} /> : <Key size={13} />}
             <span>{toast.actionLabel}</span>
           </button>
         )}

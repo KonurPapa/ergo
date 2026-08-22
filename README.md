@@ -2,11 +2,13 @@
 
 ## Work together with AI
 
+**The AI Problem:** It's often an invisible black-box agent that you have to micromanage with prompts, or a token-hungry over-thinker that spends too much time planning and not enough time building.
+
 **Ergo** is an AI-powered task workspace, designed to align humans and AI in a shared, holistic project environment. 
 
-AI is often an invisible black-box agent that you have to micromanage with prompts, or a token-hungry over-thinker that spends too much time planning and not enough time building.
+It provides a clean, scannable task list paired alongside rich, technical briefs. This means you and the AI **share the same working model of your project**, enabling the AI to function more like an actual collaborator and less like a mindless drone. Your output is better because the AI is **closer to your understanding of the whole project**.
 
-Ergo provides a clean, scannable task list paired alongside rich, technical briefs. This means you and the AI **share the same working model of your project**, enabling the AI to function more like an actual collaborator. Results are more accurate than pure prompting, because the AI is **closer to your understanding of the project**. It also acts as an **MCP Host** (Model Context Protocol client), allowing **seamless execution of real-world tools**.
+Beyond the human/AI synchronization, Ergo also acts as a **Model Context Protocol hub**, allowing **seamless execution of your real-world tools, all from one interface**.
 
 ---
 

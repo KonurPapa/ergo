@@ -57,6 +57,43 @@ async function ensureStorageInitialized(storageDir: string) {
       await fs.writeFile(secretsFile, JSON.stringify(defaultSecrets, null, 2), 'utf-8');
     }
 
+    // Skills (Ensure all 4 skills exist in local filesystem: ~/.ergo and .ergo)
+    const skillNames = [
+      'human-assistant',
+      'assistant-context-analyzer',
+      'assistant-todo-builder',
+      'assistant-context-syncer'
+    ];
+
+    for (const skillName of skillNames) {
+      const docPath = path.join(process.cwd(), 'docs', 'skills', skillName, 'SKILL.md');
+      let skillContent = '';
+      try {
+        skillContent = await fs.readFile(docPath, 'utf-8');
+      } catch {}
+
+      if (skillContent) {
+        const localSkillTargets = [
+          path.join(storageDir, 'config', 'skills', skillName, 'SKILL.md'),
+          path.join(process.cwd(), '.ergo', 'config', 'skills', skillName, 'SKILL.md')
+        ];
+
+        for (const target of localSkillTargets) {
+          try {
+            await fs.access(target);
+          } catch {
+            // File missing: seed it to the local filesystem from codebase docs
+            try {
+              await fs.mkdir(path.dirname(target), { recursive: true });
+              await fs.writeFile(target, skillContent, 'utf-8');
+            } catch (seedErr) {
+              console.warn(`[Ergo Storage] Failed to seed skill ${skillName} at ${target}:`, seedErr);
+            }
+          }
+        }
+      }
+    }
+
     // Projects
     const projectsDir = path.join(storageDir, 'projects');
     await fs.mkdir(projectsDir, { recursive: true });
@@ -387,6 +424,95 @@ function ergoFileSystemPlugin(): Plugin {
           });
         } catch (err: any) {
           console.error('[Ergo FS API] Config write error:', err);
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
+      // ─────────────────────────────────────────────────────────────
+      // Skill Document Endpoints (.ergo/config/skills/)
+      // ─────────────────────────────────────────────────────────────
+
+      if (url === '/api/skills/read' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const skillName = body.skillName || 'human-assistant';
+
+          // 1. Check user local workspace .ergo first, then storageDir ~/.ergo
+          const localFilesystemPaths = [
+            path.join(process.cwd(), '.ergo', 'config', 'skills', skillName, 'SKILL.md'),
+            path.join(storageDir, 'config', 'skills', skillName, 'SKILL.md'),
+          ];
+
+          let content: string | null = null;
+          let matchedPath: string | null = null;
+
+          for (const fp of localFilesystemPaths) {
+            try {
+              content = await fs.readFile(fp, 'utf-8');
+              matchedPath = fp;
+              break;
+            } catch {}
+          }
+
+          // 2. If missing on local filesystem, load default from codebase docs/skills/ and auto-seed to local filesystem
+          if (!content) {
+            const codebaseDocPath = path.join(process.cwd(), 'docs', 'skills', skillName, 'SKILL.md');
+            try {
+              content = await fs.readFile(codebaseDocPath, 'utf-8');
+            } catch {}
+
+            if (content) {
+              for (const target of localFilesystemPaths) {
+                try {
+                  await fs.mkdir(path.dirname(target), { recursive: true });
+                  await fs.writeFile(target, content, 'utf-8');
+                } catch (wErr) {
+                  console.warn(`[Ergo FS API] Could not auto-seed skill to ${target}:`, wErr);
+                }
+              }
+              matchedPath = localFilesystemPaths[0];
+            }
+          }
+
+          return sendJson(res, 200, {
+            success: true,
+            skillName,
+            content,
+            filePath: matchedPath
+          });
+        } catch (err: any) {
+          console.error('[Ergo FS API] Skill read error:', err);
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
+      if (url === '/api/skills/write' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const skillName = body.skillName || 'human-assistant';
+          const content = body.content || '';
+
+          const targets = [
+            path.join(storageDir, 'config', 'skills', skillName, 'SKILL.md'),
+            path.join(process.cwd(), '.ergo', 'config', 'skills', skillName, 'SKILL.md')
+          ];
+
+          for (const target of targets) {
+            try {
+              await fs.mkdir(path.dirname(target), { recursive: true });
+              await fs.writeFile(target, content, 'utf-8');
+            } catch (wErr) {
+              console.warn(`[Ergo FS API] Could not write skill to ${target}:`, wErr);
+            }
+          }
+
+          return sendJson(res, 200, {
+            success: true,
+            skillName,
+            savedAt: new Date().toISOString()
+          });
+        } catch (err: any) {
+          console.error('[Ergo FS API] Skill write error:', err);
           return sendJson(res, 500, { error: err.message });
         }
       }

@@ -443,8 +443,8 @@ function cleanAndUnescapeMarkdown(text: string): string {
   cleaned = cleaned.replace(/<\/del>/gi, '');
   cleaned = cleaned.replace(/:$/, '');
 
-  // Unescape escaped markdown punctuation (\*, \_, \~, \`, \#, \[, \], \\, etc.)
-  cleaned = cleaned.replace(/\\([*~_`#\[\]()>+\-.!\\])/g, '$1');
+  // Unescape escaped markdown punctuation (\*, \_, \~, \`, \#, [, \], \\, etc.)
+  cleaned = cleaned.replace(/\\([*~_`#[\]()>+\-.!\\])/g, '$1');
 
   return cleaned.trim();
 }

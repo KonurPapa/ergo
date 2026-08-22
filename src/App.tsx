@@ -9,6 +9,10 @@ import {
   type FolderMetadata,
   type CliAgentConfig,
   type TerminalSession,
+  type HumanAiAssistantResult,
+  type SpawnedSession,
+  type ExecutionStep,
+  type McpToolPermissionPrompt
 } from './types';
 
 import { INITIAL_PROJECTS, createNewProjectData, INITIAL_MCP_SERVERS } from './lib/demoData';
@@ -20,7 +24,6 @@ import { SUPPORTED_AI_PROVIDERS } from './lib/aiProviders';
 import { Navbar } from './components/Navbar';
 import { TaskPane } from './components/TaskPane';
 import { BriefPane } from './components/BriefPane';
-import { DraftTaskModal } from './components/DraftTaskModal';
 import { McpHubModal } from './components/McpHubModal';
 import { RawMarkdownModal } from './components/RawMarkdownModal';
 import { CreateProjectModal } from './components/CreateProjectModal';
@@ -28,7 +31,6 @@ import { AiCredentialsModal } from './components/AiCredentialsModal';
 import { SettingsModal } from './components/SettingsModal';
 import { FolderPickerModal } from './components/FolderPickerModal';
 import { ToastContainer, type ToastMessage } from './components/Toast';
-import { type SpawnedSession, type ExecutionStep, type McpToolPermissionPrompt } from './types';
 import { executeTaskWithAi } from './lib/ai';
 
 
@@ -484,6 +486,12 @@ export function App() {
   }, [activeProjectId]);
 
   // Real-time disk file watcher subscription (SSE): updates UI instantly when markdown files change externally
+  // Uses refs to read current state inside the handler without recreating the EventSource on every render.
+  const activeProjectRef = useRef(activeProject);
+  const tasksRef = useRef(tasks);
+  useEffect(() => { activeProjectRef.current = activeProject; }, [activeProject]);
+  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
+
   useEffect(() => {
     let eventSource: EventSource | null = null;
 
@@ -518,13 +526,14 @@ export function App() {
             })
           );
 
-          // If the changed file belongs to the active project, update active tasks/briefs immediately
+          // Use refs to avoid stale closure — reads current activeProject and tasks without triggering reconnect
+          const ap = activeProjectRef.current;
           const isActiveProject =
-            activeProject &&
-            (activeProject.id === projectId ||
-              activeProject.folderPath === `projects/${projectId}` ||
-              activeProject.todoFilePath === relativePath ||
-              activeProject.agentContextFilePath === relativePath);
+            ap &&
+            (ap.id === projectId ||
+              ap.folderPath === `projects/${projectId}` ||
+              ap.todoFilePath === relativePath ||
+              ap.agentContextFilePath === relativePath);
 
           if (isActiveProject) {
             if (fileType === 'todo') {
@@ -534,7 +543,8 @@ export function App() {
               setBriefs((prevBriefs) => syncBriefsWithTasks(prevBriefs, parsedTodo.items));
             } else if (fileType === 'agent') {
               const parsedBriefs = parseAgentContextMarkdown(content);
-              setBriefs(() => syncBriefsWithTasks(parsedBriefs, tasks));
+              // Use ref to read current tasks at the moment of event, not at effect creation time
+              setBriefs(() => syncBriefsWithTasks(parsedBriefs, tasksRef.current));
             }
           }
         } catch (err) {
@@ -554,7 +564,10 @@ export function App() {
         eventSource.close();
       }
     };
-  }, [activeProject, tasks]);
+  // Empty dep array: EventSource is created once and stays alive for the component lifetime.
+  // State is read via refs inside the handler, so no reconnects on task/project changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Save projects to localStorage on change
   useEffect(() => {
@@ -595,52 +608,85 @@ export function App() {
     }
   };
 
-  // Commit Drafted Tasks from AI (Skill: new-todo)
-  const handleCommitDraftedTasks = (newTasks: Partial<TaskItem>[], newBriefs: Partial<AgentContextItem>[]) => {
-    let currentId = tasks.length > 0 ? Math.max(...tasks.map((t) => t.id)) : 0;
-    const createdTasks: TaskItem[] = [];
-    const createdBriefs: AgentContextItem[] = [];
+  // AI Assistant Undo Snapshot State (Supports Ctrl+Z for Human AI Assistant modifications)
+  const [aiUndoSnapshot, setAiUndoSnapshot] = useState<{
+    tasks: TaskItem[];
+    briefs: AgentContextItem[];
+  } | null>(null);
 
-    newTasks.forEach((nt, idx) => {
-      currentId += 1;
-      const fullTask: TaskItem = {
-        id: currentId,
-        title: nt.title || `Task ${currentId}`,
-        category: nt.category || 'Core Tasks',
-        status: 'not_started',
-        isDone: false,
-        subtasks: nt.subtasks || [],
-        isHumanReview: nt.isHumanReview,
-        mcpRequired: nt.mcpRequired
-      };
-      createdTasks.push(fullTask);
-
-      const nb = newBriefs[idx];
-      const overviewText = nb?.overview || nb?.brief || `Overview for ${fullTask.title}`;
-      const buildText = nb?.buildAndVerification || nb?.built || '';
-      const completionText = nb?.completion || nb?.validation || nb?.humanReview || nb?.followUps || '';
-      createdBriefs.push({
-        itemNumber: currentId,
-        title: fullTask.title,
-        status: 'not started',
-        overview: overviewText,
-        buildAndVerification: buildText,
-        completion: completionText,
-        brief: overviewText,
-        built: buildText,
-        validation: completionText,
-        humanReview: completionText,
-        followUps: completionText
-      });
+  const handleUndoAiChanges = useCallback(() => {
+    if (!aiUndoSnapshot) return;
+    const { tasks: restoredTasks, briefs: restoredBriefs } = aiUndoSnapshot;
+    syncAndSaveProject(restoredTasks, restoredBriefs, true);
+    setAiUndoSnapshot(null);
+    showToast({
+      type: 'info',
+      title: 'AI Changes Undone',
+      message: 'Reverted previous AI assistant changes to TODO.md and AGENT_CONTEXT.md.'
     });
+  }, [aiUndoSnapshot, showToast]);
 
-    const nextTasks = [...tasks, ...createdTasks];
-    const nextBriefs = [...briefs, ...createdBriefs];
+  // Global key listener for Ctrl+Z AI Undo when outside text inputs
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        const activeEl = document.activeElement;
+        const isInput =
+          activeEl instanceof HTMLInputElement ||
+          activeEl instanceof HTMLTextAreaElement ||
+          (activeEl && activeEl.getAttribute('contenteditable') === 'true');
 
-    if (createdTasks.length > 0) {
-      setSelectedTaskId(createdTasks[0].id);
+        if (!isInput && aiUndoSnapshot) {
+          e.preventDefault();
+          handleUndoAiChanges();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [aiUndoSnapshot, handleUndoAiChanges]);
+
+  // Apply result from Human AI Workspace Assistant (create, refine, aggregate, organize, delete with permission)
+  const handleApplyAssistantResult = (
+    result: HumanAiAssistantResult,
+    _confirmedDeletions: boolean
+  ) => {
+    // 1. Snapshot state for instant Ctrl+Z undo
+    setAiUndoSnapshot({ tasks: [...tasks], briefs: [...briefs] });
+
+    let nextTasks = [...tasks];
+    let nextBriefs = [...briefs];
+
+    // If the assistant returned new markdown, we parse and apply it directly
+    if (result.todoMarkdown) {
+      const parsedTodo = parseTodoMarkdown(result.todoMarkdown);
+      nextTasks = parsedTodo.items;
+      if (parsedTodo.headerComments) {
+        setHeaderComments(parsedTodo.headerComments);
+      }
     }
+    
+    if (result.agentContextMarkdown) {
+      nextBriefs = parseAgentContextMarkdown(result.agentContextMarkdown);
+    }
+
+    // 2. Renumber and maintain counterpart parity in AGENT_CONTEXT.md
+    nextBriefs = syncBriefsWithTasks(nextBriefs, nextTasks);
+
+    // 3. Persist to state and disk immediately
     syncAndSaveProject(nextTasks, nextBriefs, true);
+
+    // 4. Show feedback toast with Undo button
+    showToast({
+      type: 'success',
+      title: 'AI Changes Applied',
+      message: result.summary || 'Workspace tasks and context updated successfully.',
+      actionLabel: 'Undo (Ctrl+Z)',
+      duration: 8000,
+      onAction: () => {
+        handleUndoAiChanges();
+      }
+    });
   };
 
   // Trigger In-Place Task Execution
@@ -1078,6 +1124,13 @@ export function App() {
             onSelectTask={(id) => setSelectedTaskId(id)}
             onOpenDraftModal={() => setIsDraftModalOpen(true)}
             onMarkdownChange={handleRawTodoEdit}
+            isAssistantOpen={isDraftModalOpen}
+            onCloseAssistant={() => setIsDraftModalOpen(false)}
+            project={activeProject}
+            agentContextMarkdown={activeProject?.agentContextMarkdown || serializeAgentContextMarkdown(briefs)}
+            aiConfig={aiConfig}
+            mcpServers={mcpServers}
+            onApplyAssistantResult={handleApplyAssistantResult}
           />
         </div>
 
@@ -1124,16 +1177,6 @@ export function App() {
         onCreateProject={handleConfirmCreateProject}
         storageDirectory={folderMetadata.storageDirectory || '.ergo'}
         existingProjects={projects}
-      />
-
-      {/* Modal 2: Draft Tasks with AI */}
-      <DraftTaskModal
-        isOpen={isDraftModalOpen}
-        onClose={() => setIsDraftModalOpen(false)}
-        project={activeProject}
-        aiConfig={aiConfig}
-        mcpServers={mcpServers}
-        onCommitDraftedTasks={handleCommitDraftedTasks}
       />
 
       {/* Modal 4: MCP Connections Hub */}
