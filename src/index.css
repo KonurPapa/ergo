@@ -1010,6 +1010,23 @@ body {
   transform: scale(1.05);
 }
 
+.card-archive-task-btn {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #f59e0b;
+}
+
+.tiptap-editor-root .tiptap ol>li:hover .card-archive-task-btn,
+.tiptap-editor-root .tiptap ul:not(li ul)>li:hover .card-archive-task-btn,
+.card-archive-task-btn:hover {
+  opacity: 1;
+  background: rgba(245, 158, 11, 0.25);
+  border-color: #f59e0b;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.35);
+  transform: scale(1.05);
+}
+
 .card-delete-task-btn {
   background: rgba(244, 63, 94, 0.08);
   border: 1px solid rgba(244, 63, 94, 0.25);
@@ -1729,6 +1746,17 @@ body {
   font-size: 0.72rem;
   color: var(--text-dim);
   font-style: italic;
+}
+
+.sync-with-task-btn {
+  transition: all 0.15s ease;
+}
+
+.sync-with-task-btn:hover:not(:disabled) {
+  background: rgba(139, 92, 246, 0.15);
+  border-color: rgba(139, 92, 246, 0.45);
+  color: #fff;
+  box-shadow: 0 0 10px rgba(139, 92, 246, 0.2);
 }
 
 .brief-body-wrapper {
@@ -2577,15 +2605,13 @@ body {
 }
 
 .markdown-styled-content.inline-mode {
-  display: inline-block;
+  display: inline;
 }
 
-.markdown-styled-content p {
-  margin-bottom: 0.35rem;
-}
-
-.markdown-styled-content p:last-child {
-  margin-bottom: 0;
+.markdown-styled-content.inline-mode p {
+  display: inline;
+  margin: 0;
+  padding: 0;
 }
 
 /* Headings */
@@ -3191,7 +3217,315 @@ body {
 }
 
 .ai-assistant-footer-btn.active {
-  background: linear-gradient(135deg, #4f46e5, #7c3aed);
-  border-color: rgba(255, 255, 255, 0.3);
-  box-shadow: 0 0 16px rgba(99, 102, 241, 0.6);
+  background: linear-gradient(135deg, #b91c1c, #dc2626);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #fff;
+  box-shadow: 0 0 16px rgba(220, 38, 38, 0.45);
+}
+
+.ai-assistant-footer-btn.active:hover {
+  background: linear-gradient(135deg, #991b1b, #b91c1c);
+  border-color: rgba(248, 113, 113, 0.6);
+  box-shadow: 0 0 20px rgba(220, 38, 38, 0.65);
+}
+
+/* ── Archive Collapsible Panels ────────────────────────────────── */
+.archive-collapsible-panel {
+  margin-top: 2rem;
+  margin-bottom: 2rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 1.25rem;
+}
+
+/* Human Workspace (TaskPane) Archive Section Alignment */
+.tiptap-body > .archive-collapsible-panel {
+  margin-left: 2.25rem;
+  margin-right: 2.25rem;
+  margin-bottom: 3rem;
+}
+
+.ai-archive-panel {
+  margin-top: 2rem;
+  padding-top: 1.25rem;
+}
+
+.archive-panel-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 0.95rem;
+  background: rgba(245, 158, 11, 0.04);
+  border: 1px solid rgba(245, 158, 11, 0.15);
+  border-radius: var(--radius-md, 8px);
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+}
+
+.archive-panel-header:hover {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.archive-panel-header.open {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.35);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.archive-panel-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.archive-icon {
+  color: #f59e0b;
+  flex-shrink: 0;
+}
+
+.archive-panel-title {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text-bright, #ffffff);
+}
+
+.archive-count-badge {
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 0.12rem 0.5rem;
+  border-radius: 12px;
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  color: #f59e0b;
+}
+
+.archive-chevron {
+  color: var(--text-muted);
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.archive-chevron.open {
+  transform: rotate(180deg);
+  color: #f59e0b;
+}
+
+.archive-panel-content {
+  padding: 0.85rem;
+  background: rgba(15, 23, 42, 0.4);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-top: none;
+  border-bottom-left-radius: var(--radius-md, 8px);
+  border-bottom-right-radius: var(--radius-md, 8px);
+}
+
+.archive-empty-state {
+  padding: 1.5rem 1rem;
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.archived-tasks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.archived-task-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 0.95rem;
+  background: var(--bg-card);
+  border: 1px solid rgba(245, 158, 11, 0.18);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.archived-task-card:hover {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(245, 158, 11, 0.35);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.32);
+}
+
+.archived-task-checkbox-col {
+  padding-top: 0.12rem;
+  flex-shrink: 0;
+}
+
+.archived-task-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.archived-task-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.archived-task-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.45;
+}
+
+.archived-task-title.is-done {
+  opacity: 0.65;
+}
+
+.archived-task-category-pill {
+  font-size: 0.68rem;
+  padding: 0.08rem 0.4rem;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+}
+
+.archived-subtasks-list {
+  margin-top: 0.2rem;
+  padding-left: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.archived-subtask-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.archived-subtask-item .is-done {
+  opacity: 0.65;
+}
+
+.archived-bullet {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.archived-task-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.32rem;
+  flex-shrink: 0;
+  min-width: 78px;
+}
+
+.archived-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0.22rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+  white-space: nowrap;
+}
+
+.archived-action-btn.unarchive-btn {
+  background: rgba(6, 182, 212, 0.1);
+  border: 1px solid rgba(6, 182, 212, 0.28);
+  color: var(--accent-cyan);
+}
+
+.archived-action-btn.unarchive-btn:hover {
+  background: rgba(6, 182, 212, 0.22);
+  border-color: var(--accent-cyan);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.archived-action-btn.delete-btn {
+  background: rgba(244, 63, 94, 0.08);
+  border: 1px solid rgba(244, 63, 94, 0.25);
+  color: var(--accent-rose);
+}
+
+.archived-action-btn.delete-btn:hover {
+  background: rgba(244, 63, 94, 0.22);
+  border-color: var(--accent-rose);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.archived-ai-card {
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+  position: relative;
+}
+
+.archived-ai-card:hover {
+  border-color: rgba(245, 158, 11, 0.4);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
+}
+
+.archived-ai-card .ai-task-card-header {
+  padding: 0.7rem 0.9rem;
+  background: rgba(245, 158, 11, 0.03);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  user-select: none;
+  transition: background 0.15s ease;
+}
+
+.archived-ai-card.is-collapsed .ai-task-card-header {
+  border-bottom: none;
+}
+
+.archived-ai-card .ai-task-card-body {
+  padding: 0.75rem 0.85rem;
+  background: rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+/* ── Archive Delete Warning Modal ─────────────────────────────── */
+.archive-delete-modal {
+  max-width: 460px;
+  background: var(--bg-darkest, #0c101a);
+  border: 1px solid rgba(244, 63, 94, 0.35);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), 0 0 20px rgba(244, 63, 94, 0.15);
+}
+
+.archive-delete-warning-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.75rem 0.9rem;
+  background: rgba(244, 63, 94, 0.08);
+  border: 1px solid rgba(244, 63, 94, 0.25);
+  border-radius: var(--radius-sm, 6px);
+  color: #fda4af;
+  font-size: 0.82rem;
+  line-height: 1.45;
 }

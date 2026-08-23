@@ -33,6 +33,10 @@ import {
   ClipboardList,
   Wrench,
   Flag,
+  Archive,
+  Trash2,
+  AlertTriangle,
+  AlertCircle,
 } from 'lucide-react';
 
 import { RichTextToolbar } from './RichTextToolbar';
@@ -42,6 +46,8 @@ import { handleMarkdownAutoWrap } from '../lib/markdownEditorUtils';
 interface BriefPaneProps {
   tasks: TaskItem[];
   briefs: AgentContextItem[];
+  archivedTasks?: TaskItem[];
+  archivedBriefs?: AgentContextItem[];
   selectedTaskId: number | null;
   runningTaskIds?: number[];
   onSelectTask?: (taskId: number) => void;
@@ -49,6 +55,10 @@ interface BriefPaneProps {
   onLiveBriefChange?: (updatedBrief: AgentContextItem) => void;
   onExecuteTask: (task: TaskItem) => void;
   onUpdateBriefWithAi?: (task: TaskItem) => void;
+  onSyncOverviewWithTask?: (task: TaskItem) => Promise<string | void>;
+  onUnarchiveTask?: (taskId: number) => void;
+  onDeleteArchivedTask?: (taskId: number) => void;
+  onSaveArchivedBrief?: (brief: AgentContextItem) => void;
   autosaveStatus?: 'idle' | 'pending' | 'saving' | 'saved' | 'error';
   autosaveDelaySec?: number;
   terminalSessions?: SpawnedSession[];
@@ -74,6 +84,8 @@ interface AiTaskCardProps {
   onSaveBrief: (updatedBrief: AgentContextItem) => void;
   onLiveBriefChange?: (updatedBrief: AgentContextItem) => void;
   onExecuteTask: (task: TaskItem) => void;
+  onUpdateBriefWithAi?: (task: TaskItem) => void;
+  onSyncOverviewWithTask?: (task: TaskItem) => Promise<string | void>;
   onPermissionChoice?: (approved: boolean) => void;
   onSessionExit?: (code: number) => void;
   onRestartSession?: (task: TaskItem) => void;
@@ -93,6 +105,8 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   onSaveBrief,
   onLiveBriefChange,
   onExecuteTask,
+  onUpdateBriefWithAi,
+  onSyncOverviewWithTask,
   onPermissionChoice,
   onSessionExit,
   onRestartSession,
@@ -100,6 +114,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 }) => {
   const [isTaskCollapsed, setIsTaskCollapsed] = useState(!isSelected);
   const [isEditing, setIsEditing] = useState(false);
+  const [isSyncingOverview, setIsSyncingOverview] = useState(false);
   const [overviewText, setOverviewText] = useState('');
   const [buildVerificationText, setBuildVerificationText] = useState('');
   const [completionText, setCompletionText] = useState('');
@@ -311,6 +326,27 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     setIsEditing(false);
   };
 
+  const handleSyncWithTask = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isSyncingOverview) return;
+    setIsSyncingOverview(true);
+    try {
+      if (onSyncOverviewWithTask) {
+        const result = await onSyncOverviewWithTask(task);
+        if (result && typeof result === 'string') {
+          setOverviewText(result);
+        }
+      } else if (onUpdateBriefWithAi) {
+        onUpdateBriefWithAi(task);
+      }
+      setCollapsedSections((prev) => ({ ...prev, overview: false }));
+    } catch (err) {
+      console.error('Failed to sync overview with task:', err);
+    } finally {
+      setIsSyncingOverview(false);
+    }
+  };
+
   const renderStatusBadge = () => {
     if (isWorking) {
       return (
@@ -502,7 +538,37 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   <span className="section-subtitle-tag">Frontend Notes & Task in Context</span>
                 </div>
 
-                <div className="header-right">
+                <div
+                  className="header-right"
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    className="btn btn-secondary sync-with-task-btn"
+                    style={{
+                      padding: '0.2rem 0.55rem',
+                      fontSize: '0.72rem',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.35rem',
+                    }}
+                    onClick={handleSyncWithTask}
+                    disabled={isSyncingOverview}
+                    title="Sync Overview with task"
+                  >
+                    {isSyncingOverview ? (
+                      <>
+                        <Loader2 size={11} className="spin-animate" />
+                        <span>Syncing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={11} color="var(--accent-violet)" />
+                        <span>Sync Task</span>
+                      </>
+                    )}
+                  </button>
                   {overviewText ? (
                     <span className="card-item-count">{overviewText.split('\n').filter(Boolean).length} lines</span>
                   ) : (
@@ -902,9 +968,256 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   );
 };
 
+interface ArchivedAiTaskCardProps {
+  task: TaskItem;
+  brief?: AgentContextItem;
+  onUnarchive: () => void;
+  onDelete: () => void;
+}
+
+const ArchivedAiTaskCard: React.FC<ArchivedAiTaskCardProps> = ({
+  task,
+  brief,
+  onUnarchive,
+  onDelete,
+}) => {
+  const [isTaskCollapsed, setIsTaskCollapsed] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState({
+    overview: false,
+    build: false,
+    completion: false,
+  });
+
+  const toggleSection = (section: 'overview' | 'build' | 'completion') => {
+    setCollapsedSections((prev) => ({ ...prev, [section]: !prev[section] }));
+  };
+
+  const overviewText = brief?.overview || brief?.brief || '';
+  const buildText = brief?.buildAndVerification || brief?.built || '';
+  const completionText = brief?.completion || brief?.validation || brief?.humanReview || brief?.followUps || '';
+
+  return (
+    <div className={`ai-task-card archived-ai-card ${isTaskCollapsed ? 'is-collapsed' : ''}`}>
+      {/* ── Task Card Header ── */}
+      <div
+        className="ai-task-card-header"
+        onClick={() => setIsTaskCollapsed((prev) => !prev)}
+        style={{ cursor: 'pointer' }}
+      >
+        <div className="ai-task-header-left">
+          <button
+            type="button"
+            className={`card-collapse-btn ${isTaskCollapsed ? 'is-collapsed' : ''}`}
+            title={isTaskCollapsed ? 'Expand task context' : 'Collapse task context'}
+            aria-label={isTaskCollapsed ? 'Expand task context' : 'Collapse task context'}
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsTaskCollapsed((prev) => !prev);
+            }}
+          >
+            <ChevronDown size={14} className="collapse-chevron" />
+          </button>
+          <span
+            className="ai-task-num-badge"
+            style={{
+              color: 'var(--accent-amber, #f59e0b)',
+              background: 'rgba(245, 158, 11, 0.12)',
+              borderColor: 'rgba(245, 158, 11, 0.28)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.25rem',
+            }}
+            title="Archived Task"
+          >
+            <Archive size={11} />
+            <span>Archived</span>
+          </span>
+          <span className="ai-task-title-text" title={task.title}>
+            {task.title}
+          </span>
+          <span
+            className="ai-task-status-badge is-done"
+            style={{
+              color: '#f59e0b',
+              background: 'rgba(245, 158, 11, 0.12)',
+              borderColor: 'rgba(245, 158, 11, 0.28)',
+            }}
+          >
+            Archived
+          </span>
+        </div>
+
+        <div
+          className="ai-task-header-actions"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="archived-task-actions">
+            <button
+              type="button"
+              className="archived-action-btn unarchive-btn"
+              title="Unarchive task"
+              onClick={onUnarchive}
+            >
+              <RotateCcw size={12} />
+              <span>Unarchive</span>
+            </button>
+            <button
+              type="button"
+              className="archived-action-btn delete-btn"
+              title="Delete task permanently"
+              onClick={onDelete}
+            >
+              <Trash2 size={12} />
+              <span>Delete</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Task Card Body ── */}
+      {!isTaskCollapsed && (
+        <div className="ai-task-card-body">
+          <div className="brief-container" style={{ padding: 0 }}>
+            {/* SECTION 1: OVERVIEW */}
+            <div className={`brief-card ${collapsedSections.overview ? 'is-collapsed' : ''}`}>
+              <div
+                className="brief-section-header clickable-header"
+                onClick={() => toggleSection('overview')}
+              >
+                <div className="header-left">
+                  <button
+                    type="button"
+                    className={`card-collapse-btn ${collapsedSections.overview ? 'is-collapsed' : ''}`}
+                    title={collapsedSections.overview ? 'Expand section' : 'Collapse section'}
+                    aria-label={collapsedSections.overview ? 'Expand section' : 'Collapse section'}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleSection('overview');
+                    }}
+                  >
+                    <ChevronDown size={12} className="collapse-chevron" />
+                  </button>
+                  <span className="section-title-text">
+                    <span className="section-icon">
+                      <ClipboardList size={18} color="var(--accent-violet)" />
+                    </span>
+                    <span>Overview</span>
+                  </span>
+                  <span className="section-subtitle-tag">Frontend Notes & Task in Context</span>
+                </div>
+              </div>
+              <div className="brief-body-wrapper">
+                <div className="brief-body" style={{ padding: '0.85rem 1rem' }}>
+                  {overviewText ? (
+                    <div className="brief-markdown-render">
+                      <MarkdownRenderer content={overviewText} />
+                    </div>
+                  ) : (
+                    <div className="empty-state" style={{ padding: '0.75rem 0', color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.82rem' }}>
+                      No overview notes recorded.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* SECTION 2: BUILD & VERIFICATION */}
+            <div className={`brief-card ${collapsedSections.build ? 'is-collapsed' : ''}`}>
+              <div
+                className="brief-section-header clickable-header"
+                onClick={() => toggleSection('build')}
+              >
+                <div className="header-left">
+                  <button
+                    type="button"
+                    className={`card-collapse-btn ${collapsedSections.build ? 'is-collapsed' : ''}`}
+                    title={collapsedSections.build ? 'Expand section' : 'Collapse section'}
+                    aria-label={collapsedSections.build ? 'Expand section' : 'Collapse section'}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleSection('build');
+                    }}
+                  >
+                    <ChevronDown size={12} className="collapse-chevron" />
+                  </button>
+                  <span className="section-title-text">
+                    <span className="section-icon">
+                      <Wrench size={18} color="var(--accent-cyan)" />
+                    </span>
+                    <span>Build & Verification</span>
+                  </span>
+                  <span className="section-subtitle-tag">Backend / Core Build Notes</span>
+                </div>
+              </div>
+              <div className="brief-body-wrapper">
+                <div className="brief-body" style={{ padding: '0.85rem 1rem' }}>
+                  {buildText ? (
+                    <div className="brief-markdown-render">
+                      <MarkdownRenderer content={buildText} />
+                    </div>
+                  ) : (
+                    <div className="empty-state" style={{ padding: '0.75rem 0', color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.82rem' }}>
+                      No build notes recorded.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* SECTION 3: COMPLETION */}
+            <div className={`brief-card ${collapsedSections.completion ? 'is-collapsed' : ''}`}>
+              <div
+                className="brief-section-header clickable-header"
+                onClick={() => toggleSection('completion')}
+              >
+                <div className="header-left">
+                  <button
+                    type="button"
+                    className={`card-collapse-btn ${collapsedSections.completion ? 'is-collapsed' : ''}`}
+                    title={collapsedSections.completion ? 'Expand section' : 'Collapse section'}
+                    aria-label={collapsedSections.completion ? 'Expand section' : 'Collapse section'}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleSection('completion');
+                    }}
+                  >
+                    <ChevronDown size={12} className="collapse-chevron" />
+                  </button>
+                  <span className="section-title-text">
+                    <span className="section-icon">
+                      <Flag size={18} color="var(--accent-emerald)" />
+                    </span>
+                    <span>Completion</span>
+                  </span>
+                  <span className="section-subtitle-tag">What Was Built & Final Status</span>
+                </div>
+              </div>
+              <div className="brief-body-wrapper">
+                <div className="brief-body" style={{ padding: '0.85rem 1rem' }}>
+                  {completionText ? (
+                    <div className="brief-markdown-render">
+                      <MarkdownRenderer content={completionText} />
+                    </div>
+                  ) : (
+                    <div className="empty-state" style={{ padding: '0.75rem 0', color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.82rem' }}>
+                      No completion notes recorded.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const BriefPane: React.FC<BriefPaneProps> = ({
   tasks,
   briefs,
+  archivedTasks = [],
+  archivedBriefs = [],
   selectedTaskId,
   runningTaskIds = [],
   onSelectTask,
@@ -912,6 +1225,10 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   onLiveBriefChange,
   onExecuteTask,
   onUpdateBriefWithAi: _onUpdateBriefWithAi,
+  onSyncOverviewWithTask,
+  onUnarchiveTask,
+  onDeleteArchivedTask,
+  onSaveArchivedBrief: _onSaveArchivedBrief,
   terminalSessions = [],
   executingTaskId = null,
   taskExecutionSteps = {},
@@ -921,6 +1238,9 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   onRestartSession,
   onKillSession,
 }) => {
+  const [isArchiveOpen, setIsArchiveOpen] = useState(false);
+  const [taskToDelete, setTaskToDelete] = useState<TaskItem | null>(null);
+
   const activeTaskRunningCount = runningTaskIds.length;
   const doneCount = tasks.filter((t) => t.isDone || t.status === 'done').length;
 
@@ -984,6 +1304,8 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                   onSaveBrief={onSaveBrief}
                   onLiveBriefChange={onLiveBriefChange}
                   onExecuteTask={onExecuteTask}
+                  onUpdateBriefWithAi={_onUpdateBriefWithAi}
+                  onSyncOverviewWithTask={onSyncOverviewWithTask}
                   onPermissionChoice={(approved) => onPermissionChoice?.(task.id, approved)}
                   onSessionExit={(code) => onSessionExit?.(task.id, code)}
                   onRestartSession={onRestartSession}
@@ -993,7 +1315,98 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
             })}
           </div>
         )}
+
+        {/* ── Collapsible Archive Panel at bottom of scrollable workspace ── */}
+        <div className="archive-collapsible-panel ai-archive-panel">
+          <button
+            type="button"
+            className={`archive-panel-header ${isArchiveOpen ? 'open' : ''}`}
+            onClick={() => setIsArchiveOpen((prev) => !prev)}
+            title={isArchiveOpen ? 'Collapse archive panel' : 'Expand archive panel'}
+          >
+            <div className="archive-panel-header-left">
+              <Archive size={15} className="archive-icon" />
+              <span className="archive-panel-title">Archive Contexts</span>
+              <span className="archive-count-badge">
+                {archivedTasks.length} {archivedTasks.length === 1 ? 'task' : 'tasks'}
+              </span>
+            </div>
+            <ChevronDown size={15} className={`archive-chevron ${isArchiveOpen ? 'open' : ''}`} />
+          </button>
+
+          {isArchiveOpen && (
+            <div className="archive-panel-content">
+              {archivedTasks.length === 0 ? (
+                <div className="archive-empty-state">
+                  <span>No archived task contexts</span>
+                </div>
+              ) : (
+                <div className="ai-tasks-list-container archived-ai-tasks">
+                  {archivedTasks.map((task, index) => {
+                    const taskBrief =
+                      archivedBriefs.find((b) => b.title.trim().toLowerCase() === task.title.trim().toLowerCase()) ||
+                      archivedBriefs[index] ||
+                      briefs.find((b) => b.title.trim().toLowerCase() === task.title.trim().toLowerCase()) ||
+                      undefined;
+
+                    return (
+                      <ArchivedAiTaskCard
+                        key={task.id}
+                        task={task}
+                        brief={taskBrief}
+                        onUnarchive={() => onUnarchiveTask?.(task.id)}
+                        onDelete={() => setTaskToDelete(task)}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* ── Task Permanent Deletion Context Warning Modal ── */}
+      {taskToDelete && (
+        <div className="modal-overlay" onClick={() => setTaskToDelete(null)}>
+          <div className="modal-card archive-delete-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-rose)' }}>
+                <AlertTriangle size={18} />
+                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Delete Task Permanently?</h3>
+              </div>
+              <button type="button" className="btn-icon" onClick={() => setTaskToDelete(null)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="modal-body" style={{ padding: '1rem 1.25rem', fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
+              <p style={{ margin: 0, marginBottom: '0.75rem' }}>
+                Are you sure you want to permanently delete <strong>"{taskToDelete.title}"</strong>?
+              </p>
+              <div className="archive-delete-warning-box">
+                <AlertCircle size={15} style={{ flexShrink: 0, color: 'var(--accent-rose)' }} />
+                <span>If you proceed with deleting this task, the AI will lose context for it.</span>
+              </div>
+            </div>
+            <div className="modal-footer" style={{ padding: '0.75rem 1.25rem', display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setTaskToDelete(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                style={{ background: 'var(--accent-rose)', color: '#fff' }}
+                onClick={() => {
+                  onDeleteArchivedTask?.(taskToDelete.id);
+                  setTaskToDelete(null);
+                }}
+              >
+                Delete Task
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

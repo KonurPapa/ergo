@@ -759,6 +759,142 @@ ${updatedTodoMarkdown}`;
 }
 
 /**
+ * Runs AI Step 3 (Context Syncer & Overview Drafter) for a single task's Overview:
+ * 1. Analyzes drift between the current Overview and the human task definition in TODO.md.
+ * 2. Adds/edits missing pieces as necessary, ensuring rich Done-State, In Context, and Seams details.
+ */
+export async function syncTaskOverviewWithAi(
+  task: TaskItem,
+  currentOverview: string,
+  project: ProjectData,
+  aiConfig: AIProviderConfig,
+  connectedMcps: MCPServer[],
+  todoMarkdown?: string,
+  _agentContextMarkdown?: string
+): Promise<string> {
+  const allowedRoots = await getAllowedRoots();
+  const runtimeConnectionsPrompt = formatConnectionsForAiPrompt(connectedMcps, allowedRoots);
+  const mcpNames = connectedMcps.filter((m) => m.status === 'connected').map((m) => m.name);
+
+  // Load the Step 3 skill instructions (assistant-context-syncer)
+  const skill3Raw = await storageManager.loadSkillDoc('assistant-context-syncer');
+  const skill3Doc = stripSkillFrontmatter(skill3Raw);
+
+  const subtasksList = task.subtasks && task.subtasks.length > 0
+    ? task.subtasks.map((st) => `    - ${st.isDone ? '~~' : ''}${st.isHumanReview ? '**human review** - ' : ''}${st.text}${st.isDone ? '~~' : ''}`).join('\n')
+    : '    (No subtasks defined)';
+
+  const formattedTaskBlock = `${task.id}. ${task.isDone ? '~~' : ''}${task.title}${task.isDone ? '~~' : ''}\n${subtasksList}`;
+
+  // Live 3-Stage Pipeline AI 3 execution
+  if (aiConfig.provider !== 'none' && aiConfig.provider !== 'mock' && (aiConfig.apiKey || aiConfig.provider === 'ollama')) {
+    try {
+      console.log('%c[Ergo AI Assistant] 🚀 Starting AI Step 3 Overview Syncer...', 'color: #8b5cf6; font-weight: bold;');
+
+      const ai3SystemPrompt = `You are AI 3 (AGENT_CONTEXT.md Syncer & Overview Drafter) in Ergo.
+${skill3Doc ? `\nSKILL INSTRUCTIONS:\n${skill3Doc}\n` : ''}
+
+PROJECT: "${project.name || 'Default Workspace'}" (${project.folderPath})
+ACTIVE MCP CONNECTIONS & PERMITTED ROOTS:
+${runtimeConnectionsPrompt}
+
+YOUR OBJECTIVE:
+Synchronize the Overview for Task #${task.id}: "${task.title}".
+1. **Identify Drift**: First analyze what drift exists between the current Overview and the human task definition (including title, category, status, and all subtasks). Check for:
+   - Newly added, deleted, or modified subtasks in TODO.md not reflected in the Overview.
+   - Status or scope changes (e.g. done/in-progress items).
+   - Missing or outdated Done-State completion criteria.
+   - Missing In Context relationships to the broader system and active workspace.
+   - Missing Seams (files, components, APIs, or active MCP tools: ${mcpNames.join(', ') || 'Local Workspace'}).
+2. **Reconcile & Update**: Add, edit, or reconcile any missing pieces, drift, or gaps. Preserve any valid existing notes, domain context, and rationale, while bringing the Overview into full alignment with the human task.
+3. **Format**: Maintain a rich, structured format covering:
+   - **Done-State**: Clear definition of user-visible behavior or completion criteria matching all subtasks.
+   - **In Context**: How this task connects with the broader system, roadmap, or dependencies.
+   - **Seams**: Specific files, components, active MCP tools (${mcpNames.join(', ') || 'Local Workspace'}), or APIs involved.
+
+OUTPUT FORMAT:
+Output ONLY the final updated markdown content for this task's Overview. Do NOT output markdown code fences around the entire response, and do NOT include the task heading or other sections like Build & Verification / Completion.`;
+
+      const ai3UserPrompt = `HUMAN TASK IN TODO.md:
+\`\`\`markdown
+${formattedTaskBlock}
+\`\`\`
+
+CATEGORY: ${task.category || 'General'}
+STATUS: ${task.isDone ? 'done' : task.status}
+
+CURRENT OVERVIEW:
+\`\`\`markdown
+${currentOverview.trim() || '(Empty - no overview defined yet)'}
+\`\`\`
+${todoMarkdown ? `\nWORKSPACE TODO.md CONTEXT:\n\`\`\`markdown\n${todoMarkdown.slice(0, 1500)}\n\`\`\`` : ''}`;
+
+      const ai3Response = await callAiEngine(ai3UserPrompt, ai3SystemPrompt, aiConfig, 'general', 'text');
+      let cleanedOverview = ai3Response.trim();
+
+      // Strip markdown code fence if wrapped
+      const fenceMatch = cleanedOverview.match(/^```(?:markdown)?(?::|\s+)?(?:overview|AGENT_CONTEXT\.md|agent_context)?\s*\n([\s\S]*?)```$/i);
+      if (fenceMatch) {
+        cleanedOverview = fenceMatch[1].trim();
+      }
+
+      // Strip accidental section headers if the model emitted full section schema
+      cleanedOverview = cleanedOverview
+        .replace(/^###\s+.*$/m, '')
+        .replace(/^\*\*Status:\*\*.*$/m, '')
+        .replace(/^\*\*Overview\*\*\s*/m, '')
+        .replace(/\*\*Build & Verification\*\*[\s\S]*$/m, '')
+        .trim();
+
+      if (cleanedOverview) {
+        console.log('%c[Ergo AI Assistant] ── Step 3: Synced Overview Output (AI 3) ──', 'color: #a78bfa; font-weight: bold;');
+        console.log(cleanedOverview);
+        return cleanedOverview;
+      }
+    } catch (e: any) {
+      console.warn(`[Ergo AI Assistant] Live Step 3 notice (falling back to offline syncer):`, e.message);
+    }
+  }
+
+  // ─── Offline Step 3 Fallback ───
+  await new Promise((resolve) => setTimeout(resolve, 400));
+
+  const subtasks = task.subtasks || [];
+  const subtaskBullets = subtasks.length > 0
+    ? subtasks.map((st) => `- ${st.isDone ? '[x] ~~' : '[ ] '}${st.text}${st.isDone ? '~~' : ''}`).join('\n')
+    : `- Complete core deliverable for "${task.title}".`;
+
+  const doneStateSection = `**Done-State:**\n${subtaskBullets}`;
+  const inContextSection = `**In Context:**\nPart of category **${task.category || 'General'}** in \`${project.name || 'Workspace'}\`. Aligned with current roadmap requirements in TODO.md.`;
+  const seamsSection = `**Seams:**\nTarget codebase located in \`${project.folderPath || './'}\` and active MCP tools (${mcpNames.join(', ') || 'Local Workspace'}).`;
+
+  let updatedOverview = '';
+  if (currentOverview && currentOverview.trim()) {
+    // Reconcile drift: check if current overview has Done-State, In Context, or Seams
+    const hasDoneState = /\*\*Done-State:?\*\*/i.test(currentOverview);
+    const hasInContext = /\*\*In Context:?\*\*/i.test(currentOverview);
+    const hasSeams = /\*\*Seams:?\*\*/i.test(currentOverview);
+
+    if (hasDoneState && hasInContext && hasSeams) {
+      // Reconcile subtask checklist drift under Done-State
+      updatedOverview = currentOverview.replace(
+        /\*\*Done-State:?\*\*[\s\S]*?(?=\n\n\*\*In Context|\n\n\*\*Seams|$)/i,
+        doneStateSection
+      );
+    } else {
+      updatedOverview = `${currentOverview.trim()}\n\n---\n\n### Synced Task Context\n\n${doneStateSection}\n\n${inContextSection}\n\n${seamsSection}`;
+    }
+  } else {
+    updatedOverview = `${doneStateSection}\n\n${inContextSection}\n\n${seamsSection}`;
+  }
+
+  console.log('%c[Ergo AI Assistant] ── Step 3: Synced Overview Output (Offline AI 3) ──', 'color: #a78bfa; font-weight: bold;');
+  console.log(updatedOverview);
+
+  return updatedOverview;
+}
+
+/**
  * Executes a single task step-by-step, emitting stream events and updating AGENT_CONTEXT.md
  */
 export async function executeTaskWithAi(

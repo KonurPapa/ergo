@@ -16,12 +16,9 @@ import {
   X,
   Check,
   Loader2,
-  FileCode,
   AlertTriangle,
   Copy,
   CheckCheck,
-  Save,
-  BookOpen,
   Layers,
   CheckSquare
 } from 'lucide-react';
@@ -76,11 +73,20 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [assistantResult, setAssistantResult] = useState<HumanAiAssistantResult | null>(null);
 
-  // Skill doc customization state
-  const [showSkillDoc, setShowSkillDoc] = useState(false);
+  // Prompt history in sessionStorage (terminal-like Up/Down arrow recall)
+  const [history, setHistory] = useState<string[]>(() => {
+    try {
+      const saved = sessionStorage.getItem('ergo_assistant_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [historyIndex, setHistoryIndex] = useState<number>(-1);
+  const [draftPrompt, setDraftPrompt] = useState<string>('');
+
+  // Skill doc content state
   const [skillDocContent, setSkillDocContent] = useState<string>(DEFAULT_HUMAN_ASSISTANT_SKILL);
-  const [isSavingSkill, setIsSavingSkill] = useState(false);
-  const [skillSaveSuccess, setSkillSaveSuccess] = useState(false);
 
   // Deletion confirmation permission state
   const [confirmDeletions, setConfirmDeletions] = useState(false);
@@ -95,9 +101,11 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
     return foundModel?.name || rawModel;
   }, [aiConfig]);
 
-  // Load Skill Doc on open
+  // Load Skill Doc & reset history index on open
   useEffect(() => {
     if (isOpen) {
+      setHistoryIndex(-1);
+      setDraftPrompt('');
       storageManager.loadSkillDoc('human-assistant').then((content) => {
         if (content && !content.includes('Strict JSON Output Schema') && !content.includes('createdTasks')) {
           setSkillDocContent(content);
@@ -115,9 +123,10 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
     return mcpServers.filter((m) => m.status === 'connected');
   }, [mcpServers]);
 
-  // Resizing state - default depth reduced by 30% (285 -> 200)
+  // Resizing state - default depth reduced by 30% (285 -> 220)
   const [drawerHeight, setDrawerHeight] = useState<number>(220);
   const [isDragging, setIsDragging] = useState(false);
+  const baseDrawerHeightRef = React.useRef<number>(220);
 
   useEffect(() => {
     if (onHeightChange) {
@@ -134,7 +143,9 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
       const newHeight = window.innerHeight - e.clientY - 53; // 53px is task footer height
       const minHeight = 120;
       const maxHeight = window.innerHeight * 0.9;
-      setDrawerHeight(Math.max(minHeight, Math.min(newHeight, maxHeight)));
+      const clampedHeight = Math.max(minHeight, Math.min(newHeight, maxHeight));
+      setDrawerHeight(clampedHeight);
+      baseDrawerHeightRef.current = clampedHeight;
     };
 
     const handleMouseUp = () => {
@@ -152,23 +163,30 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSaveSkill = async () => {
-    setIsSavingSkill(true);
-    await storageManager.saveSkillDoc('human-assistant', skillDocContent);
-    setIsSavingSkill(false);
-    setSkillSaveSuccess(true);
-    setTimeout(() => setSkillSaveSuccess(false), 2000);
-  };
-
   const handleGenerate = async () => {
-    if (!prompt.trim()) return;
+    const trimmed = prompt.trim();
+    if (!trimmed) return;
+
+    // Push to sessionStorage history (terminal-like)
+    setHistory((prev) => {
+      // Remove duplicate if it was immediately previous or exists
+      const filtered = prev.filter((p) => p !== trimmed);
+      const nextHistory = [...filtered, trimmed];
+      try {
+        sessionStorage.setItem('ergo_assistant_history', JSON.stringify(nextHistory));
+      } catch {}
+      return nextHistory;
+    });
+    setHistoryIndex(-1);
+    setDraftPrompt('');
+
     setIsLoading(true);
     setAssistantResult(null);
     setConfirmDeletions(false);
 
     try {
       const res = await runHumanAiAssistant(
-        prompt,
+        trimmed,
         intent,
         todoMarkdown,
         agentContextMarkdown,
@@ -179,6 +197,10 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
       );
 
       setAssistantResult(res);
+
+      // Expand panel by 50% automatically when proposed changes arrive
+      const expandedHeight = Math.min(window.innerHeight * 0.9, Math.round(baseDrawerHeightRef.current * 1.5));
+      setDrawerHeight(expandedHeight);
     } catch (err) {
       console.error('Failed to run Human AI Assistant:', err);
     } finally {
@@ -186,11 +208,18 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
     }
   };
 
+  const handleDismiss = () => {
+    setAssistantResult(null);
+    setDrawerHeight(baseDrawerHeightRef.current);
+    onClose();
+  };
+
   const handleApply = () => {
     if (assistantResult) {
       onApplyAssistantResult(assistantResult, confirmDeletions);
       setAssistantResult(null);
       setPrompt('');
+      setDrawerHeight(baseDrawerHeightRef.current);
       onClose();
     }
   };
@@ -268,7 +297,7 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
             <button
               className="btn btn-secondary"
               style={{ padding: '0.25rem 0.45rem', fontSize: '0.75rem' }}
-              onClick={onClose}
+              onClick={handleDismiss}
               title="Close Assistant"
             >
               <X size={15} />
@@ -278,49 +307,6 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
 
         {/* Drawer Body */}
         <div className="human-assistant-drawer-body">
-          {/* Collapsible Skill Doc Viewer / Editor */}
-          {showSkillDoc && (
-            <div
-              style={{
-                background: 'var(--bg-darkest)',
-                border: '1px solid var(--accent-primary)',
-                borderRadius: 'var(--radius-md)',
-                padding: '0.85rem',
-                marginBottom: '1rem'
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.45rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <FileCode size={15} color="var(--accent-primary)" />
-                  <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#fff' }}>
-                    Skill Instructions (<code style={{ color: 'var(--accent-cyan)' }}>.ergo/config/skills/human-assistant/SKILL.md</code>)
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem', gap: '0.3rem' }}
-                  onClick={handleSaveSkill}
-                  disabled={isSavingSkill}
-                >
-                  {skillSaveSuccess ? <CheckCheck size={12} color="var(--accent-emerald)" /> : <Save size={12} />}
-                  <span>{skillSaveSuccess ? 'Saved!' : isSavingSkill ? 'Saving...' : 'Save Skill Doc'}</span>
-                </button>
-              </div>
-              <textarea
-                className="textarea-text"
-                rows={5}
-                style={{ fontSize: '0.78rem', fontFamily: 'var(--font-mono)' }}
-                value={skillDocContent}
-                onChange={(e) => setSkillDocContent(e.target.value)}
-                placeholder="Skill instructions..."
-              />
-              <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.25rem' }}>
-                💡 Any edits saved here immediately dictate how the Discovery AI behaves and parses your workspace requests.
-              </div>
-            </div>
-          )}
-
           {/* Mode Selection Tabs (Task vs Architect) */}
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.65rem' }}>
             {INTENT_TABS.map((tab) => {
@@ -378,14 +364,60 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
               rows={3}
               placeholder={currentTab.placeholder}
               value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
+              onChange={(e) => {
+                setPrompt(e.target.value);
+                if (historyIndex === -1) {
+                  setDraftPrompt(e.target.value);
+                }
+              }}
               onKeyDown={(e) => {
+                // Submit on Ctrl/Cmd + Enter
                 if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                   e.preventDefault();
                   handleGenerate();
-                } else {
-                  handleMarkdownAutoWrap(e, setPrompt);
+                  return;
                 }
+
+                // Terminal-like Up arrow history recall
+                if (e.key === 'ArrowUp') {
+                  // Only cycle if cursor is on first line or selection is at start (or single line)
+                  const target = e.currentTarget;
+                  const isAtStart = target.selectionStart === 0 || !prompt.includes('\n');
+                  if (isAtStart && history.length > 0) {
+                    e.preventDefault();
+                    if (historyIndex === -1) {
+                      setDraftPrompt(prompt);
+                      const newIdx = history.length - 1;
+                      setHistoryIndex(newIdx);
+                      setPrompt(history[newIdx]);
+                    } else if (historyIndex > 0) {
+                      const newIdx = historyIndex - 1;
+                      setHistoryIndex(newIdx);
+                      setPrompt(history[newIdx]);
+                    }
+                    return;
+                  }
+                }
+
+                // Terminal-like Down arrow history recall
+                if (e.key === 'ArrowDown') {
+                  const target = e.currentTarget;
+                  const isAtEnd = target.selectionEnd === prompt.length || !prompt.includes('\n');
+                  if (isAtEnd && historyIndex !== -1) {
+                    e.preventDefault();
+                    if (historyIndex < history.length - 1) {
+                      const newIdx = historyIndex + 1;
+                      setHistoryIndex(newIdx);
+                      setPrompt(history[newIdx]);
+                    } else {
+                      setHistoryIndex(-1);
+                      setPrompt(draftPrompt);
+                    }
+                    return;
+                  }
+                }
+
+                handleMarkdownAutoWrap(e, setPrompt);
               }}
             />
           </div>
@@ -437,19 +469,8 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
                       <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent-emerald)', marginBottom: '0.4rem' }}>
                         Proposed TODO.md Changes
                       </div>
-                      <pre style={{ margin: 0, padding: '0.45rem', background: 'var(--bg-darkest)', borderRadius: 'var(--radius-sm)', fontSize: '0.72rem', fontFamily: 'var(--font-mono)', color: 'var(--text-normal)', maxHeight: '180px', overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
+                      <pre style={{ margin: 0, padding: '0.45rem', background: 'var(--bg-darkest)', borderRadius: 'var(--radius-sm)', fontSize: '0.72rem', fontFamily: 'var(--font-mono)', color: 'var(--text-normal)', maxHeight: '220px', overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
                         {assistantResult.todoMarkdown}
-                      </pre>
-                    </div>
-                  )}
-
-                  {assistantResult.agentContextMarkdown && (
-                    <div style={{ background: 'var(--bg-card)', border: '1px solid rgba(6, 182, 212, 0.3)', borderRadius: 'var(--radius-sm)', padding: '0.65rem' }}>
-                      <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent-cyan)', marginBottom: '0.4rem' }}>
-                        Proposed AGENT_CONTEXT.md Changes
-                      </div>
-                      <pre style={{ margin: 0, padding: '0.45rem', background: 'var(--bg-darkest)', borderRadius: 'var(--radius-sm)', fontSize: '0.72rem', fontFamily: 'var(--font-mono)', color: 'var(--text-normal)', maxHeight: '180px', overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
-                        {assistantResult.agentContextMarkdown}
                       </pre>
                     </div>
                   )}

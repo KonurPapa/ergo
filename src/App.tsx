@@ -16,7 +16,7 @@ import {
 } from './types';
 
 import { INITIAL_PROJECTS, createNewProjectData, INITIAL_MCP_SERVERS } from './lib/demoData';
-import { parseTodoMarkdown, serializeTodoMarkdown, parseAgentContextMarkdown, serializeAgentContextMarkdown, syncBriefsWithTasks } from './lib/parser';
+import { parseTodoMarkdown, serializeTodoMarkdown, parseAgentContextMarkdown, parseAgentContextWithArchive, serializeAgentContextMarkdown, syncBriefsWithTasks } from './lib/parser';
 import { readFilesFromDisk, createProjectOnDisk } from './lib/fileSystem';
 import { storageManager } from './lib/storageManager';
 import { useAutosave } from './hooks/useAutosave';
@@ -31,7 +31,7 @@ import { AiCredentialsModal } from './components/AiCredentialsModal';
 import { SettingsModal } from './components/SettingsModal';
 import { FolderPickerModal } from './components/FolderPickerModal';
 import { ToastContainer, type ToastMessage } from './components/Toast';
-import { executeTaskWithAi } from './lib/ai';
+import { executeTaskWithAi, syncTaskOverviewWithAi } from './lib/ai';
 
 
 export function App() {
@@ -71,7 +71,9 @@ export function App() {
 
   // Parsed Tasks & Briefs State
   const [tasks, setTasks] = useState<TaskItem[]>([]);
+  const [archivedTasks, setArchivedTasks] = useState<TaskItem[]>([]);
   const [briefs, setBriefs] = useState<AgentContextItem[]>([]);
+  const [archivedBriefs, setArchivedBriefs] = useState<AgentContextItem[]>([]);
   const [headerComments, setHeaderComments] = useState<string>('');
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
 
@@ -449,12 +451,14 @@ export function App() {
       }
 
       const parsedTodo = parseTodoMarkdown(effectiveTodoMd);
-      const parsedBriefs = parseAgentContextMarkdown(effectiveAgentMd);
-      const alignedBriefs = syncBriefsWithTasks(parsedBriefs, parsedTodo.items);
+      const parsedBriefsWithArchive = parseAgentContextWithArchive(effectiveAgentMd);
+      const alignedBriefs = syncBriefsWithTasks(parsedBriefsWithArchive.items, parsedTodo.items);
 
       setTasks(parsedTodo.items);
+      setArchivedTasks(parsedTodo.archivedItems);
       setHeaderComments(parsedTodo.headerComments);
       setBriefs(alignedBriefs);
+      setArchivedBriefs(parsedBriefsWithArchive.archivedItems);
 
       if (parsedTodo.items.length > 0) {
         setSelectedTaskId((prev) => (prev !== null && parsedTodo.items.some((t) => t.id === prev) ? prev : parsedTodo.items[0].id));
@@ -578,13 +582,17 @@ export function App() {
   const syncAndSaveProject = (
     newTasks: TaskItem[],
     newBriefs: AgentContextItem[],
-    immediateDiskSave = true
+    immediateDiskSave = true,
+    currentArchivedTasks = archivedTasks,
+    currentArchivedBriefs = archivedBriefs
   ) => {
     setTasks(newTasks);
     setBriefs(newBriefs);
+    setArchivedTasks(currentArchivedTasks);
+    setArchivedBriefs(currentArchivedBriefs);
 
-    const updatedTodoMd = serializeTodoMarkdown(newTasks, headerComments);
-    const updatedBriefsMd = serializeAgentContextMarkdown(newBriefs);
+    const updatedTodoMd = serializeTodoMarkdown(newTasks, headerComments, currentArchivedTasks);
+    const updatedBriefsMd = serializeAgentContextMarkdown(newBriefs, currentArchivedBriefs);
 
     setProjects((prev) =>
       prev.map((p) =>
@@ -907,6 +915,130 @@ export function App() {
   };
 
   // Live Typing Handler from BriefPane (Triggers Debounced Autosave to disk)
+  // Archive Task Handler (Moves task and corresponding brief into archive section immediately)
+  // Takes the live title string read from the editor node, matching by title is immune to stale indices.
+  const handleArchiveTask = (taskTitle: string) => {
+    if (!taskTitle) return;
+    const normalTitle = taskTitle.trim().toLowerCase();
+    const taskToArchive = tasks.find((t) => t.title.trim().toLowerCase() === normalTitle);
+    if (!taskToArchive) return;
+
+    const taskIndex = tasks.findIndex((t) => t.title.trim().toLowerCase() === normalTitle);
+    const nextActiveTasks = tasks.filter((t) => t.title.trim().toLowerCase() !== normalTitle);
+
+    // Assign a unique ID in the 1000+ range for the archived task
+    const nextArchiveId = archivedTasks.length > 0 ? Math.max(...archivedTasks.map((t) => t.id), 1000) + 1 : 1001;
+    const archivedTask: TaskItem = {
+      ...taskToArchive,
+      id: nextArchiveId,
+      isArchived: true,
+      archivedAtIndex: taskIndex,         // remember original 0-based position
+      category: 'Archive',
+      categoryHeadingPrefix: '##',
+    };
+    const nextArchivedTasks = [
+      ...archivedTasks.filter((t) => t.title.trim().toLowerCase() !== normalTitle),
+      archivedTask,
+    ];
+
+    // Move corresponding brief to archivedBriefs
+    const matchingBrief = briefs.find(
+      (b) => b.title.trim().toLowerCase() === normalTitle || b.itemNumber === taskToArchive.id
+    );
+    const nextActiveBriefsRaw = briefs.filter(
+      (b) => b.title.trim().toLowerCase() !== normalTitle && b.itemNumber !== taskToArchive.id
+    );
+    const nextActiveBriefs = syncBriefsWithTasks(nextActiveBriefsRaw, nextActiveTasks);
+
+    const nextArchivedBriefs = matchingBrief
+      ? [
+          ...archivedBriefs.filter((b) => b.title.trim().toLowerCase() !== normalTitle),
+          { ...matchingBrief, isArchived: true, itemNumber: nextArchiveId },
+        ]
+      : archivedBriefs;
+
+    if (selectedTaskId === taskToArchive.id) {
+      setSelectedTaskId(nextActiveTasks.length > 0 ? nextActiveTasks[0].id : null);
+    }
+
+    syncAndSaveProject(nextActiveTasks, nextActiveBriefs, true, nextArchivedTasks, nextArchivedBriefs);
+  };
+
+  // Unarchive Task Handler (Restores task from archive back to active workspace at its original position)
+  const handleUnarchiveTask = (taskId: number) => {
+    const taskToUnarchive = archivedTasks.find((t) => t.id === taskId);
+    if (!taskToUnarchive) return;
+
+    const normalTitle = taskToUnarchive.title.trim().toLowerCase();
+    const nextArchivedTasks = archivedTasks.filter((t) => t.id !== taskToUnarchive.id);
+
+    // Restore the task's category to match the surrounding active tasks so it
+    // doesn't create a stray "## Archive" section inside the active list.
+    const referenceTask = tasks.length > 0 ? tasks[0] : null;
+    const restoredTask: TaskItem = {
+      ...taskToUnarchive,
+      id: tasks.length + 1,     // temporary; syncBriefsWithTasks will align
+      category: referenceTask?.category || 'Untitled',
+      categoryHeadingPrefix: referenceTask?.categoryHeadingPrefix || '##',
+      categoryHasColon: referenceTask?.categoryHasColon || false,
+      isArchived: false,
+      archivedAtIndex: undefined,
+    };
+
+    // Splice back at the original position if we have it, otherwise append
+    let nextActiveTasks: TaskItem[];
+    const originalIndex = taskToUnarchive.archivedAtIndex;
+    if (originalIndex !== undefined && originalIndex >= 0 && originalIndex <= tasks.length) {
+      nextActiveTasks = [...tasks.slice(0, originalIndex), restoredTask, ...tasks.slice(originalIndex)];
+    } else {
+      nextActiveTasks = [...tasks, restoredTask];
+    }
+    // Re-number IDs to be sequential after splice
+    nextActiveTasks = nextActiveTasks.map((t, i) => ({ ...t, id: i + 1 }));
+
+    const matchingArchivedBrief = archivedBriefs.find(
+      (b) => b.title.trim().toLowerCase() === normalTitle
+    );
+    const nextArchivedBriefs = archivedBriefs.filter(
+      (b) => b.title.trim().toLowerCase() !== normalTitle
+    );
+
+    // Find what the restored task's new ID is after re-numbering
+    const restoredId = nextActiveTasks.find((t) => t.title.trim().toLowerCase() === normalTitle)?.id
+      ?? nextActiveTasks[nextActiveTasks.length - 1].id;
+
+    const nextActiveBriefsRaw = matchingArchivedBrief
+      ? [...briefs, { ...matchingArchivedBrief, isArchived: false, itemNumber: restoredId }]
+      : briefs;
+    const nextActiveBriefs = syncBriefsWithTasks(nextActiveBriefsRaw, nextActiveTasks);
+
+    setSelectedTaskId(restoredId);
+    syncAndSaveProject(nextActiveTasks, nextActiveBriefs, true, nextArchivedTasks, nextArchivedBriefs);
+  };
+
+  // Permanent Delete Archived Task Handler
+  const handleDeleteArchivedTask = (taskId: number) => {
+    const taskToDelete = archivedTasks.find((t) => t.id === taskId);
+    if (!taskToDelete) return;
+
+    const normalTitle = taskToDelete.title.trim().toLowerCase();
+    const nextArchivedTasks = archivedTasks.filter((t) => t.id !== taskToDelete.id);
+    const nextArchivedBriefs = archivedBriefs.filter(
+      (b) => b.title.trim().toLowerCase() !== normalTitle
+    );
+
+    syncAndSaveProject(tasks, briefs, true, nextArchivedTasks, nextArchivedBriefs);
+  };
+
+  // Save Archived Brief Edit
+  const handleSaveArchivedBrief = (updatedBrief: AgentContextItem) => {
+    const nextArchivedBriefs = archivedBriefs.map((b) =>
+      b.title.trim().toLowerCase() === updatedBrief.title.trim().toLowerCase() ? updatedBrief : b
+    );
+    syncAndSaveProject(tasks, briefs, true, archivedTasks, nextArchivedBriefs);
+  };
+
+  // Live Typing Handler from BriefPane (Triggers Debounced Autosave to disk)
   const handleLiveBriefChange = (updatedBrief: AgentContextItem) => {
     const existingIdx = briefs.findIndex((b) => b.itemNumber === updatedBrief.itemNumber);
     let nextBriefs: AgentContextItem[];
@@ -917,8 +1049,8 @@ export function App() {
     }
     setBriefs(nextBriefs);
 
-    const currentTodoMd = serializeTodoMarkdown(tasks, headerComments);
-    const updatedBriefsMd = serializeAgentContextMarkdown(nextBriefs);
+    const currentTodoMd = serializeTodoMarkdown(tasks, headerComments, archivedTasks);
+    const updatedBriefsMd = serializeAgentContextMarkdown(nextBriefs, archivedBriefs);
 
     setProjects((prev) =>
       prev.map((p) =>
@@ -937,26 +1069,42 @@ export function App() {
     ]);
   };
 
-  // Refine Brief with AI
-  const handleUpdateBriefWithAi = (task: TaskItem) => {
-    const existingBrief = briefs.find((b) => b.itemNumber === task.id);
+  // Refine Brief with AI (AI Step 3 Context Syncer & Overview Drafter)
+  const handleSyncOverviewWithTask = async (task: TaskItem): Promise<string> => {
+    const existingBrief =
+      briefs.find((b) => b.title.trim().toLowerCase() === task.title.trim().toLowerCase()) ||
+      briefs.find((b) => b.itemNumber === task.id);
     const existingOverview = existingBrief?.overview || existingBrief?.brief || '';
-    const updatedOverview = existingOverview
-      ? `${existingOverview}\n\n**AI Context Notes (${new Date().toLocaleDateString()}):**\n- Target Folder: \`${activeProject.folderPath}\`\n- Architecture & Seams: Additive changes in dependency order\n- Constraints: Evaluated in context of other tasks`
-      : `**AI Context Notes (${new Date().toLocaleDateString()}):**\n- Target Folder: \`${activeProject.folderPath}\`\n- Architecture & Seams: Additive changes in dependency order\n- Constraints: Evaluated in context of other tasks`;
+
+    const syncedOverview = await syncTaskOverviewWithAi(
+      task,
+      existingOverview,
+      activeProject,
+      aiConfig,
+      mcpServers,
+      serializeTodoMarkdown(tasks, headerComments, archivedTasks),
+      serializeAgentContextMarkdown(briefs, archivedBriefs)
+    );
 
     const updatedBrief: AgentContextItem = {
       itemNumber: task.id,
       title: task.title,
       status: task.status,
-      overview: updatedOverview,
+      overview: syncedOverview,
       buildAndVerification: existingBrief?.buildAndVerification || existingBrief?.built || '',
       completion: existingBrief?.completion || existingBrief?.validation || existingBrief?.humanReview || existingBrief?.followUps || '',
-      brief: updatedOverview,
+      brief: syncedOverview,
       built: existingBrief?.built || '',
-      validation: existingBrief?.validation || ''
+      validation: existingBrief?.validation || '',
+      humanReview: existingBrief?.humanReview || '',
+      followUps: existingBrief?.followUps || ''
     };
     handleSaveBrief(updatedBrief);
+    return syncedOverview;
+  };
+
+  const handleUpdateBriefWithAi = (task: TaskItem) => {
+    handleSyncOverviewWithTask(task);
   };
 
   // Live edit handler from Obsidian-style TaskPane editor (Triggers Debounced Autosave to disk)
@@ -971,13 +1119,14 @@ export function App() {
     // Sync and renumber briefs matching the updated tasks
     const updatedBriefs = syncBriefsWithTasks(briefs, parsedTodo.items);
     setBriefs(updatedBriefs);
-    const updatedBriefsMd = serializeAgentContextMarkdown(updatedBriefs);
+    const combinedTodoMd = serializeTodoMarkdown(parsedTodo.items, parsedTodo.headerComments || headerComments, archivedTasks);
+    const updatedBriefsMd = serializeAgentContextMarkdown(updatedBriefs, archivedBriefs);
 
     // Sync the raw markdown and updated briefs into the project record
     setProjects((prev) =>
       prev.map((p) =>
         p.id === activeProjectId
-          ? { ...p, todoMarkdown: fullTodoMd, agentContextMarkdown: updatedBriefsMd }
+          ? { ...p, todoMarkdown: combinedTodoMd, agentContextMarkdown: updatedBriefsMd }
           : p
       )
     );
@@ -986,7 +1135,7 @@ export function App() {
     const agentPath = activeProject?.agentContextFilePath || `${activeProject?.folderPath}/AGENT_CONTEXT.md`;
 
     autosave.queueSave([
-      { filePath: todoPath, content: fullTodoMd },
+      { filePath: todoPath, content: combinedTodoMd },
       { filePath: agentPath, content: updatedBriefsMd }
     ]);
   };
@@ -994,11 +1143,13 @@ export function App() {
   // Save Raw Markdown Editing (from Raw Markdown modal - Flushes immediately)
   const handleSaveRawMarkdown = (newTodoMd: string, newAgentContextMd: string) => {
     const parsedTodo = parseTodoMarkdown(newTodoMd);
-    const parsedBriefs = parseAgentContextMarkdown(newAgentContextMd);
+    const parsedBriefsWithArchive = parseAgentContextWithArchive(newAgentContextMd);
 
     setTasks(parsedTodo.items);
+    setArchivedTasks(parsedTodo.archivedItems);
     setHeaderComments(parsedTodo.headerComments);
-    setBriefs(parsedBriefs);
+    setBriefs(parsedBriefsWithArchive.items);
+    setArchivedBriefs(parsedBriefsWithArchive.archivedItems);
 
     setProjects((prev) =>
       prev.map((p) =>
@@ -1021,8 +1172,8 @@ export function App() {
   const handleExportProject = () => {
     if (!activeProject) return;
     const folderSlug = activeProject.folderPath ? activeProject.folderPath.replace(/^projects\//, '') : activeProject.id;
-    const todoBlob = new Blob([serializeTodoMarkdown(tasks, headerComments)], { type: 'text/markdown' });
-    const briefBlob = new Blob([serializeAgentContextMarkdown(briefs)], { type: 'text/markdown' });
+    const todoBlob = new Blob([serializeTodoMarkdown(tasks, headerComments, archivedTasks)], { type: 'text/markdown' });
+    const briefBlob = new Blob([serializeAgentContextMarkdown(briefs, archivedBriefs)], { type: 'text/markdown' });
 
     const a1 = document.createElement('a');
     a1.href = URL.createObjectURL(todoBlob);
@@ -1119,6 +1270,7 @@ export function App() {
           <TaskPane
             rawMarkdown={activeProject?.todoMarkdown || ''}
             tasks={tasks}
+            archivedTasks={archivedTasks}
             selectedTaskId={selectedTaskId}
             runningTaskIds={runningTaskIds}
             onSelectTask={(id) => setSelectedTaskId(id)}
@@ -1127,10 +1279,13 @@ export function App() {
             isAssistantOpen={isDraftModalOpen}
             onCloseAssistant={() => setIsDraftModalOpen(false)}
             project={activeProject}
-            agentContextMarkdown={activeProject?.agentContextMarkdown || serializeAgentContextMarkdown(briefs)}
+            agentContextMarkdown={activeProject?.agentContextMarkdown || serializeAgentContextMarkdown(briefs, archivedBriefs)}
             aiConfig={aiConfig}
             mcpServers={mcpServers}
             onApplyAssistantResult={handleApplyAssistantResult}
+            onArchiveTask={handleArchiveTask}
+            onUnarchiveTask={handleUnarchiveTask}
+            onDeleteArchivedTask={handleDeleteArchivedTask}
           />
         </div>
 
@@ -1148,6 +1303,8 @@ export function App() {
           <BriefPane
             tasks={tasks}
             briefs={briefs}
+            archivedTasks={archivedTasks}
+            archivedBriefs={archivedBriefs}
             selectedTaskId={selectedTaskId}
             runningTaskIds={runningTaskIds}
             onSelectTask={(id) => setSelectedTaskId(id)}
@@ -1155,6 +1312,10 @@ export function App() {
             onLiveBriefChange={handleLiveBriefChange}
             onExecuteTask={handleExecuteTask}
             onUpdateBriefWithAi={handleUpdateBriefWithAi}
+            onSyncOverviewWithTask={handleSyncOverviewWithTask}
+            onUnarchiveTask={handleUnarchiveTask}
+            onDeleteArchivedTask={handleDeleteArchivedTask}
+            onSaveArchivedBrief={handleSaveArchivedBrief}
             autosaveStatus={autosave.status}
             autosaveDelaySec={autosave.delaySec}
             terminalSessions={terminalSessions}

@@ -22,6 +22,8 @@ export interface TaskItem {
   isHumanReview?: boolean;
   mcpRequired?: string[]; // e.g. ['github', 'filesystem']
   summaryNote?: string;
+  isArchived?: boolean;
+  archivedAtIndex?: number; // 0-based index in the active list at time of archiving, for position-accurate restore
 }
 
 export interface AgentContextItem {
@@ -32,6 +34,7 @@ export interface AgentContextItem {
   overview: string;
   buildAndVerification: string;
   completion: string;
+  isArchived?: boolean;
   // Compatibility fields
   brief?: string;
   built?: string;

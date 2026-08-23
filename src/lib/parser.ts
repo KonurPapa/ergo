@@ -1,10 +1,16 @@
 import { type TaskItem, type AgentContextItem, type TaskStatus } from '../types';
 
+export const ARCHIVE_DELIMITER = '<!-- ARCHIVE -->';
+
 /**
  * Strips leading HTML comments and blank lines to provide clean markdown body for UI editor
  */
 export function stripHeaderComments(markdown: string): string {
-  const lines = markdown.split('\n');
+  // If there's an archive section, only consider the active section for the main editor
+  const archiveIndex = markdown.search(/^\s*<!--\s*ARCHIVE\s*-->/im);
+  const activeMarkdown = archiveIndex !== -1 ? markdown.slice(0, archiveIndex) : markdown;
+
+  const lines = activeMarkdown.split('\n');
   let firstContentIndex = 0;
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
@@ -18,16 +24,16 @@ export function stripHeaderComments(markdown: string): string {
 }
 
 /**
- * Parses TODO.md content into structured TaskItem array
+ * Internal helper to parse a block of task markdown lines into TaskItem array
  */
-export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; headerComments: string; bodyMarkdown: string } {
+function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArchived: boolean = false): { items: TaskItem[]; headerComments: string; bodyMarkdown: string } {
   const lines = markdown.split('\n');
   const items: TaskItem[] = [];
   let currentHeading: string | null = null;
   let currentHeadingPrefix = '##';
   let currentHeadingHasColon = false;
   let isHeadingActive = false;
-  let currentCategory = 'Untitled';
+  let currentCategory = isArchived ? 'Archive' : 'Untitled';
   let categoryCounter = 0;
   let currentTask: TaskItem | null = null;
   const commentLines: string[] = [];
@@ -61,7 +67,7 @@ export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; header
     if (line.trim().match(/^(-{3,}|\*{3,}|_{3,})$/)) {
       currentTask = null;
       isHeadingActive = false;
-      currentCategory = 'Untitled';
+      currentCategory = isArchived ? 'Archive' : 'Untitled';
       categoryCounter = 0;
       continue;
     }
@@ -95,11 +101,11 @@ export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; header
       const parsedNum = parseInt(numberedMatch[1], 10);
       if (parsedNum === 1) {
         if (isHeadingActive) {
-          currentCategory = currentHeading || 'Untitled';
+          currentCategory = currentHeading || (isArchived ? 'Archive' : 'Untitled');
           isHeadingActive = false;
           categoryCounter = 1;
         } else {
-          currentCategory = 'Untitled';
+          currentCategory = isArchived ? 'Archive' : 'Untitled';
         }
       } else {
         categoryCounter += 1;
@@ -112,7 +118,7 @@ export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; header
       // Clean title and unescape
       const cleanedTitle = cleanAndUnescapeMarkdown(rawTitle);
 
-      const nextId = items.length + 1;
+      const nextId = startIdOffset + items.length + 1;
       currentTask = {
         id: nextId,
         title: cleanedTitle || `Task ${nextId}`,
@@ -126,7 +132,8 @@ export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; header
         isDone,
         subtasks: [],
         isHumanReview,
-        mcpRequired: extractMcpTags(cleanedTitle)
+        mcpRequired: extractMcpTags(cleanedTitle),
+        isArchived
       };
       items.push(currentTask);
       continue;
@@ -136,11 +143,11 @@ export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; header
     const bulletMatch = line.match(/^[-*+]\s+(.*)$/);
     if (bulletMatch) {
       if (isHeadingActive) {
-        currentCategory = currentHeading || 'Untitled';
+        currentCategory = currentHeading || (isArchived ? 'Archive' : 'Untitled');
         isHeadingActive = false;
         categoryCounter = 1;
       } else if (categoryCounter === 0) {
-        currentCategory = 'Untitled';
+        currentCategory = isArchived ? 'Archive' : 'Untitled';
         categoryCounter = 1;
       } else {
         categoryCounter += 1;
@@ -152,7 +159,7 @@ export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; header
 
       const cleanedTitle = cleanAndUnescapeMarkdown(rawTitle);
 
-      const nextId = items.length + 1;
+      const nextId = startIdOffset + items.length + 1;
       currentTask = {
         id: nextId,
         title: cleanedTitle || `Task ${nextId}`,
@@ -166,7 +173,8 @@ export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; header
         isDone,
         subtasks: [],
         isHumanReview,
-        mcpRequired: extractMcpTags(cleanedTitle)
+        mcpRequired: extractMcpTags(cleanedTitle),
+        isArchived
       };
       items.push(currentTask);
       continue;
@@ -176,7 +184,7 @@ export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; header
     if (line.trim() !== '') {
       currentTask = null;
       isHeadingActive = false;
-      currentCategory = 'Untitled';
+      currentCategory = isArchived ? 'Archive' : 'Untitled';
       categoryCounter = 0;
     }
   }
@@ -188,12 +196,51 @@ export function parseTodoMarkdown(markdown: string): { items: TaskItem[]; header
   };
 }
 
-/**
- * Serializes TaskItem array back to TODO.md format
- */
-export function serializeTodoMarkdown(items: TaskItem[], headerComment?: string): string {
-  let md = headerComment && headerComment.trim() ? `${headerComment.trim()}\n\n` : '';
+export interface ParsedTodoResult {
+  items: TaskItem[];
+  archivedItems: TaskItem[];
+  headerComments: string;
+  bodyMarkdown: string;
+  archivedBodyMarkdown: string;
+}
 
+/**
+ * Parses TODO.md content into structured TaskItem arrays (active and archived)
+ */
+export function parseTodoMarkdown(markdown: string): ParsedTodoResult {
+  const archiveMatch = markdown.match(/^\s*<!--\s*ARCHIVE\s*-->/im);
+
+  if (archiveMatch && archiveMatch.index !== undefined) {
+    const activeMarkdown = markdown.slice(0, archiveMatch.index);
+    const archivedMarkdown = markdown.slice(archiveMatch.index + archiveMatch[0].length);
+
+    const activeResult = parseTaskItemsBlock(activeMarkdown, 0, false);
+    const archivedResult = parseTaskItemsBlock(archivedMarkdown, 1000, true);
+
+    return {
+      items: activeResult.items,
+      archivedItems: archivedResult.items,
+      headerComments: activeResult.headerComments,
+      bodyMarkdown: activeResult.bodyMarkdown,
+      archivedBodyMarkdown: archivedResult.bodyMarkdown
+    };
+  }
+
+  const activeResult = parseTaskItemsBlock(markdown, 0, false);
+  return {
+    items: activeResult.items,
+    archivedItems: [],
+    headerComments: activeResult.headerComments,
+    bodyMarkdown: activeResult.bodyMarkdown,
+    archivedBodyMarkdown: ''
+  };
+}
+
+/**
+ * Serializes a list of TaskItems into markdown text
+ */
+function serializeTaskListMarkdown(items: TaskItem[]): string {
+  let md = '';
   // Group by categories
   const categoriesMap = new Map<string, TaskItem[]>();
   for (const item of items) {
@@ -228,6 +275,31 @@ export function serializeTodoMarkdown(items: TaskItem[], headerComment?: string)
     }
     md += '\n';
   });
+
+  return md.trim();
+}
+
+/**
+ * Serializes TaskItem array back to TODO.md format, optionally including archived tasks
+ */
+export function serializeTodoMarkdown(
+  items: TaskItem[],
+  headerComment?: string,
+  archivedItems: TaskItem[] = []
+): string {
+  let md = headerComment && headerComment.trim() ? `${headerComment.trim()}\n\n` : '';
+
+  // Separate active and archived if mixed in items
+  const active = items.filter((i) => !i.isArchived);
+  const explicitArchived = items.filter((i) => i.isArchived);
+  const allArchived = [...explicitArchived, ...archivedItems];
+
+  md += serializeTaskListMarkdown(active);
+
+  if (allArchived.length > 0) {
+    const archiveMd = serializeTaskListMarkdown(allArchived);
+    md = md.trim() + `\n\n${ARCHIVE_DELIMITER}\n\n${archiveMd}`;
+  }
 
   return md.trim();
 }
@@ -296,7 +368,10 @@ export function syncBriefsWithTasks(
 /**
  * Parses AGENT_CONTEXT.md content into structured AgentContextItem array
  */
-export function parseAgentContextMarkdown(markdown: string): AgentContextItem[] {
+/**
+ * Helper to parse a block of AgentContext markdown into AgentContextItem array
+ */
+function parseAgentContextBlock(markdown: string, isArchived: boolean = false): AgentContextItem[] {
   const sections = markdown.split(/(?=^###\s+)/m);
   const items: AgentContextItem[] = [];
 
@@ -339,7 +414,8 @@ export function parseAgentContextMarkdown(markdown: string): AgentContextItem[] 
       validation: completion,
       humanReview: completion,
       followUps: completion,
-      rawContent: section
+      rawContent: section,
+      isArchived
     });
   }
 
@@ -347,13 +423,45 @@ export function parseAgentContextMarkdown(markdown: string): AgentContextItem[] 
 }
 
 /**
- * Serializes AgentContextItem array back to AGENT_CONTEXT.md format
+ * Parses AGENT_CONTEXT.md content into structured AgentContextItem array (with isArchived flag)
  */
-export function serializeAgentContextMarkdown(items: AgentContextItem[]): string {
-  let md = `# TODO context — the verbose half of \`TODO.md\`\n\n`;
-  md += `\`TODO.md\` is the **human** view: the ask in Konur's words, scannable in seconds, with at most a one-line \`DONE:\` per finished item. This file is the **agent** view: the full overview for an item before it's built, mid-task build & verification notes, and the completion record of what was built and where the task stands.\n\n`;
-  md += `Rules of the split:\n- Sections here mirror \`TODO.md\` **by item number and title** — same numbers, same order.\n- Not every item needs a section here — only ones that have been fleshed out or worked.\n- Verbosity is fine here. It lives here and only here.\n\n---\n\n`;
+export function parseAgentContextMarkdown(markdown: string): AgentContextItem[] {
+  const archiveMatch = markdown.match(/^\s*<!--\s*ARCHIVE\s*-->/im);
+  if (archiveMatch && archiveMatch.index !== undefined) {
+    const activeMarkdown = markdown.slice(0, archiveMatch.index);
+    const archivedMarkdown = markdown.slice(archiveMatch.index + archiveMatch[0].length);
 
+    const activeItems = parseAgentContextBlock(activeMarkdown, false);
+    const archivedItems = parseAgentContextBlock(archivedMarkdown, true);
+    return [...activeItems, ...archivedItems];
+  }
+
+  return parseAgentContextBlock(markdown, false);
+}
+
+/**
+ * Parses AGENT_CONTEXT.md into separated active and archived item lists
+ */
+export function parseAgentContextWithArchive(markdown: string): { items: AgentContextItem[]; archivedItems: AgentContextItem[] } {
+  const archiveMatch = markdown.match(/^\s*<!--\s*ARCHIVE\s*-->/im);
+  if (archiveMatch && archiveMatch.index !== undefined) {
+    const activeMarkdown = markdown.slice(0, archiveMatch.index);
+    const archivedMarkdown = markdown.slice(archiveMatch.index + archiveMatch[0].length);
+
+    const items = parseAgentContextBlock(activeMarkdown, false);
+    const archivedItems = parseAgentContextBlock(archivedMarkdown, true);
+    return { items, archivedItems };
+  }
+
+  const items = parseAgentContextBlock(markdown, false);
+  return { items, archivedItems: [] };
+}
+
+/**
+ * Helper to serialize a list of AgentContextItems into markdown sections
+ */
+function serializeAgentContextItemsList(items: AgentContextItem[]): string {
+  let md = '';
   for (const item of items) {
     if (item.isUnordered) {
       md += `### ${item.title}\n\n`;
@@ -376,6 +484,30 @@ export function serializeAgentContextMarkdown(items: AgentContextItem[]): string
     }
 
     md += `---\n\n`;
+  }
+  return md.trim();
+}
+
+/**
+ * Serializes AgentContextItem array back to AGENT_CONTEXT.md format, optionally including archived briefs
+ */
+export function serializeAgentContextMarkdown(
+  items: AgentContextItem[],
+  archivedItems: AgentContextItem[] = []
+): string {
+  let md = `# TODO context — the verbose half of \`TODO.md\`\n\n`;
+  md += `\`TODO.md\` is the **human** view: the ask in Konur's words, scannable in seconds, with at most a one-line \`DONE:\` per finished item. This file is the **agent** view: the full overview for an item before it's built, mid-task build & verification notes, and the completion record of what was built and where the task stands.\n\n`;
+  md += `Rules of the split:\n- Sections here mirror \`TODO.md\` **by item number and title** — same numbers, same order.\n- Not every item needs a section here — only ones that have been fleshed out or worked.\n- Verbosity is fine here. It lives here and only here.\n\n---\n\n`;
+
+  const active = items.filter((i) => !i.isArchived);
+  const explicitArchived = items.filter((i) => i.isArchived);
+  const allArchived = [...explicitArchived, ...archivedItems];
+
+  md += serializeAgentContextItemsList(active);
+
+  if (allArchived.length > 0) {
+    const archiveMd = serializeAgentContextItemsList(allArchived);
+    md = md.trim() + `\n\n${ARCHIVE_DELIMITER}\n\n${archiveMd}\n\n---`;
   }
 
   return md.trim();

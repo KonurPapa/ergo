@@ -15,6 +15,7 @@ import Typography from '@tiptap/extension-typography';
 import { Markdown } from 'tiptap-markdown';
 import { stripHeaderComments } from '../lib/parser';
 import { HumanAiAssistantModal } from './HumanAiAssistantModal';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state';
@@ -45,6 +46,13 @@ import {
   Undo2,
   Redo2,
   Type,
+  ChevronDown,
+  Archive,
+  Trash2,
+  RotateCcw,
+  AlertTriangle,
+  AlertCircle,
+  X,
 } from 'lucide-react';
 
 interface WithMarkdownStorage {
@@ -494,6 +502,7 @@ const AutoCardListExtension = Extension.create({
 interface TaskPaneProps {
   rawMarkdown: string;
   tasks: TaskItemType[];
+  archivedTasks?: TaskItemType[];
   selectedTaskId?: number | null;
   runningTaskIds?: number[];
   onSelectTask?: (taskId: number) => void;
@@ -506,6 +515,9 @@ interface TaskPaneProps {
   aiConfig?: AIProviderConfig;
   mcpServers?: MCPServer[];
   onApplyAssistantResult?: (result: HumanAiAssistantResult, confirmedDeletions: boolean) => void;
+  onArchiveTask?: (taskTitle: string) => void;
+  onUnarchiveTask?: (taskId: number) => void;
+  onDeleteArchivedTask?: (taskId: number) => void;
 }
 
 // Module-level persistent Set to remember collapsed cards across re-renders
@@ -539,6 +551,7 @@ const Sep = () => <div className="tiptap-toolbar-sep" />;
 export const TaskPane: React.FC<TaskPaneProps> = ({
   rawMarkdown,
   tasks,
+  archivedTasks = [],
   selectedTaskId,
   runningTaskIds = [],
   onSelectTask,
@@ -551,6 +564,9 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   aiConfig,
   mcpServers = [],
   onApplyAssistantResult = () => {},
+  onArchiveTask,
+  onUnarchiveTask,
+  onDeleteArchivedTask,
 }) => {
   const selectedTaskIdRef = React.useRef(selectedTaskId);
   selectedTaskIdRef.current = selectedTaskId;
@@ -563,6 +579,12 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
 
   const onSelectTaskRef = React.useRef(onSelectTask);
   onSelectTaskRef.current = onSelectTask;
+
+  const onArchiveTaskRef = React.useRef(onArchiveTask);
+  onArchiveTaskRef.current = onArchiveTask;
+
+  const [isArchiveOpen, setIsArchiveOpen] = useState(false);
+  const [taskToDelete, setTaskToDelete] = useState<TaskItemType | null>(null);
 
   // Track assistant drawer height dynamically to ensure task list is fully scrollable above the panel
   const [assistantDrawerHeight, setAssistantDrawerHeight] = React.useState<number>(0);
@@ -835,7 +857,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                   if (isSelected || isRunning) {
                     const cardActionsWidget = Decoration.widget(
                       pos + 1,
-                      (view, getPos) => {
+                      (_view, getPos) => {
                         const container = document.createElement('div');
                         container.className = 'card-actions-wrapper';
                         container.setAttribute('contenteditable', 'false');
@@ -874,40 +896,34 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                             }
                           });
 
-                          // Delete task card button
-                          const deleteBtn = document.createElement('button');
-                          deleteBtn.className = 'card-action-btn card-delete-task-btn';
-                          deleteBtn.setAttribute('contenteditable', 'false');
-                          deleteBtn.type = 'button';
-                          deleteBtn.title = 'Delete task';
-                          deleteBtn.setAttribute('aria-label', 'Delete task');
-                          deleteBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>`;
+                          // Archive task card button
+                          const archiveBtn = document.createElement('button');
+                          archiveBtn.className = 'card-action-btn card-archive-task-btn';
+                          archiveBtn.setAttribute('contenteditable', 'false');
+                          archiveBtn.type = 'button';
+                          archiveBtn.title = 'Archive task';
+                          archiveBtn.setAttribute('aria-label', 'Archive task');
+                          archiveBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>`;
 
-                          deleteBtn.addEventListener('mousedown', (e) => {
+                          archiveBtn.addEventListener('mousedown', (e) => {
                             e.preventDefault();
                             e.stopPropagation();
                           });
 
-                          deleteBtn.addEventListener('click', (e) => {
+                          archiveBtn.addEventListener('click', (e) => {
                             e.preventDefault();
                             e.stopPropagation();
                             collapsedCardsState.delete(cardKey);
-                            const widgetPos = typeof getPos === 'function' ? getPos() : pos + 1;
-                            if (widgetPos == null) return;
-                            const listItemPos = Number(widgetPos) - 1;
 
-                            const liveDoc = view.state.doc;
-                            const liveNode = liveDoc.nodeAt(listItemPos);
-                            if (!liveNode || liveNode.type.name !== 'listItem') return;
-
-                            const tr = view.state.tr;
-                            tr.delete(listItemPos, listItemPos + liveNode.nodeSize);
-                            view.dispatch(tr);
-                            view.focus();
+                            if (onArchiveTaskRef.current) {
+                              // Read the title from the live node text — more reliable than a stale numeric ID
+                              const liveTitle = firstBlockNode?.textContent?.trim() || '';
+                              onArchiveTaskRef.current(liveTitle);
+                            }
                           });
 
                           container.appendChild(addBtn);
-                          container.appendChild(deleteBtn);
+                          container.appendChild(archiveBtn);
                         }
 
                         return container;
@@ -1291,7 +1307,158 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
         }}
       >
         <EditorContent editor={editor} className="tiptap-editor-root" />
+
+        {/* ── Collapsible Archive Panel at bottom of scrollable content ── */}
+        <div className="archive-collapsible-panel">
+          <button
+            type="button"
+            className={`archive-panel-header ${isArchiveOpen ? 'open' : ''}`}
+            onClick={() => setIsArchiveOpen((prev) => !prev)}
+            title={isArchiveOpen ? 'Collapse archive panel' : 'Expand archive panel'}
+          >
+            <div className="archive-panel-header-left">
+              <Archive size={15} className="archive-icon" />
+              <span className="archive-panel-title">Archive</span>
+              <span className="archive-count-badge">
+                {archivedTasks.length} {archivedTasks.length === 1 ? 'task' : 'tasks'}
+              </span>
+            </div>
+            <ChevronDown size={15} className={`archive-chevron ${isArchiveOpen ? 'open' : ''}`} />
+          </button>
+
+          {isArchiveOpen && (
+            <div className="archive-panel-content">
+              {archivedTasks.length === 0 ? (
+                <div className="archive-empty-state">
+                  <span>No archived tasks</span>
+                </div>
+              ) : (
+                <div className="archived-tasks-list">
+                  {archivedTasks.map((task) => (
+                    <div key={task.id} className="archived-task-card">
+                      <div className="archived-task-checkbox-col">
+                        <div
+                          className={`task-ui-checkbox parent-checkbox ${task.isDone ? 'checked' : ''}`}
+                          style={{ cursor: 'default', pointerEvents: 'none' }}
+                        >
+                          {task.isDone && (
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          )}
+                        </div>
+                      </div>
+                      <div className="archived-task-main">
+                        <div className="archived-task-title-row">
+                          <MarkdownRenderer
+                            content={task.isDone ? `~~${task.title}~~` : task.title}
+                            inline={true}
+                            className={`archived-task-title ${task.isDone ? 'is-done' : ''}`}
+                          />
+                          {task.category && task.category !== 'Archive' && task.category !== 'Untitled' && (
+                            <span className="archived-task-category-pill">{task.category}</span>
+                          )}
+                        </div>
+                        {task.subtasks && task.subtasks.length > 0 && (
+                          <div className="archived-subtasks-list">
+                            {task.subtasks.map((st) => (
+                              <div key={st.id} className="archived-subtask-item">
+                                <span className="archived-bullet">•</span>
+                                {st.isHumanReview && (
+                                  <span
+                                    className="human-review-tag"
+                                    style={{
+                                      fontSize: '0.68rem',
+                                      padding: '0.05rem 0.35rem',
+                                      borderRadius: '3px',
+                                      background: 'rgba(139, 92, 246, 0.15)',
+                                      color: 'var(--accent-violet)',
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    human review
+                                  </span>
+                                )}
+                                <MarkdownRenderer
+                                  content={st.isDone ? `~~${st.text}~~` : st.text}
+                                  inline={true}
+                                  className={st.isDone ? 'is-done' : ''}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="archived-task-actions">
+                        <button
+                          type="button"
+                          className="archived-action-btn unarchive-btn"
+                          title="Unarchive task"
+                          onClick={() => onUnarchiveTask?.(task.id)}
+                        >
+                          <RotateCcw size={12} />
+                          <span>Unarchive</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="archived-action-btn delete-btn"
+                          title="Delete task permanently"
+                          onClick={() => setTaskToDelete(task)}
+                        >
+                          <Trash2 size={12} />
+                          <span>Delete</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* ── Task Permanent Deletion Context Warning Modal ── */}
+      {taskToDelete && (
+        <div className="modal-overlay" onClick={() => setTaskToDelete(null)}>
+          <div className="modal-card archive-delete-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-rose)' }}>
+                <AlertTriangle size={18} />
+                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Delete Task Permanently?</h3>
+              </div>
+              <button type="button" className="btn-icon" onClick={() => setTaskToDelete(null)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="modal-body" style={{ padding: '1rem 1.25rem', fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
+              <p style={{ margin: 0, marginBottom: '0.75rem' }}>
+                Are you sure you want to permanently delete <strong>"{taskToDelete.title}"</strong>?
+              </p>
+              <div className="archive-delete-warning-box">
+                <AlertCircle size={15} style={{ flexShrink: 0, color: 'var(--accent-rose)' }} />
+                <span>If you proceed with deleting this task, the AI will lose context for it.</span>
+              </div>
+            </div>
+            <div className="modal-footer" style={{ padding: '0.75rem 1.25rem', display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setTaskToDelete(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                style={{ background: 'var(--accent-rose)', color: '#fff' }}
+                onClick={() => {
+                  onDeleteArchivedTask?.(taskToDelete.id);
+                  setTaskToDelete(null);
+                }}
+              >
+                Delete Task
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Human AI Assistant Slide-up Bar / Drawer ── */}
       {project && aiConfig && (
@@ -1324,7 +1491,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
           onClick={isAssistantOpen ? onCloseAssistant : onOpenDraftModal}
           title={isAssistantOpen ? 'Close Human AI Assistant' : 'Activate Human AI Assistant: Task mode (flesh out single task) or Architect mode (plan multi-task roadmap)'}
         >
-          <Sparkles size={16} />
+          {isAssistantOpen ? <ChevronDown size={16} /> : <Sparkles size={16} />}
           <span>{isAssistantOpen ? 'Hide Assistant' : 'AI Assistant'}</span>
         </button>
       </div>
