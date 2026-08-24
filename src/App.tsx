@@ -8,11 +8,13 @@ import {
   type UserApiKey,
   type FolderMetadata,
   type CliAgentConfig,
+  type CliAgentSetup,
   type TerminalSession,
   type HumanAiAssistantResult,
   type SpawnedSession,
   type ExecutionStep,
-  type McpToolPermissionPrompt
+  type McpToolPermissionPrompt,
+  type HumanInputPrompt
 } from './types';
 
 import { INITIAL_PROJECTS, createNewProjectData, INITIAL_MCP_SERVERS } from './lib/demoData';
@@ -142,6 +144,8 @@ export function App() {
   // ─── CLI Agent Terminal State ───────────────────────────────────────────────────────
   // CLI agent config (command + flags), persisted to config/secrets.json
   const [cliAgentConfig, setCliAgentConfig] = useState<CliAgentConfig | null>(null);
+  const [cliAgents, setCliAgents] = useState<CliAgentSetup[]>([]);
+  const [activeCliAgentId, setActiveCliAgentId] = useState<string | null>(null);
   // Live spawned terminal sessions, one per task
   const [terminalSessions, setTerminalSessions] = useState<SpawnedSession[]>([]);
   const [_activeTerminalTaskId, setActiveTerminalTaskId] = useState<number | null>(null);
@@ -159,6 +163,12 @@ export function App() {
         }
         if (res.secrets?.cliAgent) {
           setCliAgentConfig(res.secrets.cliAgent);
+        }
+        if (res.secrets?.cliAgents && Array.isArray(res.secrets.cliAgents)) {
+          setCliAgents(res.secrets.cliAgents);
+        }
+        if (res.secrets?.activeCliAgentId !== undefined) {
+          setActiveCliAgentId(res.secrets.activeCliAgentId);
         }
 
 
@@ -208,8 +218,10 @@ export function App() {
       updatedAt: new Date().toISOString(),
       userApiKeys,
       cliAgent: cliAgentConfig ?? undefined,
+      cliAgents,
+      activeCliAgentId,
     });
-  }, [userApiKeys, cliAgentConfig]);
+  }, [userApiKeys, cliAgentConfig, cliAgents, activeCliAgentId]);
 
 
   // Active AI Provider Config
@@ -280,6 +292,7 @@ export function App() {
   const [executingTaskId, setExecutingTaskId] = useState<number | null>(null);
   const [taskExecutionSteps, setTaskExecutionSteps] = useState<Record<number, ExecutionStep[]>>({});
   const [pendingPermissions, setPendingPermissions] = useState<Record<number, { prompt: McpToolPermissionPrompt; resolve: (approved: boolean) => void }>>({});
+  const [pendingHumanInputs, setPendingHumanInputs] = useState<Record<number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>>({});
 
 
   // Folder management handlers
@@ -381,6 +394,65 @@ export function App() {
 
   const handleSelectUserKey = (keyId: string | null) => {
     setActiveKeyId(keyId);
+  };
+
+  // Handlers for CLI Coding Agent Setups
+  const handleSaveCliAgentSetup = (setupData: Omit<CliAgentSetup, 'id'> & { id?: string }) => {
+    let savedId = setupData.id;
+    if (savedId) {
+      // Edit existing setup
+      setCliAgents((prev) =>
+        prev.map((a) => (a.id === savedId ? { ...a, ...setupData, id: savedId! } : a))
+      );
+    } else {
+      // Add new setup
+      savedId = `agent_${Date.now()}`;
+      const newSetup: CliAgentSetup = {
+        ...setupData,
+        id: savedId,
+        createdAt: new Date().toISOString()
+      };
+      setCliAgents((prev) => [...prev, newSetup]);
+    }
+    setActiveCliAgentId(savedId);
+  };
+
+  const handleDeleteCliAgentSetup = (id: string) => {
+    setCliAgents((prev) => prev.filter((a) => a.id !== id));
+    if (activeCliAgentId === id) {
+      const remaining = cliAgents.filter((a) => a.id !== id);
+      if (remaining.length > 0) {
+        setActiveCliAgentId(remaining[0].id);
+        setCliAgentConfig({
+          id: remaining[0].id,
+          name: remaining[0].name,
+          presetId: remaining[0].presetId,
+          command: remaining[0].command,
+          extraArgs: remaining[0].extraArgs,
+        });
+      } else {
+        setActiveCliAgentId(null);
+        setCliAgentConfig(null);
+      }
+    }
+  };
+
+  const handleSelectActiveCliAgent = (agentId: string | null) => {
+    setActiveCliAgentId(agentId);
+    if (agentId) {
+      const found = cliAgents.find((a) => a.id === agentId);
+      if (found) {
+        setCliAgentConfig({
+          id: found.id,
+          name: found.name,
+          presetId: found.presetId,
+          command: found.command,
+          extraArgs: found.extraArgs,
+        });
+      }
+    } else {
+      setCliAgentConfig(null);
+    }
   };
 
   const handleOpenAiScreen = () => {
@@ -703,16 +775,21 @@ export function App() {
   const handleExecuteTask = async (task: TaskItem) => {
     setSelectedTaskId(task.id);
 
-    // If using in-place AI execution (no CLI agent configured), verify active API key
+    // If using in-place AI execution (no CLI agent configured), verify active AI configuration
     if (!cliAgentConfig?.command) {
       const activeKey = userApiKeys.find((k) => k.id === activeKeyId);
-      const hasValidKey = !!(activeKey && activeKey.apiKey && activeKey.apiKey.trim().length > 0);
+      const pMeta = activeKey ? SUPPORTED_AI_PROVIDERS.find((p) => p.id === activeKey.provider) : undefined;
+      const requiresKey = pMeta ? pMeta.requiresKey : true;
+      const hasValidKey = !!(
+        activeKey &&
+        (!requiresKey || (activeKey.apiKey && activeKey.apiKey.trim().length > 0))
+      );
 
       if (!hasValidKey) {
         showToast({
           type: 'warning',
           title: 'AI API Key Required',
-          message: 'No active AI API key selected. Please select or add an API key to execute tasks with AI.',
+          message: 'No active AI provider or API key selected. Please select or add an AI provider configuration to execute tasks with AI.',
           actionLabel: 'Set Up Key',
           onAction: () => setIsAiScreenOpen(true),
           duration: 6000,
@@ -801,6 +878,14 @@ export function App() {
                 [task.id]: { prompt: permissionPrompt, resolve },
               }));
             });
+          },
+          (humanInputPrompt) => {
+            return new Promise<string>((resolve) => {
+              setPendingHumanInputs((prev) => ({
+                ...prev,
+                [task.id]: { prompt: humanInputPrompt, resolve },
+              }));
+            });
           }
         );
 
@@ -818,6 +903,11 @@ export function App() {
         console.error('Task execution error:', err);
       } finally {
         setExecutingTaskId((cur) => (cur === task.id ? null : cur));
+        setPendingHumanInputs((prev) => {
+          const next = { ...prev };
+          delete next[task.id];
+          return next;
+        });
       }
     }
   };
@@ -827,6 +917,18 @@ export function App() {
     if (pending) {
       pending.resolve(approved);
       setPendingPermissions((prev) => {
+        const next = { ...prev };
+        delete next[taskId];
+        return next;
+      });
+    }
+  };
+
+  const handleHumanInputChoice = (taskId: number, answer: string) => {
+    const pending = pendingHumanInputs[taskId];
+    if (pending) {
+      pending.resolve(answer);
+      setPendingHumanInputs((prev) => {
         const next = { ...prev };
         delete next[taskId];
         return next;
@@ -1273,6 +1375,7 @@ export function App() {
             archivedTasks={archivedTasks}
             selectedTaskId={selectedTaskId}
             runningTaskIds={runningTaskIds}
+            pendingHumanInputs={pendingHumanInputs}
             onSelectTask={(id) => setSelectedTaskId(id)}
             onOpenDraftModal={() => setIsDraftModalOpen(true)}
             onMarkdownChange={handleRawTodoEdit}
@@ -1322,7 +1425,9 @@ export function App() {
             executingTaskId={executingTaskId}
             taskExecutionSteps={taskExecutionSteps}
             pendingPermissions={pendingPermissions}
+            pendingHumanInputs={pendingHumanInputs}
             onPermissionChoice={handlePermissionChoice}
+            onHumanInputChoice={handleHumanInputChoice}
             onSessionExit={handleSessionExit}
             onRestartSession={handleExecuteTask}
             onKillSession={handleKillSession}
@@ -1369,6 +1474,11 @@ export function App() {
         onAddCustomServer={(newServer) => setMcpServers([...mcpServers, newServer])}
         cliAgentConfig={cliAgentConfig}
         onSaveCliAgent={(config) => setCliAgentConfig(config)}
+        cliAgents={cliAgents}
+        activeCliAgentId={activeCliAgentId}
+        onSaveCliAgentSetup={handleSaveCliAgentSetup}
+        onDeleteCliAgentSetup={handleDeleteCliAgentSetup}
+        onSelectActiveCliAgent={handleSelectActiveCliAgent}
       />
 
 

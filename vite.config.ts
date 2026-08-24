@@ -584,12 +584,14 @@ function ergoFileSystemPlugin(): Plugin {
           const configDir = path.resolve(storageDir, 'config');
           const rootsFile = path.join(configDir, 'roots.json');
           let roots = [
-            { id: 'root-default', path: storageDir, name: 'Home Ergo Root (~/.ergo)', isDefault: true },
-            { id: 'root-workspace', path: process.cwd(), name: 'Workspace Folder', isDefault: false }
+            { id: 'root-default', path: storageDir, name: 'Home Ergo Root (~/.ergo)', isDefault: true }
           ];
           try {
             const content = await fs.readFile(rootsFile, 'utf-8');
-            roots = JSON.parse(content);
+            const parsed = JSON.parse(content);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              roots = parsed;
+            }
           } catch {}
           return sendJson(res, 200, { success: true, roots });
         } catch (err: any) {
@@ -611,6 +613,79 @@ function ergoFileSystemPlugin(): Plugin {
         }
       }
 
+      // ─────────────────────────────────────────────────────────────
+      // File Open in IDE / System Opener Endpoint
+      // ─────────────────────────────────────────────────────────────
+
+      if (url === '/api/files/open' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const { filePath, line, column, openInIde } = body;
+          if (!filePath || typeof filePath !== 'string') {
+            return sendJson(res, 400, { error: 'filePath is required' });
+          }
+
+          let target = filePath.trim();
+          if (target.startsWith('file://')) {
+            target = target.replace(/^file:\/\//, '');
+          }
+          if (target.startsWith('~')) {
+            target = path.join(os.homedir(), target.slice(1));
+          }
+          if (!path.isAbsolute(target)) {
+            target = path.resolve(storageDir, target);
+          }
+
+          let fileStat: any = null;
+          try {
+            fileStat = await fs.stat(target);
+          } catch {
+            return sendJson(res, 404, { error: `File not found: ${filePath}`, resolvedPath: target });
+          }
+
+          const { exec } = await import('child_process');
+          const targetWithLine = line ? `${target}:${line}${column ? `:${column}` : ''}` : target;
+          let opened = false;
+          let methodUsed = '';
+
+          const isCodeFile = /\.(ts|tsx|js|jsx|json|py|rs|go|c|cpp|h|css|html|md|toml|yaml|yml|sh|sql)$/i.test(target);
+          const ideCommands = ['code', 'cursor', 'webstorm', 'subl', 'gedit', 'kate', 'notepad'];
+
+          if (openInIde || isCodeFile) {
+            for (const cmd of ideCommands) {
+              try {
+                exec(`${cmd} "${targetWithLine}"`, () => {});
+                opened = true;
+                methodUsed = cmd;
+                break;
+              } catch {}
+            }
+          }
+
+          if (!opened) {
+            const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start ""' : 'xdg-open';
+            try {
+              exec(`${opener} "${target}"`, () => {});
+              opened = true;
+              methodUsed = opener;
+            } catch (openErr: any) {
+              console.warn('[Ergo File Open] Could not launch system opener:', openErr);
+            }
+          }
+
+          return sendJson(res, 200, {
+            success: true,
+            opened,
+            methodUsed,
+            filePath,
+            resolvedPath: target,
+            isDirectory: fileStat.isDirectory()
+          });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
       if (url === '/api/mcp/tools/call' && req.method === 'POST') {
         try {
           const body = await parseJsonBody(req);
@@ -622,24 +697,39 @@ function ergoFileSystemPlugin(): Plugin {
 
           // 1. Filesystem MCP Harness
           if (serverId === 'mcp-filesystem' || toolName === 'read_file' || toolName === 'write_file' || toolName === 'list_directory' || toolName === 'create_directory' || toolName === 'search_files' || toolName === 'get_file_info') {
-            const targetPath = args.path || args.filePath || '';
-            const fullPath = path.isAbsolute(targetPath) ? targetPath : path.resolve(storageDir, targetPath);
+            let targetPath = (args.path || args.filePath || '').trim();
+            if (targetPath.startsWith('~')) {
+              targetPath = path.join(os.homedir(), targetPath.slice(1));
+            }
+            const fullPath = path.isAbsolute(targetPath) ? path.resolve(targetPath) : path.resolve(storageDir, targetPath);
 
-            // Safe Roots boundary check
+            // Safe Roots boundary check - strictly storageDir (~/.ergo) + user's explicit allowed folders
             const configDir = path.resolve(storageDir, 'config');
-            let allowedRoots = [storageDir, process.cwd(), os.homedir()];
+            let allowedRoots = [path.resolve(storageDir)];
             try {
               const rootsContent = await fs.readFile(path.join(configDir, 'roots.json'), 'utf-8');
               const parsedRoots = JSON.parse(rootsContent);
               if (Array.isArray(parsedRoots)) {
-                allowedRoots = parsedRoots.map((r: any) => path.resolve(r.path));
+                for (const r of parsedRoots) {
+                  let p = (r.path || '').trim();
+                  if (!p) continue;
+                  if (p.startsWith('~')) p = path.join(os.homedir(), p.slice(1));
+                  const resolvedRoot = path.resolve(p);
+                  if (!allowedRoots.includes(resolvedRoot)) {
+                    allowedRoots.push(resolvedRoot);
+                  }
+                }
               }
             } catch {}
 
-            const isAllowed = allowedRoots.some((root) => fullPath.startsWith(root));
+            const isAllowed = allowedRoots.some((root) => {
+              const normRoot = path.resolve(root);
+              return fullPath === normRoot || fullPath.startsWith(normRoot + path.sep);
+            });
+
             if (!isAllowed) {
               return sendJson(res, 403, {
-                error: `Access denied: "${targetPath}" is outside allowed MCP Roots boundaries.`
+                error: `Access denied: "${targetPath}" is outside approved folder boundaries. The AI is restricted to write only within ~/.ergo or folders explicitly permitted under Connections -> Allowed Folders.`
               });
             }
 

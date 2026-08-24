@@ -6,10 +6,11 @@ import {
   type AIProviderConfig,
   type MCPServer,
   type ExecutionStep,
-  type McpToolPermissionPrompt
+  type McpToolPermissionPrompt,
+  type HumanInputPrompt
 } from '../types';
 import { executeTaskWithAi } from '../lib/ai';
-import { Play, X, CheckCircle2, Loader2, Send, Layers, Code, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { Play, X, CheckCircle2, Loader2, Send, Layers, Code, ShieldAlert, ShieldCheck, HelpCircle } from 'lucide-react';
 
 interface ExecutionModalProps {
   isOpen: boolean;
@@ -40,6 +41,12 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
     prompt: McpToolPermissionPrompt;
     resolve: (approved: boolean) => void;
   } | null>(null);
+  const [pendingHumanInput, setPendingHumanInput] = useState<{
+    prompt: HumanInputPrompt;
+    resolve: (answer: string) => void;
+  } | null>(null);
+  const [selectedOption, setSelectedOption] = useState<string | null>(null);
+  const [customAnswer, setCustomAnswer] = useState('');
 
   useEffect(() => {
     if (isOpen && task && !isRunning && !isFinished) {
@@ -55,6 +62,9 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
     setIsFinished(false);
     setResultPayload(null);
     setPendingPermission(null);
+    setPendingHumanInput(null);
+    setSelectedOption(null);
+    setCustomAnswer('');
 
     try {
       const res = await executeTaskWithAi(
@@ -78,6 +88,11 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
           return new Promise<boolean>((resolve) => {
             setPendingPermission({ prompt: permissionPrompt, resolve });
           });
+        },
+        (humanInputPrompt) => {
+          return new Promise<string>((resolve) => {
+            setPendingHumanInput({ prompt: humanInputPrompt, resolve });
+          });
         }
       );
 
@@ -94,6 +109,22 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
     if (pendingPermission) {
       pendingPermission.resolve(approved);
       setPendingPermission(null);
+    }
+  };
+
+  const handleHumanInputSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (pendingHumanInput) {
+      const cleanCustom = customAnswer.trim();
+      const finalAnswer = cleanCustom
+        ? selectedOption
+          ? `${selectedOption} — ${cleanCustom}`
+          : cleanCustom
+        : selectedOption || 'Confirmed';
+      pendingHumanInput.resolve(finalAnswer);
+      setPendingHumanInput(null);
+      setSelectedOption(null);
+      setCustomAnswer('');
     }
   };
 
@@ -135,6 +166,72 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
               {brief?.brief?.slice(0, 140) || 'Executing task subtasks & logging build records to AGENT_CONTEXT.md.'}
             </p>
           </div>
+
+          {/* Interactive Human Clarification Prompt Card */}
+          {pendingHumanInput && (
+            <div className="ai-human-input-card" style={{ marginBottom: '1.25rem' }}>
+              <div className="ai-human-input-header">
+                <div className="ai-human-input-title">
+                  <HelpCircle size={17} color="var(--accent-amber)" />
+                  <span>Clarification Needed &bull; Builder AI</span>
+                </div>
+                <span className="ai-human-input-badge">Mid-Build Input</span>
+              </div>
+
+              <p className="ai-human-input-question">{pendingHumanInput.prompt.question}</p>
+
+              {pendingHumanInput.prompt.context && (
+                <div className="ai-human-input-context">
+                  <strong>Context:</strong> {pendingHumanInput.prompt.context}
+                </div>
+              )}
+
+              {pendingHumanInput.prompt.options && pendingHumanInput.prompt.options.length > 0 && (
+                <div className="ai-human-input-options">
+                  <div className="ai-human-input-options-label">Select an option:</div>
+                  <div className="ai-human-input-options-list">
+                    {pendingHumanInput.prompt.options.map((opt, idx) => {
+                      const isSelected = selectedOption === opt;
+                      return (
+                        <button
+                          key={idx}
+                          type="button"
+                          className={`ai-input-option-btn ${isSelected ? 'is-selected' : ''}`}
+                          onClick={() => setSelectedOption(isSelected ? null : opt)}
+                        >
+                          <span className="option-number">{idx + 1}</span>
+                          <span className="option-text">{opt}</span>
+                          {isSelected && <CheckCircle2 size={13} className="option-check-icon" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {(pendingHumanInput.prompt.allowFreeform !== false || !pendingHumanInput.prompt.options || pendingHumanInput.prompt.options.length === 0) && (
+                <form onSubmit={handleHumanInputSubmit} className="ai-human-input-form">
+                  <textarea
+                    className="ai-human-input-textarea"
+                    placeholder="Type your response or clarification here..."
+                    value={customAnswer}
+                    onChange={(e) => setCustomAnswer(e.target.value)}
+                    rows={2}
+                  />
+                  <div className="ai-human-input-actions">
+                    <button
+                      type="submit"
+                      className="btn btn-primary ai-human-input-submit-btn"
+                      disabled={!selectedOption && !customAnswer.trim()}
+                    >
+                      <Send size={13} />
+                      <span>Submit Response</span>
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          )}
 
           {/* Interactive MCP Permission Prompt Card */}
           {pendingPermission && (

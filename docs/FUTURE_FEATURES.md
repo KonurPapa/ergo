@@ -50,6 +50,9 @@
     - an undo button to revert back to the previous diff
         - how is this handled for non-code tasks?
         - maybe this starts out in V1 just for code
+    - **context-reading w/ fast AI**:
+        - instead of the default where the same powerful AI is doing both context-reading and the actual work, try to restructure the work so that it uses a fast model for acquiring all the context it needs to do the work, then immediately passing that context off the powerful AI to actually do the work
+        - this allows the powerful AI to focus on the actual task, rather than spending time/tokens on context-reading
 
 
 

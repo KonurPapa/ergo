@@ -1,5 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { type MCPServer, type McpRootBoundary, type CliAgentConfig, type CliAgentPreset } from '../types';
+import {
+  type MCPServer,
+  type McpRootBoundary,
+  type CliAgentConfig,
+  type CliAgentPreset,
+  type CliAgentSetup,
+} from '../types';
 
 import { getAllowedRoots, addAllowedRoot, removeAllowedRoot } from '../lib/mcpClient';
 import {
@@ -27,9 +33,10 @@ import {
   Check,
   CheckCircle2,
   ExternalLink,
+  Edit3,
+  Tag,
+  AlertTriangle,
 } from 'lucide-react';
-
-
 
 interface McpHubModalProps {
   isOpen: boolean;
@@ -41,6 +48,12 @@ interface McpHubModalProps {
   /** Persist CLI agent config when user clicks Save */
   cliAgentConfig: CliAgentConfig | null;
   onSaveCliAgent: (config: CliAgentConfig | null) => void;
+  /** List of saved preconfigured CLI agent setups */
+  cliAgents?: CliAgentSetup[];
+  activeCliAgentId?: string | null;
+  onSaveCliAgentSetup?: (setup: Omit<CliAgentSetup, 'id'> & { id?: string }) => void;
+  onDeleteCliAgentSetup?: (id: string) => void;
+  onSelectActiveCliAgent?: (id: string | null) => void;
 }
 
 
@@ -141,6 +154,11 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   onAddCustomServer,
   cliAgentConfig,
   onSaveCliAgent,
+  cliAgents = [],
+  activeCliAgentId = null,
+  onSaveCliAgentSetup,
+  onDeleteCliAgentSetup,
+  onSelectActiveCliAgent,
 }) => {
   const [activeTab, setActiveTab] = useState<'harnesses' | 'roots' | 'external' | 'cli'>('harnesses');
 
@@ -152,16 +170,44 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   const [newRootName, setNewRootName] = useState('');
 
   // CLI agent local state
+  const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
+  const [cliAgentName, setCliAgentName] = useState('');
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(cliAgentConfig?.presetId ?? null);
   const [cliCommand, setCliCommand] = useState(cliAgentConfig?.command ?? '');
   const [cliExtraArgs, setCliExtraArgs] = useState(cliAgentConfig?.extraArgs ?? '');
   const [cliSaved, setCliSaved] = useState(false);
+  const [agentPendingDelete, setAgentPendingDelete] = useState<CliAgentSetup | null>(null);
+
+  const resetCliForm = () => {
+    setEditingAgentId(null);
+    setCliAgentName('');
+    setSelectedPresetId('claude-code');
+    setCliCommand('claude');
+    setCliExtraArgs('');
+    setCliSaved(false);
+  };
+
+  const loadAgentForEditing = (agent: CliAgentSetup) => {
+    setEditingAgentId(agent.id);
+    setCliAgentName(agent.name);
+    setSelectedPresetId(agent.presetId ?? (CLI_AGENT_PRESETS.some((p) => p.command === agent.command) ? CLI_AGENT_PRESETS.find((p) => p.command === agent.command)!.id : 'custom'));
+    setCliCommand(agent.command);
+    setCliExtraArgs(agent.extraArgs || '');
+    setCliSaved(false);
+  };
 
   useEffect(() => {
     if (isOpen) {
       getAllowedRoots().then(setRoots);
+      if (!editingAgentId) {
+        setSelectedPresetId(cliAgentConfig?.presetId ?? (cliAgentConfig?.command ? (CLI_AGENT_PRESETS.find((p) => p.command === cliAgentConfig.command)?.id || 'custom') : null));
+        setCliAgentName(cliAgentConfig?.name ?? '');
+        setCliCommand(cliAgentConfig?.command ?? '');
+        setCliExtraArgs(cliAgentConfig?.extraArgs ?? '');
+        setCliSaved(false);
+      }
     }
-  }, [isOpen]);
+  }, [isOpen, cliAgentConfig]);
 
   if (!isOpen) return null;
 
@@ -677,101 +723,208 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                   <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff' }}>Native Agent Execution</span>
                 </div>
                 <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: '1.5' }}>
-                  When you click <strong style={{ color: '#fff' }}>Execute Task</strong>, Ergo spawns your chosen coding agent in a real PTY terminal inside the AI Workspace — identical to running it in your IDE's integrated terminal. No custom integrations needed: arrow-key prompts, colors, and interactive widgets all work natively.
+                  When you click <strong style={{ color: '#fff' }}>Execute Task</strong>, Ergo spawns your active coding agent in a real PTY terminal inside the AI Workspace — identical to running it in your IDE's integrated terminal. You can save multiple agent presets and switch between them anytime.
                 </p>
               </div>
 
-              {/* Preset cards */}
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                  <h4
+              {/* Form Card: Add / Edit CLI Agent Setup */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '-0.5rem' }}>
+                <h4
+                  style={{
+                    fontSize: '0.85rem',
+                    fontWeight: 700,
+                    color: 'var(--text-muted)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    margin: 0
+                  }}
+                >
+                  {editingAgentId ? 'Edit Coding Agent Setup' : 'Configure & Save Coding Agent'}
+                </h4>
+                {editingAgentId && (
+                  <button
+                    type="button"
+                    onClick={() => resetCliForm()}
                     style={{
-                      fontSize: '0.85rem',
-                      fontWeight: 700,
-                      color: 'var(--text-muted)',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.05em',
-                      margin: 0
+                      background: 'rgba(244, 63, 94, 0.1)',
+                      border: '1px solid rgba(244, 63, 94, 0.3)',
+                      color: 'var(--accent-rose)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '0.2rem 0.6rem',
+                      fontSize: '0.75rem',
+                      cursor: 'pointer',
+                      fontWeight: 600
                     }}
                   >
-                    Popular Agent Presets
-                  </h4>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '0.75rem' }}>
-                  {CLI_AGENT_PRESETS.map((preset) => {
-                    const isSelected = selectedPresetId === preset.id;
-                    return (
-                      <button
-                        key={preset.id}
-                        onClick={() => {
-                          setSelectedPresetId(preset.id);
-                          setCliCommand(preset.command);
-                          setCliExtraArgs(preset.defaultArgs);
-                          setCliSaved(false);
-                        }}
-                        style={{
-                          textAlign: 'left',
-                          background: isSelected ? 'rgba(6, 182, 212, 0.08)' : 'var(--bg-card)',
-                          border: `1px solid ${isSelected ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
-                          borderRadius: 'var(--radius-md)',
-                          padding: '0.85rem 1rem',
-                          cursor: 'pointer',
-                          transition: 'all 0.15s ease',
-                          position: 'relative',
-                        }}
-                      >
-                        {isSelected && (
-                          <span style={{ position: 'absolute', top: '0.65rem', right: '0.65rem' }}>
-                            <Check size={14} color="var(--accent-cyan)" />
-                          </span>
-                        )}
-                        <div style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff', marginBottom: '0.25rem' }}>{preset.label}</div>
-                        <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent-cyan)', marginBottom: '0.4rem' }}>{preset.command}{preset.defaultArgs ? ' ' + preset.defaultArgs : ''}</div>
-                        <p style={{ fontSize: '0.77rem', color: 'var(--text-muted)', lineHeight: '1.4', margin: 0 }}>{preset.description}</p>
-                        <a
-                          href={preset.docsUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', marginTop: '0.6rem', fontSize: '0.72rem', color: 'var(--accent-primary)', textDecoration: 'none' }}
-                        >
-                          <ExternalLink size={10} /> Docs
-                        </a>
-                      </button>
-                    );
-                  })}
-                </div>
+                    Cancel Edit
+                  </button>
+                )}
               </div>
 
-              {/* Custom / override fields */}
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                  <h4
-                    style={{
-                      fontSize: '0.85rem',
-                      fontWeight: 700,
-                      color: 'var(--text-muted)',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.05em',
-                      margin: 0
-                    }}
-                  >
-                    Command Configuration
-                  </h4>
+              <div
+                style={{
+                  background: 'var(--bg-dark)',
+                  border: editingAgentId ? '1px solid var(--accent-cyan)' : '1px solid var(--border-glow)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '1.25rem',
+                  boxShadow: editingAgentId ? '0 0 16px rgba(6, 182, 212, 0.15)' : 'none',
+                  transition: 'all 0.2s ease',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '1rem'
+                }}
+              >
+                {/* Preset cards selection */}
+                <div>
+                  <label className="input-label" style={{ marginBottom: '0.5rem' }}>
+                    Choose a Preset or Custom
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '0.75rem' }}>
+                    {CLI_AGENT_PRESETS.map((preset) => {
+                      const isSelected = selectedPresetId === preset.id;
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedPresetId(preset.id);
+                            setCliCommand(preset.command);
+                            setCliExtraArgs(preset.defaultArgs);
+                            if (!cliAgentName || CLI_AGENT_PRESETS.some((p) => p.label === cliAgentName) || cliAgentName === 'Custom Agent') {
+                              setCliAgentName(preset.label);
+                            }
+                            setCliSaved(false);
+                          }}
+                          style={{
+                            textAlign: 'left',
+                            background: isSelected ? 'rgba(6, 182, 212, 0.08)' : 'var(--bg-card)',
+                            border: `1px solid ${isSelected ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
+                            borderRadius: 'var(--radius-md)',
+                            padding: '0.85rem 1rem',
+                            cursor: 'pointer',
+                            transition: 'all 0.15s ease',
+                            position: 'relative',
+                          }}
+                        >
+                          {isSelected && (
+                            <span style={{ position: 'absolute', top: '0.65rem', right: '0.65rem' }}>
+                              <Check size={14} color="var(--accent-cyan)" />
+                            </span>
+                          )}
+                          <div style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff', marginBottom: '0.25rem' }}>{preset.label}</div>
+                          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent-cyan)', marginBottom: '0.4rem' }}>{preset.command}{preset.defaultArgs ? ' ' + preset.defaultArgs : ''}</div>
+                          <p style={{ fontSize: '0.77rem', color: 'var(--text-muted)', lineHeight: '1.4', margin: 0 }}>{preset.description}</p>
+                          <a
+                            href={preset.docsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', marginTop: '0.6rem', fontSize: '0.72rem', color: 'var(--accent-primary)', textDecoration: 'none' }}
+                          >
+                            <ExternalLink size={10} /> Docs
+                          </a>
+                        </button>
+                      );
+                    })}
+
+                    {/* Custom Command Card */}
+                    {(() => {
+                      const isCustomSelected = selectedPresetId === 'custom' || (!selectedPresetId && !!cliCommand.trim());
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedPresetId('custom');
+                            if (selectedPresetId && selectedPresetId !== 'custom') {
+                              setCliCommand('');
+                              setCliExtraArgs('');
+                            }
+                            if (!cliAgentName || CLI_AGENT_PRESETS.some((p) => p.label === cliAgentName)) {
+                              setCliAgentName('Custom Agent');
+                            }
+                            setCliSaved(false);
+                          }}
+                          style={{
+                            textAlign: 'left',
+                            background: isCustomSelected ? 'rgba(16, 185, 129, 0.08)' : 'var(--bg-card)',
+                            border: `1px dashed ${isCustomSelected ? 'var(--accent-emerald)' : 'var(--border-subtle)'}`,
+                            borderRadius: 'var(--radius-md)',
+                            padding: '0.85rem 1rem',
+                            cursor: 'pointer',
+                            transition: 'all 0.15s ease',
+                            position: 'relative',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'space-between'
+                          }}
+                        >
+                          {isCustomSelected && (
+                            <span style={{ position: 'absolute', top: '0.65rem', right: '0.65rem' }}>
+                              <Check size={14} color="var(--accent-emerald)" />
+                            </span>
+                          )}
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem' }}>
+                              <Code size={14} color={isCustomSelected ? "var(--accent-emerald)" : "var(--text-muted)"} />
+                              <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff' }}>Custom Command</span>
+                            </div>
+                            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent-emerald)', marginBottom: '0.4rem' }}>
+                              {cliCommand.trim() ? `${cliCommand}${cliExtraArgs.trim() ? ' ' + cliExtraArgs.trim() : ''}` : 'your-own-agent'}
+                            </div>
+                            <p style={{ fontSize: '0.77rem', color: 'var(--text-muted)', lineHeight: '1.4', margin: 0 }}>
+                              Run any custom terminal command, CLI agent (e.g. goose, cline, cursor-agent), or custom shell script.
+                            </p>
+                          </div>
+                          <div style={{ marginTop: '0.6rem', fontSize: '0.72rem', color: isCustomSelected ? 'var(--accent-emerald)' : 'var(--text-dim)', fontWeight: 600 }}>
+                            {isCustomSelected ? 'Custom active' : 'Click to configure'}
+                          </div>
+                        </button>
+                      );
+                    })()}
+                  </div>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem', marginBottom: '1rem' }}>
+
+                {/* Setup Name / Label */}
+                <div className="input-group" style={{ margin: 0 }}>
+                  <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
+                    <Tag size={13} color="var(--accent-cyan)" />
+                    <span style={{ fontWeight: 600, color: '#e2e8f0' }}>Configuration Label</span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>(Name to identify this agent setup)</span>
+                  </label>
+                  <input
+                    type="text"
+                    className="input-text"
+                    placeholder="e.g. Claude Code (Production), Aider Local, Custom Goose Agent..."
+                    value={cliAgentName}
+                    onChange={(e) => { setCliAgentName(e.target.value); setCliSaved(false); }}
+                  />
+                </div>
+
+                {/* Command & Flags Inputs */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
                   <div>
-                    <label className="input-label">Shell Command</label>
+                    <label className="input-label">
+                      Shell Command <span style={{ color: 'var(--accent-rose)' }}>*</span>
+                    </label>
                     <input
                       type="text"
                       className="input-text"
-                      placeholder="e.g. claude, agy, aider"
+                      placeholder="e.g. claude, agy, aider, goose, ./run-agent.sh"
                       value={cliCommand}
-                      onChange={(e) => { setCliCommand(e.target.value); setSelectedPresetId(null); setCliSaved(false); }}
+                      onChange={(e) => {
+                        setCliCommand(e.target.value);
+                        if (selectedPresetId && selectedPresetId !== 'custom') {
+                          const matching = CLI_AGENT_PRESETS.find((p) => p.command === e.target.value.trim());
+                          if (!matching) {
+                            setSelectedPresetId(null);
+                          }
+                        }
+                        setCliSaved(false);
+                      }}
                     />
                   </div>
                   <div>
-                    <label className="input-label">Extra Flags (optional)</label>
+                    <label className="input-label">Extra Flags / Arguments (optional)</label>
                     <input
                       type="text"
                       className="input-text"
@@ -782,39 +935,344 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                {/* Actions */}
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginTop: '0.25rem' }}>
                   <button
                     className="btn btn-primary"
                     disabled={!cliCommand.trim()}
                     onClick={() => {
+                      const finalName = cliAgentName.trim() || (selectedPresetId ? (CLI_AGENT_PRESETS.find((p) => p.id === selectedPresetId)?.label || 'Custom Agent') : 'Custom Agent');
+                      const resolvedPresetId = selectedPresetId ? (selectedPresetId === 'custom' ? undefined : selectedPresetId) : undefined;
+                      
+                      // Save to saved list if onSaveCliAgentSetup is provided
+                      if (onSaveCliAgentSetup) {
+                        onSaveCliAgentSetup({
+                          id: editingAgentId || undefined,
+                          name: finalName,
+                          presetId: resolvedPresetId,
+                          command: cliCommand.trim(),
+                          extraArgs: cliExtraArgs.trim(),
+                        });
+                      }
+
+                      // Also set as active config
                       const config: CliAgentConfig = {
-                        presetId: selectedPresetId ?? undefined,
+                        id: editingAgentId || undefined,
+                        name: finalName,
+                        presetId: resolvedPresetId,
                         command: cliCommand.trim(),
                         extraArgs: cliExtraArgs.trim(),
                       };
                       onSaveCliAgent(config);
                       setCliSaved(true);
+                      setEditingAgentId(null);
                     }}
                   >
                     <Check size={14} />
-                    <span>Save Agent Config</span>
+                    <span>{editingAgentId ? 'Update Agent Setup' : 'Save Agent Setup'}</span>
                   </button>
-                  {cliAgentConfig && (
+                  {editingAgentId ? (
                     <button
                       className="btn btn-secondary"
-                      style={{ color: 'var(--accent-rose)', fontSize: '0.8rem' }}
-                      onClick={() => { onSaveCliAgent(null); setCliCommand(''); setCliExtraArgs(''); setSelectedPresetId(null); setCliSaved(false); }}
+                      onClick={() => resetCliForm()}
                     >
-                      Clear
+                      Cancel
                     </button>
+                  ) : (
+                    cliAgentConfig && (
+                      <button
+                        className="btn btn-secondary"
+                        style={{ color: 'var(--accent-rose)', fontSize: '0.8rem' }}
+                        onClick={() => {
+                          onSaveCliAgent(null);
+                          if (onSelectActiveCliAgent) onSelectActiveCliAgent(null);
+                          setCliCommand('');
+                          setCliExtraArgs('');
+                          setCliAgentName('');
+                          setSelectedPresetId(null);
+                          setCliSaved(false);
+                        }}
+                      >
+                        Deactivate Agent
+                      </button>
+                    )
                   )}
                   {cliSaved && (
                     <span style={{ fontSize: '0.82rem', color: 'var(--accent-emerald)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                      <CheckCircle2 size={14} /> Saved
+                      <CheckCircle2 size={14} /> Saved & Activated
                     </span>
                   )}
                 </div>
               </div>
+
+              {/* Card 2: Saved Configured Coding Agents List */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                  <h4
+                    style={{
+                      fontSize: '0.85rem',
+                      fontWeight: 700,
+                      color: 'var(--text-muted)',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em',
+                      margin: 0
+                    }}
+                  >
+                    Configured Coding Agents ({cliAgents.length})
+                  </h4>
+                  {cliAgents.length > 0 && (
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      Click 'Set Active' to choose which agent runs on task execution
+                    </span>
+                  )}
+                </div>
+
+                {cliAgents.length === 0 ? (
+                  <div
+                    style={{
+                      padding: '1.5rem',
+                      textAlign: 'center',
+                      background: 'var(--bg-dark)',
+                      border: '1px dashed var(--border-subtle)',
+                      borderRadius: 'var(--radius-md)'
+                    }}
+                  >
+                    <Terminal size={28} color="var(--text-muted)" style={{ margin: '0 auto 0.5rem auto', opacity: 0.6 }} />
+                    <p style={{ fontSize: '0.84rem', color: '#fff', fontWeight: 600, margin: '0 0 0.25rem 0' }}>
+                      No coding agent setups saved yet
+                    </p>
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: 0 }}>
+                      Configure Claude Code, Antigravity (agy), Aider, Codex, or your own custom terminal command above and click Save.
+                    </p>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                    {cliAgents.map((agent) => {
+                      const isActive = activeCliAgentId === agent.id || (!activeCliAgentId && cliAgentConfig?.command === agent.command && (cliAgentConfig?.extraArgs || '') === (agent.extraArgs || ''));
+                      const isCurrentlyEditing = agent.id === editingAgentId;
+                      const preset = CLI_AGENT_PRESETS.find((p) => p.id === agent.presetId || p.command === agent.command);
+
+                      return (
+                        <div
+                          key={agent.id}
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.6rem',
+                            padding: '0.85rem 1rem',
+                            background: 'var(--bg-dark)',
+                            border: `1px solid ${isCurrentlyEditing
+                              ? 'var(--accent-cyan)'
+                              : isActive
+                                ? 'rgba(16, 185, 129, 0.4)'
+                                : 'var(--border-subtle)'
+                              }`,
+                            borderRadius: 'var(--radius-md)',
+                            boxShadow: isActive ? '0 0 10px rgba(16, 185, 129, 0.08)' : 'none',
+                            transition: 'all 0.15s ease'
+                          }}
+                        >
+                          {/* Top Row: Preset icon/name, Name, Active Badge & Action Buttons */}
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                              <div
+                                style={{
+                                  width: 28,
+                                  height: 28,
+                                  borderRadius: '6px',
+                                  background: preset ? (preset.badgeColor ? `${preset.badgeColor}22` : 'rgba(6, 182, 212, 0.15)') : 'rgba(16, 185, 129, 0.15)',
+                                  border: `1px solid ${preset?.badgeColor || 'var(--accent-emerald)'}`,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  flexShrink: 0
+                                }}
+                              >
+                                <Terminal size={14} color={preset?.badgeColor || 'var(--accent-emerald)'} />
+                              </div>
+                              <div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                  <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff' }}>{agent.name}</span>
+                                  <span
+                                    className="badge"
+                                    style={{
+                                      fontSize: '0.65rem',
+                                      padding: '0.1rem 0.4rem',
+                                      background: 'rgba(255, 255, 255, 0.06)',
+                                      color: '#cbd5e1',
+                                      borderColor: 'var(--border-subtle)'
+                                    }}
+                                  >
+                                    {preset?.label || 'Custom'}
+                                  </span>
+                                  {isActive && (
+                                    <span
+                                      className="badge badge-done"
+                                      style={{
+                                        fontSize: '0.65rem',
+                                        padding: '0.1rem 0.4rem',
+                                        background: 'rgba(16, 185, 129, 0.15)',
+                                        color: 'var(--accent-emerald)',
+                                        borderColor: 'rgba(16, 185, 129, 0.3)'
+                                      }}
+                                    >
+                                      Active Agent
+                                    </span>
+                                  )}
+                                </div>
+                                <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.76rem', color: 'var(--accent-cyan)', marginTop: '0.15rem' }}>
+                                  {agent.command} {agent.extraArgs ? <span style={{ color: 'var(--text-muted)' }}>{agent.extraArgs}</span> : null}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Actions on this setup */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                              {!isActive && (
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary"
+                                  style={{ fontSize: '0.74rem', padding: '0.25rem 0.6rem' }}
+                                  onClick={() => {
+                                    if (onSelectActiveCliAgent) {
+                                      onSelectActiveCliAgent(agent.id);
+                                    }
+                                    onSaveCliAgent({
+                                      id: agent.id,
+                                      name: agent.name,
+                                      presetId: agent.presetId,
+                                      command: agent.command,
+                                      extraArgs: agent.extraArgs,
+                                    });
+                                  }}
+                                >
+                                  Set Active
+                                </button>
+                              )}
+
+                              <button
+                                type="button"
+                                className="btn btn-secondary"
+                                style={{
+                                  fontSize: '0.74rem',
+                                  padding: '0.25rem 0.6rem',
+                                  background: isCurrentlyEditing ? 'rgba(6, 182, 212, 0.15)' : undefined,
+                                  borderColor: isCurrentlyEditing ? 'var(--accent-cyan)' : undefined,
+                                  color: isCurrentlyEditing ? 'var(--accent-cyan)' : undefined
+                                }}
+                                onClick={() => loadAgentForEditing(agent)}
+                                title="Edit this setup"
+                              >
+                                <Edit3 size={12} />
+                                <span>Edit</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                className="btn btn-secondary"
+                                style={{
+                                  fontSize: '0.74rem',
+                                  padding: '0.25rem 0.5rem',
+                                  color: 'var(--accent-rose)',
+                                  borderColor: 'rgba(244, 63, 94, 0.2)'
+                                }}
+                                onClick={() => setAgentPendingDelete(agent)}
+                                title="Delete this setup"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Delete Agent Setup Confirmation Modal */}
+              {agentPendingDelete && (
+                <div
+                  style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(0, 0, 0, 0.75)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 10000,
+                    backdropFilter: 'blur(3px)'
+                  }}
+                  onClick={() => setAgentPendingDelete(null)}
+                >
+                  <div
+                    style={{
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border-subtle)',
+                      borderRadius: 'var(--radius-md)',
+                      padding: '1.5rem',
+                      maxWidth: '420px',
+                      width: '90%',
+                      boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '1rem'
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                      <div
+                        style={{
+                          width: '32px',
+                          height: '32px',
+                          borderRadius: '8px',
+                          background: 'rgba(244, 63, 94, 0.15)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: 'var(--accent-rose)'
+                        }}
+                      >
+                        <AlertTriangle size={18} />
+                      </div>
+                      <h4 style={{ margin: 0, fontSize: '1rem', color: '#fff', fontWeight: 700 }}>
+                        Delete Agent Setup?
+                      </h4>
+                    </div>
+                    <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--text-muted)', lineHeight: '1.45' }}>
+                      Are you sure you want to delete <strong style={{ color: '#fff' }}>{agentPendingDelete.name}</strong> ({agentPendingDelete.command})? This cannot be undone.
+                    </p>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', marginTop: '0.25rem' }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => setAgentPendingDelete(null)}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        style={{ background: 'var(--accent-rose)', borderColor: 'var(--accent-rose)' }}
+                        onClick={() => {
+                          if (onDeleteCliAgentSetup) {
+                            onDeleteCliAgentSetup(agentPendingDelete.id);
+                          }
+                          if (editingAgentId === agentPendingDelete.id) {
+                            resetCliForm();
+                          }
+                          setAgentPendingDelete(null);
+                        }}
+                      >
+                        Delete Setup
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

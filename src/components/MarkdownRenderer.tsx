@@ -1,13 +1,15 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ExternalLink, CheckSquare, Square } from 'lucide-react';
+import { ExternalLink, CheckSquare, Square, FileCode } from 'lucide-react';
+import { openFileInIdeOrSystem } from '../lib/mcpClient';
 
 interface MarkdownRendererProps {
   content: string;
   className?: string;
   style?: React.CSSProperties;
   inline?: boolean;
+  onOpenFile?: (path: string) => void;
 }
 
 /**
@@ -18,7 +20,8 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   content,
   className = '',
   style,
-  inline = false
+  inline = false,
+  onOpenFile
 }) => {
   if (!content) return null;
 
@@ -54,18 +57,49 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
           del: ({ children }) => <del className="md-del">{children}</del>,
 
           // Links
-          a: ({ href, children }) => (
-            <a
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="md-link"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <span>{children}</span>
-              <ExternalLink size={11} style={{ opacity: 0.7 }} />
-            </a>
-          ),
+          a: ({ href, children }) => {
+            const isLocalFile = href && (
+              href.startsWith('file://') ||
+              href.startsWith('projects/') ||
+              href.startsWith('.ergo/') ||
+              href.startsWith('~/') ||
+              href.startsWith('./') ||
+              /\.(ts|tsx|js|jsx|json|py|rs|go|c|cpp|h|css|html|md|toml|yaml|yml|sh|sql)$/i.test(href)
+            );
+
+            const isExternalWeb = href && (href.startsWith('http://') || href.startsWith('https://'));
+
+            const handleClick = async (e: React.MouseEvent) => {
+              e.stopPropagation();
+              if (isLocalFile && !isExternalWeb) {
+                e.preventDefault();
+                if (onOpenFile) {
+                  onOpenFile(href);
+                } else {
+                  await openFileInIdeOrSystem(href);
+                }
+              }
+            };
+
+            return (
+              <a
+                href={href}
+                target={isExternalWeb ? '_blank' : undefined}
+                rel={isExternalWeb ? 'noopener noreferrer' : undefined}
+                className={`md-link ${isLocalFile ? 'md-file-link' : ''}`}
+                onClick={handleClick}
+                title={isLocalFile ? `Open ${href} in IDE / Editor` : undefined}
+              >
+                {isLocalFile && <FileCode size={12} className="md-file-icon" />}
+                <span>{children}</span>
+                {isExternalWeb ? (
+                  <ExternalLink size={11} style={{ opacity: 0.7 }} />
+                ) : isLocalFile ? (
+                  <span className="md-ide-tag">IDE</span>
+                ) : null}
+              </a>
+            );
+          },
 
           // Code blocks & inline code
           code: ({ className: codeClassName, children, ...props }) => {

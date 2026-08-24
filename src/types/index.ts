@@ -20,10 +20,12 @@ export interface TaskItem {
   isDone: boolean;
   subtasks: Subtask[];
   isHumanReview?: boolean;
+  needsInput?: boolean;
   mcpRequired?: string[]; // e.g. ['github', 'filesystem']
   summaryNote?: string;
   isArchived?: boolean;
   archivedAtIndex?: number; // 0-based index in the active list at time of archiving, for position-accurate restore
+  createdFiles?: string[];
 }
 
 export interface AgentContextItem {
@@ -35,6 +37,7 @@ export interface AgentContextItem {
   buildAndVerification: string;
   completion: string;
   isArchived?: boolean;
+  createdFiles?: string[];
   // Compatibility fields
   brief?: string;
   built?: string;
@@ -150,16 +153,26 @@ export interface ProjectData {
   connectedMcps: string[];
 }
 
+export interface HumanInputPrompt {
+  id: string;
+  taskId: number;
+  question: string;
+  options?: string[];
+  context?: string;
+  allowFreeform?: boolean;
+}
+
 export interface ExecutionStep {
   id: string;
   time: string;
-  stage: 'context' | 'mcp_call' | 'thinking' | 'execution' | 'built_record' | 'done';
+  stage: 'context' | 'mcp_call' | 'thinking' | 'execution' | 'human_input' | 'built_record' | 'done';
   title: string;
   detail: string;
   mcpToolUsed?: string;
   status: 'pending' | 'running' | 'success' | 'warning' | 'error';
   widgetType?: 'code_diff' | 'analytics_chart' | 'figma_preview' | 'slack_draft' | 'bluebeam_diff' | 'vscode_preview';
   widgetData?: any;
+  humanInputPrompt?: HumanInputPrompt;
 }
 
 export type RootFolderStatus = 'connected' | 'needs_permission' | 'disconnected' | 'server_fallback';
@@ -205,6 +218,8 @@ export interface AppSecrets {
   userApiKeys: UserApiKey[];
   mcpSecrets?: Record<string, McpSecretEntry>;
   cliAgent?: CliAgentConfig;
+  cliAgents?: CliAgentSetup[];
+  activeCliAgentId?: string | null;
 }
 
 // ─── CLI Coding Agent Types ──────────────────────────────────────────────────
@@ -220,8 +235,20 @@ export interface CliAgentPreset {
   badgeColor: string;  // CSS var or hex
 }
 
+/** A saved coding agent configuration preset/setup */
+export interface CliAgentSetup {
+  id: string;
+  name: string;
+  presetId?: string;   // If set, derived from a CliAgentPreset or 'custom'
+  command: string;     // Shell command to run, e.g. 'claude', 'agy', './my-agent.sh'
+  extraArgs: string;   // Extra flags, e.g. '--verbose'
+  createdAt?: string;
+}
+
 /** User-configured CLI agent that Ergo will spawn in a PTY. */
 export interface CliAgentConfig {
+  id?: string;
+  name?: string;
   presetId?: string;   // If set, derived from a CliAgentPreset
   command: string;     // Shell command to run, e.g. 'claude'
   extraArgs: string;   // Extra flags, e.g. '--verbose'

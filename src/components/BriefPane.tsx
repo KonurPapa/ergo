@@ -5,6 +5,7 @@ import {
   type SpawnedSession,
   type ExecutionStep,
   type McpToolPermissionPrompt,
+  type HumanInputPrompt
 } from '../types';
 import { AgentTerminal } from './AgentTerminal';
 import {
@@ -37,11 +38,132 @@ import {
   Trash2,
   AlertTriangle,
   AlertCircle,
+  HelpCircle,
+  Eye,
+  ExternalLink,
+  Check
 } from 'lucide-react';
 
 import { RichTextToolbar } from './RichTextToolbar';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { handleMarkdownAutoWrap } from '../lib/markdownEditorUtils';
+import { openFileInIdeOrSystem } from '../lib/mcpClient';
+
+interface HumanInputCardProps {
+  prompt: HumanInputPrompt;
+  onSubmit: (answer: string) => void;
+}
+
+const HumanInputCard: React.FC<HumanInputCardProps> = ({ prompt, onSubmit }) => {
+  const [selectedOption, setSelectedOption] = useState<string | null>(null);
+  const [customText, setCustomText] = useState('');
+
+  const handleSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const cleanCustom = customText.trim();
+    const finalAnswer = cleanCustom
+      ? selectedOption
+        ? `${selectedOption} — ${cleanCustom}`
+        : cleanCustom
+      : selectedOption || 'Confirmed';
+
+    if (finalAnswer) {
+      onSubmit(finalAnswer);
+    }
+  };
+
+  return (
+    <div className="ai-human-input-card">
+      <div className="ai-human-input-header">
+        <div className="ai-human-input-title">
+          <HelpCircle size={17} color="var(--accent-amber)" />
+          <span>Clarification Needed &bull; Builder AI</span>
+        </div>
+        <span className="ai-human-input-badge">Interactive Prompt</span>
+      </div>
+
+      <p className="ai-human-input-question">{prompt.question}</p>
+
+      {prompt.context && (
+        <div className="ai-human-input-context">
+          <strong>Context:</strong> {prompt.context}
+        </div>
+      )}
+
+      {prompt.options && prompt.options.length > 0 && (
+        <div className="ai-human-input-options">
+          <div className="ai-human-input-options-label">Select an option:</div>
+          <div className="ai-human-input-options-list">
+            {prompt.options.map((opt, idx) => {
+              const isSelected = selectedOption === opt;
+              return (
+                <button
+                  key={idx}
+                  type="button"
+                  className={`ai-input-option-btn ${isSelected ? 'is-selected' : ''}`}
+                  onClick={() => setSelectedOption(isSelected ? null : opt)}
+                >
+                  <span className="option-number">{idx + 1}</span>
+                  <span className="option-text">{opt}</span>
+                  {isSelected && <CheckCircle2 size={13} className="option-check-icon" />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {(prompt.allowFreeform !== false || !prompt.options || prompt.options.length === 0) && (
+        <form onSubmit={handleSubmit} className="ai-human-input-form">
+          <textarea
+            className="ai-human-input-textarea"
+            placeholder={
+              prompt.options && prompt.options.length > 0
+                ? 'Or type specific clarification / custom response...'
+                : 'Type your answer / clarification here...'
+            }
+            value={customText}
+            onChange={(e) => setCustomText(e.target.value)}
+            rows={2}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                handleSubmit();
+              }
+            }}
+          />
+          <div className="ai-human-input-actions">
+            <span className="ai-human-input-hint">
+              Press <strong>Ctrl+Enter</strong> or click Submit
+            </span>
+            <button
+              type="submit"
+              className="btn btn-primary ai-human-input-submit-btn"
+              disabled={!selectedOption && !customText.trim()}
+            >
+              <Send size={13} />
+              <span>Submit Response</span>
+            </button>
+          </div>
+        </form>
+      )}
+
+      {prompt.allowFreeform === false && prompt.options && prompt.options.length > 0 && (
+        <div className="ai-human-input-actions" style={{ marginTop: '0.75rem' }}>
+          <button
+            type="button"
+            className="btn btn-primary ai-human-input-submit-btn"
+            disabled={!selectedOption}
+            onClick={() => handleSubmit()}
+          >
+            <Send size={13} />
+            <span>Confirm Selection</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
 
 interface BriefPaneProps {
   tasks: TaskItem[];
@@ -65,7 +187,9 @@ interface BriefPaneProps {
   executingTaskId?: number | null;
   taskExecutionSteps?: Record<number, ExecutionStep[]>;
   pendingPermissions?: Record<number, { prompt: McpToolPermissionPrompt; resolve: (approved: boolean) => void }>;
+  pendingHumanInputs?: Record<number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>;
   onPermissionChoice?: (taskId: number, approved: boolean) => void;
+  onHumanInputChoice?: (taskId: number, answer: string) => void;
   onSessionExit?: (taskId: number, code: number) => void;
   onRestartSession?: (task: TaskItem) => void;
   onKillSession?: (taskId: number) => void;
@@ -80,6 +204,7 @@ interface AiTaskCardProps {
   isExecuting: boolean;
   executionSteps: ExecutionStep[];
   pendingPermission: McpToolPermissionPrompt | null;
+  pendingHumanInput: { prompt: HumanInputPrompt; resolve: (answer: string) => void } | null;
   onSelect: () => void;
   onSaveBrief: (updatedBrief: AgentContextItem) => void;
   onLiveBriefChange?: (updatedBrief: AgentContextItem) => void;
@@ -87,6 +212,7 @@ interface AiTaskCardProps {
   onUpdateBriefWithAi?: (task: TaskItem) => void;
   onSyncOverviewWithTask?: (task: TaskItem) => Promise<string | void>;
   onPermissionChoice?: (approved: boolean) => void;
+  onHumanInputChoice?: (answer: string) => void;
   onSessionExit?: (code: number) => void;
   onRestartSession?: (task: TaskItem) => void;
   onKillSession?: (taskId: number) => void;
@@ -101,6 +227,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   isExecuting,
   executionSteps,
   pendingPermission,
+  pendingHumanInput,
   onSelect,
   onSaveBrief,
   onLiveBriefChange,
@@ -108,6 +235,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   onUpdateBriefWithAi,
   onSyncOverviewWithTask,
   onPermissionChoice,
+  onHumanInputChoice,
   onSessionExit,
   onRestartSession,
   onKillSession,
@@ -119,6 +247,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   const [buildVerificationText, setBuildVerificationText] = useState('');
   const [completionText, setCompletionText] = useState('');
   const [viewModeSection2, setViewModeSection2] = useState<'auto' | 'notes' | 'terminal' | 'steps'>('auto');
+  const [openedFileFeedback, setOpenedFileFeedback] = useState<string | null>(null);
 
   const overviewRef = useRef<HTMLTextAreaElement>(null);
   const buildVerificationRef = useRef<HTMLTextAreaElement>(null);
@@ -126,6 +255,37 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   const [activeFocusedRef, setActiveFocusedRef] = useState<React.RefObject<HTMLTextAreaElement | null> | null>(null);
 
   const cardRef = useRef<HTMLDivElement>(null);
+
+  const createdFilesList = React.useMemo(() => {
+    const list: string[] = [];
+    if (Array.isArray(task.createdFiles)) {
+      for (const f of task.createdFiles) {
+        if (f && !list.includes(f)) list.push(f);
+      }
+    }
+    if (Array.isArray(brief?.createdFiles)) {
+      for (const f of brief.createdFiles) {
+        if (f && !list.includes(f)) list.push(f);
+      }
+    }
+    if (completionText) {
+      const fileRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+      let match;
+      while ((match = fileRegex.exec(completionText)) !== null) {
+        const target = match[2].trim();
+        const isFile =
+          target.startsWith('projects/') ||
+          target.startsWith('.ergo/') ||
+          target.startsWith('file://') ||
+          target.startsWith('~/') ||
+          /\.(ts|tsx|js|jsx|json|py|rs|go|c|cpp|h|css|html|md|toml|yaml|yml|sh|sql)$/i.test(target);
+        if (isFile && !target.startsWith('http://') && !target.startsWith('https://')) {
+          if (!list.includes(target)) list.push(target);
+        }
+      }
+    }
+    return list;
+  }, [task.createdFiles, brief?.createdFiles, completionText]);
 
   // Auto-expand and scroll into view when selected
   useEffect(() => {
@@ -795,6 +955,14 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                 ) : showExecutionSteps ? (
                   /* Sub-view 2: In-place Execution Steps & Logs */
                   <div style={{ padding: '1rem', background: '#0a0c10', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                    {/* Interactive Mid-Build Human Clarification Card if active */}
+                    {pendingHumanInput && onHumanInputChoice && (
+                      <HumanInputCard
+                        prompt={pendingHumanInput.prompt}
+                        onSubmit={onHumanInputChoice}
+                      />
+                    )}
+
                     {/* Interactive MCP Permission Prompt Card if active */}
                     {pendingPermission && onPermissionChoice && (
                       <div
@@ -834,7 +1002,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                         <div key={step.id} className={`step-card ${step.status}`}>
                           <div className="step-header">
                             <div className="step-title">
-                              {step.status === 'running' && <Loader2 size={15} className="spin-animate" color="var(--accent-primary)" />}
+                              {step.status === 'running' && (step.stage === 'human_input' ? <HelpCircle size={15} color="var(--accent-amber)" className="pulse-animate" /> : <Loader2 size={15} className="spin-animate" color="var(--accent-primary)" />)}
                               {step.status === 'success' && <CheckCircle2 size={15} color="var(--accent-emerald)" />}
                               {step.status === 'warning' && <ShieldAlert size={15} color="var(--accent-rose)" />}
                               {step.status === 'pending' && <CircleDot size={15} color="var(--text-dim)" />}
@@ -846,6 +1014,15 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                           </div>
 
                           <div className="step-detail" style={{ fontSize: '0.82rem' }}>{step.detail}</div>
+
+                          {step.humanInputPrompt && step.status === 'running' && onHumanInputChoice && !pendingHumanInput && (
+                            <div style={{ marginTop: '0.6rem' }}>
+                              <HumanInputCard
+                                prompt={step.humanInputPrompt}
+                                onSubmit={onHumanInputChoice}
+                              />
+                            </div>
+                          )}
 
                           {step.widgetType && renderMcpAppWidget(step.widgetType, step.widgetData)}
                         </div>
@@ -946,6 +1123,34 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   </div>
                 ) : (
                   <div className="brief-body">
+                    {/* Dedicated Human Review Verification Checklist Card */}
+                    {task.subtasks?.some((s) => s.isHumanReview) && (
+                      <div className="human-review-verification-card">
+                        <div className="human-review-verification-header">
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                            <Eye size={15} color="var(--accent-violet)" />
+                            <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#fff' }}>Human Review Verification</span>
+                          </div>
+                          <span className="human-review-count-badge">
+                            {task.subtasks.filter((s) => s.isHumanReview && s.isDone).length} / {task.subtasks.filter((s) => s.isHumanReview).length} verified
+                          </span>
+                        </div>
+                        <div className="human-review-verification-list">
+                          {task.subtasks.filter((s) => s.isHumanReview).map((s, idx) => (
+                            <div key={s.id || idx} className={`human-review-step-row ${s.isDone ? 'is-done' : 'is-pending'}`}>
+                              <span className="human-review-step-icon">
+                                {s.isDone ? <CheckCircle2 size={14} color="var(--accent-emerald)" /> : <CircleDot size={14} color="var(--accent-violet)" />}
+                              </span>
+                              <span className="human-review-step-text">{s.text}</span>
+                              <span className={`human-review-step-status ${s.isDone ? 'verified' : 'pending'}`}>
+                                {s.isDone ? 'Verified' : 'Action Required'}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {completionText ? (
                       <div className="brief-markdown-render">
                         <MarkdownRenderer content={completionText} />
@@ -955,6 +1160,56 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                         <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
                           Completion summary and final verification will be recorded once the agent finishes execution.
                         </span>
+                      </div>
+                    )}
+
+                    {/* Dedicated Created Files & Artifacts Interactive List */}
+                    {createdFilesList.length > 0 && (
+                      <div className="created-artifacts-card">
+                        <div className="created-artifacts-header">
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                            <FileCode size={15} color="var(--accent-cyan)" />
+                            <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#fff' }}>Completed Work & Created Files</span>
+                          </div>
+                          <span className="created-artifacts-count-badge">
+                            {createdFilesList.length} {createdFilesList.length === 1 ? 'file' : 'files'}
+                          </span>
+                        </div>
+                        <div className="created-artifacts-list">
+                          {createdFilesList.map((filePath, idx) => (
+                            <div key={idx} className="created-artifact-row">
+                              <div className="created-artifact-info">
+                                <FileCode size={14} color="var(--accent-cyan)" />
+                                <span className="created-artifact-path" title={filePath}>{filePath}</span>
+                              </div>
+                              <div className="created-artifact-actions">
+                                <button
+                                  type="button"
+                                  className="created-artifact-btn open-ide-btn"
+                                  title="Open file in IDE (VS Code / Cursor)"
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    setOpenedFileFeedback(filePath);
+                                    await openFileInIdeOrSystem(filePath);
+                                    setTimeout(() => setOpenedFileFeedback(null), 2500);
+                                  }}
+                                >
+                                  {openedFileFeedback === filePath ? (
+                                    <>
+                                      <Check size={12} color="var(--accent-emerald)" />
+                                      <span style={{ color: 'var(--accent-emerald)' }}>Opened in IDE</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <ExternalLink size={12} />
+                                      <span>Open in IDE</span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1233,7 +1488,9 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   executingTaskId = null,
   taskExecutionSteps = {},
   pendingPermissions = {},
+  pendingHumanInputs = {},
   onPermissionChoice,
+  onHumanInputChoice,
   onSessionExit,
   onRestartSession,
   onKillSession,
@@ -1248,15 +1505,18 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
     <div className="pane pane-right obsidian-pane">
       {/* ── Pane Header ── */}
       <div className="pane-header obsidian-header">
-        <div className="pane-title">
-          <FileCode size={17} color="var(--accent-violet)" />
-          <span>AI Workspace</span>
-          <span className="pane-subtitle">
-            {tasks.length} {tasks.length === 1 ? 'task' : 'tasks'} ({doneCount} done)
+        <div className="pane-header-title">
+          <FileCode size={16} className="text-secondary" />
+          <span style={{ fontWeight: 600, fontSize: '0.88rem' }}>AI Workspace (AGENT_CONTEXT.md)</span>
+          <span className="task-count-badge" title={`${doneCount} of ${tasks.length} tasks completed`}>
+            {doneCount}/{tasks.length}
           </span>
+        </div>
+
+        <div className="pane-header-actions">
           {activeTaskRunningCount > 0 && (
-            <span className="task-status-pill status-working">
-              <Loader2 size={12} className="spin-animate" />
+            <span className="running-indicator-badge">
+              <span className="live-pulse-dot" />
               <span>{activeTaskRunningCount} running</span>
             </span>
           )}
@@ -1300,6 +1560,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                   isExecuting={isExecuting}
                   executionSteps={taskExecutionSteps[task.id] || []}
                   pendingPermission={pendingPermissions[task.id]?.prompt ?? null}
+                  pendingHumanInput={pendingHumanInputs[task.id] ?? null}
                   onSelect={() => onSelectTask?.(task.id)}
                   onSaveBrief={onSaveBrief}
                   onLiveBriefChange={onLiveBriefChange}
@@ -1307,6 +1568,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                   onUpdateBriefWithAi={_onUpdateBriefWithAi}
                   onSyncOverviewWithTask={onSyncOverviewWithTask}
                   onPermissionChoice={(approved) => onPermissionChoice?.(task.id, approved)}
+                  onHumanInputChoice={(answer) => onHumanInputChoice?.(task.id, answer)}
                   onSessionExit={(code) => onSessionExit?.(task.id, code)}
                   onRestartSession={onRestartSession}
                   onKillSession={onKillSession}

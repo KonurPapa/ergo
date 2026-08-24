@@ -4,7 +4,8 @@ import {
   type ProjectData,
   type AIProviderConfig,
   type MCPServer,
-  type HumanAiAssistantResult
+  type HumanAiAssistantResult,
+  type HumanInputPrompt
 } from '../types';
 import { useEditor, EditorContent } from '@tiptap/react';
 import ListItem from '@tiptap/extension-list-item';
@@ -505,6 +506,7 @@ interface TaskPaneProps {
   archivedTasks?: TaskItemType[];
   selectedTaskId?: number | null;
   runningTaskIds?: number[];
+  pendingHumanInputs?: Record<number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>;
   onSelectTask?: (taskId: number) => void;
   onMarkdownChange: (newMarkdown: string) => void;
   onOpenDraftModal: () => void;
@@ -554,16 +556,17 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   archivedTasks = [],
   selectedTaskId,
   runningTaskIds = [],
+  pendingHumanInputs,
   onSelectTask,
   onMarkdownChange,
   onOpenDraftModal,
   isAssistantOpen = false,
-  onCloseAssistant = () => {},
+  onCloseAssistant = () => { },
   project,
   agentContextMarkdown = '',
   aiConfig,
   mcpServers = [],
-  onApplyAssistantResult = () => {},
+  onApplyAssistantResult = () => { },
   onArchiveTask,
   onUnarchiveTask,
   onDeleteArchivedTask,
@@ -573,6 +576,9 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
 
   const runningTaskIdsRef = React.useRef(runningTaskIds);
   runningTaskIdsRef.current = runningTaskIds;
+
+  const pendingHumanInputsRef = React.useRef(pendingHumanInputs);
+  pendingHumanInputsRef.current = pendingHumanInputs;
 
   const tasksRef = React.useRef(tasks);
   tasksRef.current = tasks;
@@ -597,23 +603,8 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
       return [
         new Plugin({
           key: new PluginKey('taskCheckboxDecorationPlugin'),
-          appendTransaction(_transactions, _oldState, newState) {
-            const { selection, storedMarks, schema } = newState;
-            const strikeMark = schema.marks.strike;
-            if (!strikeMark) return null;
-
-            if (storedMarks && storedMarks.some((m) => m.type === strikeMark)) {
-              const { $from, empty } = selection;
-              if (empty && $from.parent.content.size === 0) {
-                for (let d = $from.depth; d > 0; d--) {
-                  if ($from.node(d).type.name === 'listItem') {
-                    const tr = newState.tr;
-                    tr.setStoredMarks(storedMarks.filter((m) => m.type !== strikeMark));
-                    return tr;
-                  }
-                }
-              }
-            }
+          appendTransaction(_transactions, _oldState, _newState) {
+            // Keep card classes synchronized with doc structure
             return null;
           },
           props: {
@@ -665,6 +656,9 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                   const cardTaskId = currentTasks[globalCardIndex - 1]?.id || globalCardIndex;
                   const isSelected = currentSelectedTaskId === cardTaskId;
                   const isRunning = currentRunningTaskIds.includes(cardTaskId);
+                  const isNeedsInput = Boolean(pendingHumanInputsRef.current?.[cardTaskId]);
+                  const matchingTask = currentTasks.find((t) => t.id === cardTaskId) || currentTasks[globalCardIndex - 1];
+                  const isHumanReviewPending = Boolean(matchingTask?.isHumanReview || matchingTask?.subtasks?.some((s) => s.isHumanReview && !s.isDone));
 
                   // Find primary content block in this card (parent task title)
                   let firstBlockPos: number | null = null;
@@ -689,11 +683,13 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                   const cardKey = `card-${pos}-${firstBlockNode?.textContent?.slice(0, 30) || ''}`;
                   const isCollapsed = hasSubtasks && collapsedCardsState.has(cardKey);
 
-                  // 1. Add active-card, card-running, card-done, card-collapsed, and digit-count class decoration
+                  // 1. Add active-card, card-running, card-needs-input, card-human-review, card-done, card-collapsed, and digit-count class decoration
                   const numDigits = String(sectionCardIndex).length;
                   const cardClasses = [
                     isSelected ? 'is-active-card' : '',
                     isRunning ? 'is-card-running' : '',
+                    isNeedsInput ? 'is-card-needs-input' : '',
+                    isHumanReviewPending ? 'is-card-human-review' : '',
                     isParentChecked ? 'is-card-done' : '',
                     isCollapsed ? 'card-collapsed' : '',
                     isUnordered ? 'card-unordered' : `card-digits-${numDigits}`,
@@ -713,13 +709,13 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                     pos + 1,
                     (view, getPos) => {
                       const container = document.createElement('div');
-                      container.className = `task-card-checkbox-wrapper ${isParentChecked ? 'is-checked' : ''} ${isRunning ? 'is-running' : ''}`;
+                      container.className = `task-card-checkbox-wrapper ${isParentChecked ? 'is-checked' : ''} ${isRunning ? 'is-running' : ''} ${isNeedsInput ? 'is-needs-input' : ''}`;
                       container.setAttribute('contenteditable', 'false');
                       container.title = isParentChecked ? 'Mark task as incomplete' : 'Mark task as completed';
 
                       const checkbox = document.createElement('button');
                       checkbox.type = 'button';
-                      checkbox.className = `task-ui-checkbox parent-checkbox ${isParentChecked ? 'checked' : ''} ${isRunning ? 'running' : ''}`;
+                      checkbox.className = `task-ui-checkbox parent-checkbox ${isParentChecked ? 'checked' : ''} ${isRunning ? 'running' : ''} ${isNeedsInput ? 'needs-input' : ''}`;
                       checkbox.setAttribute('aria-checked', String(isParentChecked));
                       checkbox.setAttribute('role', 'checkbox');
                       checkbox.setAttribute('aria-label', isParentChecked ? 'Completed task' : 'Incomplete task');
@@ -797,6 +793,11 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                           });
                         }
 
+                        // Also select this task card when clicking its checkbox
+                        if (onSelectTaskRef.current) {
+                          onSelectTaskRef.current(cardTaskId);
+                        }
+
                         view.dispatch(tr);
                         view.focus();
                       };
@@ -814,26 +815,25 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                   );
                   decorations.push(parentCheckboxWidget);
 
-                  // 3. Add Collapse / Expand Toggle Button Widget at pos + 1 (left side beside item number)
-                  // Only show collapse/expand chevron if the card has subtask items
+                  // 3. Add Collapse / Expand Chevron Widget if task has subtasks
                   if (hasSubtasks) {
-                    const collapseWidget = Decoration.widget(
+                    const chevronWidget = Decoration.widget(
                       pos + 1,
                       (view) => {
-                        const collapseBtn = document.createElement('button');
-                        collapseBtn.className = `card-collapse-btn ${isCollapsed ? 'is-collapsed' : ''}`;
-                        collapseBtn.setAttribute('contenteditable', 'false');
-                        collapseBtn.type = 'button';
-                        collapseBtn.title = isCollapsed ? 'Expand card' : 'Collapse card';
-                        collapseBtn.setAttribute('aria-label', isCollapsed ? 'Expand card' : 'Collapse card');
-                        collapseBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="collapse-chevron"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+                        const btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = `card-collapse-btn ${isCollapsed ? 'is-collapsed' : ''}`;
+                        btn.setAttribute('contenteditable', 'false');
+                        btn.title = isCollapsed ? 'Expand subtasks' : 'Collapse subtasks';
+                        btn.setAttribute('aria-label', isCollapsed ? 'Expand subtasks' : 'Collapse subtasks');
+                        btn.innerHTML = `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
 
-                        collapseBtn.addEventListener('mousedown', (e) => {
+                        btn.addEventListener('mousedown', (e) => {
                           e.preventDefault();
                           e.stopPropagation();
                         });
 
-                        collapseBtn.addEventListener('click', (e) => {
+                        btn.addEventListener('click', (e) => {
                           e.preventDefault();
                           e.stopPropagation();
                           if (collapsedCardsState.has(cardKey)) {
@@ -841,20 +841,21 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                           } else {
                             collapsedCardsState.add(cardKey);
                           }
-                          const tr = view.state.tr.setMeta('cardCollapseToggle', true);
+                          // Force decoration redraw by touching state transaction
+                          const tr = view.state.tr.setMeta('taskCollapseToggle', true);
                           view.dispatch(tr);
                         });
 
-                        return collapseBtn;
+                        return btn;
                       },
                       { side: -1, stopEvent: () => true }
                     );
-                    decorations.push(collapseWidget);
+                    decorations.push(chevronWidget);
                   }
 
                   // 4. Add Card Action Buttons Widget (Add Subtask + Delete Task) at pos + 1 (right side)
-                  // Only show 'add subtask' and 'delete' buttons on the currently-selected card
-                  if (isSelected || isRunning) {
+                  // Show on selected card, running card, needs-input card, or human-review pending card
+                  if (isSelected || isRunning || isNeedsInput || isHumanReviewPending) {
                     const cardActionsWidget = Decoration.widget(
                       pos + 1,
                       (_view, getPos) => {
@@ -862,12 +863,38 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                         container.className = 'card-actions-wrapper';
                         container.setAttribute('contenteditable', 'false');
 
+                        // Needs Input live pulsing badge button
+                        if (isNeedsInput) {
+                          const needsInputBadge = document.createElement('button');
+                          needsInputBadge.type = 'button';
+                          needsInputBadge.className = 'task-needs-input-badge-pill';
+                          needsInputBadge.title = 'Builder AI needs user input mid-task. Click to view prompt.';
+                          needsInputBadge.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="pulse-animate"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg><span>Needs Input</span>`;
+                          needsInputBadge.addEventListener('mousedown', (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (onSelectTaskRef.current) {
+                              onSelectTaskRef.current(cardTaskId);
+                            }
+                          });
+                          container.appendChild(needsInputBadge);
+                        }
+
                         // Running live pill indicator
-                        if (isRunning) {
+                        if (isRunning && !isNeedsInput) {
                           const runningBadge = document.createElement('span');
                           runningBadge.className = 'task-running-badge-pill';
                           runningBadge.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin-animate"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg><span>Working</span>`;
                           container.appendChild(runningBadge);
+                        }
+
+                        // Human review badge pill indicator on card
+                        if (isHumanReviewPending && !isRunning && !isNeedsInput) {
+                          const reviewBadge = document.createElement('span');
+                          reviewBadge.className = 'task-human-review-badge-pill';
+                          reviewBadge.title = 'Human review verification required for completed work';
+                          reviewBadge.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg><span>Human Review</span>`;
+                          container.appendChild(reviewBadge);
                         }
 
                         // Add subtask & delete card buttons (only on selected card)
@@ -947,24 +974,38 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
 
                   if (subBlockNode && subBlockPos !== null) {
                     const isSubChecked = isNodeChecked(subBlockNode);
+                    const subText = (subBlockNode.textContent || '').toLowerCase();
+                    const isHumanReviewSubtask = subText.includes('**human review**') || subText.includes('human review:') || subText.includes('human review -');
+
+                    if (isHumanReviewSubtask) {
+                      decorations.push(
+                        Decoration.node(pos, pos + node.nodeSize, {
+                          class: `task-human-review-item ${isSubChecked ? 'is-verified' : 'is-pending-review'}`,
+                        })
+                      );
+                    }
 
                     const subtaskCheckboxWidget = Decoration.widget(
                       pos + 1,
                       (view, getPos) => {
                         const container = document.createElement('span');
-                        container.className = `subtask-checkbox-wrapper ${isSubChecked ? 'is-checked' : ''}`;
+                        container.className = `subtask-checkbox-wrapper ${isSubChecked ? 'is-checked' : ''} ${isHumanReviewSubtask ? 'is-human-review-wrapper' : ''}`;
                         container.setAttribute('contenteditable', 'false');
-                        container.title = isSubChecked ? 'Mark subtask as incomplete' : 'Mark subtask as completed';
+                        container.title = isHumanReviewSubtask
+                          ? (isSubChecked ? 'Human verification completed' : 'Pending human review / verification')
+                          : (isSubChecked ? 'Mark subtask as incomplete' : 'Mark subtask as completed');
 
                         const checkbox = document.createElement('button');
                         checkbox.type = 'button';
-                        checkbox.className = `task-ui-checkbox subtask-checkbox ${isSubChecked ? 'checked' : ''}`;
+                        checkbox.className = `task-ui-checkbox subtask-checkbox ${isSubChecked ? 'checked' : ''} ${isHumanReviewSubtask ? 'human-review-cb' : ''}`;
                         checkbox.setAttribute('aria-checked', String(isSubChecked));
                         checkbox.setAttribute('role', 'checkbox');
                         checkbox.setAttribute('aria-label', isSubChecked ? 'Completed subtask' : 'Incomplete subtask');
 
                         if (isSubChecked) {
                           checkbox.innerHTML = `<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+                        } else if (isHumanReviewSubtask) {
+                          checkbox.innerHTML = `<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
                         }
 
                         const toggleSubtask = (e: MouseEvent) => {
@@ -1489,10 +1530,10 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
           type="button"
           className={`new-task-btn ai-assistant-footer-btn ${isAssistantOpen ? 'active' : ''}`}
           onClick={isAssistantOpen ? onCloseAssistant : onOpenDraftModal}
-          title={isAssistantOpen ? 'Close Human AI Assistant' : 'Activate Human AI Assistant: Task mode (flesh out single task) or Architect mode (plan multi-task roadmap)'}
+          title={isAssistantOpen ? 'Close Task Assistant' : 'Activate Task Assistant: Task mode (flesh out single task) or Architect mode (plan multi-task roadmap)'}
         >
           {isAssistantOpen ? <ChevronDown size={16} /> : <Sparkles size={16} />}
-          <span>{isAssistantOpen ? 'Hide Assistant' : 'AI Assistant'}</span>
+          <span>{isAssistantOpen ? 'Hide Assistant' : 'Task Assistant'}</span>
         </button>
       </div>
     </div>

@@ -15,7 +15,6 @@ import {
   CheckCheck,
   AlertCircle,
   FolderOpen,
-  ShieldCheck,
   Lock,
   RefreshCw
 } from 'lucide-react';
@@ -148,8 +147,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   {folderMetadata.status === 'connected'
                     ? 'ACTIVE'
                     : folderMetadata.status === 'needs_permission'
-                    ? 'PERMISSION NEEDED'
-                    : 'SERVER WORKSPACE'}
+                      ? 'PERMISSION NEEDED'
+                      : 'SERVER WORKSPACE'}
                 </span>
               </div>
 
@@ -431,13 +430,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             )}
           </div>
-
-          {/* Privacy Note */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.75rem', color: 'var(--accent-emerald)', opacity: 0.9 }}>
-            <ShieldCheck size={14} />
-            <span>Local-First Design: No database accounts, cloud storage bills, or remote API key honeypots.</span>
-          </div>
-
         </div>
 
         {/* Modal Footer */}

@@ -43,6 +43,30 @@ export async function callMcpTool(
 }
 
 /**
+ * Open a created file or document in the user's IDE or system viewer
+ */
+export async function openFileInIdeOrSystem(
+  filePath: string,
+  line?: number
+): Promise<{ success: boolean; opened?: boolean; methodUsed?: string; resolvedPath?: string; error?: string }> {
+  try {
+    const res = await fetch('/api/files/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath, line, openInIde: true })
+    });
+    const data = await res.json();
+    return data;
+  } catch (err: any) {
+    console.warn(`[Ergo Client] Error opening ${filePath}:`, err);
+    return {
+      success: false,
+      error: err?.message || 'Network error opening file'
+    };
+  }
+}
+
+/**
  * Query safe directory roots from the MCP Host
  */
 export async function getAllowedRoots(): Promise<McpRootBoundary[]> {
