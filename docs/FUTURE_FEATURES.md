@@ -53,6 +53,9 @@
     - **context-reading w/ fast AI**:
         - instead of the default where the same powerful AI is doing both context-reading and the actual work, try to restructure the work so that it uses a fast model for acquiring all the context it needs to do the work, then immediately passing that context off the powerful AI to actually do the work
         - this allows the powerful AI to focus on the actual task, rather than spending time/tokens on context-reading
+    - some sort of master list of which files in a codebase are being accessed and by which agents
+        - this would give the user a cool view of what's actually being edited
+        - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts
 
 
 

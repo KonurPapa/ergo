@@ -151,6 +151,21 @@ export function App() {
   const [_activeTerminalTaskId, setActiveTerminalTaskId] = useState<number | null>(null);
 
 
+  // Theme State (Default: 'light')
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const saved = localStorage.getItem('ergo_theme');
+    if (saved === 'dark' || saved === 'light') return saved;
+    return 'light';
+  });
+
+  // Apply theme attribute to root HTML document element
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    try {
+      localStorage.setItem('ergo_theme', theme);
+    } catch {}
+  }, [theme]);
+
   // Initialize Storage Layer on mount (IndexedDB handle & config loading)
   useEffect(() => {
     async function initStorage() {
@@ -171,7 +186,6 @@ export function App() {
           setActiveCliAgentId(res.secrets.activeCliAgentId);
         }
 
-
         if (res.projects && res.projects.length > 0) {
           setProjects(res.projects);
         }
@@ -188,6 +202,9 @@ export function App() {
           }
           if (typeof res.settings.autosaveEnabled === 'boolean') {
             autosave.setIsEnabled(res.settings.autosaveEnabled);
+          }
+          if (res.settings.theme === 'light' || res.settings.theme === 'dark') {
+            setTheme(res.settings.theme);
           }
         }
       } catch (err) {
@@ -206,10 +223,11 @@ export function App() {
         activeKeyId,
         autosaveDelaySec: autosave.delaySec,
         autosaveEnabled: autosave.isEnabled,
+        theme,
         lastOpenedAt: new Date().toISOString()
       });
     }
-  }, [activeProjectId, activeKeyId, autosave.delaySec, autosave.isEnabled]);
+  }, [activeProjectId, activeKeyId, autosave.delaySec, autosave.isEnabled, theme]);
 
   // Sync secrets (config/secrets.json)
   useEffect(() => {
@@ -1523,6 +1541,8 @@ export function App() {
         onSetAutosaveDelay={autosave.setDelaySec}
         onToggleAutosave={autosave.setIsEnabled}
         onSaveImmediately={handleManualSaveNow}
+        theme={theme}
+        onThemeChange={setTheme}
       />
 
       {/* Modal 8: Local Root Directory Picker */}

@@ -362,6 +362,7 @@ export async function initializeFolderStructure(
       activeKeyId: null,
       autosaveDelaySec: 5,
       autosaveEnabled: true,
+      theme: 'light',
       lastOpenedAt: new Date().toISOString()
     };
     await writeFileTextToDir(configDir, 'settings.json', JSON.stringify(settings, null, 2));

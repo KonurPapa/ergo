@@ -270,7 +270,7 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
               <Sparkles size={15} color="#fff" />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-              <h3 style={{ fontSize: '0.95rem', fontWeight: 700, margin: 0, color: '#fff' }}>Task Assistant</h3>
+              <h3 style={{ fontSize: '0.95rem', fontWeight: 700, margin: 0, color: 'var(--text-bright)' }}>Task Assistant</h3>
             </div>
           </div>
 
@@ -443,7 +443,7 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
               {assistantResult.aggregatedReport && (
                 <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', padding: '0.85rem', marginBottom: '0.85rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.45rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.35rem' }}>
-                    <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff' }}>📊 Summary Report</span>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)' }}>📊 Summary Report</span>
                     <button
                       type="button"
                       className="btn btn-secondary"

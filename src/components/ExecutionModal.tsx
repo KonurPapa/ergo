@@ -161,7 +161,7 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
             <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-violet)', textTransform: 'uppercase', marginBottom: '0.2rem' }}>
               Executing Item #{task.id}
             </div>
-            <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fff' }}>{task.title}</h3>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-bright)' }}>{task.title}</h3>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
               {brief?.brief?.slice(0, 140) || 'Executing task subtasks & logging build records to AGENT_CONTEXT.md.'}
             </p>

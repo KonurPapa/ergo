@@ -225,7 +225,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.25, minWidth: 0 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                            <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff' }}>{p.name}</span>
+                            <span style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-bright)' }}>{p.name}</span>
                             {isSelected && <Check size={14} color="var(--accent-cyan)" />}
                           </div>
                           <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
@@ -280,7 +280,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               <Brain size={18} color={activeUserKey ? 'var(--accent-cyan)' : 'var(--text-muted)'} />
             )}
             <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <span style={{ fontWeight: activeUserKey ? 600 : 500, color: activeUserKey ? '#fff' : 'var(--text-muted)' }}>
+              <span style={{ fontWeight: activeUserKey ? 600 : 500, color: activeUserKey ? 'var(--text-bright)' : 'var(--text-muted)' }}>
                 {activeLabel}
               </span>
             </span>
@@ -352,7 +352,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                           </div>
                           <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.25, minWidth: 0 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                              <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff' }}>{key.name}</span>
+                              <span style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-bright)' }}>{key.name}</span>
                               {isSelected && <Check size={14} color="var(--accent-cyan)" />}
                             </div>
                             <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>

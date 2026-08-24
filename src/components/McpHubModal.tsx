@@ -282,7 +282,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
             </div>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#fff', margin: 0 }}>Connections</h3>
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-bright)', margin: 0 }}>Connections</h3>
               </div>
               <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0.15rem 0 0 0' }}>
                 Manage local connections & folders, external MCPs, and cloud coding tools
@@ -467,23 +467,23 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
 
                       {/* Discovered Tools List */}
                       {isConnected && server.tools.length > 0 && (
-                        <div style={{ background: 'rgba(0, 0, 0, 0.25)', border: '1px solid var(--border-subtle)', padding: '0.65rem 0.75rem', borderRadius: 'var(--radius-sm)', marginTop: '0.2rem' }}>
-                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <Shield size={12} />
+                        <div style={{ background: 'var(--code-bg)', border: '1px solid var(--code-border)', padding: '0.75rem 0.85rem', borderRadius: 'var(--radius-sm)', marginTop: '0.35rem', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)' }}>
+                          <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <Shield size={13} />
                             <span>Tools & Security Auto-Approval Policies</span>
                           </div>
 
                           {server.tools.map((tool) => (
-                            <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.3rem 0', borderTop: '1px solid rgba(255, 255, 255, 0.04)' }}>
-                              <span style={{ fontFamily: 'var(--font-mono)', color: '#fff', fontSize: '0.76rem' }}>{tool.name}</span>
+                            <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.35rem 0', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--code-text)', fontSize: '0.78rem', fontWeight: 500 }}>{tool.name}</span>
                               <button
                                 style={{
-                                  background: tool.autoApprove ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-                                  color: tool.autoApprove ? 'var(--accent-emerald)' : 'var(--accent-amber)',
-                                  border: '1px solid ' + (tool.autoApprove ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)'),
-                                  padding: '0.15rem 0.5rem',
+                                  background: tool.autoApprove ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                                  color: tool.autoApprove ? '#34d399' : '#fbbf24',
+                                  border: '1px solid ' + (tool.autoApprove ? 'rgba(16, 185, 129, 0.45)' : 'rgba(245, 158, 11, 0.45)'),
+                                  padding: '0.2rem 0.55rem',
                                   borderRadius: '4px',
-                                  fontSize: '0.7rem',
+                                  fontSize: '0.72rem',
                                   cursor: 'pointer',
                                   fontWeight: 600,
                                   transition: 'all 0.15s ease'
@@ -677,23 +677,23 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
 
                       {/* Discovered Tools List */}
                       {isConnected && server.tools.length > 0 && (
-                        <div style={{ background: 'rgba(0, 0, 0, 0.25)', border: '1px solid var(--border-subtle)', padding: '0.65rem 0.75rem', borderRadius: 'var(--radius-sm)', marginTop: '0.2rem' }}>
-                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <Shield size={12} />
+                        <div style={{ background: 'var(--code-bg)', border: '1px solid var(--code-border)', padding: '0.75rem 0.85rem', borderRadius: 'var(--radius-sm)', marginTop: '0.35rem', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)' }}>
+                          <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <Shield size={13} />
                             <span>Available MCP Tools & Security Policies</span>
                           </div>
 
                           {server.tools.map((tool) => (
-                            <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.3rem 0', borderTop: '1px solid rgba(255, 255, 255, 0.04)' }}>
-                              <span style={{ fontFamily: 'var(--font-mono)', color: '#fff', fontSize: '0.76rem' }}>{tool.name}</span>
+                            <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.35rem 0', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--code-text)', fontSize: '0.78rem', fontWeight: 500 }}>{tool.name}</span>
                               <button
                                 style={{
-                                  background: tool.autoApprove ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-                                  color: tool.autoApprove ? 'var(--accent-emerald)' : 'var(--accent-amber)',
-                                  border: '1px solid ' + (tool.autoApprove ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)'),
-                                  padding: '0.15rem 0.5rem',
+                                  background: tool.autoApprove ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                                  color: tool.autoApprove ? '#34d399' : '#fbbf24',
+                                  border: '1px solid ' + (tool.autoApprove ? 'rgba(16, 185, 129, 0.45)' : 'rgba(245, 158, 11, 0.45)'),
+                                  padding: '0.2rem 0.55rem',
                                   borderRadius: '4px',
-                                  fontSize: '0.7rem',
+                                  fontSize: '0.72rem',
                                   cursor: 'pointer',
                                   fontWeight: 600,
                                   transition: 'all 0.15s ease'
@@ -763,11 +763,11 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
 
               <div
                 style={{
-                  background: 'var(--bg-dark)',
-                  border: editingAgentId ? '1px solid var(--accent-cyan)' : '1px solid var(--border-glow)',
+                  background: 'var(--bg-card)',
+                  border: editingAgentId ? '1.5px solid var(--accent-cyan)' : '1px solid var(--border-subtle)',
                   borderRadius: 'var(--radius-md)',
                   padding: '1.25rem',
-                  boxShadow: editingAgentId ? '0 0 16px rgba(6, 182, 212, 0.15)' : 'none',
+                  boxShadow: editingAgentId ? '0 0 16px rgba(6, 182, 212, 0.15)' : 'var(--shadow-card)',
                   transition: 'all 0.2s ease',
                   display: 'flex',
                   flexDirection: 'column',
@@ -776,7 +776,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               >
                 {/* Preset cards selection */}
                 <div>
-                  <label className="input-label" style={{ marginBottom: '0.5rem' }}>
+                  <label className="input-label" style={{ marginBottom: '0.5rem', color: 'var(--text-bright)', fontWeight: 700 }}>
                     Choose a Preset or Custom
                   </label>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '0.75rem' }}>
@@ -797,13 +797,15 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                           }}
                           style={{
                             textAlign: 'left',
-                            background: isSelected ? 'rgba(6, 182, 212, 0.08)' : 'var(--bg-card)',
-                            border: `1px solid ${isSelected ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
+                            background: isSelected ? 'rgba(99, 102, 241, 0.12)' : 'var(--btn-secondary-bg)',
+                            border: `1.5px solid ${isSelected ? 'var(--accent-primary)' : 'var(--btn-secondary-border)'}`,
                             borderRadius: 'var(--radius-md)',
-                            padding: '0.85rem 1rem',
+                            padding: '0.75rem 0.85rem',
                             cursor: 'pointer',
                             transition: 'all 0.15s ease',
-                            position: 'relative',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.35rem'
                           }}
                         >
                           {isSelected && (
@@ -1060,15 +1062,15 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                             flexDirection: 'column',
                             gap: '0.6rem',
                             padding: '0.85rem 1rem',
-                            background: 'var(--bg-dark)',
-                            border: `1px solid ${isCurrentlyEditing
+                            background: 'var(--bg-card)',
+                            border: `1.5px solid ${isCurrentlyEditing
                               ? 'var(--accent-cyan)'
                               : isActive
-                                ? 'rgba(16, 185, 129, 0.4)'
+                                ? 'var(--accent-emerald)'
                                 : 'var(--border-subtle)'
                               }`,
                             borderRadius: 'var(--radius-md)',
-                            boxShadow: isActive ? '0 0 10px rgba(16, 185, 129, 0.08)' : 'none',
+                            boxShadow: isActive ? '0 0 10px rgba(16, 185, 129, 0.12)' : 'var(--shadow-card)',
                             transition: 'all 0.15s ease'
                           }}
                         >
@@ -1092,15 +1094,15 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                               </div>
                               <div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                                  <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff' }}>{agent.name}</span>
+                                  <span style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-bright)' }}>{agent.name}</span>
                                   <span
                                     className="badge"
                                     style={{
                                       fontSize: '0.65rem',
                                       padding: '0.1rem 0.4rem',
-                                      background: 'rgba(255, 255, 255, 0.06)',
-                                      color: '#cbd5e1',
-                                      borderColor: 'var(--border-subtle)'
+                                      background: 'var(--btn-secondary-bg)',
+                                      color: 'var(--text-muted)',
+                                      borderColor: 'var(--btn-secondary-border)'
                                     }}
                                   >
                                     {preset?.label || 'Custom'}

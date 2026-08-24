@@ -1129,7 +1129,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                         <div className="human-review-verification-header">
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                             <Eye size={15} color="var(--accent-violet)" />
-                            <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#fff' }}>Human Review Verification</span>
+                            <span style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-bright)' }}>Human Review Verification</span>
                           </div>
                           <span className="human-review-count-badge">
                             {task.subtasks.filter((s) => s.isHumanReview && s.isDone).length} / {task.subtasks.filter((s) => s.isHumanReview).length} verified
@@ -1169,7 +1169,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                         <div className="created-artifacts-header">
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                             <FileCode size={15} color="var(--accent-cyan)" />
-                            <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#fff' }}>Completed Work & Created Files</span>
+                            <span style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-bright)' }}>Completed Work & Created Files</span>
                           </div>
                           <span className="created-artifacts-count-badge">
                             {createdFilesList.length} {createdFilesList.length === 1 ? 'file' : 'files'}
@@ -1505,15 +1505,13 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
     <div className="pane pane-right obsidian-pane">
       {/* ── Pane Header ── */}
       <div className="pane-header obsidian-header">
-        <div className="pane-header-title">
-          <FileCode size={16} className="text-secondary" />
-          <span style={{ fontWeight: 600, fontSize: '0.88rem' }}>AI Workspace (AGENT_CONTEXT.md)</span>
-          <span className="task-count-badge" title={`${doneCount} of ${tasks.length} tasks completed`}>
-            {doneCount}/{tasks.length}
-          </span>
+        <div className="pane-title">
+          <FileCode size={17} color="var(--accent-violet)" />
+          <span>AI Workspace</span>
+          <span className="pane-subtitle">{doneCount}/{tasks.length} done</span>
         </div>
 
-        <div className="pane-header-actions">
+        <div className="pane-header-actions" style={{ display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
           {activeTaskRunningCount > 0 && (
             <span className="running-indicator-badge">
               <span className="live-pulse-dot" />
@@ -1529,7 +1527,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: '300px' }}>
             <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
               <ListTodo size={48} color="var(--accent-violet)" style={{ opacity: 0.45, marginBottom: '1rem' }} />
-              <h3 style={{ color: '#fff', fontSize: '1.15rem' }}>No tasks in workspace</h3>
+              <h3 style={{ color: 'var(--text-bright)', fontSize: '1.15rem' }}>No tasks in workspace</h3>
               <p style={{ fontSize: '0.85rem', marginTop: '0.5rem', maxWidth: '420px', lineHeight: '1.6' }}>
                 Add tasks in the Human Workspace using <strong>New Task</strong> or <strong>AI Assistant</strong>.
               </p>

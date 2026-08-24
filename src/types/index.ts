@@ -193,7 +193,7 @@ export interface AppSettings {
   activeKeyId: string | null;
   autosaveDelaySec: number;
   autosaveEnabled: boolean;
-  theme?: string;
+  theme?: 'light' | 'dark';
   storageDirectory?: string; // default: "~/.ergo"
   lastOpenedAt?: string;
 }

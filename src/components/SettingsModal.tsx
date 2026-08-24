@@ -16,7 +16,10 @@ import {
   AlertCircle,
   FolderOpen,
   Lock,
-  RefreshCw
+  RefreshCw,
+  Sun,
+  Moon,
+  Palette
 } from 'lucide-react';
 
 interface SettingsModalProps {
@@ -34,6 +37,8 @@ interface SettingsModalProps {
   onSetAutosaveDelay: (seconds: number) => void;
   onToggleAutosave: (enabled: boolean) => void;
   onSaveImmediately: () => void;
+  theme: 'light' | 'dark';
+  onThemeChange: (theme: 'light' | 'dark') => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -50,7 +55,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   lastSavedAt,
   onSetAutosaveDelay,
   onToggleAutosave,
-  onSaveImmediately
+  onSaveImmediately,
+  theme,
+  onThemeChange
 }) => {
   const [isScanning, setIsScanning] = useState(false);
   const [storagePathInput, setStoragePathInput] = useState(
@@ -115,7 +122,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div>
               <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Workspace Settings</h3>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.1rem' }}>
-                Local filesystem directory, secrets storage, and disk synchronization
+                Appearance theme, local directory, secrets storage, and disk synchronization
               </p>
             </div>
           </div>
@@ -126,6 +133,118 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         {/* Modal Body */}
         <div className="modal-body" style={{ gap: '1.25rem', display: 'flex', flexDirection: 'column' }}>
+
+          {/* Section 0: Appearance & Theme */}
+          <div
+            style={{
+              background: 'rgba(255, 255, 255, 0.025)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: '8px',
+              padding: '1.1rem'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Palette size={16} color="var(--accent-cyan)" />
+                <span style={{ fontSize: '0.92rem', fontWeight: 600 }}>Appearance & Theme</span>
+              </div>
+              <span
+                className="badge badge-done"
+                style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', textTransform: 'uppercase' }}
+              >
+                {theme === 'light' ? 'Light Mode (Default)' : 'Dark Mode'}
+              </span>
+            </div>
+
+            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.9rem', lineHeight: '1.45' }}>
+              Choose your preferred visual aesthetic. Changes apply immediately and are saved across workspaces.
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+              {/* Light Theme Card */}
+              <button
+                type="button"
+                onClick={() => onThemeChange('light')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.75rem',
+                  padding: '0.75rem 0.9rem',
+                  borderRadius: 'var(--radius-md, 8px)',
+                  border: theme === 'light' ? '2px solid var(--accent-primary)' : '1px solid var(--border-subtle)',
+                  background: theme === 'light' ? 'rgba(99, 102, 241, 0.12)' : 'var(--bg-darkest, rgba(0, 0, 0, 0.2))',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  transition: 'all 0.2s ease',
+                  boxShadow: theme === 'light' ? '0 0 14px rgba(99, 102, 241, 0.2)' : 'none'
+                }}
+              >
+                <div
+                  style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '6px',
+                    background: theme === 'light' ? 'var(--accent-amber)' : 'rgba(245, 158, 11, 0.15)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: theme === 'light' ? '#fff' : 'var(--accent-amber)',
+                    flexShrink: 0
+                  }}
+                >
+                  <Sun size={18} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <span style={{ fontSize: '0.86rem', fontWeight: 700, color: 'var(--text-main)' }}>Light Mode</span>
+                    <span style={{ fontSize: '0.65rem', background: 'rgba(99, 102, 241, 0.15)', color: 'var(--accent-primary)', padding: '0.05rem 0.3rem', borderRadius: '3px', fontWeight: 600 }}>Default</span>
+                  </div>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Crisp, clean high-contrast</span>
+                </div>
+                {theme === 'light' && <Check size={16} color="var(--accent-primary)" style={{ flexShrink: 0 }} />}
+              </button>
+
+              {/* Dark Theme Card */}
+              <button
+                type="button"
+                onClick={() => onThemeChange('dark')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.75rem',
+                  padding: '0.75rem 0.9rem',
+                  borderRadius: 'var(--radius-md, 8px)',
+                  border: theme === 'dark' ? '2px solid var(--accent-primary)' : '1px solid var(--border-subtle)',
+                  background: theme === 'dark' ? 'rgba(99, 102, 241, 0.12)' : 'var(--bg-darkest, rgba(0, 0, 0, 0.2))',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  transition: 'all 0.2s ease',
+                  boxShadow: theme === 'dark' ? '0 0 14px rgba(99, 102, 241, 0.2)' : 'none'
+                }}
+              >
+                <div
+                  style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '6px',
+                    background: theme === 'dark' ? 'var(--accent-violet)' : 'rgba(139, 92, 246, 0.15)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: theme === 'dark' ? '#fff' : 'var(--accent-violet)',
+                    flexShrink: 0
+                  }}
+                >
+                  <Moon size={18} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ fontSize: '0.86rem', fontWeight: 700, color: 'var(--text-main)', display: 'block' }}>Dark Mode</span>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Sleek deep navy aesthetic</span>
+                </div>
+                {theme === 'dark' && <Check size={16} color="var(--accent-primary)" style={{ flexShrink: 0 }} />}
+              </button>
+            </div>
+          </div>
 
           {/* Section 1: Local Directory & Storage Location */}
           <div
@@ -139,7 +258,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <FolderOpen size={16} color="var(--accent-cyan)" />
-                <span style={{ fontSize: '0.92rem', fontWeight: 600, color: '#fff' }}>App Storage Folder (Default: ~/.ergo)</span>
+                <span style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--text-bright)' }}>App Storage Folder (Default: ~/.ergo)</span>
                 <span
                   className={`badge ${folderMetadata.status === 'connected' ? 'badge-done' : ''}`}
                   style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem' }}
@@ -223,13 +342,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             {folderMetadata.resolvedPath && (
               <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginBottom: '0.75rem', fontFamily: 'var(--font-mono)' }}>
-                Resolved path on disk: <strong style={{ color: '#fff' }}>{folderMetadata.resolvedPath}</strong>
+                Resolved path on disk: <strong style={{ color: 'var(--text-bright)' }}>{folderMetadata.resolvedPath}</strong>
               </div>
             )}
 
             <div
               style={{
-                background: 'rgba(0, 0, 0, 0.3)',
+                background: 'rgba(0, 0, 0, 0.1)',
                 padding: '0.65rem 0.85rem',
                 borderRadius: '6px',
                 border: '1px solid var(--border-subtle)',
@@ -240,7 +359,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 gap: '0.3rem'
               }}
             >
-              <div style={{ color: '#fff', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <div style={{ color: 'var(--text-bright)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                 <Folder size={13} color="var(--accent-amber)" />
                 <span>{folderMetadata.storageDirectory || '~/.ergo'}/</span>
               </div>
@@ -275,7 +394,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <HardDrive size={16} color="var(--accent-cyan)" />
-                  <span style={{ fontSize: '0.92rem', fontWeight: 600, color: '#fff' }}>Sync to Local Files</span>
+                  <span style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--text-bright)' }}>Sync to Local Files</span>
                   <span
                     className={`badge ${isAutosaveEnabled ? 'badge-done' : ''}`}
                     style={{
@@ -319,7 +438,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
               <Clock size={16} color="var(--accent-amber)" />
-              <span style={{ fontSize: '0.92rem', fontWeight: 600, color: '#fff' }}>Inactivity Delay</span>
+              <span style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--text-bright)' }}>Inactivity Delay</span>
             </div>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.85rem', lineHeight: '1.4' }}>
               Amount of time the app waits after you stop typing before writing to the markdown files.

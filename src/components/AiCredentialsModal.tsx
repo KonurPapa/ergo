@@ -325,7 +325,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
             </div>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#fff', margin: 0 }}>
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-bright)', margin: 0 }}>
                   Manage AI Keys
                 </h3>
                 {/* <span className="badge badge-done" style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem' }}>
@@ -380,11 +380,11 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
           </div>
           <div
             style={{
-              background: 'var(--bg-dark)',
-              border: editingId ? '1px solid var(--accent-cyan)' : '1px solid var(--border-glow)',
+              background: 'var(--bg-card)',
+              border: editingId ? '1.5px solid var(--accent-cyan)' : '1px solid var(--border-subtle)',
               borderRadius: 'var(--radius-md)',
               padding: '1.25rem',
-              boxShadow: editingId ? '0 0 16px rgba(6, 182, 212, 0.15)' : 'none',
+              boxShadow: editingId ? '0 0 16px rgba(6, 182, 212, 0.15)' : 'var(--shadow-card)',
               transition: 'all 0.2s ease'
             }}
           >
@@ -414,11 +414,12 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                       gap: '0.35rem',
                       padding: '0.65rem 0.4rem',
                       borderRadius: 'var(--radius-sm)',
-                      border: `1px solid ${isSelected ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
-                      background: isSelected ? 'rgba(6, 182, 212, 0.14)' : 'var(--bg-card)',
-                      color: isSelected ? '#fff' : 'var(--text-muted)',
+                      border: `1.5px solid ${isSelected ? 'var(--accent-primary)' : 'var(--btn-secondary-border)'}`,
+                      background: isSelected ? 'rgba(99, 102, 241, 0.15)' : 'var(--btn-secondary-bg)',
+                      color: isSelected ? 'var(--accent-primary)' : 'var(--text-main)',
                       cursor: 'pointer',
-                      transition: 'all 0.15s ease'
+                      transition: 'all 0.15s ease',
+                      boxShadow: isSelected ? '0 0 10px rgba(99, 102, 241, 0.2)' : '0 1px 2px rgba(0, 0, 0, 0.04)'
                     }}
                   >
                     <div style={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -430,7 +431,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                             width: '100%',
                             height: '100%',
                             objectFit: 'contain',
-                            opacity: isSelected ? 1 : 0.75,
+                            opacity: isSelected ? 1 : 0.85,
                             transition: 'opacity 0.15s ease'
                           }}
                         />
@@ -438,7 +439,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         <span style={{ fontSize: '1.2rem' }}>{p.icon}</span>
                       )}
                     </div>
-                    <span style={{ fontSize: '0.76rem', fontWeight: isSelected ? 700 : 500 }}>{p.shortName}</span>
+                    <span style={{ fontSize: '0.76rem', fontWeight: isSelected ? 700 : 600 }}>{p.shortName}</span>
                   </button>
                 );
               })}
@@ -448,7 +449,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
             <div className="input-group" style={{ marginBottom: '0.85rem' }}>
               <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
                 <Tag size={13} color="var(--accent-cyan)" />
-                <span style={{ fontWeight: 600, color: '#e2e8f0' }}>Key Label</span>
+                <span style={{ fontWeight: 700, color: 'var(--text-bright)' }}>Key Label</span>
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>(Name to identify this key)</span>
               </label>
               <input
@@ -465,7 +466,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
               <div className="input-group" style={{ marginBottom: '0.85rem' }}>
                 <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
                   <Key size={13} color="var(--accent-amber)" />
-                  <span style={{ fontWeight: 600, color: '#e2e8f0' }}>API Key</span>
+                  <span style={{ fontWeight: 700, color: 'var(--text-bright)' }}>API Key</span>
                 </label>
                 <div style={{ position: 'relative' }}>
                   <input
@@ -502,7 +503,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
               <div className="input-group" style={{ marginBottom: '0.85rem' }}>
                 <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
                   <Globe size={13} color="var(--accent-violet)" />
-                  <span style={{ fontWeight: 600, color: '#e2e8f0' }}>Ollama Host Endpoint</span>
+                  <span style={{ fontWeight: 700, color: 'var(--text-bright)' }}>Ollama Host Endpoint</span>
                 </label>
                 <input
                   type="text"
@@ -525,11 +526,11 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   width: '100%',
-                  background: 'rgba(15, 23, 42, 0.4)',
-                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--btn-secondary-bg)',
+                  border: '1px solid var(--btn-secondary-border)',
                   borderRadius: 'var(--radius-sm)',
                   padding: '0.55rem 0.75rem',
-                  color: '#cbd5e1',
+                  color: 'var(--text-bright)',
                   cursor: 'pointer',
                   fontSize: '0.8rem',
                   fontWeight: 600,
@@ -577,8 +578,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                     gap: '0.85rem',
                     marginTop: '0.5rem',
                     padding: '0.85rem',
-                    background: 'rgba(15, 23, 42, 0.5)',
-                    border: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-pane)',
+                    border: '1px solid var(--btn-secondary-border)',
                     borderRadius: 'var(--radius-sm)'
                   }}
                 >
@@ -587,7 +588,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
                       <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
                         <Zap size={13} color="var(--accent-amber)" />
-                        <span style={{ fontWeight: 700, color: '#fff', fontSize: '0.82rem' }}>Discovery Model</span>
+                        <span style={{ fontWeight: 700, color: 'var(--text-bright)', fontSize: '0.82rem' }}>Discovery Model</span>
                         <span
                           style={{
                             fontSize: '0.62rem',
@@ -634,7 +635,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                       <div>
                         <select
                           className="input-text"
-                          value={discoveryModel}
+                          value={discoveryModel || providerMeta.defaultDiscoveryModel}
                           onChange={(e) => setDiscoveryModel(e.target.value)}
                           disabled={!isOllamaConnected || ollamaModels.length === 0 || isLoadingOllamaModels}
                           style={{
@@ -667,7 +668,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         )}
                         {isOllamaConnected && ollamaModels.length === 0 && (
                           <span style={{ display: 'block', fontSize: '0.68rem', color: 'var(--accent-amber)', marginTop: '0.3rem' }}>
-                            No models found. Run <code style={{ color: '#fff' }}>ollama pull llama3</code> in terminal.
+                            No models found. Run <code style={{ color: 'var(--text-bright)' }}>ollama pull llama3</code> in terminal.
                           </span>
                         )}
                       </div>
@@ -692,7 +693,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
                       <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
                         <Brain size={13} color="var(--accent-cyan)" />
-                        <span style={{ fontWeight: 700, color: '#fff', fontSize: '0.82rem' }}>Tasks Model</span>
+                        <span style={{ fontWeight: 700, color: 'var(--text-bright)', fontSize: '0.82rem' }}>Tasks Model</span>
                         <span
                           style={{
                             fontSize: '0.62rem',
@@ -772,7 +773,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         )}
                         {isOllamaConnected && ollamaModels.length === 0 && (
                           <span style={{ display: 'block', fontSize: '0.68rem', color: 'var(--accent-amber)', marginTop: '0.3rem' }}>
-                            No models found. Run <code style={{ color: '#fff' }}>ollama pull qwen2.5-coder</code> in terminal.
+                            No models found. Run <code style={{ color: 'var(--text-bright)' }}>ollama pull qwen2.5-coder</code> in terminal.
                           </span>
                         )}
                       </div>
@@ -907,15 +908,15 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         flexDirection: 'column',
                         gap: '0.6rem',
                         padding: '0.85rem 1rem',
-                        background: 'var(--bg-dark)',
-                        border: `1px solid ${isCurrentlyEditing
+                        background: 'var(--bg-card)',
+                        border: `1.5px solid ${isCurrentlyEditing
                           ? 'var(--accent-cyan)'
                           : isActive
-                            ? 'rgba(6, 182, 212, 0.4)'
+                            ? 'var(--accent-cyan)'
                             : 'var(--border-subtle)'
                           }`,
                         borderRadius: 'var(--radius-md)',
-                        boxShadow: isActive ? '0 0 10px rgba(6, 182, 212, 0.08)' : 'none',
+                        boxShadow: isActive ? '0 0 10px rgba(6, 182, 212, 0.12)' : 'var(--shadow-card)',
                         transition: 'all 0.15s ease'
                       }}
                     >
@@ -931,15 +932,15 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                           </div>
                           <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                              <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff' }}>{k.name}</span>
+                              <span style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-bright)' }}>{k.name}</span>
                               <span
                                 className="badge"
                                 style={{
                                   fontSize: '0.65rem',
                                   padding: '0.1rem 0.4rem',
-                                  background: 'rgba(255, 255, 255, 0.06)',
-                                  color: '#cbd5e1',
-                                  borderColor: 'var(--border-subtle)'
+                                  background: 'var(--btn-secondary-bg)',
+                                  color: 'var(--text-muted)',
+                                  borderColor: 'var(--btn-secondary-border)'
                                 }}
                               >
                                 {pMeta?.shortName || k.provider}
@@ -1033,21 +1034,21 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                           alignItems: 'center',
                           gap: '0.75rem',
                           paddingTop: '0.4rem',
-                          borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+                          borderTop: '1px solid var(--border-subtle)',
                           fontSize: '0.72rem'
                         }}
                       >
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--text-muted)' }}>
                           <Zap size={12} color="var(--accent-amber)" />
                           <span>Discovery:</span>
-                          <span style={{ fontWeight: 600, color: '#e2e8f0', background: 'rgba(255, 255, 255, 0.06)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
+                          <span style={{ fontWeight: 600, color: 'var(--text-bright)', background: 'var(--btn-secondary-bg)', border: '1px solid var(--btn-secondary-border)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
                             {discModelName}
                           </span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--text-muted)' }}>
                           <Brain size={12} color="var(--accent-cyan)" />
                           <span>General Tasks:</span>
-                          <span style={{ fontWeight: 600, color: '#e2e8f0', background: 'rgba(255, 255, 255, 0.06)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
+                          <span style={{ fontWeight: 600, color: 'var(--text-bright)', background: 'var(--btn-secondary-bg)', border: '1px solid var(--btn-secondary-border)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
                             {genModelName}
                           </span>
                         </div>
@@ -1070,7 +1071,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
               <HelpCircle size={18} color="var(--accent-cyan)" />
-              <h4 style={{ fontSize: '0.92rem', fontWeight: 700, color: '#fff', margin: 0 }}>
+              <h4 style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--text-bright)', margin: 0 }}>
                 Don't know where to get an API key?
               </h4>
             </div>
@@ -1087,10 +1088,10 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   padding: '0.6rem 0.85rem',
-                  background: 'var(--bg-card)',
-                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--btn-secondary-bg)',
+                  border: '1px solid var(--btn-secondary-border)',
                   borderRadius: 'var(--radius-sm)',
-                  color: '#fff',
+                  color: 'var(--text-bright)',
                   fontSize: '0.8rem',
                   fontWeight: 600,
                   textDecoration: 'none',
@@ -1114,10 +1115,10 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   padding: '0.6rem 0.85rem',
-                  background: 'var(--bg-card)',
-                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--btn-secondary-bg)',
+                  border: '1px solid var(--btn-secondary-border)',
                   borderRadius: 'var(--radius-sm)',
-                  color: '#fff',
+                  color: 'var(--text-bright)',
                   fontSize: '0.8rem',
                   fontWeight: 600,
                   textDecoration: 'none',
@@ -1141,10 +1142,10 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   padding: '0.6rem 0.85rem',
-                  background: 'var(--bg-card)',
-                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--btn-secondary-bg)',
+                  border: '1px solid var(--btn-secondary-border)',
                   borderRadius: 'var(--radius-sm)',
-                  color: '#fff',
+                  color: 'var(--text-bright)',
                   fontSize: '0.8rem',
                   fontWeight: 600,
                   textDecoration: 'none',
@@ -1168,10 +1169,10 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   padding: '0.6rem 0.85rem',
-                  background: 'var(--bg-card)',
-                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--btn-secondary-bg)',
+                  border: '1px solid var(--btn-secondary-border)',
                   borderRadius: 'var(--radius-sm)',
-                  color: '#fff',
+                  color: 'var(--text-bright)',
                   fontSize: '0.8rem',
                   fontWeight: 600,
                   textDecoration: 'none',
