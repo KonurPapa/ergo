@@ -1,11 +1,12 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
   type TaskItem as TaskItemType,
   type ProjectData,
   type AIProviderConfig,
   type MCPServer,
   type HumanAiAssistantResult,
-  type HumanInputPrompt
+  type HumanInputPrompt,
+  type SwimLaneDoc
 } from '../types';
 import { useEditor, EditorContent } from '@tiptap/react';
 import ListItem from '@tiptap/extension-list-item';
@@ -14,7 +15,7 @@ import Placeholder from '@tiptap/extension-placeholder';
 import Link from '@tiptap/extension-link';
 import Typography from '@tiptap/extension-typography';
 import { Markdown } from 'tiptap-markdown';
-import { stripHeaderComments } from '../lib/parser';
+import { stripHeaderComments, parseSwimLaneMarkdown } from '../lib/parser';
 import { HumanAiAssistantModal } from './HumanAiAssistantModal';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
@@ -27,6 +28,7 @@ import { MARKDOWN_WRAPPER_PAIRS } from '../lib/markdownEditorUtils';
 const CustomListItem = ListItem.extend({
   content: 'block+',
 });
+
 import {
   Plus,
   FileText,
@@ -54,6 +56,9 @@ import {
   AlertTriangle,
   AlertCircle,
   X,
+  Edit2,
+  Columns,
+  MoreHorizontal
 } from 'lucide-react';
 
 interface WithMarkdownStorage {
@@ -63,6 +68,9 @@ interface WithMarkdownStorage {
     };
   };
 }
+
+// Module-level persistent Set to remember collapsed cards across re-renders
+const collapsedCardsState = new Set<string>();
 
 // Helper: check if a node (paragraph) is marked as done via strikethrough
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -95,11 +103,9 @@ function insertSubtaskAtCardPos(editorInstance: any, listItemPos: number) {
   const paragraph = schema.nodes.paragraph;
   if (!bulletList || !listItem || !paragraph) return;
 
-  // Read the LIVE listItem node from the current doc
   const liveNode = doc.nodeAt(listItemPos);
   if (!liveNode || liveNode.type.name !== 'listItem') return;
 
-  // Scan children: find where content blocks end and if a bulletList already exists
   let insertAfterContent = listItemPos + 1;
   let existingBulletEnd: number | null = null;
 
@@ -109,7 +115,6 @@ function insertSubtaskAtCardPos(editorInstance: any, listItemPos: number) {
       insertAfterContent = listItemPos + 1 + offset + child.nodeSize;
     }
     if (child.type.name === 'bulletList') {
-      // Position just before the bulletList closing tag — insert new items here
       existingBulletEnd = listItemPos + 1 + offset + child.nodeSize - 1;
     }
   });
@@ -118,12 +123,10 @@ function insertSubtaskAtCardPos(editorInstance: any, listItemPos: number) {
   let focusPos: number;
 
   if (existingBulletEnd !== null) {
-    // Append another bullet item to the existing nested list
     const newItem = listItem.create(null, paragraph.create(null));
     tr.insert(existingBulletEnd, newItem);
     focusPos = existingBulletEnd + 2;
   } else {
-    // Create a fresh bulletList with one empty item, placed right after the content block
     const newBullet = bulletList.create(null, listItem.create(null, paragraph.create(null)));
     tr.insert(insertAfterContent, newBullet);
     focusPos = insertAfterContent + 3;
@@ -150,6 +153,7 @@ function handleAddNewCard(editorInstance: any) {
   let lastOrderedListPos: number | null = null;
   let lastOrderedListNode: any = null;
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   doc.descendants((node: any, pos: number) => {
     if (node.type === orderedList) {
       const resolved = doc.resolve(pos);
@@ -184,7 +188,6 @@ function handleAddNewCard(editorInstance: any) {
 }
 
 // Helper: determines whether the listItem node at pos is a top-level task card
-// (i.e. direct child of an orderedList or bulletList, and not nested inside any other listItem)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function isTopLevelListItemNode(doc: any, pos: number): boolean {
   const resolved = doc.resolve(pos);
@@ -200,7 +203,7 @@ function isTopLevelListItemNode(doc: any, pos: number): boolean {
   return true;
 }
 
-// Helper: compute 1-based top-level card index from document position
+// Helper: computes which 1-based top-level task index corresponds to a given cursor/click pos
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getTaskIndexAtPos(doc: any, pos: number): number | null {
   const resolved = doc.resolve(pos);
@@ -234,7 +237,7 @@ function getTaskIndexAtPos(doc: any, pos: number): number | null {
   return found;
 }
 
-// Extension: Auto-join directly adjacent ordered lists and bullet lists (preserving intervening paragraphs)
+// Extension: Auto-join directly adjacent ordered lists and bullet lists
 const AutoJoinListsExtension = Extension.create({
   name: 'autoJoinLists',
   addProseMirrorPlugins() {
@@ -277,7 +280,6 @@ const AutoJoinListsExtension = Extension.create({
               }
               pos += childSize;
             }
-
             if (!localChanged) break;
           }
 
@@ -288,70 +290,30 @@ const AutoJoinListsExtension = Extension.create({
   },
 });
 
-// Extension: H1 → ordered list on Enter; Enter on blank card → exit to generic text editor; Shift+Enter inside card → add subtask; Backspace on empty card → clean delete
-const AutoCardListExtension = Extension.create({
-  name: 'autoCardList',
+// Extension: Custom keymap for list item navigation and creation
+const CustomListKeymapExtension = Extension.create({
+  name: 'customListKeymap',
   addKeyboardShortcuts() {
     return {
       Enter: ({ editor }) => {
-        // 1. If at the end of top-level H1 (outside list items), Enter creates an ordered list
-        if (editor.isActive('heading', { level: 1 }) && !editor.isActive('listItem')) {
-          const { $from } = editor.state.selection;
-          if ($from.parentOffset === $from.parent.content.size) {
-            const res = editor.chain().splitBlock().toggleOrderedList().unsetMark('strike').run();
-            editor.view.dispatch(editor.state.tr.setStoredMarks([]));
-            return res;
-          }
-        }
+        if (!editor.isActive('orderedList') && !editor.isActive('bulletList')) {
+          const { state } = editor;
+          const { selection } = state;
+          const { $from } = selection;
+          const currentLineText = $from.parent.textContent;
+          const wasHeading = $from.parent.type.name === 'heading';
 
-        // 2. If inside a top-level blank card, Enter exits to generic text editor mode
-        const { state } = editor;
-        const { selection } = state;
-        const { $from, empty } = selection;
-
-        if (empty) {
-          for (let depth = $from.depth; depth > 0; depth--) {
-            const node = $from.node(depth);
-            if (node.type.name === 'listItem') {
-              const parent = $from.node(depth - 1);
-              const isTopLevelCard =
-                (parent.type.name === 'orderedList' || parent.type.name === 'bulletList') &&
-                (depth < 2 || $from.node(depth - 2)?.type.name !== 'listItem');
-
-              if (isTopLevelCard) {
-                // Check if card is empty (blank task)
-                let isCardEmpty = true;
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                node.forEach((child: any) => {
-                  if (child.textContent.trim() !== '') {
-                    isCardEmpty = false;
-                  }
-                  if (child.type.name === 'bulletList' || child.type.name === 'orderedList') {
-                    isCardEmpty = false;
-                  }
-                });
-
-                if (isCardEmpty) {
-                  // Exit the task list and switch to generic text editor mode (outside of cards)
-                  return editor.chain().focus().liftListItem('listItem').run();
-                }
-              }
-              break;
+          if (/^\d+\.\s*/.test(currentLineText.trim())) {
+            const res = editor.chain().focus().toggleOrderedList().unsetMark('strike').run();
+            if (res) {
+              const tr = editor.state.tr;
+              tr.setStoredMarks([]);
+              editor.view.dispatch(tr);
+              return true;
             }
           }
-        }
 
-        // 3. If inside a blockquote inside a listItem, allow empty block to lift out of blockquote
-        if (editor.isActive('blockquote')) {
-          if ($from.parent.textContent.trim() === '') {
-            return false;
-          }
-        }
-
-        // 4. If inside a listItem (card or subtask), split and always clear strike marks from the new item
-        if (editor.isActive('listItem')) {
-          const wasHeading = editor.isActive('heading');
-          const res = editor.chain().splitListItem('listItem').unsetMark('strike').run();
+          const res = editor.chain().focus().toggleOrderedList().unsetMark('strike').run();
           if (res) {
             if (wasHeading) {
               editor.chain().setNode('paragraph').run();
@@ -375,7 +337,6 @@ const AutoCardListExtension = Extension.create({
         return false;
       },
       Tab: ({ editor }) => {
-        // 1. When inside an existing non-blank top-level task (ordered or bullet), Tab adds a subtask
         if (editor.isActive('orderedList') || editor.isActive('bulletList')) {
           const { state } = editor;
           const { selection } = state;
@@ -390,7 +351,6 @@ const AutoCardListExtension = Extension.create({
                 (depth < 2 || $from.node(depth - 2)?.type.name !== 'listItem');
 
               if (isTopLevelCard) {
-                // Check if card has content (not blank)
                 let hasContent = false;
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 node.forEach((child: any) => {
@@ -410,7 +370,6 @@ const AutoCardListExtension = Extension.create({
           return false;
         }
 
-        // 2. When typing a plain text line outside a list, Tab elevates the line into a task item
         if (!editor.isActive('orderedList') && !editor.isActive('bulletList')) {
           const res = editor.chain().focus().toggleOrderedList().unsetMark('strike').run();
           if (res) {
@@ -422,7 +381,6 @@ const AutoCardListExtension = Extension.create({
         return false;
       },
       'Shift-Enter': ({ editor }) => {
-        // When inside a top-level task card, Shift+Enter adds a subtask bullet
         if (!editor.isActive('orderedList') && !editor.isActive('bulletList')) return false;
         const { $from } = editor.state.selection;
         for (let depth = $from.depth; depth > 0; depth--) {
@@ -461,7 +419,6 @@ const AutoCardListExtension = Extension.create({
               const cardBeforePos = $from.before(depth);
               const cardAfterPos = $from.after(depth);
 
-              // Check if card is empty
               let isCardEmpty = true;
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               node.forEach((child: any) => {
@@ -474,7 +431,6 @@ const AutoCardListExtension = Extension.create({
               });
 
               if (isCardEmpty) {
-                // Directly delete the listItem to prevent liftListItem splitting the list into orphans
                 const tr = state.tr;
                 tr.delete(cardBeforePos, cardAfterPos);
                 const targetPos = Math.max(1, Math.min(cardBeforePos, tr.doc.content.size - 1));
@@ -483,7 +439,6 @@ const AutoCardListExtension = Extension.create({
                 return true;
               }
 
-              // At start of non-empty card: avoid liftListItem splitting list
               if ($from.pos === cardStartPos) {
                 const indexInParent = $from.index(depth - 1);
                 if (indexInParent > 0) {
@@ -499,31 +454,6 @@ const AutoCardListExtension = Extension.create({
     };
   },
 });
-
-interface TaskPaneProps {
-  rawMarkdown: string;
-  tasks: TaskItemType[];
-  archivedTasks?: TaskItemType[];
-  selectedTaskId?: number | null;
-  runningTaskIds?: number[];
-  pendingHumanInputs?: Record<number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>;
-  onSelectTask?: (taskId: number) => void;
-  onMarkdownChange: (newMarkdown: string) => void;
-  onOpenDraftModal: () => void;
-  isAssistantOpen?: boolean;
-  onCloseAssistant?: () => void;
-  project?: ProjectData | null;
-  agentContextMarkdown?: string;
-  aiConfig?: AIProviderConfig;
-  mcpServers?: MCPServer[];
-  onApplyAssistantResult?: (result: HumanAiAssistantResult, confirmedDeletions: boolean) => void;
-  onArchiveTask?: (taskTitle: string) => void;
-  onUnarchiveTask?: (taskId: number) => void;
-  onDeleteArchivedTask?: (taskId: number) => void;
-}
-
-// Module-level persistent Set to remember collapsed cards across re-renders
-const collapsedCardsState = new Set<string>();
 
 // ── Toolbar button component ────────────────────────────────────
 interface ToolbarBtnProps {
@@ -546,73 +476,139 @@ const ToolbarBtn: React.FC<ToolbarBtnProps> = ({ onClick, active, disabled, titl
   </button>
 );
 
-// ── Toolbar separator ───────────────────────────────────────────
 const Sep = () => <div className="tiptap-toolbar-sep" />;
 
-// ── Main component ──────────────────────────────────────────────
-export const TaskPane: React.FC<TaskPaneProps> = ({
-  rawMarkdown,
-  tasks,
-  archivedTasks = [],
+// ── Individual SwimLane Column Component ────────────────────────
+interface SwimLaneColumnProps {
+  lane: SwimLaneDoc;
+  totalLanes: number;
+  width?: string;
+  isActive: boolean;
+  onActivate: () => void;
+  selectedTaskId?: number | null;
+  runningTaskIds?: number[];
+  pendingHumanInputs?: Record<number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>;
+  showStyles: boolean;
+  onSelectTask?: (taskId: number) => void;
+  onMarkdownChange: (laneId: string, newMarkdown: string) => void;
+  onRenameSwimLane?: (laneId: string, newTitle: string) => void;
+  onDeleteSwimLane?: (laneId: string) => void;
+  onArchiveTask?: (taskTitle: string) => void;
+  onUnarchiveTask?: (taskId: number) => void;
+  onDeleteArchivedTask?: (taskId: number) => void;
+  archivedTasks?: TaskItemType[];
+  assistantDrawerHeight: number;
+  onEditorReady?: (laneId: string, editorInstance: any) => void;
+}
+
+const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
+  lane,
+  totalLanes,
+  width,
+  isActive,
+  onActivate,
   selectedTaskId,
   runningTaskIds = [],
   pendingHumanInputs,
+  showStyles,
   onSelectTask,
   onMarkdownChange,
-  onOpenDraftModal,
-  isAssistantOpen = false,
-  onCloseAssistant = () => { },
-  project,
-  agentContextMarkdown = '',
-  aiConfig,
-  mcpServers = [],
-  onApplyAssistantResult = () => { },
+  onRenameSwimLane,
+  onDeleteSwimLane,
   onArchiveTask,
   onUnarchiveTask,
   onDeleteArchivedTask,
+  archivedTasks = [],
+  assistantDrawerHeight,
+  onEditorReady,
 }) => {
-  const selectedTaskIdRef = React.useRef(selectedTaskId);
+  const selectedTaskIdRef = useRef(selectedTaskId);
   selectedTaskIdRef.current = selectedTaskId;
 
-  const runningTaskIdsRef = React.useRef(runningTaskIds);
+  const runningTaskIdsRef = useRef(runningTaskIds);
   runningTaskIdsRef.current = runningTaskIds;
 
-  const pendingHumanInputsRef = React.useRef(pendingHumanInputs);
+  const pendingHumanInputsRef = useRef(pendingHumanInputs);
   pendingHumanInputsRef.current = pendingHumanInputs;
 
-  const tasksRef = React.useRef(tasks);
-  tasksRef.current = tasks;
-
-  const onSelectTaskRef = React.useRef(onSelectTask);
+  const onSelectTaskRef = useRef(onSelectTask);
   onSelectTaskRef.current = onSelectTask;
 
-  const onArchiveTaskRef = React.useRef(onArchiveTask);
+  const onArchiveTaskRef = useRef(onArchiveTask);
   onArchiveTaskRef.current = onArchiveTask;
 
+  // Local parsed items for this swim lane
+  const laneParsed = useMemo(() => parseSwimLaneMarkdown(lane, 0), [lane]);
+  const laneTasks = laneParsed.items;
+  const laneTasksRef = useRef(laneTasks);
+  laneTasksRef.current = laneTasks;
+
+  const laneArchivedTasks = useMemo(() => {
+    if (laneParsed.archivedItems && laneParsed.archivedItems.length > 0) {
+      return laneParsed.archivedItems;
+    }
+    if (archivedTasks && archivedTasks.length > 0) {
+      return archivedTasks.filter(
+        (t) => t.swimLaneId === lane.id || (!t.swimLaneId && (lane.id === 'lane-default' || totalLanes === 1))
+      );
+    }
+    return [];
+  }, [laneParsed.archivedItems, archivedTasks, lane.id, totalLanes]);
   const [isArchiveOpen, setIsArchiveOpen] = useState(false);
   const [taskToDelete, setTaskToDelete] = useState<TaskItemType | null>(null);
 
-  // Track assistant drawer height dynamically to ensure task list is fully scrollable above the panel
-  const [assistantDrawerHeight, setAssistantDrawerHeight] = React.useState<number>(0);
+  // Inline Title Editing State
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [editedTitle, setEditedTitle] = useState(lane.title);
+  const [isDeleteLaneModalOpen, setIsDeleteLaneModalOpen] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setIsMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isMenuOpen]);
+
+  useEffect(() => {
+    setEditedTitle(lane.title);
+  }, [lane.title]);
+
+  const handleTitleCommit = () => {
+    setIsEditingTitle(false);
+    if (editedTitle.trim() && editedTitle.trim() !== lane.title && onRenameSwimLane) {
+      onRenameSwimLane(lane.id, editedTitle.trim());
+    } else {
+      setEditedTitle(lane.title);
+    }
+  };
 
   // ProseMirror decoration extension for UI Checkboxes, Add Subtask, and Active Card highlighting
   const TaskCheckboxDecorationExtension = Extension.create({
-    name: 'taskCheckboxDecoration',
+    name: `taskCheckboxDecoration_${lane.id}`,
     addProseMirrorPlugins() {
-      const editor = this.editor;
       return [
         new Plugin({
-          key: new PluginKey('taskCheckboxDecorationPlugin'),
-          appendTransaction(_transactions, _oldState, _newState) {
-            // Keep card classes synchronized with doc structure
-            return null;
-          },
+          key: new PluginKey(`taskCheckboxDecorationPlugin_${lane.id}`),
           props: {
             handleClick(view, pos) {
               if (onSelectTaskRef.current) {
                 const itemIndex = getTaskIndexAtPos(view.state.doc, pos);
                 if (itemIndex !== null) {
-                  const targetTask = tasksRef.current[itemIndex - 1];
+                  // Resolve matching task by index or id
+                  const targetTask = laneTasksRef.current[itemIndex - 1];
                   const targetId = targetTask ? targetTask.id : itemIndex;
                   if (selectedTaskIdRef.current !== targetId) {
                     onSelectTaskRef.current(targetId);
@@ -627,95 +623,68 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
               const strikeMarkType = state.schema.marks.strike;
               const currentSelectedTaskId = selectedTaskIdRef.current;
               const currentRunningTaskIds = runningTaskIdsRef.current;
-              const currentTasks = tasksRef.current;
+              const currentTasks = laneTasksRef.current;
               if (!strikeMarkType) return DecorationSet.empty;
 
-              let globalCardIndex = 0;
-              let sectionCardIndex = 0;
+              let orderedItemCounter = 0;
 
-              // Track sections to reset sectionCardIndex per heading / hr
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               doc.descendants((node: any, pos: number) => {
-                if (node.type.name === 'heading' || node.type.name === 'horizontalRule') {
-                  const resolved = doc.resolve(pos);
-                  if (resolved.depth === 0 || (resolved.depth === 1 && resolved.parent.type.name === 'doc')) {
-                    sectionCardIndex = 0;
-                  }
-                }
-
                 if (node.type.name !== 'listItem') return;
 
-                const isTopLevelCard = isTopLevelListItemNode(doc, pos);
+                const isTopLevel = isTopLevelListItemNode(doc, pos);
 
-                if (isTopLevelCard) {
-                  const resolved = doc.resolve(pos);
-                  const parent = resolved.parent;
-                  globalCardIndex++;
-                  sectionCardIndex++;
-                  const isUnordered = parent.type.name === 'bulletList';
-                  const cardTaskId = currentTasks[globalCardIndex - 1]?.id || globalCardIndex;
-                  const isSelected = currentSelectedTaskId === cardTaskId;
-                  const isRunning = currentRunningTaskIds.includes(cardTaskId);
-                  const isNeedsInput = Boolean(pendingHumanInputsRef.current?.[cardTaskId]);
-                  const matchingTask = currentTasks.find((t) => t.id === cardTaskId) || currentTasks[globalCardIndex - 1];
-                  const isHumanReviewPending = Boolean(matchingTask?.isHumanReview || matchingTask?.subtasks?.some((s) => s.isHumanReview && !s.isDone));
+                if (isTopLevel) {
+                  orderedItemCounter++;
+                  const isOrdered = doc.resolve(pos).parent.type.name === 'orderedList';
+                  const digitCount = isOrdered ? String(orderedItemCounter).length : 1;
 
-                  // Find primary content block in this card (parent task title)
+                  const cardKey = `lane_${lane.id}_task_${orderedItemCounter}`;
+                  const isCollapsed = collapsedCardsState.has(cardKey);
+
+                  const matchedTask = currentTasks[orderedItemCounter - 1];
+                  const cardTaskId = matchedTask ? matchedTask.id : orderedItemCounter;
+
+                  const isCardActive = currentSelectedTaskId === cardTaskId;
+                  const isCardRunning = currentRunningTaskIds ? currentRunningTaskIds.includes(cardTaskId) : false;
+                  const isNeedsInput = !!pendingHumanInputsRef.current?.[cardTaskId];
+
                   let firstBlockPos: number | null = null;
                   let firstBlockNode: any = null;
-
                   let hasSubtasks = false;
+
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   node.forEach((child: any, offset: number) => {
-                    const childPos = pos + 1 + offset;
-                    if (child.type.name !== 'bulletList' && child.type.name !== 'orderedList') {
-                      if (firstBlockPos === null) {
-                        firstBlockPos = childPos;
-                        firstBlockNode = child;
-                      }
-                    } else if (child.childCount > 0) {
+                    if (child.type.name !== 'bulletList' && child.type.name !== 'orderedList' && firstBlockPos === null) {
+                      firstBlockPos = pos + 1 + offset;
+                      firstBlockNode = child;
+                    }
+                    if (child.type.name === 'bulletList' || child.type.name === 'orderedList') {
                       hasSubtasks = true;
                     }
                   });
 
-                  const isParentChecked = firstBlockNode ? isNodeChecked(firstBlockNode) : false;
+                  const isParentChecked = isNodeChecked(firstBlockNode);
 
-                  // Set of collapsed card keys (using node content or position key)
-                  const cardKey = `card-${pos}-${firstBlockNode?.textContent?.slice(0, 30) || ''}`;
-                  const isCollapsed = hasSubtasks && collapsedCardsState.has(cardKey);
-
-                  // 1. Add active-card, card-running, card-needs-input, card-human-review, card-done, card-collapsed, and digit-count class decoration
-                  const numDigits = String(sectionCardIndex).length;
-                  const cardClasses = [
-                    isSelected ? 'is-active-card' : '',
-                    isRunning ? 'is-card-running' : '',
-                    isNeedsInput ? 'is-card-needs-input' : '',
-                    isHumanReviewPending ? 'is-card-human-review' : '',
-                    isParentChecked ? 'is-card-done' : '',
-                    isCollapsed ? 'card-collapsed' : '',
-                    isUnordered ? 'card-unordered' : `card-digits-${numDigits}`,
-                  ]
-                    .filter(Boolean)
-                    .join(' ');
-
+                  // 1. Add active, running, done, collapsed, and digit-width classes to the top-level card
                   decorations.push(
                     Decoration.node(pos, pos + node.nodeSize, {
-                      class: cardClasses,
-                      style: isUnordered ? undefined : `--card-digits: ${numDigits};`,
+                      class: `${isCardActive ? 'is-active-card' : ''} ${isCardRunning ? 'is-card-running' : ''} ${isParentChecked ? 'is-card-done' : ''} ${isCollapsed ? 'card-collapsed' : ''} ${isOrdered ? `card-digits-${digitCount}` : 'card-unordered'}`,
                     })
                   );
 
-                  // 2. Add Parent Task Checkbox Widget at pos + 1
+                  // 2. Add Parent Checkbox Widget
                   const parentCheckboxWidget = Decoration.widget(
                     pos + 1,
                     (view, getPos) => {
                       const container = document.createElement('div');
-                      container.className = `task-card-checkbox-wrapper ${isParentChecked ? 'is-checked' : ''} ${isRunning ? 'is-running' : ''} ${isNeedsInput ? 'is-needs-input' : ''}`;
+                      container.className = `task-card-checkbox-wrapper ${isParentChecked ? 'is-checked' : ''} ${isCardRunning ? 'is-running' : ''} ${isNeedsInput ? 'is-needs-input' : ''}`;
                       container.setAttribute('contenteditable', 'false');
                       container.title = isParentChecked ? 'Mark task as incomplete' : 'Mark task as completed';
 
                       const checkbox = document.createElement('button');
                       checkbox.type = 'button';
-                      checkbox.className = `task-ui-checkbox parent-checkbox ${isParentChecked ? 'checked' : ''} ${isRunning ? 'running' : ''} ${isNeedsInput ? 'needs-input' : ''}`;
+                      checkbox.className = `task-ui-checkbox parent-checkbox ${isParentChecked ? 'checked' : ''} ${isCardRunning ? 'running' : ''} ${isNeedsInput ? 'needs-input' : ''}`;
                       checkbox.setAttribute('aria-checked', String(isParentChecked));
                       checkbox.setAttribute('role', 'checkbox');
                       checkbox.setAttribute('aria-label', isParentChecked ? 'Completed task' : 'Incomplete task');
@@ -742,6 +711,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                         let liveFirstBlockNode: any = null;
                         const liveSubtaskBlocks: { pos: number; node: any }[] = [];
 
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         liveNode.forEach((child: any, offset: number) => {
                           const childPos: number = listItemPos + 1 + offset;
                           if (child.type.name !== 'bulletList' && child.type.name !== 'orderedList') {
@@ -750,9 +720,11 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                               liveFirstBlockNode = child;
                             }
                           } else if (child.type.name === 'bulletList' || child.type.name === 'orderedList') {
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
                             child.forEach((nestedItem: any, nestedOffset: number) => {
                               const nestedItemPos: number = childPos + 1 + nestedOffset;
                               if (nestedItem.type.name === 'listItem') {
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                                 nestedItem.forEach((nestedChild: any, nOffset: number) => {
                                   if (nestedChild.type.name !== 'bulletList' && nestedChild.type.name !== 'orderedList') {
                                     liveSubtaskBlocks.push({
@@ -774,18 +746,14 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                         const toPos: number = fromPos + Number(liveFirstBlockNode.nodeSize);
 
                         if (shouldCheck) {
-                          // Strikethrough parent task
                           tr.addMark(fromPos, toPos, strikeMarkType.create());
-                          // Cascade: check and strikethrough all children subtasks
                           liveSubtaskBlocks.forEach((sp) => {
                             const spFrom: number = Number(sp.pos);
                             const spTo: number = spFrom + Number(sp.node.nodeSize);
                             tr.addMark(spFrom, spTo, strikeMarkType.create());
                           });
                         } else {
-                          // Uncheck parent task
                           tr.removeMark(fromPos, toPos, strikeMarkType);
-                          // Cascade: uncheck and remove strikethrough from all children subtasks
                           liveSubtaskBlocks.forEach((sp) => {
                             const spFrom: number = Number(sp.pos);
                             const spTo: number = spFrom + Number(sp.node.nodeSize);
@@ -793,7 +761,6 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                           });
                         }
 
-                        // Also select this task card when clicking its checkbox
                         if (onSelectTaskRef.current) {
                           onSelectTaskRef.current(cardTaskId);
                         }
@@ -841,7 +808,6 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                           } else {
                             collapsedCardsState.add(cardKey);
                           }
-                          // Force decoration redraw by touching state transaction
                           const tr = view.state.tr.setMeta('taskCollapseToggle', true);
                           view.dispatch(tr);
                         });
@@ -853,105 +819,138 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                     decorations.push(chevronWidget);
                   }
 
-                  // 4. Add Card Action Buttons Widget (Add Subtask + Delete Task) at pos + 1 (right side)
-                  // Show on selected card, running card, needs-input card, or human-review pending card
-                  if (isSelected || isRunning || isNeedsInput || isHumanReviewPending) {
+                  // 4. Add Top-Right Card Actions Widget (+ Subtask, Archive)
+                  if (!isCollapsed) {
                     const cardActionsWidget = Decoration.widget(
                       pos + 1,
-                      (_view, getPos) => {
+                      (view, getPos) => {
                         const container = document.createElement('div');
                         container.className = 'card-actions-wrapper';
                         container.setAttribute('contenteditable', 'false');
 
-                        // Needs Input live pulsing badge button
-                        if (isNeedsInput) {
-                          const needsInputBadge = document.createElement('button');
-                          needsInputBadge.type = 'button';
-                          needsInputBadge.className = 'task-needs-input-badge-pill';
-                          needsInputBadge.title = 'Builder AI needs user input mid-task. Click to view prompt.';
-                          needsInputBadge.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="pulse-animate"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg><span>Needs Input</span>`;
-                          needsInputBadge.addEventListener('mousedown', (e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            if (onSelectTaskRef.current) {
-                              onSelectTaskRef.current(cardTaskId);
-                            }
-                          });
-                          container.appendChild(needsInputBadge);
+                        // Running status pill
+                        if (isCardRunning) {
+                          const runningPill = document.createElement('div');
+                          runningPill.className = 'task-running-badge-pill';
+                          runningPill.innerHTML = `<span class="live-pulse-dot-working"></span><span>RUNNING</span>`;
+                          container.appendChild(runningPill);
                         }
 
-                        // Running live pill indicator
-                        if (isRunning && !isNeedsInput) {
-                          const runningBadge = document.createElement('span');
-                          runningBadge.className = 'task-running-badge-pill';
-                          runningBadge.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin-animate"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg><span>Working</span>`;
-                          container.appendChild(runningBadge);
-                        }
+                        // Add Subtask button
+                        const addBtn = document.createElement('button');
+                        addBtn.className = 'card-action-btn card-add-subtask-btn';
+                        addBtn.setAttribute('contenteditable', 'false');
+                        addBtn.type = 'button';
+                        addBtn.title = 'Add subtask';
+                        addBtn.setAttribute('aria-label', 'Add subtask');
+                        addBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`;
 
-                        // Human review badge pill indicator on card
-                        if (isHumanReviewPending && !isRunning && !isNeedsInput) {
-                          const reviewBadge = document.createElement('span');
-                          reviewBadge.className = 'task-human-review-badge-pill';
-                          reviewBadge.title = 'Human review verification required for completed work';
-                          reviewBadge.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg><span>Human Review</span>`;
-                          container.appendChild(reviewBadge);
-                        }
+                        addBtn.addEventListener('mousedown', (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                        });
 
-                        // Add subtask & delete card buttons (only on selected card)
-                        if (isSelected) {
-                          const addBtn = document.createElement('button');
-                          addBtn.className = 'card-action-btn card-add-subtask-btn';
-                          addBtn.setAttribute('contenteditable', 'false');
-                          addBtn.type = 'button';
-                          addBtn.title = 'Add subtask';
-                          addBtn.setAttribute('aria-label', 'Add subtask');
-                          addBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`;
+                        addBtn.addEventListener('click', (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const rawPos = typeof getPos === 'function' ? getPos() : pos + 1;
+                          if (rawPos == null) return;
+                          const currentPos = Number(rawPos) - 1;
+                          insertSubtaskAtCardPos({ state: view.state, view }, currentPos);
+                        });
 
-                          addBtn.addEventListener('mousedown', (e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            // Auto-expand if collapsed when adding a subtask
-                            if (collapsedCardsState.has(cardKey)) {
+                        // Task Options menu button with nested Archive functionality
+                        const menuWrapper = document.createElement('div');
+                        menuWrapper.style.position = 'relative';
+
+                        const menuBtn = document.createElement('button');
+                        menuBtn.className = 'card-action-btn card-menu-btn';
+                        menuBtn.setAttribute('contenteditable', 'false');
+                        menuBtn.type = 'button';
+                        menuBtn.title = 'Task options';
+                        menuBtn.setAttribute('aria-label', 'Task options');
+                        menuBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="2.2"></circle><circle cx="19" cy="12" r="2.2"></circle><circle cx="5" cy="12" r="2.2"></circle></svg>`;
+
+                        let dropdownEl: HTMLElement | null = null;
+
+                        const closeMenu = () => {
+                          if (dropdownEl && dropdownEl.parentNode) {
+                            dropdownEl.parentNode.removeChild(dropdownEl);
+                            dropdownEl = null;
+                            menuBtn.classList.remove('active');
+                          }
+                          document.removeEventListener('mousedown', handleOutside);
+                          document.removeEventListener('keydown', handleKey);
+                        };
+
+                        const handleOutside = (ev: MouseEvent) => {
+                          if (dropdownEl && !menuWrapper.contains(ev.target as Node)) {
+                            closeMenu();
+                          }
+                        };
+
+                        const handleKey = (ev: KeyboardEvent) => {
+                          if (ev.key === 'Escape') {
+                            closeMenu();
+                          }
+                        };
+
+                        menuBtn.addEventListener('mousedown', (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                        });
+
+                        menuBtn.addEventListener('click', (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+
+                          if (dropdownEl) {
+                            closeMenu();
+                            return;
+                          }
+
+                          menuBtn.classList.add('active');
+                          dropdownEl = document.createElement('div');
+                          dropdownEl.className = 'card-dropdown-menu';
+                          dropdownEl.setAttribute('contenteditable', 'false');
+
+                          if (onArchiveTaskRef.current) {
+                            const archiveItem = document.createElement('button');
+                            archiveItem.type = 'button';
+                            archiveItem.className = 'card-dropdown-item';
+                            archiveItem.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg><span>Archive Task</span>`;
+
+                            archiveItem.addEventListener('mousedown', (ev) => {
+                              ev.preventDefault();
+                              ev.stopPropagation();
+                            });
+
+                            archiveItem.addEventListener('click', (ev) => {
+                              ev.preventDefault();
+                              ev.stopPropagation();
+                              closeMenu();
                               collapsedCardsState.delete(cardKey);
-                            }
-                            const widgetPos = typeof getPos === 'function' ? getPos() : pos + 1;
-                            if (widgetPos == null) return;
-                            const listItemPos = Number(widgetPos) - 1;
-                            insertSubtaskAtCardPos(editor, listItemPos);
-                            if (onSelectTaskRef.current) {
-                              onSelectTaskRef.current(cardTaskId);
-                            }
-                          });
 
-                          // Archive task card button
-                          const archiveBtn = document.createElement('button');
-                          archiveBtn.className = 'card-action-btn card-archive-task-btn';
-                          archiveBtn.setAttribute('contenteditable', 'false');
-                          archiveBtn.type = 'button';
-                          archiveBtn.title = 'Archive task';
-                          archiveBtn.setAttribute('aria-label', 'Archive task');
-                          archiveBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>`;
+                              if (onArchiveTaskRef.current) {
+                                const liveTitle = firstBlockNode?.textContent?.trim() || '';
+                                onArchiveTaskRef.current(liveTitle);
+                              }
+                            });
 
-                          archiveBtn.addEventListener('mousedown', (e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                          });
+                            dropdownEl.appendChild(archiveItem);
+                          }
 
-                          archiveBtn.addEventListener('click', (e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            collapsedCardsState.delete(cardKey);
+                          menuWrapper.appendChild(dropdownEl);
 
-                            if (onArchiveTaskRef.current) {
-                              // Read the title from the live node text — more reliable than a stale numeric ID
-                              const liveTitle = firstBlockNode?.textContent?.trim() || '';
-                              onArchiveTaskRef.current(liveTitle);
-                            }
-                          });
+                          setTimeout(() => {
+                            document.addEventListener('mousedown', handleOutside);
+                            document.addEventListener('keydown', handleKey);
+                          }, 0);
+                        });
 
-                          container.appendChild(addBtn);
-                          container.appendChild(archiveBtn);
-                        }
+                        menuWrapper.appendChild(menuBtn);
+                        container.appendChild(addBtn);
+                        container.appendChild(menuWrapper);
 
                         return container;
                       },
@@ -961,10 +960,11 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                   }
 
                 } else {
-                  // Subtask list item (nested under a card or bullet list item)
+                  // Subtask list item
                   let subBlockPos: number | null = null;
                   let subBlockNode: any = null;
 
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   node.forEach((child: any, offset: number) => {
                     if (child.type.name !== 'bulletList' && child.type.name !== 'orderedList' && subBlockPos === null) {
                       subBlockPos = pos + 1 + offset;
@@ -1024,6 +1024,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
 
                           let liveBlockPos: number | null = null;
                           let liveBlockNode: any = null;
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           liveNode.forEach((child: any, offset: number) => {
                             if (child.type.name !== 'bulletList' && child.type.name !== 'orderedList' && liveBlockPos === null) {
                               liveBlockPos = itemPos + 1 + offset;
@@ -1064,8 +1065,9 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                 }
               });
 
-              // Add inline decorations to hide backslash escaping before formatting characters when not directly adjacent to the cursor
+              // Add inline decorations to hide backslash escaping before formatting characters
               const cursor = state.selection.from;
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               doc.descendants((node: any, pos: number) => {
                 if (node.isText && node.text) {
                   const text = node.text;
@@ -1073,7 +1075,6 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                   let match: RegExpExecArray | null;
                   while ((match = escapeRegex.exec(text)) !== null) {
                     const slashPos = pos + match.index;
-                    // If cursor is not immediately touching the backslash, hide it
                     const isNearCursor = cursor >= slashPos && cursor <= slashPos + 2;
                     if (!isNearCursor) {
                       decorations.push(
@@ -1096,12 +1097,12 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   });
 
   const AutoSurroundExtension = Extension.create({
-    name: 'autoSurround',
+    name: `autoSurround_${lane.id}`,
     addProseMirrorPlugins() {
       const editorInstance = this.editor;
       return [
         new Plugin({
-          key: new PluginKey('autoSurround'),
+          key: new PluginKey(`autoSurround_${lane.id}`),
           props: {
             handleTextInput(view, from, to, text) {
               if (from === to) return false;
@@ -1109,7 +1110,6 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
               const { selection } = state;
               if (selection.empty) return false;
 
-              // Format marks directly so they render visually and serialize cleanly to markdown without backslash escaping
               if (text === '`') {
                 editorInstance.chain().focus().toggleCode().run();
                 return true;
@@ -1117,13 +1117,10 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
 
               if (text === '*' || text === '_') {
                 if (editorInstance.isActive('italic') && !editorInstance.isActive('bold')) {
-                  // Move from italic to bold (*text* -> **text**)
                   editorInstance.chain().focus().toggleItalic().toggleBold().run();
                 } else if (editorInstance.isActive('bold') && !editorInstance.isActive('italic')) {
-                  // Add italic for bold + italic (***text***)
                   editorInstance.chain().focus().toggleItalic().run();
                 } else {
-                  // Default: apply italic
                   editorInstance.chain().focus().toggleItalic().run();
                 }
                 return true;
@@ -1134,7 +1131,6 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
                 return true;
               }
 
-              // For punctuation, quotes, brackets: wrap the text
               const pair = MARKDOWN_WRAPPER_PAIRS[text];
               if (pair) {
                 const [open, close] = pair;
@@ -1160,306 +1156,406 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
+        bulletList: { keepMarks: true, keepAttributes: false },
+        orderedList: { keepMarks: true, keepAttributes: false },
         listItem: false,
-        heading: { levels: [1, 2, 3, 4] },
-        code: {},
-        codeBlock: {},
-        blockquote: {},
-        horizontalRule: {},
       }),
       CustomListItem,
-      Placeholder.configure({
-        placeholder: '# My Task List\n\nStart typing in markdown — **bold**, *italic*, `code`, headings, lists…',
+      Link.configure({
+        openOnClick: false,
+        HTMLAttributes: { class: 'md-link', target: '_blank', rel: 'noopener noreferrer' },
       }),
-      Link.configure({ openOnClick: false }),
+      Placeholder.configure({
+        placeholder: ({ node }) => {
+          if (node.type.name === 'heading') return 'Heading...';
+          return 'Add a task or click + New Task...';
+        },
+      }),
       Typography,
-      AutoCardListExtension,
-      AutoJoinListsExtension,
-      TaskCheckboxDecorationExtension,
-      AutoSurroundExtension,
       Markdown.configure({
         html: false,
+        tightLists: true,
+        tightListClass: 'tight',
+        bulletListMarker: '-',
+        linkify: true,
+        breaks: false,
         transformPastedText: true,
         transformCopiedText: true,
       }),
+      AutoJoinListsExtension,
+      CustomListKeymapExtension,
+      TaskCheckboxDecorationExtension,
+      AutoSurroundExtension,
     ],
-    content: stripHeaderComments(rawMarkdown),
-    autofocus: false,
-    onSelectionUpdate({ editor }) {
-      if (!editor.isFocused) return;
-      if (!onSelectTaskRef.current) return;
-      const pos = editor.state.selection.from;
-      const itemIndex = getTaskIndexAtPos(editor.state.doc, pos);
-      if (itemIndex !== null) {
-        const targetTask = tasksRef.current[itemIndex - 1];
-        const targetId = targetTask ? targetTask.id : itemIndex;
-        if (selectedTaskIdRef.current !== targetId) {
-          onSelectTaskRef.current(targetId);
-        }
-      }
+    content: stripHeaderComments(lane.markdown),
+    editorProps: {
+      attributes: {
+        class: 'tiptap obsidian-editor',
+        spellcheck: 'false',
+      },
     },
-    onUpdate({ editor }) {
-      // Serialize back to markdown on every change
-      const md = (editor as unknown as WithMarkdownStorage).storage.markdown.getMarkdown();
-      onMarkdownChange(md);
+    onFocus: () => {
+      onActivate();
+    },
+    onUpdate: ({ editor: currentEditor }) => {
+      const storage = (currentEditor as unknown as WithMarkdownStorage).storage;
+      const markdown = storage.markdown.getMarkdown();
+      onMarkdownChange(lane.id, markdown);
     },
   });
 
-  // Sync content if the project changes externally
   useEffect(() => {
-    if (!editor) return;
-    const cleanRaw = stripHeaderComments(rawMarkdown);
-    const current = (editor as unknown as WithMarkdownStorage).storage.markdown.getMarkdown();
-    // Only reset if content meaningfully diverges (avoids caret jump on every keystroke)
-    if (current.trim() !== cleanRaw.trim()) {
-      editor.commands.setContent(cleanRaw, { emitUpdate: false });
+    if (editor && onEditorReady) {
+      onEditorReady(lane.id, editor);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawMarkdown, editor]);
+  }, [editor, lane.id, onEditorReady]);
 
-  // Re-dispatch transaction when selectedTaskId or runningTaskIds changes to update active card & running card decorations
+  // Synchronize editor content when external lane.markdown changes
   useEffect(() => {
-    if (!editor || editor.isDestroyed) return;
-    const tr = editor.state.tr.setMeta('selectedCardSync', true);
-    editor.view.dispatch(tr);
-  }, [selectedTaskId, runningTaskIds, editor]);
+    if (editor && !editor.isFocused) {
+      const stripped = stripHeaderComments(lane.markdown);
+      const storage = (editor as unknown as WithMarkdownStorage).storage;
+      const currentMd = storage.markdown?.getMarkdown();
+      if (currentMd !== stripped) {
+        editor.commands.setContent(stripped, { emitUpdate: false });
+      }
+    }
+  }, [lane.markdown, editor]);
 
-  const [showStyles, setShowStyles] = useState(false);
-
+  // Toolbar action helpers
   const setLink = useCallback(() => {
     if (!editor) return;
-    const prev = editor.getAttributes('link').href as string | undefined;
-    const url = window.prompt('Enter URL', prev ?? 'https://');
+    const previousUrl = editor.getAttributes('link').href;
+    const url = window.prompt('URL', previousUrl);
     if (url === null) return;
     if (url === '') {
       editor.chain().focus().extendMarkRange('link').unsetLink().run();
-    } else {
-      editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
+      return;
     }
+    editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
   }, [editor]);
 
-  const doneTasks = tasks.filter((t) => t.isDone).length;
+  const laneDoneCount = laneTasks.filter((t) => t.isDone).length;
+  const fileName = lane.filePath ? lane.filePath.split('/').pop() || lane.title : lane.title;
 
   return (
-    <div className="pane pane-left obsidian-pane">
-      {/* ── Header ── */}
-      <div className="pane-header obsidian-header">
-        <div className="pane-title">
-          <FileText size={17} color="var(--accent-cyan)" />
-          <span>Human Workspace</span>
-          <span className="pane-subtitle">{doneTasks}/{tasks.length} done</span>
-        </div>
+    <div
+      className={`swimlane-column ${totalLanes > 1 ? 'is-multi-lane' : 'is-single-lane'} ${isActive ? 'is-active-lane' : ''}`}
+      onClick={() => onActivate()}
+      style={totalLanes > 1 && width ? { width, minWidth: '260px', flex: `0 0 ${width}` } : undefined}
+    >
+      {/* Column Sub-Header (Only shown in multi-swimlane mode to avoid duplicate headers in single lane mode) */}
+      {totalLanes > 1 && (
+        <div className="swimlane-column-header">
+          <div className="swimlane-title-container">
+            {isEditingTitle ? (
+              <input
+                type="text"
+                className="swimlane-title-input"
+                value={editedTitle}
+                onChange={(e) => setEditedTitle(e.target.value)}
+                onBlur={handleTitleCommit}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleTitleCommit();
+                  if (e.key === 'Escape') {
+                    setEditedTitle(lane.title);
+                    setIsEditingTitle(false);
+                  }
+                }}
+                autoFocus
+              />
+            ) : (
+              <div
+                style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', minWidth: 0 }}
+                onClick={() => setIsEditingTitle(true)}
+                title="Click to rename swim lane"
+              >
+                <span className="swimlane-title-text">{lane.title}</span>
+              </div>
+            )}
+            <span className="pane-subtitle" style={{ fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
+              {laneDoneCount}/{laneTasks.length} done
+            </span>
+          </div>
 
-        <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
-          <button
-            type="button"
-            className={`btn btn-secondary ${showStyles ? 'active' : ''}`}
-            style={{
-              padding: '0.3rem 0.65rem',
-              fontSize: '0.8rem',
-              borderColor: showStyles ? 'var(--accent-primary)' : undefined,
-              background: showStyles ? 'rgba(99, 102, 241, 0.18)' : undefined,
-              color: showStyles ? 'var(--text-bright, #fff)' : undefined,
-            }}
-            onClick={() => setShowStyles((prev) => !prev)}
-            title={showStyles ? 'Hide markdown formatting bar' : 'Show markdown formatting bar'}
-          >
-            <Type size={13} />
-            <span>Styles</span>
-          </button>
-        </div>
-      </div>
+          <div style={{ position: 'relative' }} ref={menuRef}>
+            <button
+              type="button"
+              className={`swimlane-menu-btn ${isMenuOpen ? 'active' : ''}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsMenuOpen((prev) => !prev);
+              }}
+              title="Swim lane options"
+            >
+              <MoreHorizontal size={15} />
+            </button>
 
-      {/* ── Formatting Toolbar ── */}
-      {showStyles && (
-        <div className="tiptap-toolbar">
-          {/* History */}
-          <ToolbarBtn title="Undo" onClick={() => editor?.chain().focus().undo().run()} disabled={!editor?.can().undo()}>
-            <Undo2 size={14} />
-          </ToolbarBtn>
-          <ToolbarBtn title="Redo" onClick={() => editor?.chain().focus().redo().run()} disabled={!editor?.can().redo()}>
-            <Redo2 size={14} />
-          </ToolbarBtn>
+            {isMenuOpen && (
+              <div className="swimlane-dropdown-menu" onClick={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  className="swimlane-dropdown-item"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    setIsEditingTitle(true);
+                  }}
+                >
+                  <Edit2 size={13} />
+                  <span>Rename Lane</span>
+                </button>
 
-          <Sep />
+                <div className="swimlane-dropdown-divider" />
 
-          {/* Text styles */}
-          <ToolbarBtn title="Bold (Ctrl+B)" active={editor?.isActive('bold')} onClick={() => editor?.chain().focus().toggleBold().run()}>
-            <Bold size={14} />
-          </ToolbarBtn>
-          <ToolbarBtn title="Italic (Ctrl+I)" active={editor?.isActive('italic')} onClick={() => editor?.chain().focus().toggleItalic().run()}>
-            <Italic size={14} />
-          </ToolbarBtn>
-          <ToolbarBtn title="Strikethrough" active={editor?.isActive('strike')} onClick={() => editor?.chain().focus().toggleStrike().run()}>
-            <Strikethrough size={14} />
-          </ToolbarBtn>
-          <ToolbarBtn title="Inline Code" active={editor?.isActive('code')} onClick={() => editor?.chain().focus().toggleCode().run()}>
-            <Code size={14} />
-          </ToolbarBtn>
-
-          <Sep />
-
-          {/* Headings */}
-          <ToolbarBtn title="Heading 1" active={editor?.isActive('heading', { level: 1 })} onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()}>
-            <Heading1 size={14} />
-          </ToolbarBtn>
-          <ToolbarBtn title="Heading 2" active={editor?.isActive('heading', { level: 2 })} onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}>
-            <Heading2 size={14} />
-          </ToolbarBtn>
-          <ToolbarBtn title="Heading 3" active={editor?.isActive('heading', { level: 3 })} onClick={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}>
-            <Heading3 size={14} />
-          </ToolbarBtn>
-
-          <Sep />
-
-          {/* Lists */}
-          <ToolbarBtn title="Bullet List" active={editor?.isActive('bulletList')} onClick={() => editor?.chain().focus().toggleBulletList().run()}>
-            <List size={14} />
-          </ToolbarBtn>
-          <ToolbarBtn title="Numbered List" active={editor?.isActive('orderedList')} onClick={() => editor?.chain().focus().toggleOrderedList().run()}>
-            <ListOrdered size={14} />
-          </ToolbarBtn>
-
-          <Sep />
-
-          {/* Block elements */}
-          <ToolbarBtn title="Blockquote" active={editor?.isActive('blockquote')} onClick={() => editor?.chain().focus().toggleBlockquote().run()}>
-            <Quote size={14} />
-          </ToolbarBtn>
-          <ToolbarBtn title="Code Block" active={editor?.isActive('codeBlock')} onClick={() => editor?.chain().focus().toggleCodeBlock().run()}>
-            <FileCode size={14} />
-          </ToolbarBtn>
-          <ToolbarBtn title="Horizontal Rule" onClick={() => editor?.chain().focus().setHorizontalRule().run()}>
-            <Minus size={14} />
-          </ToolbarBtn>
-          <ToolbarBtn title="Link" active={editor?.isActive('link')} onClick={setLink}>
-            <LinkIcon size={14} />
-          </ToolbarBtn>
+                <button
+                  type="button"
+                  className="swimlane-dropdown-item is-danger"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    setIsDeleteLaneModalOpen(true);
+                  }}
+                >
+                  <Trash2 size={13} />
+                  <span>Delete Lane</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      {/* ── Editor canvas ── */}
+      {/* Formatting Toolbar (when Styles is toggled) */}
+      {showStyles && (
+        <div className="tiptap-toolbar" style={{ flexShrink: 0 }}>
+          <div className="tiptap-toolbar-group">
+            <ToolbarBtn onClick={() => editor?.chain().focus().undo().run()} disabled={!editor?.can().undo()} title="Undo (Ctrl+Z)">
+              <Undo2 size={13} />
+            </ToolbarBtn>
+            <ToolbarBtn onClick={() => editor?.chain().focus().redo().run()} disabled={!editor?.can().redo()} title="Redo (Ctrl+Y)">
+              <Redo2 size={13} />
+            </ToolbarBtn>
+          </div>
+
+          <Sep />
+
+          <div className="tiptap-toolbar-group">
+            <ToolbarBtn onClick={() => editor?.chain().focus().toggleBold().run()} active={editor?.isActive('bold')} title="Bold (**text**)">
+              <Bold size={13} />
+            </ToolbarBtn>
+            <ToolbarBtn onClick={() => editor?.chain().focus().toggleItalic().run()} active={editor?.isActive('italic')} title="Italic (*text*)">
+              <Italic size={13} />
+            </ToolbarBtn>
+            <ToolbarBtn onClick={() => editor?.chain().focus().toggleStrike().run()} active={editor?.isActive('strike')} title="Strike (~~text~~)">
+              <Strikethrough size={13} />
+            </ToolbarBtn>
+            <ToolbarBtn onClick={() => editor?.chain().focus().toggleCode().run()} active={editor?.isActive('code')} title="Inline Code (`code`)">
+              <Code size={13} />
+            </ToolbarBtn>
+            <ToolbarBtn onClick={setLink} active={editor?.isActive('link')} title="Link ([text](url))">
+              <LinkIcon size={13} />
+            </ToolbarBtn>
+          </div>
+
+          <Sep />
+
+          <div className="tiptap-toolbar-group">
+            <ToolbarBtn onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()} active={editor?.isActive('heading', { level: 1 })} title="Heading 1 (# Text)">
+              <Heading1 size={13} />
+            </ToolbarBtn>
+            <ToolbarBtn onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()} active={editor?.isActive('heading', { level: 2 })} title="Heading 2 (## Text)">
+              <Heading2 size={13} />
+            </ToolbarBtn>
+            <ToolbarBtn onClick={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()} active={editor?.isActive('heading', { level: 3 })} title="Heading 3 (### Text)">
+              <Heading3 size={13} />
+            </ToolbarBtn>
+          </div>
+
+          <Sep />
+
+          <div className="tiptap-toolbar-group">
+            <ToolbarBtn onClick={() => editor?.chain().focus().toggleOrderedList().run()} active={editor?.isActive('orderedList')} title="Task List / Numbered List (1. Task)">
+              <ListOrdered size={13} />
+            </ToolbarBtn>
+            <ToolbarBtn onClick={() => editor?.chain().focus().toggleBulletList().run()} active={editor?.isActive('bulletList')} title="Subtask / Bullet List (- Subtask)">
+              <List size={13} />
+            </ToolbarBtn>
+            <ToolbarBtn onClick={() => editor?.chain().focus().toggleBlockquote().run()} active={editor?.isActive('blockquote')} title="Blockquote (> quote)">
+              <Quote size={13} />
+            </ToolbarBtn>
+            <ToolbarBtn onClick={() => editor?.chain().focus().toggleCodeBlock().run()} active={editor?.isActive('codeBlock')} title="Code Block (```)">
+              <FileCode size={13} />
+            </ToolbarBtn>
+            <ToolbarBtn onClick={() => editor?.chain().focus().setHorizontalRule().run()} title="Horizontal Rule (---)">
+              <Minus size={13} />
+            </ToolbarBtn>
+          </div>
+        </div>
+      )}
+
+      {/* Editor Scroll Container */}
       <div
-        className="obsidian-body tiptap-body"
+        className="obsidian-editor-container obsidian-scroll-area"
         style={{
-          position: 'relative',
-          paddingBottom: isAssistantOpen && assistantDrawerHeight > 0 ? `${assistantDrawerHeight + 30}px` : undefined,
-          transition: 'padding-bottom 0.2s ease'
+          flex: 1,
+          overflowY: 'auto',
+          paddingBottom: `${assistantDrawerHeight + 80}px`,
         }}
       >
         <EditorContent editor={editor} className="tiptap-editor-root" />
-
-        {/* ── Collapsible Archive Panel at bottom of scrollable content ── */}
-        <div className="archive-collapsible-panel">
-          <button
-            type="button"
-            className={`archive-panel-header ${isArchiveOpen ? 'open' : ''}`}
-            onClick={() => setIsArchiveOpen((prev) => !prev)}
-            title={isArchiveOpen ? 'Collapse archive panel' : 'Expand archive panel'}
-          >
-            <div className="archive-panel-header-left">
-              <Archive size={15} className="archive-icon" />
-              <span className="archive-panel-title">Archive</span>
-              <span className="archive-count-badge">
-                {archivedTasks.length} {archivedTasks.length === 1 ? 'task' : 'tasks'}
-              </span>
-            </div>
-            <ChevronDown size={15} className={`archive-chevron ${isArchiveOpen ? 'open' : ''}`} />
-          </button>
-
-          {isArchiveOpen && (
-            <div className="archive-panel-content">
-              {archivedTasks.length === 0 ? (
-                <div className="archive-empty-state">
-                  <span>No archived tasks</span>
-                </div>
-              ) : (
-                <div className="archived-tasks-list">
-                  {archivedTasks.map((task) => (
-                    <div key={task.id} className="archived-task-card">
-                      <div className="archived-task-checkbox-col">
-                        <div
-                          className={`task-ui-checkbox parent-checkbox ${task.isDone ? 'checked' : ''}`}
-                          style={{ cursor: 'default', pointerEvents: 'none' }}
-                        >
-                          {task.isDone && (
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="20 6 9 17 4 12" />
-                            </svg>
-                          )}
-                        </div>
-                      </div>
-                      <div className="archived-task-main">
-                        <div className="archived-task-title-row">
-                          <MarkdownRenderer
-                            content={task.isDone ? `~~${task.title}~~` : task.title}
-                            inline={true}
-                            className={`archived-task-title ${task.isDone ? 'is-done' : ''}`}
-                          />
-                          {task.category && task.category !== 'Archive' && task.category !== 'Untitled' && (
-                            <span className="archived-task-category-pill">{task.category}</span>
-                          )}
-                        </div>
-                        {task.subtasks && task.subtasks.length > 0 && (
-                          <div className="archived-subtasks-list">
-                            {task.subtasks.map((st) => (
-                              <div key={st.id} className="archived-subtask-item">
-                                <span className="archived-bullet">•</span>
-                                {st.isHumanReview && (
-                                  <span
-                                    className="human-review-tag"
-                                    style={{
-                                      fontSize: '0.68rem',
-                                      padding: '0.05rem 0.35rem',
-                                      borderRadius: '3px',
-                                      background: 'rgba(139, 92, 246, 0.15)',
-                                      color: 'var(--accent-violet)',
-                                      fontWeight: 600,
-                                    }}
-                                  >
-                                    human review
-                                  </span>
-                                )}
-                                <MarkdownRenderer
-                                  content={st.isDone ? `~~${st.text}~~` : st.text}
-                                  inline={true}
-                                  className={st.isDone ? 'is-done' : ''}
-                                />
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      <div className="archived-task-actions">
-                        <button
-                          type="button"
-                          className="archived-action-btn unarchive-btn"
-                          title="Unarchive task"
-                          onClick={() => onUnarchiveTask?.(task.id)}
-                        >
-                          <RotateCcw size={12} />
-                          <span>Unarchive</span>
-                        </button>
-                        <button
-                          type="button"
-                          className="archived-action-btn delete-btn"
-                          title="Delete task permanently"
-                          onClick={() => setTaskToDelete(task)}
-                        >
-                          <Trash2 size={12} />
-                          <span>Delete</span>
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
       </div>
 
-      {/* ── Task Permanent Deletion Context Warning Modal ── */}
+      {/* ── Collapsible Archive Panel at bottom of swim lane ── */}
+      <div className="archive-collapsible-panel" style={{ margin: '1rem 0.85rem 1.25rem', flexShrink: 0 }}>
+        <button
+          type="button"
+          className={`archive-panel-header ${isArchiveOpen ? 'open' : ''}`}
+          onClick={() => setIsArchiveOpen((prev) => !prev)}
+          title={isArchiveOpen ? 'Collapse archive panel' : 'Expand archive panel'}
+        >
+          <div className="archive-panel-header-left">
+            <Archive size={15} className="archive-icon" />
+            <span className="archive-panel-title">Archived Tasks</span>
+            <span className="archive-count-badge">
+              {laneArchivedTasks.length} {laneArchivedTasks.length === 1 ? 'task' : 'tasks'}
+            </span>
+          </div>
+          <ChevronDown size={15} className={`archive-chevron ${isArchiveOpen ? 'open' : ''}`} />
+        </button>
+
+        {isArchiveOpen && (
+          <div className="archive-panel-content">
+            {laneArchivedTasks.length === 0 ? (
+              <div className="archive-empty-state">
+                <span>No archived tasks in this lane</span>
+              </div>
+            ) : (
+              <div className="archived-tasks-list">
+                {laneArchivedTasks.map((task) => (
+                  <div key={task.id} className="archived-task-card">
+                    <div className="archived-task-checkbox-col">
+                      <div
+                        className={`task-ui-checkbox parent-checkbox ${task.isDone ? 'checked' : ''}`}
+                        style={{ cursor: 'default', pointerEvents: 'none' }}
+                      >
+                        {task.isDone && (
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        )}
+                      </div>
+                    </div>
+                    <div className="archived-task-main">
+                      <div className="archived-task-title-row">
+                        <MarkdownRenderer
+                          content={task.isDone ? `~~${task.title}~~` : task.title}
+                          inline={true}
+                          className={`archived-task-title ${task.isDone ? 'is-done' : ''}`}
+                        />
+                        {task.category && task.category !== 'Archive' && task.category !== 'Untitled' && (
+                          <span className="archived-task-category-pill">{task.category}</span>
+                        )}
+                      </div>
+                      {task.subtasks && task.subtasks.length > 0 && (
+                        <div className="archived-subtasks-list">
+                          {task.subtasks.map((st) => (
+                            <div key={st.id} className="archived-subtask-item">
+                              <span className="archived-bullet">•</span>
+                              {st.isHumanReview && (
+                                <span
+                                  className="human-review-tag"
+                                  style={{
+                                    fontSize: '0.68rem',
+                                    padding: '0.05rem 0.35rem',
+                                    borderRadius: '3px',
+                                    background: 'rgba(139, 92, 246, 0.15)',
+                                    color: 'var(--accent-violet)',
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  human review
+                                </span>
+                              )}
+                              <MarkdownRenderer
+                                content={st.isDone ? `~~${st.text}~~` : st.text}
+                                inline={true}
+                                className={st.isDone ? 'is-done' : ''}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="archived-task-actions">
+                      <button
+                        type="button"
+                        className="archived-action-btn unarchive-btn"
+                        title="Unarchive task"
+                        onClick={() => onUnarchiveTask?.(task.id)}
+                      >
+                        <RotateCcw size={12} />
+                        <span>Unarchive</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="archived-action-btn delete-btn"
+                        title="Delete task permanently"
+                        onClick={() => setTaskToDelete(task)}
+                      >
+                        <Trash2 size={12} />
+                        <span>Delete</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Swim Lane Delete Confirmation Modal */}
+      {isDeleteLaneModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsDeleteLaneModalOpen(false)}>
+          <div className="modal-card archive-delete-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-rose)' }}>
+                <AlertTriangle size={18} />
+                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Delete Swim Lane?</h3>
+              </div>
+              <button type="button" className="btn-icon" onClick={() => setIsDeleteLaneModalOpen(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="modal-body" style={{ padding: '1rem 1.25rem', fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
+              <p style={{ margin: 0, marginBottom: '0.75rem' }}>
+                Are you sure you want to remove swim lane <strong>"{lane.title}"</strong> ({fileName})?
+              </p>
+              <div className="archive-delete-warning-box">
+                <AlertCircle size={15} style={{ flexShrink: 0, color: 'var(--accent-rose)' }} />
+                <span>The file content in this lane will no longer appear in your active workspace view.</span>
+              </div>
+            </div>
+            <div className="modal-footer" style={{ padding: '0.75rem 1.25rem', display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setIsDeleteLaneModalOpen(false)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                style={{ background: 'var(--accent-rose)', color: '#fff' }}
+                onClick={() => {
+                  onDeleteSwimLane?.(lane.id);
+                  setIsDeleteLaneModalOpen(false);
+                }}
+              >
+                Delete Swim Lane
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Task Permanent Deletion Context Warning Modal */}
       {taskToDelete && (
         <div className="modal-overlay" onClick={() => setTaskToDelete(null)}>
           <div className="modal-card archive-delete-modal" onClick={(e) => e.stopPropagation()}>
@@ -1500,18 +1596,322 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
           </div>
         </div>
       )}
+    </div>
+  );
+};
 
-      {/* ── Human AI Assistant Slide-up Bar / Drawer ── */}
+// ─── Main TaskPane Component ──────────────────────────────────────────────────
+interface TaskPaneProps {
+  rawMarkdown: string;
+  tasks: TaskItemType[];
+  archivedTasks?: TaskItemType[];
+  selectedTaskId?: number | null;
+  runningTaskIds?: number[];
+  pendingHumanInputs?: Record<number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>;
+  onSelectTask?: (taskId: number) => void;
+  onMarkdownChange: (newMarkdown: string) => void;
+  onOpenDraftModal: () => void;
+  isAssistantOpen?: boolean;
+  onCloseAssistant?: () => void;
+  project?: ProjectData | null;
+  agentContextMarkdown?: string;
+  aiConfig?: AIProviderConfig;
+  mcpServers?: MCPServer[];
+  onApplyAssistantResult?: (result: HumanAiAssistantResult, confirmedDeletions: boolean) => void;
+  onArchiveTask?: (taskTitle: string) => void;
+  onUnarchiveTask?: (taskId: number) => void;
+  onDeleteArchivedTask?: (taskId: number) => void;
+  swimLanes?: SwimLaneDoc[];
+  onAddSwimLane?: () => void;
+  onRenameSwimLane?: (laneId: string, newTitle: string) => void;
+  onDeleteSwimLane?: (laneId: string) => void;
+  onSwimLaneMarkdownChange?: (laneId: string, newMarkdown: string) => void;
+}
+
+export const TaskPane: React.FC<TaskPaneProps> = ({
+  rawMarkdown,
+  tasks,
+  archivedTasks = [],
+  selectedTaskId,
+  runningTaskIds = [],
+  pendingHumanInputs,
+  onSelectTask,
+  onMarkdownChange,
+  onOpenDraftModal,
+  isAssistantOpen = false,
+  onCloseAssistant = () => { },
+  project,
+  agentContextMarkdown = '',
+  aiConfig,
+  mcpServers = [],
+  onApplyAssistantResult = () => { },
+  onArchiveTask,
+  onUnarchiveTask,
+  onDeleteArchivedTask,
+  swimLanes,
+  onAddSwimLane,
+  onRenameSwimLane,
+  onDeleteSwimLane,
+  onSwimLaneMarkdownChange,
+}) => {
+  const [showStyles, setShowStyles] = useState(false);
+  const [assistantDrawerHeight, setAssistantDrawerHeight] = useState<number>(0);
+
+  // Keep references to active editors in each lane to support global "+ New Task" button
+  const editorsRef = useRef<Record<string, any>>({});
+  const handleEditorReady = useCallback((laneId: string, editorInstance: any) => {
+    editorsRef.current[laneId] = editorInstance;
+  }, []);
+
+  // Normalize swimLanes: fallback to 1 human view if not provided
+  const effectiveSwimLanes = useMemo<SwimLaneDoc[]>(() => {
+    if (swimLanes && swimLanes.length > 0) {
+      return swimLanes;
+    }
+    return [
+      {
+        id: 'lane-default',
+        title: 'Human Workspace',
+        filePath: project?.todoFilePath || 'TODO.md',
+        markdown: rawMarkdown || '',
+      },
+    ];
+  }, [swimLanes, project?.todoFilePath, rawMarkdown]);
+
+  const totalTasks = tasks.length;
+  const totalDoneTasks = tasks.filter((t) => t.isDone).length;
+
+  const handleLaneMarkdownChange = (laneId: string, newMarkdown: string) => {
+    if (onSwimLaneMarkdownChange) {
+      onSwimLaneMarkdownChange(laneId, newMarkdown);
+    } else {
+      onMarkdownChange(newMarkdown);
+    }
+  };
+
+  // Active / Highlighted Swim Lane ID (defaults to first lane)
+  const [activeSwimLaneId, setActiveSwimLaneId] = useState<string>(effectiveSwimLanes[0]?.id || 'lane-default');
+
+  useEffect(() => {
+    if (!effectiveSwimLanes.some((l) => l.id === activeSwimLaneId)) {
+      setActiveSwimLaneId(effectiveSwimLanes[0]?.id || 'lane-default');
+    }
+  }, [effectiveSwimLanes, activeSwimLaneId]);
+
+  const activeSwimLane = effectiveSwimLanes.find((l) => l.id === activeSwimLaneId) || effectiveSwimLanes[0];
+
+  // Inline Title Editing for Single Swim Lane mode
+  const singleLane = effectiveSwimLanes[0];
+  const [isEditingSingleTitle, setIsEditingSingleTitle] = useState(false);
+  const [singleTitleVal, setSingleTitleVal] = useState(singleLane?.title || 'Human Workspace');
+
+  useEffect(() => {
+    if (singleLane?.title) {
+      setSingleTitleVal(singleLane.title);
+    }
+  }, [singleLane?.title]);
+
+  const handleSingleTitleCommit = () => {
+    setIsEditingSingleTitle(false);
+    if (singleTitleVal.trim() && singleTitleVal.trim() !== singleLane?.title && onRenameSwimLane && singleLane) {
+      onRenameSwimLane(singleLane.id, singleTitleVal.trim());
+    } else {
+      setSingleTitleVal(singleLane?.title || 'Human Workspace');
+    }
+  };
+
+  // Lane widths state (in pixels) for draggable resizing in multi-swimlane mode
+  const [laneWidths, setLaneWidths] = useState<Record<string, number>>({});
+  const resizingRef = useRef<{ laneId: string; startX: number; startWidth: number } | null>(null);
+  const [isResizingLane, setIsResizingLane] = useState(false);
+
+  const handleStartResize = (e: React.MouseEvent, laneId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const currentWidth = laneWidths[laneId] || Math.round(window.innerWidth / 3);
+    resizingRef.current = {
+      laneId,
+      startX: e.clientX,
+      startWidth: currentWidth,
+    };
+    setIsResizingLane(true);
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!resizingRef.current) return;
+      const { laneId, startX, startWidth } = resizingRef.current;
+      const deltaX = e.clientX - startX;
+      const newWidth = Math.max(260, startWidth + deltaX);
+      setLaneWidths((prev) => ({ ...prev, [laneId]: newWidth }));
+    };
+
+    const handleMouseUp = () => {
+      if (resizingRef.current) {
+        resizingRef.current = null;
+        setIsResizingLane(false);
+      }
+    };
+
+    if (isResizingLane) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizingLane]);
+
+  // Click "+ New Task" in footer creates task in highlighted / active swim lane
+  const handleGlobalNewTask = () => {
+    const targetLaneId = activeSwimLaneId || effectiveSwimLanes[0]?.id;
+    const editor = editorsRef.current[targetLaneId];
+    if (editor) {
+      editor.commands.focus();
+      handleAddNewCard(editor);
+    }
+  };
+
+  return (
+    <div className="pane pane-left obsidian-pane">
+      {/* ── Main Pane Header ── */}
+      <div className="pane-header obsidian-header">
+        <div className="pane-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, flex: 1 }}>
+          <FileText size={17} color="var(--accent-cyan)" />
+          {effectiveSwimLanes.length === 1 ? (
+            isEditingSingleTitle ? (
+              <input
+                type="text"
+                className="swimlane-title-input"
+                style={{ maxWidth: '220px', padding: '0.15rem 0.4rem', fontSize: '0.88rem' }}
+                value={singleTitleVal}
+                onChange={(e) => setSingleTitleVal(e.target.value)}
+                onBlur={handleSingleTitleCommit}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleSingleTitleCommit();
+                  if (e.key === 'Escape') {
+                    setSingleTitleVal(singleLane?.title || 'Human Workspace');
+                    setIsEditingSingleTitle(false);
+                  }
+                }}
+                autoFocus
+              />
+            ) : (
+              <div
+                style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer' }}
+                onClick={() => setIsEditingSingleTitle(true)}
+                title="Click to rename"
+              >
+                <span>{singleLane?.title || 'Human Workspace'}</span>
+              </div>
+            )
+          ) : (
+            <span>Human Workspace</span>
+          )}
+          <span className="pane-subtitle">{totalDoneTasks}/{totalTasks} done</span>
+          {effectiveSwimLanes.length > 1 && (
+            <span className="swimlane-count-pill" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(99, 102, 241, 0.15)', color: '#818cf8', fontSize: '0.72rem', fontWeight: 600 }}>
+              <Columns size={11} />
+              <span>{effectiveSwimLanes.length} Lanes</span>
+            </span>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
+          {/* Styles Toolbar Toggle */}
+          <button
+            type="button"
+            className={`btn btn-secondary ${showStyles ? 'active' : ''}`}
+            style={{
+              padding: '0.3rem 0.65rem',
+              fontSize: '0.8rem',
+              borderColor: showStyles ? 'var(--accent-primary)' : undefined,
+              background: showStyles ? 'rgba(99, 102, 241, 0.18)' : undefined,
+              color: showStyles ? 'var(--text-bright, #fff)' : undefined,
+            }}
+            onClick={() => setShowStyles((prev) => !prev)}
+            title={showStyles ? 'Hide markdown formatting bar' : 'Show markdown formatting bar'}
+          >
+            <Type size={13} />
+            <span>Styles</span>
+          </button>
+
+          {/* + Add Swim Lane Button directly beside Styles */}
+          <button
+            type="button"
+            className="btn btn-secondary add-swimlane-header-btn"
+            style={{
+              padding: '0.3rem 0.65rem',
+              fontSize: '0.8rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+            }}
+            onClick={onAddSwimLane}
+            title="Create a new swim lane column (additional markdown document)"
+          >
+            <Plus size={14} />
+            {/* <span>Swim Lane</span> */}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Swim Lanes Container ── */}
+      <div className={`swimlanes-wrapper ${effectiveSwimLanes.length > 1 ? 'is-multi-column' : 'is-single-column'}`}>
+        {effectiveSwimLanes.map((lane, idx) => (
+          <React.Fragment key={lane.id}>
+            <SwimLaneColumn
+              lane={lane}
+              totalLanes={effectiveSwimLanes.length}
+              width={effectiveSwimLanes.length > 1 ? (laneWidths[lane.id] ? `${laneWidths[lane.id]}px` : 'calc(100vw / 3)') : undefined}
+              isActive={lane.id === activeSwimLaneId}
+              onActivate={() => setActiveSwimLaneId(lane.id)}
+              selectedTaskId={selectedTaskId}
+              runningTaskIds={runningTaskIds}
+              pendingHumanInputs={pendingHumanInputs}
+              showStyles={showStyles}
+              onSelectTask={onSelectTask}
+              onMarkdownChange={handleLaneMarkdownChange}
+              onRenameSwimLane={onRenameSwimLane}
+              onDeleteSwimLane={onDeleteSwimLane}
+              onArchiveTask={onArchiveTask}
+              onUnarchiveTask={onUnarchiveTask}
+              onDeleteArchivedTask={onDeleteArchivedTask}
+              archivedTasks={archivedTasks}
+              assistantDrawerHeight={assistantDrawerHeight}
+              onEditorReady={handleEditorReady}
+            />
+            {effectiveSwimLanes.length > 1 && idx < effectiveSwimLanes.length - 1 && (
+              <div
+                className={`swimlane-resizer-handle ${resizingRef.current?.laneId === lane.id ? 'is-active' : ''}`}
+                onMouseDown={(e) => handleStartResize(e, lane.id)}
+                title="Drag to resize swim lane width"
+              >
+                <div className="swimlane-resizer-line" />
+              </div>
+            )}
+          </React.Fragment>
+        ))}
+      </div>
+
+      {/* ── Human AI Assistant Slide-up Bar / Drawer (targets highlighted active lane) ── */}
       {project && aiConfig && (
         <HumanAiAssistantModal
           isOpen={isAssistantOpen}
           onClose={onCloseAssistant}
           project={project}
-          todoMarkdown={rawMarkdown}
+          todoMarkdown={activeSwimLane?.markdown || rawMarkdown}
           agentContextMarkdown={agentContextMarkdown}
           aiConfig={aiConfig}
           mcpServers={mcpServers}
-          onApplyAssistantResult={onApplyAssistantResult}
+          onApplyAssistantResult={(result, confirmedDeletions) => {
+            if (result.todoMarkdown && activeSwimLane) {
+              handleLaneMarkdownChange(activeSwimLane.id, result.todoMarkdown);
+            }
+            onApplyAssistantResult?.(result, confirmedDeletions);
+          }}
           onHeightChange={setAssistantDrawerHeight}
         />
       )}
@@ -1521,7 +1921,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
         <button
           type="button"
           className="new-card-btn"
-          onClick={() => handleAddNewCard(editor)}
+          onClick={handleGlobalNewTask}
         >
           <Plus size={16} />
           <span>New Task</span>
@@ -1530,7 +1930,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
           type="button"
           className={`new-task-btn ai-assistant-footer-btn ${isAssistantOpen ? 'active' : ''}`}
           onClick={isAssistantOpen ? onCloseAssistant : onOpenDraftModal}
-          title={isAssistantOpen ? 'Close Task Assistant' : 'Activate Task Assistant: Task mode (flesh out single task) or Architect mode (plan multi-task roadmap)'}
+          title={isAssistantOpen ? 'Close Task Assistant' : 'Activate Task Assistant: Task mode or Architect mode'}
         >
           {isAssistantOpen ? <ChevronDown size={16} /> : <Sparkles size={16} />}
           <span>{isAssistantOpen ? 'Hide Assistant' : 'Task Assistant'}</span>

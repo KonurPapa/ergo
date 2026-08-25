@@ -351,6 +351,43 @@ function ergoFileSystemPlugin(): Plugin {
         }
       }
 
+      if (url === '/api/files/delete' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const filePaths: string[] = body.filePaths || (body.filePath ? [body.filePath] : []);
+
+          if (!Array.isArray(filePaths) || filePaths.length === 0) {
+            return sendJson(res, 400, { error: 'filePaths must be a non-empty array of strings' });
+          }
+
+          const deletedFiles: string[] = [];
+          const now = Date.now();
+          for (const fp of filePaths) {
+            if (!fp) continue;
+            const fullPath = path.resolve(storageDir, fp);
+            try {
+              await fs.unlink(fullPath);
+              deletedFiles.push(fp);
+              recentWrites.set(fp, now);
+              recentWrites.set(fullPath, now);
+            } catch (unlinkErr: any) {
+              if (unlinkErr.code !== 'ENOENT') {
+                console.warn('[Ergo FS API] Unlink warning for', fullPath, unlinkErr.message);
+              }
+            }
+          }
+
+          return sendJson(res, 200, {
+            success: true,
+            deletedAt: new Date().toISOString(),
+            files: deletedFiles
+          });
+        } catch (err: any) {
+          console.error('[Ergo FS API] Delete error:', err);
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
       if (url === '/api/projects/create' && req.method === 'POST') {
         try {
           const body = await parseJsonBody(req);
@@ -531,27 +568,57 @@ function ergoFileSystemPlugin(): Plugin {
             agentContextFilePath: string;
             todoMarkdown: string;
             agentContextMarkdown: string;
+            swimLanes?: Array<{ id: string; title: string; filePath: string; markdown: string }>;
           }> = [];
 
           for (const entry of entries) {
             if (entry.isDirectory()) {
               const projectDir = path.join(projectsDir, entry.name);
-              const todoPath = path.join(projectDir, 'TODO.md');
-              const agentPath = path.join(projectDir, 'AGENT_CONTEXT.md');
+              const projectFiles = await fs.readdir(projectDir, { withFileTypes: true });
 
               let todoContent = '';
               let agentContent = '';
+              const swimLanes: Array<{ id: string; title: string; filePath: string; markdown: string }> = [];
 
-              try {
-                todoContent = await fs.readFile(todoPath, 'utf-8');
-              } catch {
-                todoContent = `# ${entry.name} Tasks:\n\n1. **Initial Task Setup:**\n    - Define project scope`;
-                await fs.writeFile(todoPath, todoContent, 'utf-8');
+              for (const pf of projectFiles) {
+                if (pf.isFile() && pf.name.endsWith('.md')) {
+                  const fp = path.join(projectDir, pf.name);
+                  const relPath = `projects/${entry.name}/${pf.name}`;
+                  try {
+                    const content = await fs.readFile(fp, 'utf-8');
+                    if (pf.name === 'AGENT_CONTEXT.md') {
+                      agentContent = content;
+                    } else {
+                      if (pf.name === 'TODO.md') {
+                        todoContent = content;
+                      }
+                      const title = pf.name === 'TODO.md' ? 'Human Workspace' : pf.name.replace(/\.md$/i, '').replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+                      swimLanes.push({
+                        id: `lane-${pf.name.replace(/\.md$/i, '').toLowerCase()}`,
+                        title,
+                        filePath: relPath,
+                        markdown: content
+                      });
+                    }
+                  } catch {}
+                }
               }
 
-              try {
-                agentContent = await fs.readFile(agentPath, 'utf-8');
-              } catch {
+              // If TODO.md or AGENT_CONTEXT.md didn't exist, create defaults
+              if (!todoContent) {
+                const todoPath = path.join(projectDir, 'TODO.md');
+                todoContent = `# ${entry.name} Tasks:\n\n1. Initial Task Setup:\n    - Define project scope`;
+                await fs.writeFile(todoPath, todoContent, 'utf-8');
+                swimLanes.unshift({
+                  id: 'lane-todo',
+                  title: 'Human Workspace',
+                  filePath: `projects/${entry.name}/TODO.md`,
+                  markdown: todoContent
+                });
+              }
+
+              if (!agentContent) {
+                const agentPath = path.join(projectDir, 'AGENT_CONTEXT.md');
                 agentContent = `# ${entry.name} Context\n\n### 1. Initial Task Setup\n\n**Status:** not started\n\n**Brief**\nInitial brief.`;
                 await fs.writeFile(agentPath, agentContent, 'utf-8');
               }
@@ -564,6 +631,7 @@ function ergoFileSystemPlugin(): Plugin {
                 agentContextFilePath: `projects/${entry.name}/AGENT_CONTEXT.md`,
                 todoMarkdown: todoContent,
                 agentContextMarkdown: agentContent,
+                swimLanes
               });
             }
           }

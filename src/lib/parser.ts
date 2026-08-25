@@ -1,4 +1,4 @@
-import { type TaskItem, type AgentContextItem, type TaskStatus } from '../types';
+import { type TaskItem, type AgentContextItem, type TaskStatus, type SwimLaneDoc } from '../types';
 
 export const ARCHIVE_DELIMITER = '<!-- ARCHIVE -->';
 
@@ -233,6 +233,37 @@ export function parseTodoMarkdown(markdown: string): ParsedTodoResult {
     headerComments: activeResult.headerComments,
     bodyMarkdown: activeResult.bodyMarkdown,
     archivedBodyMarkdown: ''
+  };
+}
+
+/**
+ * Parses an individual SwimLane document into structured TaskItem arrays
+ * with swimLaneId and sourceFileName metadata attached to each item.
+ */
+export function parseSwimLaneMarkdown(
+  swimLane: SwimLaneDoc,
+  startIdOffset: number = 0
+): ParsedTodoResult {
+  const fileName = swimLane.filePath ? swimLane.filePath.split('/').pop() || 'TODO.md' : 'TODO.md';
+  const result = parseTodoMarkdown(swimLane.markdown);
+
+  const items = result.items.map((item, idx) => ({
+    ...item,
+    id: startIdOffset + idx + 1,
+    swimLaneId: swimLane.id,
+    sourceFileName: fileName
+  }));
+
+  const archivedItems = result.archivedItems.map((item) => ({
+    ...item,
+    swimLaneId: swimLane.id,
+    sourceFileName: fileName
+  }));
+
+  return {
+    ...result,
+    items,
+    archivedItems
   };
 }
 

@@ -14,11 +14,20 @@ import {
   type SpawnedSession,
   type ExecutionStep,
   type McpToolPermissionPrompt,
-  type HumanInputPrompt
+  type HumanInputPrompt,
+  type SwimLaneDoc
 } from './types';
 
 import { INITIAL_PROJECTS, createNewProjectData, INITIAL_MCP_SERVERS } from './lib/demoData';
-import { parseTodoMarkdown, serializeTodoMarkdown, parseAgentContextMarkdown, parseAgentContextWithArchive, serializeAgentContextMarkdown, syncBriefsWithTasks } from './lib/parser';
+import {
+  parseTodoMarkdown,
+  parseSwimLaneMarkdown,
+  serializeTodoMarkdown,
+  parseAgentContextMarkdown,
+  parseAgentContextWithArchive,
+  serializeAgentContextMarkdown,
+  syncBriefsWithTasks
+} from './lib/parser';
 import { readFilesFromDisk, createProjectOnDisk } from './lib/fileSystem';
 import { storageManager } from './lib/storageManager';
 import { useAutosave } from './hooks/useAutosave';
@@ -478,8 +487,8 @@ export function App() {
     setIsAiScreenOpen(true);
   };
 
-  // Resizable Split Pane State
-  const [splitWidth, setSplitWidth] = useState<number>(50); // percentage
+  // Resizable Split Pane State (default: 2/3 for Human lanes, 1/3 for AI workspace)
+  const [splitWidth, setSplitWidth] = useState<number>(66.667); // percentage
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
 
@@ -523,52 +532,78 @@ export function App() {
     async function loadActiveProjectContent() {
       if (!activeProject) return;
 
-      const todoPath = activeProject.todoFilePath || `${activeProject.folderPath}/TODO.md`;
+      const currentLanes: SwimLaneDoc[] = activeProject.swimLanes && activeProject.swimLanes.length > 0
+        ? activeProject.swimLanes
+        : [{
+            id: 'lane-default',
+            title: 'Human Workspace',
+            filePath: activeProject.todoFilePath || `${activeProject.folderPath}/TODO.md`,
+            markdown: activeProject.todoMarkdown || ''
+          }];
+
       const agentPath = activeProject.agentContextFilePath || `${activeProject.folderPath}/AGENT_CONTEXT.md`;
+      const allPathsToRead = [...currentLanes.map((l) => l.filePath), agentPath];
 
       // Try reading latest live files directly from disk
-      const diskFiles = await readFilesFromDisk([todoPath, agentPath]);
+      const diskFiles = await readFilesFromDisk(allPathsToRead);
       if (!isMounted) return;
 
-      let effectiveTodoMd = activeProject.todoMarkdown;
       let effectiveAgentMd = activeProject.agentContextMarkdown;
-
-      if (diskFiles[todoPath] !== null && diskFiles[todoPath] !== undefined) {
-        effectiveTodoMd = diskFiles[todoPath]!;
-      }
       if (diskFiles[agentPath] !== null && diskFiles[agentPath] !== undefined) {
         effectiveAgentMd = diskFiles[agentPath]!;
       }
 
-      const parsedTodo = parseTodoMarkdown(effectiveTodoMd);
-      const parsedBriefsWithArchive = parseAgentContextWithArchive(effectiveAgentMd);
-      const alignedBriefs = syncBriefsWithTasks(parsedBriefsWithArchive.items, parsedTodo.items);
+      const effectiveSwimLanes = currentLanes.map((lane) => {
+        if (diskFiles[lane.filePath] !== null && diskFiles[lane.filePath] !== undefined) {
+          return { ...lane, markdown: diskFiles[lane.filePath]! };
+        }
+        return lane;
+      });
 
-      setTasks(parsedTodo.items);
-      setArchivedTasks(parsedTodo.archivedItems);
-      setHeaderComments(parsedTodo.headerComments);
+      let allActiveTasks: TaskItem[] = [];
+      let allArchivedTasks: TaskItem[] = [];
+      let globalOffset = 0;
+      let firstHeaderComments = '';
+
+      for (const lane of effectiveSwimLanes) {
+        const parsed = parseSwimLaneMarkdown(lane, globalOffset);
+        allActiveTasks = [...allActiveTasks, ...parsed.items];
+        allArchivedTasks = [...allArchivedTasks, ...parsed.archivedItems];
+        if (!firstHeaderComments && parsed.headerComments) {
+          firstHeaderComments = parsed.headerComments;
+        }
+        globalOffset += parsed.items.length;
+      }
+
+      const parsedBriefsWithArchive = parseAgentContextWithArchive(effectiveAgentMd);
+      const alignedBriefs = syncBriefsWithTasks(parsedBriefsWithArchive.items, allActiveTasks);
+
+      setTasks(allActiveTasks);
+      setArchivedTasks(allArchivedTasks);
+      setHeaderComments(firstHeaderComments);
       setBriefs(alignedBriefs);
       setArchivedBriefs(parsedBriefsWithArchive.archivedItems);
 
-      if (parsedTodo.items.length > 0) {
-        setSelectedTaskId((prev) => (prev !== null && parsedTodo.items.some((t) => t.id === prev) ? prev : parsedTodo.items[0].id));
+      if (allActiveTasks.length > 0) {
+        setSelectedTaskId((prev) => (prev !== null && allActiveTasks.some((t) => t.id === prev) ? prev : allActiveTasks[0].id));
       } else {
         setSelectedTaskId(null);
       }
 
-      // Update project state if disk files had more recent changes
-      if (
-        effectiveTodoMd !== activeProject.todoMarkdown ||
-        effectiveAgentMd !== activeProject.agentContextMarkdown
-      ) {
-        setProjects((prev) =>
-          prev.map((p) =>
-            p.id === activeProjectId
-              ? { ...p, todoMarkdown: effectiveTodoMd, agentContextMarkdown: effectiveAgentMd }
-              : p
-          )
-        );
-      }
+      // Update project state if disk files had more recent changes or swimLanes need sync
+      const primaryTodoMd = effectiveSwimLanes[0]?.markdown || activeProject.todoMarkdown;
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === activeProjectId
+            ? {
+                ...p,
+                todoMarkdown: primaryTodoMd,
+                agentContextMarkdown: effectiveAgentMd,
+                swimLanes: effectiveSwimLanes
+              }
+            : p
+        )
+      );
     }
 
     loadActiveProjectContent();
@@ -580,7 +615,6 @@ export function App() {
   }, [activeProjectId]);
 
   // Real-time disk file watcher subscription (SSE): updates UI instantly when markdown files change externally
-  // Uses refs to read current state inside the handler without recreating the EventSource on every render.
   const activeProjectRef = useRef(activeProject);
   const tasksRef = useRef(tasks);
   useEffect(() => { activeProjectRef.current = activeProject; }, [activeProject]);
@@ -607,16 +641,23 @@ export function App() {
                 p.id === projectId ||
                 p.folderPath === `projects/${projectId}` ||
                 p.todoFilePath === relativePath ||
-                p.agentContextFilePath === relativePath;
+                p.agentContextFilePath === relativePath ||
+                (p.swimLanes && p.swimLanes.some((l) => l.filePath === relativePath));
 
               if (!isMatch) return p;
 
-              if (fileType === 'todo') {
-                return { ...p, todoMarkdown: content };
-              } else if (fileType === 'agent') {
+              if (fileType === 'agent' || relativePath?.endsWith('AGENT_CONTEXT.md')) {
                 return { ...p, agentContextMarkdown: content };
+              } else {
+                const updatedLanes = (p.swimLanes || []).map((l) =>
+                  l.filePath === relativePath ? { ...l, markdown: content } : l
+                );
+                return {
+                  ...p,
+                  todoMarkdown: updatedLanes[0]?.markdown || (p.todoFilePath === relativePath ? content : p.todoMarkdown),
+                  swimLanes: updatedLanes
+                };
               }
-              return p;
             })
           );
 
@@ -627,18 +668,41 @@ export function App() {
             (ap.id === projectId ||
               ap.folderPath === `projects/${projectId}` ||
               ap.todoFilePath === relativePath ||
-              ap.agentContextFilePath === relativePath);
+              ap.agentContextFilePath === relativePath ||
+              (ap.swimLanes && ap.swimLanes.some((l) => l.filePath === relativePath)));
 
           if (isActiveProject) {
-            if (fileType === 'todo') {
-              const parsedTodo = parseTodoMarkdown(content);
-              setTasks(parsedTodo.items);
-              setHeaderComments(parsedTodo.headerComments);
-              setBriefs((prevBriefs) => syncBriefsWithTasks(prevBriefs, parsedTodo.items));
-            } else if (fileType === 'agent') {
+            if (fileType === 'agent' || relativePath?.endsWith('AGENT_CONTEXT.md')) {
               const parsedBriefs = parseAgentContextMarkdown(content);
-              // Use ref to read current tasks at the moment of event, not at effect creation time
               setBriefs(() => syncBriefsWithTasks(parsedBriefs, tasksRef.current));
+            } else {
+              const currentLanes: SwimLaneDoc[] = ap.swimLanes && ap.swimLanes.length > 0
+                ? ap.swimLanes
+                : [{
+                    id: 'lane-default',
+                    title: 'Human Workspace',
+                    filePath: ap.todoFilePath || `${ap.folderPath}/TODO.md`,
+                    markdown: ap.todoMarkdown || ''
+                  }];
+
+              const updatedLanes = currentLanes.map((l) =>
+                l.filePath === relativePath ? { ...l, markdown: content } : l
+              );
+
+              let allActiveTasks: TaskItem[] = [];
+              let allArchivedTasks: TaskItem[] = [];
+              let globalOffset = 0;
+
+              for (const lane of updatedLanes) {
+                const parsed = parseSwimLaneMarkdown(lane, globalOffset);
+                allActiveTasks = [...allActiveTasks, ...parsed.items];
+                allArchivedTasks = [...allArchivedTasks, ...parsed.archivedItems];
+                globalOffset += parsed.items.length;
+              }
+
+              setTasks(allActiveTasks);
+              setArchivedTasks(allArchivedTasks);
+              setBriefs((prevBriefs) => syncBriefsWithTasks(prevBriefs, allActiveTasks));
             }
           }
         } catch (err) {
@@ -659,7 +723,6 @@ export function App() {
       }
     };
   // Empty dep array: EventSource is created once and stays alive for the component lifetime.
-  // State is read via refs inside the handler, so no reconnects on task/project changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -674,28 +737,42 @@ export function App() {
     newBriefs: AgentContextItem[],
     immediateDiskSave = true,
     currentArchivedTasks = archivedTasks,
-    currentArchivedBriefs = archivedBriefs
+    currentArchivedBriefs = archivedBriefs,
+    currentSwimLanes = activeProject?.swimLanes
   ) => {
     setTasks(newTasks);
     setBriefs(newBriefs);
     setArchivedTasks(currentArchivedTasks);
     setArchivedBriefs(currentArchivedBriefs);
 
-    const updatedTodoMd = serializeTodoMarkdown(newTasks, headerComments, currentArchivedTasks);
+    const effectiveLanes: SwimLaneDoc[] = currentSwimLanes && currentSwimLanes.length > 0
+      ? currentSwimLanes
+      : [{
+          id: 'lane-default',
+          title: 'Human Workspace',
+          filePath: activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`,
+          markdown: activeProject?.todoMarkdown || ''
+        }];
+
+    const primaryTodoMd = effectiveLanes[0]?.markdown || serializeTodoMarkdown(newTasks, headerComments, currentArchivedTasks);
     const updatedBriefsMd = serializeAgentContextMarkdown(newBriefs, currentArchivedBriefs);
 
     setProjects((prev) =>
       prev.map((p) =>
         p.id === activeProjectId
-          ? { ...p, todoMarkdown: updatedTodoMd, agentContextMarkdown: updatedBriefsMd }
+          ? {
+              ...p,
+              todoMarkdown: primaryTodoMd,
+              agentContextMarkdown: updatedBriefsMd,
+              swimLanes: effectiveLanes
+            }
           : p
       )
     );
 
-    const todoPath = activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`;
     const agentPath = activeProject?.agentContextFilePath || `${activeProject?.folderPath}/AGENT_CONTEXT.md`;
     const filesToSave = [
-      { filePath: todoPath, content: updatedTodoMd },
+      ...effectiveLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
       { filePath: agentPath, content: updatedBriefsMd }
     ];
 
@@ -1227,63 +1304,330 @@ export function App() {
     handleSyncOverviewWithTask(task);
   };
 
-  // Live edit handler from Obsidian-style TaskPane editor (Triggers Debounced Autosave to disk)
-  const handleRawTodoEdit = (newBodyMd: string) => {
-    const fullTodoMd = headerComments && headerComments.trim() ? `${headerComments.trim()}\n\n${newBodyMd}` : newBodyMd;
-    const parsedTodo = parseTodoMarkdown(fullTodoMd);
-    setTasks(parsedTodo.items);
-    if (parsedTodo.headerComments) {
-      setHeaderComments(parsedTodo.headerComments);
+  // Live edit handler from individual SwimLane column editor (Triggers Debounced Autosave to disk)
+  const handleSwimLaneMarkdownChange = (laneId: string, newBodyMd: string) => {
+    if (!activeProject) return;
+
+    const currentLanes: SwimLaneDoc[] = activeProject.swimLanes && activeProject.swimLanes.length > 0
+      ? activeProject.swimLanes
+      : [{
+          id: 'lane-default',
+          title: 'Human Workspace',
+          filePath: activeProject.todoFilePath || `${activeProject.folderPath}/TODO.md`,
+          markdown: activeProject.todoMarkdown || ''
+        }];
+
+    const updatedLanes = currentLanes.map((lane) =>
+      lane.id === laneId ? { ...lane, markdown: newBodyMd } : lane
+    );
+
+    // Re-parse all tasks across all swim lanes
+    let allActiveTasks: TaskItem[] = [];
+    let allArchivedTasks: TaskItem[] = [];
+    let globalOffset = 0;
+    let firstHeaderComments = '';
+
+    for (const lane of updatedLanes) {
+      const parsed = parseSwimLaneMarkdown(lane, globalOffset);
+      allActiveTasks = [...allActiveTasks, ...parsed.items];
+      allArchivedTasks = [...allArchivedTasks, ...parsed.archivedItems];
+      if (!firstHeaderComments && parsed.headerComments) {
+        firstHeaderComments = parsed.headerComments;
+      }
+      globalOffset += parsed.items.length;
     }
 
-    // Sync and renumber briefs matching the updated tasks
-    const updatedBriefs = syncBriefsWithTasks(briefs, parsedTodo.items);
+    setTasks(allActiveTasks);
+    setArchivedTasks(allArchivedTasks);
+    if (firstHeaderComments) {
+      setHeaderComments(firstHeaderComments);
+    }
+
+    // Sync briefs with all tasks across all swim lanes
+    const updatedBriefs = syncBriefsWithTasks(briefs, allActiveTasks);
     setBriefs(updatedBriefs);
-    const combinedTodoMd = serializeTodoMarkdown(parsedTodo.items, parsedTodo.headerComments || headerComments, archivedTasks);
+
+    const primaryTodoMd = updatedLanes[0]?.markdown || newBodyMd;
     const updatedBriefsMd = serializeAgentContextMarkdown(updatedBriefs, archivedBriefs);
 
-    // Sync the raw markdown and updated briefs into the project record
     setProjects((prev) =>
       prev.map((p) =>
         p.id === activeProjectId
-          ? { ...p, todoMarkdown: combinedTodoMd, agentContextMarkdown: updatedBriefsMd }
+          ? {
+              ...p,
+              todoMarkdown: primaryTodoMd,
+              agentContextMarkdown: updatedBriefsMd,
+              swimLanes: updatedLanes
+            }
           : p
       )
     );
 
-    const todoPath = activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`;
-    const agentPath = activeProject?.agentContextFilePath || `${activeProject?.folderPath}/AGENT_CONTEXT.md`;
+    const agentPath = activeProject.agentContextFilePath || `${activeProject.folderPath}/AGENT_CONTEXT.md`;
+    const filesToSave = [
+      ...updatedLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
+      { filePath: agentPath, content: updatedBriefsMd }
+    ];
 
-    autosave.queueSave([
-      { filePath: todoPath, content: combinedTodoMd },
+    autosave.queueSave(filesToSave);
+  };
+
+  // Add new SwimLane column (creates additional markdown file)
+  const handleAddSwimLane = () => {
+    if (!activeProject) return;
+
+    const currentLanes: SwimLaneDoc[] = activeProject.swimLanes && activeProject.swimLanes.length > 0
+      ? activeProject.swimLanes
+      : [{
+          id: 'lane-default',
+          title: 'Human Workspace',
+          filePath: activeProject.todoFilePath || `${activeProject.folderPath}/TODO.md`,
+          markdown: activeProject.todoMarkdown || ''
+        }];
+
+    const nextIndex = currentLanes.length + 1;
+    const title = `Swim Lane ${nextIndex}`;
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `lane-${nextIndex}`;
+    const fileName = `${slug.toUpperCase().replace(/-/g, '_')}.md`;
+    const filePath = `${activeProject.folderPath}/${fileName}`;
+
+    const defaultContent = `<!-- Project: ${activeProject.name} | Folder: ${activeProject.folderPath} -->\n<!-- Linked Context: ${activeProject.agentContextFilePath} -->\n\n## ${title} Tasks\n\n1. Initial Task in ${title}\n    - Define task scope and subtasks\n`;
+
+    const newLane: SwimLaneDoc = {
+      id: `lane-${Date.now()}`,
+      title,
+      filePath,
+      markdown: defaultContent
+    };
+
+    const nextLanes = [...currentLanes, newLane];
+
+    // Re-parse tasks with new lane
+    let allActiveTasks: TaskItem[] = [];
+    let allArchivedTasks: TaskItem[] = [];
+    let globalOffset = 0;
+
+    for (const lane of nextLanes) {
+      const parsed = parseSwimLaneMarkdown(lane, globalOffset);
+      allActiveTasks = [...allActiveTasks, ...parsed.items];
+      allArchivedTasks = [...allArchivedTasks, ...parsed.archivedItems];
+      globalOffset += parsed.items.length;
+    }
+
+    const updatedBriefs = syncBriefsWithTasks(briefs, allActiveTasks);
+    setTasks(allActiveTasks);
+    setArchivedTasks(allArchivedTasks);
+    setBriefs(updatedBriefs);
+
+    const primaryTodoMd = nextLanes[0]?.markdown || activeProject.todoMarkdown;
+    const updatedBriefsMd = serializeAgentContextMarkdown(updatedBriefs, archivedBriefs);
+
+    setProjects((prev) =>
+      prev.map((p) =>
+        p.id === activeProjectId
+          ? {
+              ...p,
+              todoMarkdown: primaryTodoMd,
+              agentContextMarkdown: updatedBriefsMd,
+              swimLanes: nextLanes
+            }
+          : p
+      )
+    );
+
+    const agentPath = activeProject.agentContextFilePath || `${activeProject.folderPath}/AGENT_CONTEXT.md`;
+    autosave.saveImmediately([
+      ...nextLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
       { filePath: agentPath, content: updatedBriefsMd }
     ]);
+
+    showToast({
+      type: 'success',
+      title: 'Swim Lane Added',
+      message: `Created new swim lane "${title}" (${fileName}) with linked context.`
+    });
+  };
+
+  // Rename a SwimLane column title
+  const handleRenameSwimLane = (laneId: string, newTitle: string) => {
+    if (!activeProject || !newTitle.trim()) return;
+
+    const currentLanes: SwimLaneDoc[] = activeProject.swimLanes && activeProject.swimLanes.length > 0
+      ? activeProject.swimLanes
+      : [{
+          id: 'lane-default',
+          title: 'Human Workspace',
+          filePath: activeProject.todoFilePath || `${activeProject.folderPath}/TODO.md`,
+          markdown: activeProject.todoMarkdown || ''
+        }];
+
+    const nextLanes = currentLanes.map((lane) => {
+      if (lane.id === laneId) {
+        return {
+          ...lane,
+          title: newTitle.trim()
+        };
+      }
+      return lane;
+    });
+
+    setProjects((prev) =>
+      prev.map((p) =>
+        p.id === activeProjectId
+          ? { ...p, swimLanes: nextLanes }
+          : p
+      )
+    );
+
+    const agentPath = activeProject.agentContextFilePath || `${activeProject.folderPath}/AGENT_CONTEXT.md`;
+    const updatedBriefsMd = serializeAgentContextMarkdown(briefs, archivedBriefs);
+    autosave.saveImmediately([
+      ...nextLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
+      { filePath: agentPath, content: updatedBriefsMd }
+    ]);
+
+    showToast({
+      type: 'info',
+      title: 'Swim Lane Renamed',
+      message: `Renamed swim lane to "${newTitle.trim()}".`
+    });
+  };
+
+  // Delete a SwimLane column
+  const handleDeleteSwimLane = (laneId: string) => {
+    if (!activeProject) return;
+
+    const currentLanes: SwimLaneDoc[] = activeProject.swimLanes && activeProject.swimLanes.length > 0
+      ? activeProject.swimLanes
+      : [{
+          id: 'lane-default',
+          title: 'Human Workspace',
+          filePath: activeProject.todoFilePath || `${activeProject.folderPath}/TODO.md`,
+          markdown: activeProject.todoMarkdown || ''
+        }];
+
+    if (currentLanes.length <= 1) {
+      showToast({
+        type: 'warning',
+        title: 'Cannot Delete Last Swim Lane',
+        message: 'A workspace must contain at least 1 swim lane.'
+      });
+      return;
+    }
+
+    const removedLane = currentLanes.find((l) => l.id === laneId);
+    const nextLanes = currentLanes.filter((l) => l.id !== laneId);
+
+    // Re-parse remaining tasks
+    let allActiveTasks: TaskItem[] = [];
+    let allArchivedTasks: TaskItem[] = [];
+    let globalOffset = 0;
+
+    for (const lane of nextLanes) {
+      const parsed = parseSwimLaneMarkdown(lane, globalOffset);
+      allActiveTasks = [...allActiveTasks, ...parsed.items];
+      allArchivedTasks = [...allArchivedTasks, ...parsed.archivedItems];
+      globalOffset += parsed.items.length;
+    }
+
+    const updatedBriefs = syncBriefsWithTasks(briefs, allActiveTasks);
+    setTasks(allActiveTasks);
+    setArchivedTasks(allArchivedTasks);
+    setBriefs(updatedBriefs);
+
+    const primaryTodoMd = nextLanes[0]?.markdown || activeProject.todoMarkdown;
+    const updatedBriefsMd = serializeAgentContextMarkdown(updatedBriefs, archivedBriefs);
+
+    setProjects((prev) =>
+      prev.map((p) =>
+        p.id === activeProjectId
+          ? {
+              ...p,
+              todoMarkdown: primaryTodoMd,
+              agentContextMarkdown: updatedBriefsMd,
+              swimLanes: nextLanes
+            }
+          : p
+      )
+    );
+
+    const agentPath = activeProject.agentContextFilePath || `${activeProject.folderPath}/AGENT_CONTEXT.md`;
+    autosave.saveImmediately([
+      ...nextLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
+      { filePath: agentPath, content: updatedBriefsMd }
+    ]);
+
+    // Delete the removed swim lane markdown file from disk so it does not recreate on reload
+    if (removedLane && removedLane.filePath) {
+      fetch('/api/files/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePaths: [removedLane.filePath] }),
+      }).catch((err) => {
+        console.error('[Ergo] Failed to delete swim lane file from disk:', err);
+      });
+    }
+
+    showToast({
+      type: 'info',
+      title: 'Swim Lane Removed',
+      message: `Removed swim lane "${removedLane?.title || laneId}".`
+    });
   };
 
   // Save Raw Markdown Editing (from Raw Markdown modal - Flushes immediately)
-  const handleSaveRawMarkdown = (newTodoMd: string, newAgentContextMd: string) => {
-    const parsedTodo = parseTodoMarkdown(newTodoMd);
+  const handleSaveRawMarkdown = (newTodoMd: string, newAgentContextMd: string, updatedSwimLanes?: SwimLaneDoc[]) => {
+    const currentLanes: SwimLaneDoc[] = updatedSwimLanes && updatedSwimLanes.length > 0
+      ? updatedSwimLanes
+      : (activeProject?.swimLanes && activeProject.swimLanes.length > 0
+        ? activeProject.swimLanes
+        : [{
+            id: 'lane-default',
+            title: 'Human Workspace',
+            filePath: activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`,
+            markdown: newTodoMd
+          }]);
+
+    let allActiveTasks: TaskItem[] = [];
+    let allArchivedTasks: TaskItem[] = [];
+    let globalOffset = 0;
+    let firstHeaderComments = '';
+
+    for (const lane of currentLanes) {
+      const parsed = parseSwimLaneMarkdown(lane, globalOffset);
+      allActiveTasks = [...allActiveTasks, ...parsed.items];
+      allArchivedTasks = [...allArchivedTasks, ...parsed.archivedItems];
+      if (!firstHeaderComments && parsed.headerComments) {
+        firstHeaderComments = parsed.headerComments;
+      }
+      globalOffset += parsed.items.length;
+    }
+
     const parsedBriefsWithArchive = parseAgentContextWithArchive(newAgentContextMd);
 
-    setTasks(parsedTodo.items);
-    setArchivedTasks(parsedTodo.archivedItems);
-    setHeaderComments(parsedTodo.headerComments);
+    setTasks(allActiveTasks);
+    setArchivedTasks(allArchivedTasks);
+    setHeaderComments(firstHeaderComments);
     setBriefs(parsedBriefsWithArchive.items);
     setArchivedBriefs(parsedBriefsWithArchive.archivedItems);
 
     setProjects((prev) =>
       prev.map((p) =>
         p.id === activeProjectId
-          ? { ...p, todoMarkdown: newTodoMd, agentContextMarkdown: newAgentContextMd }
+          ? {
+              ...p,
+              todoMarkdown: currentLanes[0]?.markdown || newTodoMd,
+              agentContextMarkdown: newAgentContextMd,
+              swimLanes: currentLanes
+            }
           : p
       )
     );
 
-    const todoPath = activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`;
     const agentPath = activeProject?.agentContextFilePath || `${activeProject?.folderPath}/AGENT_CONTEXT.md`;
 
     autosave.saveImmediately([
-      { filePath: todoPath, content: newTodoMd },
+      ...currentLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
       { filePath: agentPath, content: newAgentContextMd }
     ]);
   };
@@ -1292,20 +1636,34 @@ export function App() {
   const handleExportProject = () => {
     if (!activeProject) return;
     const folderSlug = activeProject.folderPath ? activeProject.folderPath.replace(/^projects\//, '') : activeProject.id;
-    const todoBlob = new Blob([serializeTodoMarkdown(tasks, headerComments, archivedTasks)], { type: 'text/markdown' });
-    const briefBlob = new Blob([serializeAgentContextMarkdown(briefs, archivedBriefs)], { type: 'text/markdown' });
+    const currentLanes: SwimLaneDoc[] = activeProject.swimLanes && activeProject.swimLanes.length > 0
+      ? activeProject.swimLanes
+      : [{
+          id: 'lane-default',
+          title: 'Human Workspace',
+          filePath: `${folderSlug}_TODO.md`,
+          markdown: activeProject.todoMarkdown
+        }];
 
-    const a1 = document.createElement('a');
-    a1.href = URL.createObjectURL(todoBlob);
-    a1.download = `${folderSlug}_TODO.md`;
-    a1.click();
+    currentLanes.forEach((lane, idx) => {
+      setTimeout(() => {
+        const rawFileName = lane.filePath.split('/').pop() || `${folderSlug}_TODO.md`;
+        const fileName = rawFileName.endsWith('.md') ? rawFileName : `${rawFileName}.md`;
+        const blob = new Blob([lane.markdown], { type: 'text/markdown' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${folderSlug}_${fileName}`;
+        a.click();
+      }, idx * 250);
+    });
 
     setTimeout(() => {
-      const a2 = document.createElement('a');
-      a2.href = URL.createObjectURL(briefBlob);
-      a2.download = `${folderSlug}_AGENT_CONTEXT.md`;
-      a2.click();
-    }, 300);
+      const briefBlob = new Blob([serializeAgentContextMarkdown(briefs, archivedBriefs)], { type: 'text/markdown' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(briefBlob);
+      a.download = `${folderSlug}_AGENT_CONTEXT.md`;
+      a.click();
+    }, currentLanes.length * 250 + 100);
   };
 
   // Create New Linked Project in Main Directory Structure & Write to Disk
@@ -1331,13 +1689,20 @@ export function App() {
 
   // Trigger Immediate Disk Save from Navbar / Manual Action
   const handleManualSaveNow = () => {
-    const todoPath = activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`;
+    const currentLanes: SwimLaneDoc[] = activeProject?.swimLanes && activeProject.swimLanes.length > 0
+      ? activeProject.swimLanes
+      : [{
+          id: 'lane-default',
+          title: 'Human Workspace',
+          filePath: activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`,
+          markdown: activeProject?.todoMarkdown || ''
+        }];
+
     const agentPath = activeProject?.agentContextFilePath || `${activeProject?.folderPath}/AGENT_CONTEXT.md`;
-    const todoMd = serializeTodoMarkdown(tasks, headerComments);
     const agentMd = serializeAgentContextMarkdown(briefs);
 
     autosave.saveImmediately([
-      { filePath: todoPath, content: todoMd },
+      ...currentLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
       { filePath: agentPath, content: agentMd }
     ]);
   };
@@ -1396,7 +1761,7 @@ export function App() {
             pendingHumanInputs={pendingHumanInputs}
             onSelectTask={(id) => setSelectedTaskId(id)}
             onOpenDraftModal={() => setIsDraftModalOpen(true)}
-            onMarkdownChange={handleRawTodoEdit}
+            onMarkdownChange={(newMd) => handleSwimLaneMarkdownChange(activeProject?.swimLanes?.[0]?.id || 'lane-default', newMd)}
             isAssistantOpen={isDraftModalOpen}
             onCloseAssistant={() => setIsDraftModalOpen(false)}
             project={activeProject}
@@ -1407,6 +1772,11 @@ export function App() {
             onArchiveTask={handleArchiveTask}
             onUnarchiveTask={handleUnarchiveTask}
             onDeleteArchivedTask={handleDeleteArchivedTask}
+            swimLanes={activeProject?.swimLanes}
+            onAddSwimLane={handleAddSwimLane}
+            onRenameSwimLane={handleRenameSwimLane}
+            onDeleteSwimLane={handleDeleteSwimLane}
+            onSwimLaneMarkdownChange={handleSwimLaneMarkdownChange}
           />
         </div>
 
@@ -1463,6 +1833,8 @@ export function App() {
         existingProjects={projects}
       />
 
+
+
       {/* Modal 4: MCP Connections Hub */}
       <McpHubModal
         isOpen={isMcpHubOpen}
@@ -1509,6 +1881,7 @@ export function App() {
         folderPath={activeProject?.folderPath}
         todoFilePath={activeProject?.todoFilePath}
         agentContextFilePath={activeProject?.agentContextFilePath}
+        swimLanes={activeProject?.swimLanes}
         onSaveMarkdown={handleSaveRawMarkdown}
         onExportProject={handleExportProject}
       />

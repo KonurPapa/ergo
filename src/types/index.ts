@@ -26,6 +26,15 @@ export interface TaskItem {
   isArchived?: boolean;
   archivedAtIndex?: number; // 0-based index in the active list at time of archiving, for position-accurate restore
   createdFiles?: string[];
+  swimLaneId?: string; // ID of the swim lane / document this task belongs to
+  sourceFileName?: string; // e.g. "TODO.md", "BACKLOG.md"
+}
+
+export interface SwimLaneDoc {
+  id: string; // unique identifier for the swim lane
+  title: string; // e.g. "Human Workspace", "Feature Backlog", "Sprint Tasks"
+  filePath: string; // e.g. "projects/default-workspace/TODO.md" or "projects/default-workspace/BACKLOG.md"
+  markdown: string; // raw markdown content of this swim lane document
 }
 
 export interface AgentContextItem {
@@ -151,6 +160,7 @@ export interface ProjectData {
   todoMarkdown: string;
   agentContextMarkdown: string;
   connectedMcps: string[];
+  swimLanes?: SwimLaneDoc[];
 }
 
 export interface HumanInputPrompt {

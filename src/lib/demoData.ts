@@ -56,6 +56,9 @@ Created project folder structure under ${folderPath} with isolated TODO.md and A
 **Completion**
 Initial project structure initialized. All core file links verified.`;
 
+  const todoMd = initialTodoMarkdown || defaultTodoMarkdown;
+  const agentMd = initialAgentContextMarkdown || defaultAgentContextMarkdown;
+
   return {
     id,
     name,
@@ -63,9 +66,17 @@ Initial project structure initialized. All core file links verified.`;
     folderPath,
     todoFilePath,
     agentContextFilePath,
-    todoMarkdown: initialTodoMarkdown || defaultTodoMarkdown,
-    agentContextMarkdown: initialAgentContextMarkdown || defaultAgentContextMarkdown,
-    connectedMcps: ['mcp-filesystem', 'mcp-fetch', 'mcp-git']
+    todoMarkdown: todoMd,
+    agentContextMarkdown: agentMd,
+    connectedMcps: ['mcp-filesystem', 'mcp-fetch', 'mcp-git'],
+    swimLanes: [
+      {
+        id: `lane-${slug || 'default'}`,
+        title: 'Human Workspace',
+        filePath: todoFilePath,
+        markdown: todoMd
+      }
+    ]
   };
 }
 
@@ -109,7 +120,22 @@ Setup initial project structure and link human task list with agent context brie
 Created project folder structure under projects/default-workspace with isolated TODO.md and AGENT_CONTEXT.md. Verified directory paths and unique markdown file references.
 
 **Completion**
-Initial project structure initialized. All core file links verified.`
+Initial project structure initialized. All core file links verified.`,
+    swimLanes: [
+      {
+        id: 'lane-default',
+        title: 'Human Workspace',
+        filePath: 'projects/default-workspace/TODO.md',
+        markdown: `<!-- Project: Default Workspace | Folder: projects/default-workspace -->
+<!-- Linked Context: projects/default-workspace/AGENT_CONTEXT.md -->
+
+## Core Tasks
+
+1. Initial Task Setup
+    - Define project scope and task list
+    - Verify bi-directional link with AGENT_CONTEXT.md`
+      }
+    ]
   }
 ];
 

@@ -970,6 +970,29 @@ export class StorageManager {
             const projectDirHandle = handle as FileSystemDirectoryHandle;
             const todoMd = (await readFileTextFromDir(projectDirHandle, 'TODO.md')) || '';
             const agentMd = (await readFileTextFromDir(projectDirHandle, 'AGENT_CONTEXT.md')) || '';
+            const swimLanes: Array<{ id: string; title: string; filePath: string; markdown: string }> = [];
+
+            for await (const [fileName, fileHandle] of (projectDirHandle as any).entries()) {
+              if (fileHandle.kind === 'file' && fileName.endsWith('.md') && fileName !== 'AGENT_CONTEXT.md') {
+                const content = (await readFileTextFromDir(projectDirHandle, fileName)) || '';
+                const title = fileName === 'TODO.md' ? 'Human Workspace' : fileName.replace(/\.md$/i, '').replace(/[-_]/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
+                swimLanes.push({
+                  id: `lane-${fileName.replace(/\.md$/i, '').toLowerCase()}`,
+                  title,
+                  filePath: `projects/${name}/${fileName}`,
+                  markdown: content
+                });
+              }
+            }
+
+            if (swimLanes.length === 0 && todoMd) {
+              swimLanes.push({
+                id: 'lane-default',
+                title: 'Human Workspace',
+                filePath: `projects/${name}/TODO.md`,
+                markdown: todoMd
+              });
+            }
 
             projectList.push({
               id: name,
@@ -980,6 +1003,7 @@ export class StorageManager {
               agentContextFilePath: `projects/${name}/AGENT_CONTEXT.md`,
               todoMarkdown: todoMd,
               agentContextMarkdown: agentMd,
+              swimLanes,
               connectedMcps: ['mcp-filesystem', 'mcp-fetch', 'mcp-git', 'mcp-github', 'mcp-slack']
             });
           }

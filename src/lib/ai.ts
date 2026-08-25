@@ -9,7 +9,8 @@ import {
   type McpToolPermissionPrompt,
   type HumanInputPrompt,
   type HumanAiIntent,
-  type HumanAiAssistantResult
+  type HumanAiAssistantResult,
+  type SwimLaneDoc
 } from '../types';
 import { callMcpTool, formatConnectionsForAiPrompt, getAllowedRoots } from './mcpClient';
 import { storageManager } from './storageManager';
@@ -899,60 +900,133 @@ ${todoMarkdown ? `\nWORKSPACE TODO.md CONTEXT:\n\`\`\`markdown\n${todoMarkdown.s
 
 // ─── Task Execution Pipeline Helpers ────────────────────────────────────────
 
+interface WorkspaceTaskEntry {
+  task: TaskItem;
+  laneTitle: string;
+  fileName: string;
+}
+
 /**
- * Builds a compact task header index from the project's markdown files.
- * Produces only titles, categories, and brief overview snippets (NOT full file bodies).
+ * Extracts and tags all tasks from all workspace swim lane markdown documents.
+ */
+function extractAllWorkspaceTasks(
+  swimLanesOrTodo: SwimLaneDoc[] | string | undefined,
+  todoFallback: string = ''
+): WorkspaceTaskEntry[] {
+  let lanes: SwimLaneDoc[] = [];
+
+  if (Array.isArray(swimLanesOrTodo) && swimLanesOrTodo.length > 0) {
+    lanes = swimLanesOrTodo;
+  } else if (typeof swimLanesOrTodo === 'string' && swimLanesOrTodo.trim()) {
+    lanes = [{ id: 'lane-default', title: 'TODO', filePath: 'TODO.md', markdown: swimLanesOrTodo }];
+  } else if (todoFallback && todoFallback.trim()) {
+    lanes = [{ id: 'lane-default', title: 'TODO', filePath: 'TODO.md', markdown: todoFallback }];
+  } else {
+    lanes = [{ id: 'lane-default', title: 'TODO', filePath: 'TODO.md', markdown: '' }];
+  }
+
+  const results: WorkspaceTaskEntry[] = [];
+  let globalOffset = 0;
+
+  for (const lane of lanes) {
+    const fileName = lane.filePath ? lane.filePath.split('/').pop() || 'TODO.md' : 'TODO.md';
+    const parsed = parseTodoMarkdown(lane.markdown);
+    for (let i = 0; i < parsed.items.length; i++) {
+      results.push({
+        task: {
+          ...parsed.items[i],
+          id: parsed.items[i].id || (globalOffset + i + 1),
+          swimLaneId: lane.id,
+          sourceFileName: fileName
+        },
+        laneTitle: lane.title || fileName,
+        fileName
+      });
+    }
+    for (const arch of parsed.archivedItems) {
+      results.push({
+        task: {
+          ...arch,
+          swimLaneId: lane.id,
+          sourceFileName: fileName
+        },
+        laneTitle: lane.title || fileName,
+        fileName
+      });
+    }
+    globalOffset += parsed.items.length;
+  }
+  return results;
+}
+
+/**
+ * Builds a compact task header index from all project markdown files (all swim lanes + AGENT_CONTEXT.md).
+ * Produces only titles, categories, source document labels, and brief overview snippets (NOT full file bodies).
  * Used by the Discovery AI to find relevant context without ingesting entire files.
  */
 function buildTaskHeaderIndex(
-  todoMarkdown: string,
-  agentContextMarkdown: string
+  swimLanesOrTodo: SwimLaneDoc[] | string | undefined,
+  agentContextMarkdown: string,
+  todoFallback: string = ''
 ): string {
-  const { items: activeTasks, archivedItems } = parseTodoMarkdown(todoMarkdown);
+  const allWorkspaceEntries = extractAllWorkspaceTasks(swimLanesOrTodo, todoFallback);
   const allBriefs = parseAgentContextMarkdown(agentContextMarkdown);
-  const allTasks = [...activeTasks, ...archivedItems];
 
-  const lines: string[] = ['TASK HEADER INDEX:'];
-  for (const task of allTasks) {
-    const brief = allBriefs.find(
-      (b) =>
-        b.title.trim().toLowerCase() === task.title.trim().toLowerCase() ||
-        b.itemNumber === task.id
-    );
-    const snippet = (brief?.overview || brief?.brief || '')
-      .slice(0, 150)
-      .replace(/\n/g, ' ')
-      .trim();
-    const archiveTag = task.isArchived ? ' [ARCHIVED]' : '';
-    const doneTag = task.isDone ? ' [DONE]' : '';
-    lines.push(`#${task.id}. ${task.title} (${task.category})${archiveTag}${doneTag}`);
-    if (snippet) lines.push(`   Overview: ${snippet}${snippet.length === 150 ? '...' : ''}`);
+  const lines: string[] = ['TASK HEADER INDEX ACROSS ALL WORKSPACE MARKDOWN DOCUMENTS:'];
+
+  // Group entries by document
+  const byLane = new Map<string, WorkspaceTaskEntry[]>();
+  for (const entry of allWorkspaceEntries) {
+    const key = `${entry.fileName} (${entry.laneTitle})`;
+    if (!byLane.has(key)) byLane.set(key, []);
+    byLane.get(key)!.push(entry);
   }
+
+  byLane.forEach((entries, laneKey) => {
+    lines.push(`\n=== DOCUMENT: ${laneKey} ===`);
+    for (const { task, fileName } of entries) {
+      const brief = allBriefs.find(
+        (b) =>
+          b.title.trim().toLowerCase() === task.title.trim().toLowerCase() ||
+          b.itemNumber === task.id
+      );
+      const snippet = (brief?.overview || brief?.brief || '')
+        .slice(0, 150)
+        .replace(/\n/g, ' ')
+        .trim();
+      const archiveTag = task.isArchived ? ' [ARCHIVED]' : '';
+      const doneTag = task.isDone ? ' [DONE]' : '';
+      lines.push(`#${task.id}. ${task.title} (${task.category}) [Doc: ${fileName}]${archiveTag}${doneTag}`);
+      if (snippet) lines.push(`   Overview: ${snippet}${snippet.length === 150 ? '...' : ''}`);
+    }
+  });
+
   return lines.join('\n');
 }
 
 /**
- * Returns full task + brief data for a given list of task IDs.
+ * Returns full task + brief data for a given list of task IDs across all workspace documents.
  * Used to pass only the relevant tasks' context to the Builder AI.
  */
 function getRelevantTasksContext(
   relevantIds: number[],
-  todoMarkdown: string,
-  agentContextMarkdown: string
+  swimLanesOrTodo: SwimLaneDoc[] | string | undefined,
+  agentContextMarkdown: string,
+  todoFallback: string = ''
 ): string {
   if (relevantIds.length === 0) return '';
-  const { items: activeTasks, archivedItems } = parseTodoMarkdown(todoMarkdown);
+  const allWorkspaceEntries = extractAllWorkspaceTasks(swimLanesOrTodo, todoFallback);
   const allBriefs = parseAgentContextMarkdown(agentContextMarkdown);
-  const allTasks = [...activeTasks, ...archivedItems];
 
-  const lines: string[] = ['RELEVANT TASK CONTEXT (from Discovery AI):'];
+  const lines: string[] = ['RELEVANT TASK CONTEXT (from Discovery AI across workspace documents):'];
   for (const id of relevantIds) {
-    const task = allTasks.find((t) => t.id === id);
-    if (!task) continue;
+    const entry = allWorkspaceEntries.find((e) => e.task.id === id);
+    if (!entry) continue;
+    const { task, fileName, laneTitle } = entry;
     const brief = allBriefs.find(
-      (b) => b.title.trim().toLowerCase() === task.title.trim().toLowerCase()
+      (b) => b.title.trim().toLowerCase() === task.title.trim().toLowerCase() || b.itemNumber === task.id
     );
-    lines.push(`\n### Task #${task.id}: ${task.title} (${task.category})${task.isArchived ? ' [ARCHIVED]' : ''}`);
+    lines.push(`\n### Task #${task.id}: ${task.title} (${task.category}) [Origin: ${fileName} / "${laneTitle}"]${task.isArchived ? ' [ARCHIVED]' : ''}`);
     if (task.subtasks.length > 0) {
       lines.push('Subtasks: ' + task.subtasks.map((s) => s.text).join('; '));
     }
@@ -1734,16 +1808,16 @@ export async function executeTaskWithAi(
       id: 'step-discovery',
       time: new Date().toLocaleTimeString(),
       stage: 'context',
-      title: 'Discovery AI: Scanning Task Headers',
-      detail: 'Skimming all task and brief headers (active + archived) to identify relevant context for this task...',
+      title: 'Discovery AI: Scanning All Markdown Documents',
+      detail: 'Scanning all task and brief headers across all workspace swim lane documents (TODO.md, Backlog, etc.) and AGENT_CONTEXT.md to identify relevant context...',
       status: 'running'
     });
 
-    const headerIndex = buildTaskHeaderIndex(project.todoMarkdown, project.agentContextMarkdown);
+    const headerIndex = buildTaskHeaderIndex(project.swimLanes, project.agentContextMarkdown, project.todoMarkdown);
 
     const discoverySystemPrompt =
       `You are the Discovery AI in Ergo's task execution pipeline.\n` +
-      `Scan the task header index below and identify which OTHER tasks (if any) have information ` +
+      `Scan the task header index below across ALL workspace markdown files (swim lanes and AGENT_CONTEXT.md) and identify which OTHER tasks (if any) have information ` +
       `relevant to the current task being executed. Consider: prior decisions, shared dependencies, ` +
       `related completed work, or context that directly informs this task.\n` +
       `Do NOT include the current task itself in the relevantTaskIds.\n\n` +
@@ -1772,7 +1846,7 @@ export async function executeTaskWithAi(
     }
 
     const relevantContext = getRelevantTasksContext(
-      relevantTaskIds, project.todoMarkdown, project.agentContextMarkdown
+      relevantTaskIds, project.swimLanes, project.agentContextMarkdown, project.todoMarkdown
     );
 
     onStepUpdate({
@@ -1781,8 +1855,8 @@ export async function executeTaskWithAi(
       stage: 'context',
       title: 'Discovery AI: Context Identified',
       detail: relevantTaskIds.length > 0
-        ? `Found ${relevantTaskIds.length} relevant task(s): #${relevantTaskIds.join(', #')}. ${discoveryReasoning}`
-        : `No additional task context needed. ${discoveryReasoning}`,
+        ? `Found ${relevantTaskIds.length} relevant task(s) across workspace documents: #${relevantTaskIds.join(', #')}. ${discoveryReasoning}`
+        : `No additional task context needed across documents. ${discoveryReasoning}`,
       status: 'success'
     });
 
@@ -2103,7 +2177,7 @@ async function runOfflineExecution(
         : (connectedMcps[0]?.id || 'mcp-filesystem');
 
   const offlineSteps: Partial<ExecutionStep>[] = [
-    { id: 'step-1', stage: 'context', title: 'Reading Shared Context & Requirements', detail: `Loading human ask from TODO.md (Item #${task.id}: "${task.title}") and inspecting AGENT_CONTEXT.md brief...`, status: 'running' },
+    { id: 'step-1', stage: 'context', title: 'Reading Shared Context & Requirements', detail: `Loading task from ${task.sourceFileName || 'TODO.md'} (Item #${task.id}: "${task.title}") and inspecting all workspace documents + AGENT_CONTEXT.md brief...`, status: 'running' },
     { id: 'step-2', stage: 'mcp_call', title: `Executing MCP Tool (${targetServerId} / ${toolName})`, detail: `Resolving tool dependencies and executing ${toolName}() across safe roots...`, mcpToolUsed: toolName, status: 'pending' },
     { id: 'step-3', stage: 'execution', title: 'Executing Subtasks & Implementation Steps', detail: `Processing subtasks: ${task.subtasks.map((s) => s.text).join('; ') || 'Implementing core logic'}`, status: 'pending' },
     { id: 'step-4', stage: 'built_record', title: 'Rendering Interactive MCP App Widget', detail: 'Building visual interactive UI result and code diff preview...', status: 'pending', widgetType: getWidgetTypeForTask(task), widgetData: getWidgetDataForTask(task) },
