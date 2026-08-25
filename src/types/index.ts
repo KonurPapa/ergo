@@ -118,6 +118,7 @@ export interface AIProviderConfig {
   provider: AIProviderId;
   model: string;
   discoveryModel?: string;
+  summaryModel?: string;
   generalModel?: string;
   apiKey?: string;
   baseUrl?: string;
@@ -130,6 +131,7 @@ export interface ProviderCredentials {
   baseUrl?: string;
   model?: string;
   discoveryModel?: string;
+  summaryModel?: string;
   generalModel?: string;
   isConnected?: boolean;
 }
@@ -144,6 +146,7 @@ export interface UserApiKey {
   baseUrl?: string;
   model?: string;
   discoveryModel?: string;
+  summaryModel?: string;
   generalModel?: string;
   isConnected?: boolean;
   createdAt?: string;
@@ -172,17 +175,92 @@ export interface HumanInputPrompt {
   allowFreeform?: boolean;
 }
 
+/**
+ * Structured Overview document produced by the Summary AI.
+ * This is the single source of truth handed to the Builder AI.
+ * The user can edit it mid-task to steer the agent.
+ */
+export interface OverviewDocument {
+  brief: string;         // Detailed, concrete done-state acceptance specification and execution brief
+  goals: string;         // Specific success criteria and expected outcomes
+  output_as: string;     // Format and location of the final output (MCP, file, markdown, etc.)
+  context?: string;      // (Optional)
+  constraints?: string;  // (Optional)
+  raw?: string;          // Raw markdown rendition of the overview
+}
+
+/**
+ * Payload sent when the user runs an agent on an arbitrary text selection
+ * rather than a structured task item.
+ */
+export interface SelectionPayload {
+  type: 'selection';
+  selectedText: string;   // The raw text the user highlighted
+  laneId: string;         // Which swim lane the selection is from
+  laneTitle: string;      // Human-readable name of the swim lane
+  sourceHeading?: string; // Nearest heading above the selection (if any)
+  sessionId: string;      // Unique ID for this execution run
+}
+
+/**
+ * Delineated context entry for an individual related task discovered in the workspace
+ */
+export interface DiscoveredTaskContextEntry {
+  taskId: number;
+  title: string;
+  category: string;
+  status: string;
+  isDone: boolean;
+  isArchived: boolean;
+  sourceDocument: string; // e.g. "TODO.md", "Backlog.md"
+  swimLaneTitle: string;
+  subtasks: string[];
+  overview?: string;
+  buildAndVerification?: string;
+  completion?: string;
+}
+
+/**
+ * Plain JSON payload produced by Step 2 Discovery AI.
+ * Contains the target task context straight from the user alongside
+ * all additional discovered task context entries delineated individually.
+ */
+export interface DiscoveryJobPayload {
+  targetTask: {
+    id: number;
+    title: string;
+    category: string;
+    status: string;
+    isDone: boolean;
+    subtasks: { id?: string; text: string; isDone: boolean; isHumanReview?: boolean }[];
+    sourceFileName?: string;
+  };
+  additionalContext: DiscoveredTaskContextEntry[];
+  discoverySummary: {
+    scannedDocumentCount: number;
+    totalTasksScanned: number;
+    relevantTasksCount: number;
+  };
+  // Assembled by Step 3 Summary AI
+  overview?: OverviewDocument;
+  requiredMcps?: string[];
+}
+
 export interface ExecutionStep {
   id: string;
   time: string;
-  stage: 'context' | 'mcp_call' | 'thinking' | 'execution' | 'human_input' | 'built_record' | 'done';
+  stage: 'context' | 'overview' | 'mcp_call' | 'thinking' | 'execution' | 'human_input' | 'built_record' | 'done' | 'terminating';
   title: string;
   detail: string;
   mcpToolUsed?: string;
-  status: 'pending' | 'running' | 'success' | 'warning' | 'error';
+  status: 'pending' | 'running' | 'success' | 'warning' | 'error' | 'cancelled';
   widgetType?: 'code_diff' | 'analytics_chart' | 'figma_preview' | 'slack_draft' | 'bluebeam_diff' | 'vscode_preview';
   widgetData?: any;
   humanInputPrompt?: HumanInputPrompt;
+  // Plain JSON Discovery payload produced by Step 2 Discovery AI
+  discoveryPayload?: DiscoveryJobPayload;
+  // The assembled overview document (set after Summary AI completes)
+  overviewDocument?: OverviewDocument;
 }
 
 export type RootFolderStatus = 'connected' | 'needs_permission' | 'disconnected' | 'server_fallback';

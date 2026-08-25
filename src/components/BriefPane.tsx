@@ -35,17 +35,16 @@ import {
   Wrench,
   Flag,
   Archive,
-  Trash2,
-  AlertTriangle,
-  AlertCircle,
   HelpCircle,
   Eye,
   ExternalLink,
-  Check
+  Check,
+  MoreHorizontal
 } from 'lucide-react';
 
 import { RichTextToolbar } from './RichTextToolbar';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { ArchivedTasksModal } from './ArchivedTasksModal';
 import { handleMarkdownAutoWrap } from '../lib/markdownEditorUtils';
 import { openFileInIdeOrSystem } from '../lib/mcpClient';
 
@@ -170,6 +169,7 @@ interface BriefPaneProps {
   briefs: AgentContextItem[];
   archivedTasks?: TaskItem[];
   archivedBriefs?: AgentContextItem[];
+  swimLanes?: import('../types').SwimLaneDoc[];
   selectedTaskId: number | null;
   runningTaskIds?: number[];
   onSelectTask?: (taskId: number) => void;
@@ -193,6 +193,7 @@ interface BriefPaneProps {
   onSessionExit?: (taskId: number, code: number) => void;
   onRestartSession?: (task: TaskItem) => void;
   onKillSession?: (taskId: number) => void;
+  onTerminateAgent?: (taskId: number) => void;
 }
 
 interface AiTaskCardProps {
@@ -216,6 +217,7 @@ interface AiTaskCardProps {
   onSessionExit?: (code: number) => void;
   onRestartSession?: (task: TaskItem) => void;
   onKillSession?: (taskId: number) => void;
+  onTerminateAgent?: (taskId: number) => void;
 }
 
 const AiTaskCard: React.FC<AiTaskCardProps> = ({
@@ -239,6 +241,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   onSessionExit,
   onRestartSession,
   onKillSession,
+  onTerminateAgent,
 }) => {
   const [isTaskCollapsed, setIsTaskCollapsed] = useState(!isSelected);
   const [isEditing, setIsEditing] = useState(false);
@@ -364,15 +367,24 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
         completion: false,
       });
     } else if (!wasWorking && isWorking) {
-      // Started working -> expand task card, collapse Overview, expand Build & Verification
+      // Started working -> expand task card, keep Overview open for context gathering, expand Build & Verification
       setIsTaskCollapsed(false);
       setCollapsedSections({
-        overview: true,
+        overview: false,
         build: false,
         completion: true,
       });
     }
   }, [isWorking]);
+
+  const isDiscoveryRunning =
+    isExecuting && executionSteps.some((s) => s.stage === 'context' && s.status === 'running');
+  const isGatheringContext =
+    isExecuting &&
+    (isDiscoveryRunning ||
+      executionSteps.length === 0 ||
+      !executionSteps.some((s) => s.stage === 'overview' || s.stage === 'execution' || s.stage === 'built_record' || s.stage === 'done'));
+  const contextStep = executionSteps.find((s) => s.stage === 'context');
 
   // Determine what to display in Section 2 (Build & Verification)
   const showTerminal =
@@ -703,36 +715,53 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <button
-                    type="button"
-                    className="btn btn-secondary sync-with-task-btn"
-                    style={{
-                      padding: '0.2rem 0.55rem',
-                      fontSize: '0.72rem',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.35rem',
-                    }}
-                    onClick={handleSyncWithTask}
-                    disabled={isSyncingOverview}
-                    title="Sync Overview with task"
-                  >
-                    {isSyncingOverview ? (
-                      <>
-                        <Loader2 size={11} className="spin-animate" />
-                        <span>Syncing...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles size={11} color="var(--accent-violet)" />
-                        <span>Sync Task</span>
-                      </>
-                    )}
-                  </button>
-                  {overviewText ? (
-                    <span className="card-item-count">{overviewText.split('\n').filter(Boolean).length} lines</span>
+                  {isGatheringContext ? (
+                    <span
+                      className="card-item-tag-working"
+                      style={{
+                        color: 'var(--accent-cyan)',
+                        background: 'rgba(56, 189, 248, 0.12)',
+                        borderColor: 'rgba(56, 189, 248, 0.35)',
+                      }}
+                      title="Discovery AI is scanning task headers across all swim lanes & archives"
+                    >
+                      <Loader2 size={11} className="spin-animate" />
+                      <span>Gathering context...</span>
+                    </span>
                   ) : (
-                    <span className="card-item-tag-empty">Empty</span>
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-secondary sync-with-task-btn"
+                        style={{
+                          padding: '0.2rem 0.55rem',
+                          fontSize: '0.72rem',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.35rem',
+                        }}
+                        onClick={handleSyncWithTask}
+                        disabled={isSyncingOverview || isExecuting}
+                        title="Sync Overview with task"
+                      >
+                        {isSyncingOverview ? (
+                          <>
+                            <Loader2 size={11} className="spin-animate" />
+                            <span>Syncing...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles size={11} color="var(--accent-violet)" />
+                            <span>Sync Task</span>
+                          </>
+                        )}
+                      </button>
+                      {overviewText ? (
+                        <span className="card-item-count">{overviewText.split('\n').filter(Boolean).length} lines</span>
+                      ) : (
+                        <span className="card-item-tag-empty">Empty</span>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -751,17 +780,31 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   />
                 ) : (
                   <div className="brief-body">
+                    {/* Live Context Gathering Indicator Banner */}
+                    {isGatheringContext && (
+                      <div className="overview-gathering-context-box">
+                        <div className="overview-gathering-context-header">
+                          <Loader2 size={14} className="spin-animate" color="var(--accent-cyan)" />
+                          <span className="overview-gathering-context-title">Gathering context...</span>
+                        </div>
+                        <p className="overview-gathering-context-detail">
+                          {contextStep?.detail ||
+                            'Discovery AI is scanning task headers in each lane (including archived tasks) to assemble relevant workspace context.'}
+                        </p>
+                      </div>
+                    )}
+
                     {overviewText ? (
                       <div className="brief-markdown-render">
                         <MarkdownRenderer content={overviewText} />
                       </div>
-                    ) : (
+                    ) : !isGatheringContext ? (
                       <div className="brief-empty-markdown">
                         <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
                           No verbose overview defined yet.
                         </span>
                       </div>
-                    )}
+                    ) : null}
                   </div>
                 )}
               </div>
@@ -892,6 +935,18 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                         <Loader2 size={11} className="spin-animate" />
                         <span>Working...</span>
                       </span>
+                      {/* Stop Agent button — always visible during execution */}
+                      {onTerminateAgent && (
+                        <button
+                          className="btn btn-secondary"
+                          style={{ padding: '0.2rem 0.55rem', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.3rem', color: 'var(--accent-rose)', borderColor: 'var(--accent-rose)' }}
+                          onClick={() => onTerminateAgent(task.id)}
+                          title="Stop the running agent immediately"
+                        >
+                          <Square size={11} />
+                          <span>Stop Agent</span>
+                        </button>
+                      )}
                       {!isEditing && (
                         <button
                           className="btn btn-secondary"
@@ -1002,11 +1057,13 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                         <div key={step.id} className={`step-card ${step.status}`}>
                           <div className="step-header">
                             <div className="step-title">
-                              {step.status === 'running' && (step.stage === 'human_input' ? <HelpCircle size={15} color="var(--accent-amber)" className="pulse-animate" /> : <Loader2 size={15} className="spin-animate" color="var(--accent-primary)" />)}
+                              {step.status === 'running' && (step.stage === 'human_input' ? <HelpCircle size={15} color="var(--accent-amber)" className="pulse-animate" /> : step.stage === 'overview' ? <Sparkles size={15} color="var(--accent-amber)" className="spin-animate" /> : <Loader2 size={15} className="spin-animate" color="var(--accent-primary)" />)}
                               {step.status === 'success' && <CheckCircle2 size={15} color="var(--accent-emerald)" />}
                               {step.status === 'warning' && <ShieldAlert size={15} color="var(--accent-rose)" />}
                               {step.status === 'pending' && <CircleDot size={15} color="var(--text-dim)" />}
-                              <span style={{ fontSize: '0.88rem' }}>{step.title}</span>
+                              {step.status === 'cancelled' && <XCircle size={15} color="var(--accent-rose)" />}
+                              {step.status === 'error' && <XCircle size={15} color="var(--accent-rose)" />}
+                              <span style={{ fontSize: '0.88rem', color: step.status === 'cancelled' ? 'var(--text-muted)' : undefined }}>{step.title}</span>
                             </div>
                             <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
                               {step.time}
@@ -1014,6 +1071,14 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                           </div>
 
                           <div className="step-detail" style={{ fontSize: '0.82rem' }}>{step.detail}</div>
+
+                          {/* Overview document preview if available */}
+                          {step.stage === 'overview' && step.status === 'success' && step.overviewDocument && (
+                            <div style={{ marginTop: '0.5rem', padding: '0.6rem 0.75rem', background: 'rgba(245, 158, 11, 0.07)', border: '1px solid rgba(245, 158, 11, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: '1.55' }}>
+                              <div style={{ fontWeight: 700, color: 'var(--accent-amber)', marginBottom: '0.3rem', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Output As</div>
+                              <span>{step.overviewDocument.output_as}</span>
+                            </div>
+                          )}
 
                           {step.humanInputPrompt && step.status === 'running' && onHumanInputChoice && !pendingHumanInput && (
                             <div style={{ marginTop: '0.6rem' }}>
@@ -1223,256 +1288,12 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   );
 };
 
-interface ArchivedAiTaskCardProps {
-  task: TaskItem;
-  brief?: AgentContextItem;
-  onUnarchive: () => void;
-  onDelete: () => void;
-}
-
-const ArchivedAiTaskCard: React.FC<ArchivedAiTaskCardProps> = ({
-  task,
-  brief,
-  onUnarchive,
-  onDelete,
-}) => {
-  const [isTaskCollapsed, setIsTaskCollapsed] = useState(false);
-  const [collapsedSections, setCollapsedSections] = useState({
-    overview: false,
-    build: false,
-    completion: false,
-  });
-
-  const toggleSection = (section: 'overview' | 'build' | 'completion') => {
-    setCollapsedSections((prev) => ({ ...prev, [section]: !prev[section] }));
-  };
-
-  const overviewText = brief?.overview || brief?.brief || '';
-  const buildText = brief?.buildAndVerification || brief?.built || '';
-  const completionText = brief?.completion || brief?.validation || brief?.humanReview || brief?.followUps || '';
-
-  return (
-    <div className={`ai-task-card archived-ai-card ${isTaskCollapsed ? 'is-collapsed' : ''}`}>
-      {/* ── Task Card Header ── */}
-      <div
-        className="ai-task-card-header"
-        onClick={() => setIsTaskCollapsed((prev) => !prev)}
-        style={{ cursor: 'pointer' }}
-      >
-        <div className="ai-task-header-left">
-          <button
-            type="button"
-            className={`card-collapse-btn ${isTaskCollapsed ? 'is-collapsed' : ''}`}
-            title={isTaskCollapsed ? 'Expand task context' : 'Collapse task context'}
-            aria-label={isTaskCollapsed ? 'Expand task context' : 'Collapse task context'}
-            onClick={(e) => {
-              e.stopPropagation();
-              setIsTaskCollapsed((prev) => !prev);
-            }}
-          >
-            <ChevronDown size={14} className="collapse-chevron" />
-          </button>
-          <span
-            className="ai-task-num-badge"
-            style={{
-              color: 'var(--accent-amber, #f59e0b)',
-              background: 'rgba(245, 158, 11, 0.12)',
-              borderColor: 'rgba(245, 158, 11, 0.28)',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.25rem',
-            }}
-            title="Archived Task"
-          >
-            <Archive size={11} />
-            <span>Archived</span>
-          </span>
-          <span className="ai-task-title-text" title={task.title}>
-            {task.title}
-          </span>
-          <span
-            className="ai-task-status-badge is-done"
-            style={{
-              color: '#f59e0b',
-              background: 'rgba(245, 158, 11, 0.12)',
-              borderColor: 'rgba(245, 158, 11, 0.28)',
-            }}
-          >
-            Archived
-          </span>
-        </div>
-
-        <div
-          className="ai-task-header-actions"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="archived-task-actions">
-            <button
-              type="button"
-              className="archived-action-btn unarchive-btn"
-              title="Unarchive task"
-              onClick={onUnarchive}
-            >
-              <RotateCcw size={12} />
-              <span>Unarchive</span>
-            </button>
-            <button
-              type="button"
-              className="archived-action-btn delete-btn"
-              title="Delete task permanently"
-              onClick={onDelete}
-            >
-              <Trash2 size={12} />
-              <span>Delete</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Task Card Body ── */}
-      {!isTaskCollapsed && (
-        <div className="ai-task-card-body">
-          <div className="brief-container" style={{ padding: 0 }}>
-            {/* SECTION 1: OVERVIEW */}
-            <div className={`brief-card ${collapsedSections.overview ? 'is-collapsed' : ''}`}>
-              <div
-                className="brief-section-header clickable-header"
-                onClick={() => toggleSection('overview')}
-              >
-                <div className="header-left">
-                  <button
-                    type="button"
-                    className={`card-collapse-btn ${collapsedSections.overview ? 'is-collapsed' : ''}`}
-                    title={collapsedSections.overview ? 'Expand section' : 'Collapse section'}
-                    aria-label={collapsedSections.overview ? 'Expand section' : 'Collapse section'}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleSection('overview');
-                    }}
-                  >
-                    <ChevronDown size={12} className="collapse-chevron" />
-                  </button>
-                  <span className="section-title-text">
-                    <span className="section-icon">
-                      <ClipboardList size={18} color="var(--accent-violet)" />
-                    </span>
-                    <span>Overview</span>
-                  </span>
-                  <span className="section-subtitle-tag">Frontend Notes & Task in Context</span>
-                </div>
-              </div>
-              <div className="brief-body-wrapper">
-                <div className="brief-body" style={{ padding: '0.85rem 1rem' }}>
-                  {overviewText ? (
-                    <div className="brief-markdown-render">
-                      <MarkdownRenderer content={overviewText} />
-                    </div>
-                  ) : (
-                    <div className="empty-state" style={{ padding: '0.75rem 0', color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.82rem' }}>
-                      No overview notes recorded.
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* SECTION 2: BUILD & VERIFICATION */}
-            <div className={`brief-card ${collapsedSections.build ? 'is-collapsed' : ''}`}>
-              <div
-                className="brief-section-header clickable-header"
-                onClick={() => toggleSection('build')}
-              >
-                <div className="header-left">
-                  <button
-                    type="button"
-                    className={`card-collapse-btn ${collapsedSections.build ? 'is-collapsed' : ''}`}
-                    title={collapsedSections.build ? 'Expand section' : 'Collapse section'}
-                    aria-label={collapsedSections.build ? 'Expand section' : 'Collapse section'}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleSection('build');
-                    }}
-                  >
-                    <ChevronDown size={12} className="collapse-chevron" />
-                  </button>
-                  <span className="section-title-text">
-                    <span className="section-icon">
-                      <Wrench size={18} color="var(--accent-cyan)" />
-                    </span>
-                    <span>Build & Verification</span>
-                  </span>
-                  <span className="section-subtitle-tag">Backend / Core Build Notes</span>
-                </div>
-              </div>
-              <div className="brief-body-wrapper">
-                <div className="brief-body" style={{ padding: '0.85rem 1rem' }}>
-                  {buildText ? (
-                    <div className="brief-markdown-render">
-                      <MarkdownRenderer content={buildText} />
-                    </div>
-                  ) : (
-                    <div className="empty-state" style={{ padding: '0.75rem 0', color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.82rem' }}>
-                      No build notes recorded.
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* SECTION 3: COMPLETION */}
-            <div className={`brief-card ${collapsedSections.completion ? 'is-collapsed' : ''}`}>
-              <div
-                className="brief-section-header clickable-header"
-                onClick={() => toggleSection('completion')}
-              >
-                <div className="header-left">
-                  <button
-                    type="button"
-                    className={`card-collapse-btn ${collapsedSections.completion ? 'is-collapsed' : ''}`}
-                    title={collapsedSections.completion ? 'Expand section' : 'Collapse section'}
-                    aria-label={collapsedSections.completion ? 'Expand section' : 'Collapse section'}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleSection('completion');
-                    }}
-                  >
-                    <ChevronDown size={12} className="collapse-chevron" />
-                  </button>
-                  <span className="section-title-text">
-                    <span className="section-icon">
-                      <Flag size={18} color="var(--accent-emerald)" />
-                    </span>
-                    <span>Completion</span>
-                  </span>
-                  <span className="section-subtitle-tag">What Was Built & Final Status</span>
-                </div>
-              </div>
-              <div className="brief-body-wrapper">
-                <div className="brief-body" style={{ padding: '0.85rem 1rem' }}>
-                  {completionText ? (
-                    <div className="brief-markdown-render">
-                      <MarkdownRenderer content={completionText} />
-                    </div>
-                  ) : (
-                    <div className="empty-state" style={{ padding: '0.75rem 0', color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.82rem' }}>
-                      No completion notes recorded.
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
 export const BriefPane: React.FC<BriefPaneProps> = ({
   tasks,
   briefs,
   archivedTasks = [],
   archivedBriefs = [],
+  swimLanes = [],
   selectedTaskId,
   runningTaskIds = [],
   onSelectTask,
@@ -1494,9 +1315,32 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   onSessionExit,
   onRestartSession,
   onKillSession,
+  onTerminateAgent,
 }) => {
-  const [isArchiveOpen, setIsArchiveOpen] = useState(false);
-  const [taskToDelete, setTaskToDelete] = useState<TaskItem | null>(null);
+  const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
+  const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
+  const headerMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close workspace header dropdown on outside click or Escape
+  useEffect(() => {
+    if (!isHeaderMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (headerMenuRef.current && !headerMenuRef.current.contains(e.target as Node)) {
+        setIsHeaderMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsHeaderMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isHeaderMenuOpen]);
 
   const activeTaskRunningCount = runningTaskIds.length;
   const doneCount = tasks.filter((t) => t.isDone || t.status === 'done').length;
@@ -1518,6 +1362,45 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
               <span>{activeTaskRunningCount} running</span>
             </span>
           )}
+
+          {/* AI Workspace Header Actions Menu */}
+          <div style={{ position: 'relative' }} ref={headerMenuRef}>
+            <button
+              type="button"
+              className={`btn btn-secondary workspace-header-menu-btn ${isHeaderMenuOpen ? 'active' : ''}`}
+              style={{
+                padding: '0.3rem 0.65rem',
+                fontSize: '0.8rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+              }}
+              onClick={() => setIsHeaderMenuOpen((prev) => !prev)}
+              title="Workspace actions"
+              aria-label="Workspace actions"
+            >
+              <MoreHorizontal size={14} />
+            </button>
+
+            {isHeaderMenuOpen && (
+              <div className="workspace-header-dropdown-menu">
+                <button
+                  type="button"
+                  className="workspace-header-dropdown-item"
+                  onClick={() => {
+                    setIsHeaderMenuOpen(false);
+                    setIsArchiveModalOpen(true);
+                  }}
+                >
+                  <Archive size={14} className="dropdown-item-icon archive-icon" />
+                  <span>Archived Tasks</span>
+                  {archivedTasks.length > 0 && (
+                    <span className="dropdown-item-badge">{archivedTasks.length}</span>
+                  )}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1570,103 +1453,25 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                   onSessionExit={(code) => onSessionExit?.(task.id, code)}
                   onRestartSession={onRestartSession}
                   onKillSession={onKillSession}
+                  onTerminateAgent={onTerminateAgent}
                 />
               );
             })}
           </div>
         )}
-
-        {/* ── Collapsible Archive Panel at bottom of scrollable workspace ── */}
-        <div className="archive-collapsible-panel ai-archive-panel">
-          <button
-            type="button"
-            className={`archive-panel-header ${isArchiveOpen ? 'open' : ''}`}
-            onClick={() => setIsArchiveOpen((prev) => !prev)}
-            title={isArchiveOpen ? 'Collapse archive panel' : 'Expand archive panel'}
-          >
-            <div className="archive-panel-header-left">
-              <Archive size={15} className="archive-icon" />
-              <span className="archive-panel-title">Archive Contexts</span>
-              <span className="archive-count-badge">
-                {archivedTasks.length} {archivedTasks.length === 1 ? 'task' : 'tasks'}
-              </span>
-            </div>
-            <ChevronDown size={15} className={`archive-chevron ${isArchiveOpen ? 'open' : ''}`} />
-          </button>
-
-          {isArchiveOpen && (
-            <div className="archive-panel-content">
-              {archivedTasks.length === 0 ? (
-                <div className="archive-empty-state">
-                  <span>No archived task contexts</span>
-                </div>
-              ) : (
-                <div className="ai-tasks-list-container archived-ai-tasks">
-                  {archivedTasks.map((task, index) => {
-                    const taskBrief =
-                      archivedBriefs.find((b) => b.title.trim().toLowerCase() === task.title.trim().toLowerCase()) ||
-                      archivedBriefs[index] ||
-                      briefs.find((b) => b.title.trim().toLowerCase() === task.title.trim().toLowerCase()) ||
-                      undefined;
-
-                    return (
-                      <ArchivedAiTaskCard
-                        key={task.id}
-                        task={task}
-                        brief={taskBrief}
-                        onUnarchive={() => onUnarchiveTask?.(task.id)}
-                        onDelete={() => setTaskToDelete(task)}
-                      />
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
       </div>
 
-      {/* ── Task Permanent Deletion Context Warning Modal ── */}
-      {taskToDelete && (
-        <div className="modal-overlay" onClick={() => setTaskToDelete(null)}>
-          <div className="modal-card archive-delete-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-rose)' }}>
-                <AlertTriangle size={18} />
-                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Delete Task Permanently?</h3>
-              </div>
-              <button type="button" className="btn-icon" onClick={() => setTaskToDelete(null)}>
-                <X size={16} />
-              </button>
-            </div>
-            <div className="modal-body" style={{ padding: '1rem 1.25rem', fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
-              <p style={{ margin: 0, marginBottom: '0.75rem' }}>
-                Are you sure you want to permanently delete <strong>"{taskToDelete.title}"</strong>?
-              </p>
-              <div className="archive-delete-warning-box">
-                <AlertCircle size={15} style={{ flexShrink: 0, color: 'var(--accent-rose)' }} />
-                <span>If you proceed with deleting this task, the AI will lose context for it.</span>
-              </div>
-            </div>
-            <div className="modal-footer" style={{ padding: '0.75rem 1.25rem', display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => setTaskToDelete(null)}>
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn btn-danger"
-                style={{ background: 'var(--accent-rose)', color: '#fff' }}
-                onClick={() => {
-                  onDeleteArchivedTask?.(taskToDelete.id);
-                  setTaskToDelete(null);
-                }}
-              >
-                Delete Task
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* ── Archived Tasks Modal Window ── */}
+      <ArchivedTasksModal
+        isOpen={isArchiveModalOpen}
+        onClose={() => setIsArchiveModalOpen(false)}
+        archivedTasks={archivedTasks}
+        swimLanes={swimLanes}
+        briefs={briefs}
+        archivedBriefs={archivedBriefs}
+        onUnarchiveTask={onUnarchiveTask}
+        onDeleteArchivedTask={onDeleteArchivedTask}
+      />
     </div>
   );
 };

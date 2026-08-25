@@ -10,7 +10,10 @@ import {
   type HumanInputPrompt,
   type HumanAiIntent,
   type HumanAiAssistantResult,
-  type SwimLaneDoc
+  type SwimLaneDoc,
+  type DiscoveryJobPayload,
+  type DiscoveredTaskContextEntry,
+  type OverviewDocument
 } from '../types';
 import { callMcpTool, formatConnectionsForAiPrompt, getAllowedRoots } from './mcpClient';
 import { storageManager } from './storageManager';
@@ -26,18 +29,21 @@ export async function callAiEngine(
   prompt: string,
   systemPrompt: string,
   config: AIProviderConfig,
-  taskType: 'discovery' | 'general' = 'general',
-  responseFormat: 'text' | 'json' = taskType === 'discovery' ? 'json' : 'text'
+  taskType: 'discovery' | 'summary' | 'general' = 'general',
+  responseFormat: 'text' | 'json' = (taskType === 'discovery' || taskType === 'summary') ? 'json' : 'text',
+  signal?: AbortSignal
 ): Promise<string> {
   const { provider, apiKey, baseUrl } = config;
   const targetModel = taskType === 'discovery'
     ? (config.discoveryModel || config.generalModel || config.model)
-    : (config.generalModel || config.model);
+    : taskType === 'summary'
+      ? (config.summaryModel || config.generalModel || config.model)
+      : (config.generalModel || config.model);
 
   if (provider === 'openai') {
     if (!apiKey) throw new Error('OpenAI API key missing.');
     const reqBody: any = {
-      model: targetModel || (taskType === 'discovery' ? 'gpt-4o-mini' : 'gpt-4o'),
+      model: targetModel || (taskType === 'discovery' ? 'gpt-4o-mini' : taskType === 'summary' ? 'gpt-4o' : 'gpt-5.4'),
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: prompt }
@@ -52,7 +58,8 @@ export async function callAiEngine(
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`
       },
-      body: JSON.stringify(reqBody)
+      body: JSON.stringify(reqBody),
+      signal
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -73,11 +80,12 @@ export async function callAiEngine(
         'anthropic-dangerous-direct-browser-access': 'true'
       },
       body: JSON.stringify({
-        model: targetModel || (taskType === 'discovery' ? 'claude-3-5-haiku-20241022' : 'claude-3-7-sonnet-20250219'),
+        model: targetModel || (taskType === 'discovery' ? 'claude-3-5-haiku-20241022' : taskType === 'summary' ? 'claude-3-7-sonnet-20250219' : 'claude-opus-5'),
         max_tokens: 4000,
         system: systemPrompt,
         messages: [{ role: 'user', content: prompt }]
-      })
+      }),
+      signal
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -89,7 +97,7 @@ export async function callAiEngine(
 
   if (provider === 'gemini') {
     if (!apiKey) throw new Error('Google Gemini API key missing.');
-    const geminiModel = targetModel || (taskType === 'discovery' ? 'gemini-2.5-flash' : 'gemini-1.5-pro');
+    const geminiModel = targetModel || (taskType === 'discovery' ? 'gemini-2.0-flash' : taskType === 'summary' ? 'gemini-3.7-flash' : 'gemini-3.7-pro');
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`,
       {
@@ -97,7 +105,8 @@ export async function callAiEngine(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: `${systemPrompt}\n\nUSER PROMPT:\n${prompt}` }] }]
-        })
+        }),
+        signal
       }
     );
     if (!res.ok) {
@@ -111,7 +120,7 @@ export async function callAiEngine(
   if (provider === 'ollama') {
     const host = (baseUrl || 'http://localhost:11434').replace(/\/+$/, '');
     const reqBody: any = {
-      model: targetModel || (taskType === 'discovery' ? 'llama3.2' : 'qwen2.5-coder'),
+      model: targetModel || (taskType === 'discovery' ? 'llama3.2' : taskType === 'summary' ? 'llama3.2' : 'qwen2.5-coder'),
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: prompt }
@@ -124,7 +133,8 @@ export async function callAiEngine(
     const res = await fetch(`${host}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(reqBody)
+      body: JSON.stringify(reqBody),
+      signal
     });
     if (!res.ok) {
       await res.json().catch(() => ({}));
@@ -136,6 +146,7 @@ export async function callAiEngine(
 
   throw new Error('Simulated engine active.');
 }
+
 
 /**
  * Drafts new scannable tasks for TODO.md and verbose briefs for AGENT_CONTEXT.md
@@ -1008,7 +1019,7 @@ function buildTaskHeaderIndex(
  * Returns full task + brief data for a given list of task IDs across all workspace documents.
  * Used to pass only the relevant tasks' context to the Builder AI.
  */
-function getRelevantTasksContext(
+export function getRelevantTasksContext(
   relevantIds: number[],
   swimLanesOrTodo: SwimLaneDoc[] | string | undefined,
   agentContextMarkdown: string,
@@ -1037,6 +1048,215 @@ function getRelevantTasksContext(
     }
   }
   return lines.join('\n');
+}
+
+/**
+ * Assembles a structured DiscoveryJobPayload object containing the target task
+ * straight from the user and delineated entries for every related task discovered.
+ */
+export function buildDiscoveryJobPayload(
+  targetTask: TaskItem,
+  relevantTaskIds: number[],
+  swimLanesOrTodo: SwimLaneDoc[] | string | undefined,
+  agentContextMarkdown: string,
+  todoFallback: string = ''
+): DiscoveryJobPayload {
+  const allWorkspaceEntries = extractAllWorkspaceTasks(swimLanesOrTodo, todoFallback);
+  const allBriefs = parseAgentContextMarkdown(agentContextMarkdown);
+  const totalTasksScanned = allWorkspaceEntries.length;
+  const laneCount = Array.isArray(swimLanesOrTodo) && swimLanesOrTodo.length > 0 ? swimLanesOrTodo.length : 1;
+
+  const additionalContext: DiscoveredTaskContextEntry[] = [];
+
+  for (const id of relevantTaskIds) {
+    const entry = allWorkspaceEntries.find((e) => e.task.id === id);
+    if (!entry) continue;
+    const { task, fileName, laneTitle } = entry;
+    const brief = allBriefs.find(
+      (b) => b.title.trim().toLowerCase() === task.title.trim().toLowerCase() || b.itemNumber === task.id
+    );
+
+    additionalContext.push({
+      taskId: task.id,
+      title: task.title,
+      category: task.category,
+      status: task.status,
+      isDone: Boolean(task.isDone),
+      isArchived: Boolean(task.isArchived),
+      sourceDocument: fileName,
+      swimLaneTitle: laneTitle,
+      subtasks: task.subtasks.map((s) => (typeof s === 'string' ? s : s.text)),
+      overview: brief?.overview || brief?.brief || undefined,
+      buildAndVerification: brief?.buildAndVerification || brief?.built || undefined,
+      completion: brief?.completion || brief?.validation || undefined
+    });
+  }
+
+  return {
+    targetTask: {
+      id: targetTask.id,
+      title: targetTask.title,
+      category: targetTask.category,
+      status: targetTask.status,
+      isDone: Boolean(targetTask.isDone),
+      subtasks: targetTask.subtasks.map((s) => ({
+        id: s.id,
+        text: s.text,
+        isDone: Boolean(s.isDone),
+        isHumanReview: Boolean(s.isHumanReview)
+      })),
+      sourceFileName: targetTask.sourceFileName || 'TODO.md'
+    },
+    additionalContext,
+    discoverySummary: {
+      scannedDocumentCount: laneCount,
+      totalTasksScanned,
+      relevantTasksCount: additionalContext.length
+    }
+  };
+}
+
+/**
+ * Safely extracts a clean string from an arbitrary AI JSON property (string, array of strings/objects, etc.)
+ */
+function extractStringFromAiValue(val: any, fallback: string = ''): string {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val === 'string') return val.trim();
+  if (Array.isArray(val)) {
+    const list = val
+      .map((item) => {
+        if (typeof item === 'string') return item.trim();
+        if (typeof item === 'object' && item !== null) {
+          return Object.values(item)
+            .filter((v) => typeof v === 'string')
+            .join(' ')
+            .trim();
+        }
+        return String(item).trim();
+      })
+      .filter(Boolean);
+    if (list.length === 0) return fallback;
+    return list
+      .map((line, idx) => (/^[0-9]+[\.\)\-]/.test(line) ? line : `${idx + 1}. ${line}`))
+      .join('\n');
+  }
+  if (typeof val === 'object') {
+    const joined = Object.values(val)
+      .filter((v) => typeof v === 'string')
+      .join(' ')
+      .trim();
+    return joined || fallback;
+  }
+  return String(val).trim() || fallback;
+}
+
+/**
+ * Synthesizes a comprehensive, verbose Overview document and determines
+ * the specific MCP tools/servers strictly needed for this task.
+ */
+export function buildVerboseOverviewAndRequiredMcps(
+  task: TaskItem,
+  brief: AgentContextItem | undefined,
+  _discoveryPayload: DiscoveryJobPayload,
+  connectedMcps: MCPServer[],
+  parsedAiOverview?: Partial<OverviewDocument> & { requiredMcps?: string[] }
+): { overviewDoc: OverviewDocument; requiredMcps: string[] } {
+  const activeMcps = connectedMcps.filter((m) => m.status === 'connected');
+
+  // 1. Determine precise MCP requirements for THIS task
+  let resolvedMcps: string[] = [];
+  if (parsedAiOverview && Array.isArray(parsedAiOverview.requiredMcps) && parsedAiOverview.requiredMcps.length > 0) {
+    // Only accept MCPs that match connected servers or tool names
+    resolvedMcps = parsedAiOverview.requiredMcps
+      .map((m) => (typeof m === 'string' ? m.trim() : (m && typeof m === 'object' ? (m as any).name || (m as any).id || '' : '')))
+      .filter((mcpRef) => {
+        if (!mcpRef) return false;
+        const lower = mcpRef.toLowerCase();
+        return activeMcps.some(
+          (m) => m.id.toLowerCase() === lower || m.name.toLowerCase() === lower || m.tools.some((t) => t.name.toLowerCase() === lower)
+        );
+      });
+  }
+
+  // If AI didn't specify or we need fallback resolution, intelligently inspect task intent
+  if (resolvedMcps.length === 0) {
+    const textToScan = `${task.title} ${task.subtasks.map((s) => s.text).join(' ')} ${brief?.overview || ''}`.toLowerCase();
+    const hasFs = activeMcps.find((m) => m.id === 'mcp-filesystem' || m.name.toLowerCase().includes('filesystem'));
+    const hasGit = activeMcps.find((m) => m.id === 'mcp-git' || m.name.toLowerCase().includes('git'));
+    const hasFetch = activeMcps.find((m) => m.id === 'mcp-fetch' || m.name.toLowerCase().includes('fetch'));
+
+    if (textToScan.includes('git') || textToScan.includes('commit') || textToScan.includes('branch') || textToScan.includes('repository')) {
+      if (hasGit && !resolvedMcps.includes(hasGit.name)) resolvedMcps.push(hasGit.name);
+    }
+    if (textToScan.includes('fetch') || textToScan.includes('url') || textToScan.includes('http') || textToScan.includes('api') || textToScan.includes('download')) {
+      if (hasFetch && !resolvedMcps.includes(hasFetch.name)) resolvedMcps.push(hasFetch.name);
+    }
+    if (textToScan.includes('file') || textToScan.includes('code') || textToScan.includes('component') || textToScan.includes('create') || textToScan.includes('write') || textToScan.includes('edit') || textToScan.includes('refactor') || textToScan.includes('implement')) {
+      if (hasFs && !resolvedMcps.includes(hasFs.name)) resolvedMcps.push(hasFs.name);
+    }
+    // Default to Filesystem MCP if code/files are likely modified and available
+    if (resolvedMcps.length === 0 && hasFs && (task.subtasks.length > 0 || task.category.toLowerCase().includes('code') || task.category.toLowerCase().includes('dev') || task.category.toLowerCase().includes('backend') || task.category.toLowerCase().includes('frontend'))) {
+      resolvedMcps.push(hasFs.name);
+    }
+  }
+
+  // 2. Build dense, concrete done-state acceptance brief & sections
+  const contextNotes = _discoveryPayload.additionalContext.length > 0
+    ? ` referencing context from task #${_discoveryPayload.additionalContext.map((c) => `${c.taskId} ("${c.title}")`).join(', ')}`
+    : '';
+
+  const concreteSteps: string[] = [];
+  if (task.subtasks.length > 0) {
+    task.subtasks.forEach((s, idx) => {
+      const cleanText = s.text.replace(/^[0-9]+[\.\)\-]\s*/, '').replace(/\.$/, '').trim();
+      concreteSteps.push(`(${idx + 1}) ${cleanText}`);
+    });
+    concreteSteps.push(`(${task.subtasks.length + 1}) Ensure all interactive elements, state transitions, and edge cases operate cleanly with proper error handling and no silent failures`);
+    concreteSteps.push(`(${task.subtasks.length + 2}) Verify all functionality via build and runtime checks before outputting final completion notes`);
+  } else {
+    concreteSteps.push(`(1) Implement and register the core features and logic for "${task.title}" under ${task.category || 'workspace'} modules`);
+    concreteSteps.push(`(2) Ensure all user interactions, UI elements, and API handlers operate without failing silently`);
+    concreteSteps.push(`(3) Wire up state management, persistence, and event listeners according to active project conventions`);
+    concreteSteps.push(`(4) Verify all changed files pass type checks and unit tests before completing`);
+  }
+
+  const fallbackBrief = `Implement "${task.title}" (${task.category || 'General'})${contextNotes}: ${concreteSteps.join('; ')}`;
+
+  const rawAiBrief = extractStringFromAiValue(parsedAiOverview?.brief || (parsedAiOverview as any)?.summary);
+  const isRawTitle = rawAiBrief.toLowerCase() === task.title.toLowerCase().trim() ||
+    rawAiBrief.toLowerCase().startsWith(`task #${task.id}`.toLowerCase()) ||
+    rawAiBrief.length <= task.title.length + 5;
+
+  const briefText = (!isRawTitle && rawAiBrief.length > 30)
+    ? rawAiBrief
+    : fallbackBrief;
+
+  const fallbackGoals = task.subtasks.length > 0
+    ? task.subtasks.map((s, idx) => `${idx + 1}. ${s.text}${s.isDone ? ' [Completed]' : ''}`).join('\n')
+    : `1. Implement and verify the core requirements for: ${task.title}\n2. Record comprehensive build log and verification notes.`;
+
+  const rawAiGoals = extractStringFromAiValue(parsedAiOverview?.goals);
+  const goals = (rawAiGoals.length > 5)
+    ? rawAiGoals
+    : fallbackGoals;
+
+  const fallbackOutputAs = resolvedMcps.some((m) => m.toLowerCase().includes('filesystem') || m.toLowerCase().includes('file'))
+    ? `Write and modify source files in workspace via Filesystem MCP, then record completion summary in AGENT_CONTEXT.md.`
+    : resolvedMcps.some((m) => m.toLowerCase().includes('git'))
+      ? `Perform Git repository operations via Git MCP, then output commit logs and status.`
+      : `Return structured completion summary and results in AGENT_CONTEXT.md.`;
+
+  const rawAiOutputAs = extractStringFromAiValue(parsedAiOverview?.output_as);
+  const output_as = (rawAiOutputAs.length > 5)
+    ? rawAiOutputAs
+    : fallbackOutputAs;
+
+  const raw = `## Brief\n\n${briefText}\n\n## Goals\n\n${goals}\n\n## Output As\n\n${output_as}`;
+
+  return {
+    overviewDoc: { brief: briefText, goals, output_as, raw },
+    requiredMcps: resolvedMcps
+  };
 }
 
 /** Converts connected MCP tools to Anthropic tool_use format */
@@ -1336,7 +1556,8 @@ async function runAnthropicBuilderLoop(
   onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<boolean>,
   currentTaskId: number = 0,
   onRequestHumanInput?: (prompt: HumanInputPrompt) => Promise<string>,
-  maxRounds = 8
+  maxRounds = 8,
+  signal?: AbortSignal
 ): Promise<{ text: string; toolCallCount: number; toolCallLog: string[]; createdFiles: string[] }> {
   const targetModel = config.generalModel || config.model || 'claude-3-5-sonnet-20241022';
   let messages: any[] = [{ role: 'user', content: initialUserContent }];
@@ -1346,6 +1567,7 @@ async function runAnthropicBuilderLoop(
   let finalText = '';
 
   for (let round = 0; round < maxRounds; round++) {
+    if (signal?.aborted) throw new DOMException('Agent terminated by user.', 'AbortError');
     const reqBody: any = {
       model: targetModel,
       max_tokens: 4000,
@@ -1362,7 +1584,8 @@ async function runAnthropicBuilderLoop(
         'anthropic-version': '2023-06-01',
         'anthropic-dangerous-direct-browser-access': 'true'
       },
-      body: JSON.stringify(reqBody)
+      body: JSON.stringify(reqBody),
+      signal
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -1410,7 +1633,8 @@ async function runOpenAiBuilderLoop(
   onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<boolean>,
   currentTaskId: number = 0,
   onRequestHumanInput?: (prompt: HumanInputPrompt) => Promise<string>,
-  maxRounds = 8
+  maxRounds = 8,
+  signal?: AbortSignal
 ): Promise<{ text: string; toolCallCount: number; toolCallLog: string[]; createdFiles: string[] }> {
   const targetModel = config.generalModel || config.model || 'gpt-4o';
   let messages: any[] = [
@@ -1423,13 +1647,15 @@ async function runOpenAiBuilderLoop(
   let finalText = '';
 
   for (let round = 0; round < maxRounds; round++) {
+    if (signal?.aborted) throw new DOMException('Agent terminated by user.', 'AbortError');
     const reqBody: any = { model: targetModel, messages };
     if (mcpTools.length > 0) { reqBody.tools = mcpTools; reqBody.tool_choice = 'auto'; }
 
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey}` },
-      body: JSON.stringify(reqBody)
+      body: JSON.stringify(reqBody),
+      signal
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -1472,7 +1698,8 @@ async function runGeminiBuilderLoop(
   onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<boolean>,
   currentTaskId: number = 0,
   onRequestHumanInput?: (prompt: HumanInputPrompt) => Promise<string>,
-  maxRounds = 8
+  maxRounds = 8,
+  signal?: AbortSignal
 ): Promise<{ text: string; toolCallCount: number; toolCallLog: string[]; createdFiles: string[] }> {
   const geminiModel = config.generalModel || config.model || 'gemini-1.5-pro';
   let contents: any[] = [
@@ -1484,12 +1711,13 @@ async function runGeminiBuilderLoop(
   let finalText = '';
 
   for (let round = 0; round < maxRounds; round++) {
+    if (signal?.aborted) throw new DOMException('Agent terminated by user.', 'AbortError');
     const reqBody: any = { contents };
     if (mcpTools.length > 0) reqBody.tools = [{ functionDeclarations: mcpTools }];
 
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${config.apiKey}`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reqBody) }
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reqBody), signal }
     );
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -1536,7 +1764,8 @@ async function runOllamaBuilderLoop(
   onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<boolean>,
   currentTaskId: number = 0,
   onRequestHumanInput?: (prompt: HumanInputPrompt) => Promise<string>,
-  maxRounds = 8
+  maxRounds = 8,
+  signal?: AbortSignal
 ): Promise<{ text: string; toolCallCount: number; toolCallLog: string[]; createdFiles: string[]; usedWorkerPattern: boolean }> {
   const host = (config.baseUrl || 'http://localhost:11434').replace(/\/+$/, '');
   const targetModel = config.generalModel || config.model || 'llama3.2';
@@ -1551,6 +1780,7 @@ async function runOllamaBuilderLoop(
   let toolCallingConfirmed = false;
 
   for (let round = 0; round < maxRounds; round++) {
+    if (signal?.aborted) throw new DOMException('Agent terminated by user.', 'AbortError');
     const reqBody: any = { model: targetModel, messages, stream: false };
     // Only include tools on first round until we confirm support
     if (mcpTools.length > 0 && (round === 0 || toolCallingConfirmed)) {
@@ -1560,7 +1790,8 @@ async function runOllamaBuilderLoop(
     const res = await fetch(`${host}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(reqBody)
+      body: JSON.stringify(reqBody),
+      signal
     });
     if (!res.ok) throw new Error(`Ollama at ${host} returned HTTP ${res.status}`);
     const data = await res.json();
@@ -1763,20 +1994,27 @@ async function runOllamaWorkerPattern(
 // ─── Main 3-Agent Pipeline ────────────────────────────────────────────────────
 
 /**
- * Executes a task using a real 3-agent sequential AI pipeline:
+ * Executes a task using a real 4-agent sequential AI pipeline:
  *
  * Step 1 — Discovery AI: Skims task header index (active + archived) to identify
  *   which other tasks have relevant context for the current task.
  *
- * Step 2 — Builder AI: Does the actual work using MCP tool-calling loops.
+ * Step 2 — Summary AI: Synthesizes all discovered context into a structured
+ *   Overview document (summary / context / goals / constraints / output_as).
+ *   This is the single source of truth handed to the Builder AI, and the user
+ *   can edit it live mid-task to steer the agent.
+ *
+ * Step 3 — Builder AI: Does the actual work using MCP tool-calling loops.
  *   Anthropic/OpenAI/Gemini use native tool-calling. Ollama tries tool-calling
  *   and falls back to a worker AI pattern if the model doesn't support it.
+ *   Always reads the Overview as its primary instruction set.
  *
- * Step 3 — Logger AI: Writes the completion record (Build & Verification +
- *   Completion sections) based on what the Builder accomplished.
+ * Step 4 — Logger AI: Writes the completion record (Build & Verification +
+ *   Completion sections) based on what the Builder accomplished. Also writes
+ *   a human review card if needed.
  *
  * Falls back to the offline simulation path when no AI provider is configured
- * or on unrecoverable errors.
+ * or on unrecoverable errors. Supports mid-run cancellation via AbortSignal.
  */
 export async function executeTaskWithAi(
   task: TaskItem,
@@ -1786,7 +2024,8 @@ export async function executeTaskWithAi(
   connectedMcps: MCPServer[],
   onStepUpdate: (step: ExecutionStep) => void,
   onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<boolean>,
-  onRequestHumanInput?: (prompt: HumanInputPrompt) => Promise<string>
+  onRequestHumanInput?: (prompt: HumanInputPrompt) => Promise<string>,
+  signal?: AbortSignal
 ): Promise<{ updatedBrief: AgentContextItem; updatedTask: TaskItem }> {
   const isLiveAi =
     aiConfig.provider !== 'none' &&
@@ -1794,7 +2033,7 @@ export async function executeTaskWithAi(
     (aiConfig.apiKey || aiConfig.provider === 'ollama');
 
   if (!isLiveAi) {
-    return runOfflineExecution(task, brief, connectedMcps, onStepUpdate, onRequestPermission, onRequestHumanInput);
+    return runOfflineExecution(task, brief, project, connectedMcps, onStepUpdate, onRequestPermission, onRequestHumanInput);
   }
 
   const buildDate = new Date().toISOString().split('T')[0];
@@ -1803,7 +2042,21 @@ export async function executeTaskWithAi(
     const allowedRoots = await getAllowedRoots();
     const runtimeConnectionsPrompt = formatConnectionsForAiPrompt(connectedMcps, allowedRoots);
 
-    // ── STEP 1: Discovery AI ─────────────────────────────────────────
+    // ── STEP 1: User Task/Selection Sent to Discovery AI ──────────────
+    console.log(
+      '%c[Ergo Agent Pipeline] ── Step 1: User Task/Selection Sent to Discovery AI ──',
+      'color: #38bdf8; font-weight: bold; font-size: 13px;'
+    );
+    console.log('📌 Target Task Payload:', {
+      id: task.id,
+      title: task.title,
+      category: task.category,
+      status: task.status,
+      isDone: Boolean(task.isDone),
+      subtasks: task.subtasks.map((s) => ({ id: s.id, text: s.text, isDone: s.isDone, isHumanReview: s.isHumanReview })),
+      sourceFileName: task.sourceFileName || 'TODO.md'
+    });
+
     onStepUpdate({
       id: 'step-discovery',
       time: new Date().toLocaleTimeString(),
@@ -1813,6 +2066,7 @@ export async function executeTaskWithAi(
       status: 'running'
     });
 
+    // ── STEP 2: Discovery AI Scans Task Headers & Archives ────────────
     const headerIndex = buildTaskHeaderIndex(project.swimLanes, project.agentContextMarkdown, project.todoMarkdown);
 
     const discoverySystemPrompt =
@@ -1823,31 +2077,45 @@ export async function executeTaskWithAi(
       `Do NOT include the current task itself in the relevantTaskIds.\n\n` +
       `${headerIndex}\n\n` +
       `Return ONLY valid JSON (no markdown fences):\n` +
-      `{ "relevantTaskIds": [<number>, ...], "reasoning": "<brief explanation>" }\n` +
-      `If nothing is relevant: { "relevantTaskIds": [], "reasoning": "no relevant tasks found" }`;
+      `{ "relevantTaskIds": [<number>, ...] }\n` +
+      `If nothing is relevant: { "relevantTaskIds": [] }`;
 
     const discoveryUserPrompt =
       `Current task to execute: #${task.id}. "${task.title}" (${task.category})\n` +
       `Subtasks: ${task.subtasks.map((s) => s.text).join('; ') || 'none'}`;
 
+    console.log('🤖 Invoking Discovery AI with model:', aiConfig.discoveryModel || aiConfig.generalModel || aiConfig.model || 'default');
+
     const discoveryRaw = await callAiEngine(
-      discoveryUserPrompt, discoverySystemPrompt, aiConfig, 'discovery', 'json'
+      discoveryUserPrompt, discoverySystemPrompt, aiConfig, 'discovery', 'json', signal
     );
 
+    // Check abort after Discovery
+    if (signal?.aborted) throw new DOMException('Agent terminated by user.', 'AbortError');
+
     let relevantTaskIds: number[] = [];
-    let discoveryReasoning = '';
     try {
       const clean = discoveryRaw.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
       const parsed = JSON.parse(clean);
       relevantTaskIds = Array.isArray(parsed.relevantTaskIds) ? parsed.relevantTaskIds.filter((id: any) => id !== task.id) : [];
-      discoveryReasoning = typeof parsed.reasoning === 'string' ? parsed.reasoning : '';
     } catch {
       relevantTaskIds = [];
     }
 
-    const relevantContext = getRelevantTasksContext(
-      relevantTaskIds, project.swimLanes, project.agentContextMarkdown, project.todoMarkdown
+    const discoveryPayload = buildDiscoveryJobPayload(
+      task,
+      relevantTaskIds,
+      project.swimLanes,
+      project.agentContextMarkdown,
+      project.todoMarkdown
     );
+
+    console.log(
+      '%c[Ergo Agent Pipeline] ── Step 2: Discovery AI Output (Plain JSON Payload) ──',
+      'color: #06b6d4; font-weight: bold; font-size: 13px;'
+    );
+    console.log('📦 Discovery Plain JSON Object:', discoveryPayload);
+    console.log('📄 Stringified Discovery Payload:\n' + JSON.stringify(discoveryPayload, null, 2));
 
     onStepUpdate({
       id: 'step-discovery',
@@ -1855,33 +2123,127 @@ export async function executeTaskWithAi(
       stage: 'context',
       title: 'Discovery AI: Context Identified',
       detail: relevantTaskIds.length > 0
-        ? `Found ${relevantTaskIds.length} relevant task(s) across workspace documents: #${relevantTaskIds.join(', #')}. ${discoveryReasoning}`
-        : `No additional task context needed across documents. ${discoveryReasoning}`,
-      status: 'success'
+        ? `Found ${relevantTaskIds.length} relevant task(s) across workspace documents: #${relevantTaskIds.join(', #')}.`
+        : `No additional task context needed across documents.`,
+      status: 'success',
+      discoveryPayload
     });
 
-    console.log('%c[Ergo Task Execution] ── Step 1/3: Discovery AI ──', 'color: #38bdf8; font-weight: bold;');
-    console.log('Relevant IDs:', relevantTaskIds, '| Reasoning:', discoveryReasoning);
+    // ── STEP 3: Summary AI → Overview Document & MCP Requirements ────
+    onStepUpdate({
+      id: 'step-overview',
+      time: new Date().toLocaleTimeString(),
+      stage: 'overview',
+      title: 'Summary AI: Building Task Overview & Tool Plan',
+      detail: 'Synthesizing context from Discovery JSON payload into structured Overview document & required MCP tools for Builder AI...',
+      status: 'running'
+    });
 
-    // ── STEP 2: Builder AI ───────────────────────────────────────────
+    const connectedMcpSummary = connectedMcps
+      .filter((m) => m.status === 'connected')
+      .map((m) => `- ${m.name} (id: "${m.id}"): tools: [${m.tools.map((t) => t.name).join(', ')}]`);
+
+    const overviewSystemPrompt =
+      `You are the Summary AI in Ergo's task execution pipeline.\n` +
+      `Your role is to analyze the Discovery JSON payload and synthesize the single authoritative instruction manual and execution prompt ("Overview") for the Builder AI.\n\n` +
+      `CRITICAL INSTRUCTION FOR "brief":\n` +
+      `The "brief" field is the MAIN MISSION PROMPT sent to the Builder AI. Assume this string is the ONLY thing the Builder AI will receive, and NONE of the other JSON fields (title, category, additionalContext, etc.) will be sent to it.\n` +
+      `Therefore, the brief MUST be completely self-contained. It must explicitly state WHAT the task is, WHAT feature/module is being created or modified, WHAT context/dependencies from discovered tasks to use, and provide the complete numbered sequence of concrete done-state behaviors, interactions, and acceptance checks.\n\n` +
+      `REQUIRED FORMAT FOR "brief":\n` +
+      `Start with: "Implement <exact feature/task subject based on targetTask.title and category> <referencing any relevant discovered task context if present>: "\n` +
+      `Followed by numbered done-state specifications:\n` +
+      `"(1) <exact component/UI placement and behavior in docked/floating/normal states>; (2) <exact user interactions, event handlers, and state transitions>; (3) <edge case handling, blocked states, and graceful error recovery with no silent failures>; (4) <state persistence, theme support, or boundary rules>; (5) <concrete acceptance check and verification outcome>"\n\n` +
+      `DO NOT write generic boilerplate (like "All UI components and handlers handle errors"). Write concrete details specifically tailored to WHAT this task is!\n\n` +
+      `MODEL EXAMPLE:\n` +
+      `"Implement the Interactive Floating Sheet Picker (Frontend) referencing Table Schema from task #3: (1) the dropdown appears in the Sheets header bar, in both its docked and torn-out form; (2) 'View in panel' opens a floating panel showing the current sheet, draggable/snappable/resizable like every other panel; (3) 'View in window' opens a second browser window with the same view, and a blocked pop-up says so instead of failing silently; (4) paging the canvas to a different sheet leaves BOTH pinned views on the sheet they were opened at; (5) the pinned view's own sheet picker (◀ ▶ and the list) changes what it shows, and that becomes the new pin; (6) zoom in the pinned view scrolls inside it and never pans the canvas underneath; (7) the rail button toggles the panel and lights when it's open; (8) closing a view forgets its pin, so the next open starts at the current sheet; (9) the popup follows the app's light/dark theme and closes cleanly."\n\n` +
+      `- **goals**: Explicit numbered checklist of core deliverables and subtasks to complete.\n` +
+      `- **output_as**: The exact method and destination for the output based on available tools (e.g. "Write updated files to src/... via filesystem MCP write_file, then output completion notes").\n` +
+      `- **requiredMcps**: Return an array containing ONLY the specific MCP server names/IDs or tools strictly required for THIS TASK (e.g. ["Filesystem MCP"] or ["Git Operations MCP"]).\n` +
+      `  - CRITICAL: Do NOT list all available MCPs. Only pick the 0, 1, or 2 MCPs that this specific task actually uses.\n` +
+      `  - If no external MCP tools are needed (pure reasoning / text), return [].\n\n` +
+      `Available Connected MCP Servers in Workspace:\n${connectedMcpSummary.length > 0 ? connectedMcpSummary.join('\n') : '(none connected)'}\n\n` +
+      `Return ONLY valid JSON (no markdown fences) matching exactly:\n` +
+      `{\n` +
+      `  "brief": "<fully self-contained done-state mission prompt stating WHAT the task is, referencing context, and giving numbered behavioral specs>",\n` +
+      `  "goals": "<detailed numbered success criteria>",\n` +
+      `  "output_as": "<exact output method and destination>",\n` +
+      `  "requiredMcps": ["<only needed MCP server IDs/names for this task>"]\n` +
+      `}`;
+
+    const overviewUserPrompt =
+      `DISCOVERY JSON PAYLOAD:\n` +
+      `${JSON.stringify(discoveryPayload, null, 2)}\n\n` +
+      `Project: "${project.name}" (${project.folderPath})`;
+
+    let parsedOverview: any = undefined;
+
+    try {
+      const overviewRaw = await callAiEngine(
+        overviewUserPrompt, overviewSystemPrompt, aiConfig, 'summary', 'json', signal
+      );
+      if (signal?.aborted) throw new DOMException('Agent terminated by user.', 'AbortError');
+      const clean = overviewRaw.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
+      parsedOverview = JSON.parse(clean);
+    } catch (e: any) {
+      if (e.name === 'AbortError') throw e;
+      console.warn('[Ergo] Summary AI call failed or returned unparseable JSON, generating verbose overview fallback:', e.message);
+    }
+
+    // Build the robust verbose overview and strictly filtered task-specific MCP list
+    const { overviewDoc, requiredMcps } = buildVerboseOverviewAndRequiredMcps(
+      task,
+      brief,
+      discoveryPayload,
+      connectedMcps,
+      parsedOverview
+    );
+
+    // Append Summary AI values and required MCPs into the JSON payload object
+    discoveryPayload.overview = overviewDoc;
+    discoveryPayload.requiredMcps = requiredMcps;
+
+    console.log(
+      '%c[Ergo Agent Pipeline] ── Step 3: Summary AI Output (Updated JSON Payload) ──',
+      'color: #f59e0b; font-weight: bold; font-size: 13px;'
+    );
+    console.log('📦 Updated Job JSON Object (Summary & MCP Plan Added):', discoveryPayload);
+    console.log('📄 Stringified Updated Payload:\n' + JSON.stringify(discoveryPayload, null, 2));
+
+    onStepUpdate({
+      id: 'step-overview',
+      time: new Date().toLocaleTimeString(),
+      stage: 'overview',
+      title: 'Summary AI: Overview & Tool Plan Ready',
+      detail: `Overview built — output format: ${overviewDoc.output_as.slice(0, 90)}${discoveryPayload.requiredMcps.length > 0 ? ` (MCPs: ${discoveryPayload.requiredMcps.join(', ')})` : ''}`,
+      status: 'success',
+      overviewDocument: overviewDoc,
+      discoveryPayload
+    });
+
+    // ── STEP 3: Builder AI ───────────────────────────────────────────
     onStepUpdate({
       id: 'step-builder-init',
       time: new Date().toLocaleTimeString(),
       stage: 'thinking',
-      title: 'Builder AI: Assembling Context & Starting Execution',
-      detail: 'Building targeted task context and connecting to available MCP tools...',
+      title: 'Builder AI: Starting Execution',
+      detail: `Following Overview — output as: ${overviewDoc.output_as.slice(0, 100)}...`,
       status: 'running'
     });
 
+    // Build context from the Overview document — this is what the Builder reads as its primary source
     const currentTaskContext =
-      `CURRENT TASK:\n` +
-      `Title: ${task.title}\nCategory: ${task.category}\nStatus: ${task.status}\n` +
-      `Subtasks:\n${task.subtasks.length > 0 ? task.subtasks.map((s) => `  - [${s.isDone ? 'x' : ' '}] ${s.text}`).join('\n') : '  (none)'}\n\n` +
-      `CURRENT TASK OVERVIEW (from AGENT_CONTEXT.md):\n${brief?.overview || brief?.brief || '(no overview yet)'}\n` +
-      (brief?.buildAndVerification ? `\nEXISTING BUILD NOTES:\n${brief.buildAndVerification}` : '');
+      `# TASK OVERVIEW (your primary instruction document — re-read this as needed)\n\n` +
+      `## Brief\n${overviewDoc.brief}\n\n` +
+      `## Goals\n${overviewDoc.goals}\n\n` +
+      `## Output As\n${overviewDoc.output_as}\n\n` +
+      `---\n\n` +
+      `Task ID: #${task.id} | Title: "${task.title}" | Category: ${task.category}\n` +
+      `Subtasks:\n${task.subtasks.length > 0 ? task.subtasks.map((s) => `  - [${s.isDone ? 'x' : ' '}] ${s.text}`).join('\n') : '  (none)'}\n` +
+      (brief?.buildAndVerification ? `\nExisting Build Notes:\n${brief.buildAndVerification}` : '');
+
 
     const builderSystemPrompt =
-      `You are the Builder AI in Ergo's task execution pipeline. Your job is to EXECUTE the given task.\n\n` +
+      `You are the Builder AI in Ergo's task execution pipeline. Your job is to EXECUTE the task described in the Overview document.\n\n` +
       `PROJECT: "${project.name}" (${project.folderPath})\n\n` +
       `FILESYSTEM BOUNDARIES & STORAGE DIRECTORY (STRICT ENFORCEMENT):\n` +
       `- You have access ONLY to write files within the .ergo directory (~/.ergo) or folders explicitly permitted under allowed roots.\n` +
@@ -1889,13 +2251,13 @@ export async function executeTaskWithAi(
       `- You MUST NEVER write to or modify the application codebase directory or any folder outside the allowed roots.\n` +
       `- All project data, generated code, scripts, files, and artifacts MUST be written inside .ergo (e.g. \`projects/${project.id || project.folderPath}/...\`) or within explicitly allowed folders.\n\n` +
       `${runtimeConnectionsPrompt}\n\n` +
-      (relevantContext ? `${relevantContext}\n\n` : '') +
-      `INSTRUCTIONS:\n` +
-      `1. Review the task, its subtasks, and overview carefully.\n` +
-      `2. Use the available MCP tools to do the actual work (read files, call APIs, write results, etc.).\n` +
-      `3. Call tools in logical order — gather/read first, then act.\n` +
-      `4. INTERACTIVE HUMAN INPUT: If you lack critical information, encounter ambiguity, need user credentials/confirmation, or need the user to choose an architectural path to proceed, call the "ask_human" tool with your question and optional choices. Do NOT guess blindly on critical decisions.\n` +
-      `5. When finished, produce a clear summary of exactly what was accomplished and what the results are.`;
+      `CORE INSTRUCTIONS:\n` +
+      `1. The Overview document (provided in the user message) is your single source of truth. Re-read it whenever you are uncertain about direction.\n` +
+      `2. Make ALL decisions about tools, format, and output location based on the "Output As" field in the Overview.\n` +
+      `3. Use the available MCP tools to do the actual work (read files, call APIs, write results, etc.).\n` +
+      `4. Call tools in logical order — gather/read first, then act/write.\n` +
+      `5. INTERACTIVE HUMAN INPUT: If you lack critical information, encounter ambiguity, need credentials/confirmation, or need the user to choose an architectural path, call the "ask_human" tool.\n` +
+      `6. When finished, produce a clear summary of exactly what was accomplished and the final output location.`;
 
     let builderResult: {
       text: string;
@@ -1910,33 +2272,32 @@ export async function executeTaskWithAi(
         builderSystemPrompt, currentTaskContext,
         mcpToolsToAnthropicFormat(connectedMcps),
         aiConfig, connectedMcps, onStepUpdate, onRequestPermission,
-        task.id, onRequestHumanInput
+        task.id, onRequestHumanInput, 8, signal
       );
     } else if (aiConfig.provider === 'openai') {
       builderResult = await runOpenAiBuilderLoop(
         builderSystemPrompt, currentTaskContext,
         mcpToolsToOpenAiFormat(connectedMcps),
         aiConfig, connectedMcps, onStepUpdate, onRequestPermission,
-        task.id, onRequestHumanInput
+        task.id, onRequestHumanInput, 8, signal
       );
     } else if (aiConfig.provider === 'gemini') {
       builderResult = await runGeminiBuilderLoop(
         builderSystemPrompt, currentTaskContext,
         mcpToolsToGeminiFormat(connectedMcps),
         aiConfig, connectedMcps, onStepUpdate, onRequestPermission,
-        task.id, onRequestHumanInput
+        task.id, onRequestHumanInput, 8, signal
       );
     } else if (aiConfig.provider === 'ollama') {
       builderResult = await runOllamaBuilderLoop(
         builderSystemPrompt, currentTaskContext,
-        mcpToolsToOpenAiFormat(connectedMcps), // Ollama uses OpenAI-compat format
+        mcpToolsToOpenAiFormat(connectedMcps),
         aiConfig, connectedMcps, onStepUpdate, onRequestPermission,
-        task.id, onRequestHumanInput
+        task.id, onRequestHumanInput, 8, signal
       );
     } else {
-      // Generic single-shot fallback (no tool-calling)
       const singleShotText = await callAiEngine(
-        currentTaskContext, builderSystemPrompt, aiConfig, 'general', 'text'
+        currentTaskContext, builderSystemPrompt, aiConfig, 'general', 'text', signal
       );
       builderResult = { text: singleShotText, toolCallCount: 0, toolCallLog: [], createdFiles: [] };
     }
@@ -2105,7 +2466,7 @@ export async function executeTaskWithAi(
       status: 'success'
     });
 
-    console.log('%c[Ergo Task Execution] ── Step 3/3: Logger AI ──', 'color: #a78bfa; font-weight: bold;');
+    console.log('%c[Ergo Task Execution] ── Step 4/4: Logger AI ──', 'color: #a78bfa; font-weight: bold;');
     console.log('%c[Ergo Task Execution] ── Pipeline Complete ✅ ──', 'color: #10b981; font-weight: bold;');
 
     const updatedBrief: AgentContextItem = {
@@ -2135,6 +2496,35 @@ export async function executeTaskWithAi(
     return { updatedBrief, updatedTask };
 
   } catch (err: any) {
+    // Handle intentional user abort cleanly
+    if (err.name === 'AbortError') {
+      console.log('%c[Ergo Task Execution] ── Terminated by User ──', 'color: #ef4444; font-weight: bold;');
+      onStepUpdate({
+        id: 'step-terminated',
+        time: new Date().toLocaleTimeString(),
+        stage: 'terminating',
+        title: 'Agent Terminated',
+        detail: 'The agent was stopped by the user. Any completed tool calls are preserved in the build log.',
+        status: 'cancelled'
+      });
+
+      // Return partial state — keep the task in_progress / preserve any existing brief content
+      const partialBrief: AgentContextItem = {
+        itemNumber: task.id,
+        title: task.title,
+        status: 'not_started',
+        overview: brief?.overview || brief?.brief || `Task #${task.id}: ${task.title}`,
+        buildAndVerification: brief?.buildAndVerification || '',
+        completion: '',
+        createdFiles: [],
+        brief: brief?.overview || brief?.brief || `Task #${task.id}: ${task.title}`,
+        built: brief?.buildAndVerification || '',
+        validation: '', humanReview: '', followUps: ''
+      };
+      const partialTask: TaskItem = { ...task, status: 'not_started', isDone: false };
+      return { updatedBrief: partialBrief, updatedTask: partialTask };
+    }
+
     console.error('[Ergo Task Execution] Pipeline error — falling back to offline mode:', err);
     onStepUpdate({
       id: 'step-pipeline-error',
@@ -2144,7 +2534,7 @@ export async function executeTaskWithAi(
       detail: `Error: ${err.message}. Using offline simulation fallback.`,
       status: 'warning'
     });
-    return runOfflineExecution(task, brief, connectedMcps, onStepUpdate, onRequestPermission, onRequestHumanInput);
+    return runOfflineExecution(task, brief, project, connectedMcps, onStepUpdate, onRequestPermission, onRequestHumanInput);
   }
 }
 
@@ -2155,11 +2545,41 @@ export async function executeTaskWithAi(
 async function runOfflineExecution(
   task: TaskItem,
   brief: AgentContextItem | undefined,
+  project: ProjectData | undefined,
   connectedMcps: MCPServer[],
   onStepUpdate: (step: ExecutionStep) => void,
   onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<boolean>,
   onRequestHumanInput?: (prompt: HumanInputPrompt) => Promise<string>
 ): Promise<{ updatedBrief: AgentContextItem; updatedTask: TaskItem }> {
+  console.log(
+    '%c[Ergo Agent Pipeline] ── Step 1: User Task/Selection Sent to Discovery AI (Offline Mode) ──',
+    'color: #38bdf8; font-weight: bold; font-size: 13px;'
+  );
+  console.log('📌 Target Task Payload:', {
+    id: task.id,
+    title: task.title,
+    category: task.category,
+    status: task.status,
+    isDone: Boolean(task.isDone),
+    subtasks: task.subtasks.map((s) => ({ id: s.id, text: s.text, isDone: s.isDone, isHumanReview: s.isHumanReview })),
+    sourceFileName: task.sourceFileName || 'TODO.md'
+  });
+
+  const discoveryPayload = buildDiscoveryJobPayload(
+    task,
+    [],
+    project?.swimLanes,
+    project?.agentContextMarkdown || '',
+    project?.todoMarkdown
+  );
+
+  console.log(
+    '%c[Ergo Agent Pipeline] ── Step 2: Discovery AI Output (Plain JSON Payload - Offline Mode) ──',
+    'color: #06b6d4; font-weight: bold; font-size: 13px;'
+  );
+  console.log('📦 Discovery Plain JSON Object:', discoveryPayload);
+  console.log('📄 Stringified Discovery Payload:\n' + JSON.stringify(discoveryPayload, null, 2));
+
   const toolName = (task.title.toLowerCase().includes('vscode') || task.title.toLowerCase().includes('editor') || task.title.toLowerCase().includes('markdown'))
     ? 'write_file'
     : (task.title.toLowerCase().includes('git') || task.title.toLowerCase().includes('commit'))
@@ -2176,17 +2596,35 @@ async function runOfflineExecution(
         ? 'mcp-filesystem'
         : (connectedMcps[0]?.id || 'mcp-filesystem');
 
+  const { overviewDoc, requiredMcps } = buildVerboseOverviewAndRequiredMcps(
+    task,
+    brief,
+    discoveryPayload,
+    connectedMcps
+  );
+
+  discoveryPayload.overview = overviewDoc;
+  discoveryPayload.requiredMcps = requiredMcps;
+
+  console.log(
+    '%c[Ergo Agent Pipeline] ── Step 3: Summary AI Output (Updated JSON Payload - Offline Mode) ──',
+    'color: #f59e0b; font-weight: bold; font-size: 13px;'
+  );
+  console.log('📦 Updated Job JSON Object (Summary & MCP Plan Added):', discoveryPayload);
+  console.log('📄 Stringified Updated Payload:\n' + JSON.stringify(discoveryPayload, null, 2));
+
+  const totalScanned = discoveryPayload.discoverySummary.totalTasksScanned;
   const offlineSteps: Partial<ExecutionStep>[] = [
-    { id: 'step-1', stage: 'context', title: 'Reading Shared Context & Requirements', detail: `Loading task from ${task.sourceFileName || 'TODO.md'} (Item #${task.id}: "${task.title}") and inspecting all workspace documents + AGENT_CONTEXT.md brief...`, status: 'running' },
+    { id: 'step-1', stage: 'context', title: 'Discovery AI: Reading Shared Context & Scanning All Documents', detail: `Scanning all task headers and workspace documents for #${task.id}: "${task.title}" (Found ${totalScanned} workspace tasks across all swim lanes & archives)...`, status: 'running' },
     { id: 'step-2', stage: 'mcp_call', title: `Executing MCP Tool (${targetServerId} / ${toolName})`, detail: `Resolving tool dependencies and executing ${toolName}() across safe roots...`, mcpToolUsed: toolName, status: 'pending' },
     { id: 'step-3', stage: 'execution', title: 'Executing Subtasks & Implementation Steps', detail: `Processing subtasks: ${task.subtasks.map((s) => s.text).join('; ') || 'Implementing core logic'}`, status: 'pending' },
     { id: 'step-4', stage: 'built_record', title: 'Rendering Interactive MCP App Widget', detail: 'Building visual interactive UI result and code diff preview...', status: 'pending', widgetType: getWidgetTypeForTask(task), widgetData: getWidgetDataForTask(task) },
     { id: 'step-5', stage: 'done', title: 'Updating Dual-File AGENT_CONTEXT.md & TODO.md', detail: 'Recording Built decisions, Validation results, and marking task as completed.', status: 'pending' }
   ];
 
-  onStepUpdate({ id: offlineSteps[0].id!, time: new Date().toLocaleTimeString(), stage: offlineSteps[0].stage!, title: offlineSteps[0].title!, detail: offlineSteps[0].detail!, status: 'running' });
-  await new Promise((r) => setTimeout(r, 600));
-  onStepUpdate({ id: offlineSteps[0].id!, time: new Date().toLocaleTimeString(), stage: offlineSteps[0].stage!, title: offlineSteps[0].title!, detail: `Loaded ask #${task.id} & parsed brief constraints. Safe root context active.`, status: 'success' });
+  onStepUpdate({ id: offlineSteps[0].id!, time: new Date().toLocaleTimeString(), stage: offlineSteps[0].stage!, title: offlineSteps[0].title!, detail: offlineSteps[0].detail!, status: 'running', discoveryPayload });
+  await new Promise((r) => setTimeout(r, 700));
+  onStepUpdate({ id: offlineSteps[0].id!, time: new Date().toLocaleTimeString(), stage: offlineSteps[0].stage!, title: 'Discovery AI: Context Identified', detail: `Scanned ${totalScanned} task headers across all swim lanes & archives. Loaded task #${task.id} & parsed brief constraints.`, status: 'success', discoveryPayload });
 
   const matchingServer = connectedMcps.find((s) => s.id === targetServerId);
   const matchingTool = matchingServer?.tools.find((t) => t.name === toolName);

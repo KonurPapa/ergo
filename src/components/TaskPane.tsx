@@ -17,7 +17,7 @@ import Typography from '@tiptap/extension-typography';
 import { Markdown } from 'tiptap-markdown';
 import { stripHeaderComments, parseSwimLaneMarkdown } from '../lib/parser';
 import { HumanAiAssistantModal } from './HumanAiAssistantModal';
-import { MarkdownRenderer } from './MarkdownRenderer';
+import { ArchivedTasksModal } from './ArchivedTasksModal';
 
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state';
@@ -52,7 +52,6 @@ import {
   ChevronDown,
   Archive,
   Trash2,
-  RotateCcw,
   AlertTriangle,
   AlertCircle,
   X,
@@ -494,11 +493,18 @@ interface SwimLaneColumnProps {
   onRenameSwimLane?: (laneId: string, newTitle: string) => void;
   onDeleteSwimLane?: (laneId: string) => void;
   onArchiveTask?: (taskTitle: string) => void;
-  onUnarchiveTask?: (taskId: number) => void;
-  onDeleteArchivedTask?: (taskId: number) => void;
-  archivedTasks?: TaskItemType[];
   assistantDrawerHeight: number;
   onEditorReady?: (laneId: string, editorInstance: any) => void;
+  // Selected lane action drawer props
+  isAssistantOpen?: boolean;
+  onOpenAssistant?: () => void;
+  onCloseAssistant?: () => void;
+  project?: ProjectData | null;
+  agentContextMarkdown?: string;
+  aiConfig?: AIProviderConfig;
+  mcpServers?: MCPServer[];
+  onApplyAssistantResult?: (result: HumanAiAssistantResult, confirmedDeletions: boolean) => void;
+  onAssistantHeightChange?: (height: number) => void;
 }
 
 const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
@@ -516,11 +522,17 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   onRenameSwimLane,
   onDeleteSwimLane,
   onArchiveTask,
-  onUnarchiveTask,
-  onDeleteArchivedTask,
-  archivedTasks = [],
   assistantDrawerHeight,
   onEditorReady,
+  isAssistantOpen = false,
+  onOpenAssistant,
+  onCloseAssistant,
+  project,
+  agentContextMarkdown = '',
+  aiConfig,
+  mcpServers = [],
+  onApplyAssistantResult,
+  onAssistantHeightChange,
 }) => {
   const selectedTaskIdRef = useRef(selectedTaskId);
   selectedTaskIdRef.current = selectedTaskId;
@@ -542,20 +554,6 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   const laneTasks = laneParsed.items;
   const laneTasksRef = useRef(laneTasks);
   laneTasksRef.current = laneTasks;
-
-  const laneArchivedTasks = useMemo(() => {
-    if (laneParsed.archivedItems && laneParsed.archivedItems.length > 0) {
-      return laneParsed.archivedItems;
-    }
-    if (archivedTasks && archivedTasks.length > 0) {
-      return archivedTasks.filter(
-        (t) => t.swimLaneId === lane.id || (!t.swimLaneId && (lane.id === 'lane-default' || totalLanes === 1))
-      );
-    }
-    return [];
-  }, [laneParsed.archivedItems, archivedTasks, lane.id, totalLanes]);
-  const [isArchiveOpen, setIsArchiveOpen] = useState(false);
-  const [taskToDelete, setTaskToDelete] = useState<TaskItemType | null>(null);
 
   // Inline Title Editing State
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -1398,120 +1396,59 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         style={{
           flex: 1,
           overflowY: 'auto',
-          paddingBottom: `${assistantDrawerHeight + 80}px`,
+          paddingBottom: isActive ? `${(isAssistantOpen ? assistantDrawerHeight : 0) + 20}px` : '20px',
         }}
       >
         <EditorContent editor={editor} className="tiptap-editor-root" />
       </div>
 
-      {/* ── Collapsible Archive Panel at bottom of swim lane ── */}
-      <div className="archive-collapsible-panel" style={{ margin: '1rem 0.85rem 1.25rem', flexShrink: 0 }}>
-        <button
-          type="button"
-          className={`archive-panel-header ${isArchiveOpen ? 'open' : ''}`}
-          onClick={() => setIsArchiveOpen((prev) => !prev)}
-          title={isArchiveOpen ? 'Collapse archive panel' : 'Expand archive panel'}
-        >
-          <div className="archive-panel-header-left">
-            <Archive size={15} className="archive-icon" />
-            <span className="archive-panel-title">Archived Tasks</span>
-            <span className="archive-count-badge">
-              {laneArchivedTasks.length} {laneArchivedTasks.length === 1 ? 'task' : 'tasks'}
-            </span>
-          </div>
-          <ChevronDown size={15} className={`archive-chevron ${isArchiveOpen ? 'open' : ''}`} />
-        </button>
+      {/* ── Human AI Assistant Slide-up Bar / Drawer (rendered only within selected lane) ── */}
+      {isActive && project && aiConfig && (
+        <HumanAiAssistantModal
+          isOpen={isAssistantOpen}
+          onClose={onCloseAssistant || (() => {})}
+          project={project}
+          todoMarkdown={lane.markdown}
+          agentContextMarkdown={agentContextMarkdown}
+          aiConfig={aiConfig}
+          mcpServers={mcpServers}
+          onApplyAssistantResult={(result, confirmedDeletions) => {
+            if (result.todoMarkdown) {
+              onMarkdownChange(lane.id, result.todoMarkdown);
+            }
+            onApplyAssistantResult?.(result, confirmedDeletions);
+          }}
+          onHeightChange={onAssistantHeightChange}
+        />
+      )}
 
-        {isArchiveOpen && (
-          <div className="archive-panel-content">
-            {laneArchivedTasks.length === 0 ? (
-              <div className="archive-empty-state">
-                <span>No archived tasks in this lane</span>
-              </div>
-            ) : (
-              <div className="archived-tasks-list">
-                {laneArchivedTasks.map((task) => (
-                  <div key={task.id} className="archived-task-card">
-                    <div className="archived-task-checkbox-col">
-                      <div
-                        className={`task-ui-checkbox parent-checkbox ${task.isDone ? 'checked' : ''}`}
-                        style={{ cursor: 'default', pointerEvents: 'none' }}
-                      >
-                        {task.isDone && (
-                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        )}
-                      </div>
-                    </div>
-                    <div className="archived-task-main">
-                      <div className="archived-task-title-row">
-                        <MarkdownRenderer
-                          content={task.isDone ? `~~${task.title}~~` : task.title}
-                          inline={true}
-                          className={`archived-task-title ${task.isDone ? 'is-done' : ''}`}
-                        />
-                        {task.category && task.category !== 'Archive' && task.category !== 'Untitled' && (
-                          <span className="archived-task-category-pill">{task.category}</span>
-                        )}
-                      </div>
-                      {task.subtasks && task.subtasks.length > 0 && (
-                        <div className="archived-subtasks-list">
-                          {task.subtasks.map((st) => (
-                            <div key={st.id} className="archived-subtask-item">
-                              <span className="archived-bullet">•</span>
-                              {st.isHumanReview && (
-                                <span
-                                  className="human-review-tag"
-                                  style={{
-                                    fontSize: '0.68rem',
-                                    padding: '0.05rem 0.35rem',
-                                    borderRadius: '3px',
-                                    background: 'rgba(139, 92, 246, 0.15)',
-                                    color: 'var(--accent-violet)',
-                                    fontWeight: 600,
-                                  }}
-                                >
-                                  human review
-                                </span>
-                              )}
-                              <MarkdownRenderer
-                                content={st.isDone ? `~~${st.text}~~` : st.text}
-                                inline={true}
-                                className={st.isDone ? 'is-done' : ''}
-                              />
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <div className="archived-task-actions">
-                      <button
-                        type="button"
-                        className="archived-action-btn unarchive-btn"
-                        title="Unarchive task"
-                        onClick={() => onUnarchiveTask?.(task.id)}
-                      >
-                        <RotateCcw size={12} />
-                        <span>Unarchive</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="archived-action-btn delete-btn"
-                        title="Delete task permanently"
-                        onClick={() => setTaskToDelete(task)}
-                      >
-                        <Trash2 size={12} />
-                        <span>Delete</span>
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      {/* ── Action Buttons Footer at bottom of selected lane only ── */}
+      {isActive && (
+        <div className="swimlane-footer">
+          <button
+            type="button"
+            className="new-card-btn"
+            onClick={() => {
+              if (editor) {
+                editor.commands.focus();
+                handleAddNewCard(editor);
+              }
+            }}
+          >
+            <Plus size={15} />
+            <span>New Task</span>
+          </button>
+          <button
+            type="button"
+            className={`new-task-btn ai-assistant-footer-btn ${isAssistantOpen ? 'active' : ''}`}
+            onClick={isAssistantOpen ? onCloseAssistant : onOpenAssistant}
+            title={isAssistantOpen ? 'Close Task Assistant' : 'Activate Task Assistant: Task mode or Architect mode'}
+          >
+            {isAssistantOpen ? <ChevronDown size={15} /> : <Sparkles size={15} />}
+            <span>{isAssistantOpen ? 'Hide Assistant' : 'Task Assistant'}</span>
+          </button>
+        </div>
+      )}
 
       {/* Swim Lane Delete Confirmation Modal */}
       {isDeleteLaneModalOpen && (
@@ -1555,47 +1492,6 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         </div>
       )}
 
-      {/* Task Permanent Deletion Context Warning Modal */}
-      {taskToDelete && (
-        <div className="modal-overlay" onClick={() => setTaskToDelete(null)}>
-          <div className="modal-card archive-delete-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-rose)' }}>
-                <AlertTriangle size={18} />
-                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Delete Task Permanently?</h3>
-              </div>
-              <button type="button" className="btn-icon" onClick={() => setTaskToDelete(null)}>
-                <X size={16} />
-              </button>
-            </div>
-            <div className="modal-body" style={{ padding: '1rem 1.25rem', fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
-              <p style={{ margin: 0, marginBottom: '0.75rem' }}>
-                Are you sure you want to permanently delete <strong>"{taskToDelete.title}"</strong>?
-              </p>
-              <div className="archive-delete-warning-box">
-                <AlertCircle size={15} style={{ flexShrink: 0, color: 'var(--accent-rose)' }} />
-                <span>If you proceed with deleting this task, the AI will lose context for it.</span>
-              </div>
-            </div>
-            <div className="modal-footer" style={{ padding: '0.75rem 1.25rem', display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => setTaskToDelete(null)}>
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn btn-danger"
-                style={{ background: 'var(--accent-rose)', color: '#fff' }}
-                onClick={() => {
-                  onDeleteArchivedTask?.(taskToDelete.id);
-                  setTaskToDelete(null);
-                }}
-              >
-                Delete Task
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
@@ -1656,6 +1552,30 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
 }) => {
   const [showStyles, setShowStyles] = useState(false);
   const [assistantDrawerHeight, setAssistantDrawerHeight] = useState<number>(0);
+  const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
+  const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
+  const headerMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close workspace header dropdown on outside click or Escape
+  useEffect(() => {
+    if (!isHeaderMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (headerMenuRef.current && !headerMenuRef.current.contains(e.target as Node)) {
+        setIsHeaderMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsHeaderMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isHeaderMenuOpen]);
 
   // Keep references to active editors in each lane to support global "+ New Task" button
   const editorsRef = useRef<Record<string, any>>({});
@@ -1697,8 +1617,6 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
       setActiveSwimLaneId(effectiveSwimLanes[0]?.id || 'lane-default');
     }
   }, [effectiveSwimLanes, activeSwimLaneId]);
-
-  const activeSwimLane = effectiveSwimLanes.find((l) => l.id === activeSwimLaneId) || effectiveSwimLanes[0];
 
   // Inline Title Editing for Single Swim Lane mode
   const singleLane = effectiveSwimLanes[0];
@@ -1764,16 +1682,6 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
     };
   }, [isResizingLane]);
 
-  // Click "+ New Task" in footer creates task in highlighted / active swim lane
-  const handleGlobalNewTask = () => {
-    const targetLaneId = activeSwimLaneId || effectiveSwimLanes[0]?.id;
-    const editor = editorsRef.current[targetLaneId];
-    if (editor) {
-      editor.commands.focus();
-      handleAddNewCard(editor);
-    }
-  };
-
   return (
     <div className="pane pane-left obsidian-pane">
       {/* ── Main Pane Header ── */}
@@ -1838,23 +1746,55 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
             <span>Styles</span>
           </button>
 
-          {/* + Add Swim Lane Button directly beside Styles */}
-          <button
-            type="button"
-            className="btn btn-secondary add-swimlane-header-btn"
-            style={{
-              padding: '0.3rem 0.65rem',
-              fontSize: '0.8rem',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.35rem',
-            }}
-            onClick={onAddSwimLane}
-            title="Create a new swim lane column (additional markdown document)"
-          >
-            <Plus size={14} />
-            {/* <span>Swim Lane</span> */}
-          </button>
+          {/* Workspace Actions Menu (Create Swim Lane & Archived Tasks) */}
+          <div style={{ position: 'relative' }} ref={headerMenuRef}>
+            <button
+              type="button"
+              className={`btn btn-secondary workspace-header-menu-btn ${isHeaderMenuOpen ? 'active' : ''}`}
+              style={{
+                padding: '0.3rem 0.65rem',
+                fontSize: '0.8rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+              }}
+              onClick={() => setIsHeaderMenuOpen((prev) => !prev)}
+              title="Workspace actions"
+              aria-label="Workspace actions"
+            >
+              <MoreHorizontal size={14} />
+            </button>
+
+            {isHeaderMenuOpen && (
+              <div className="workspace-header-dropdown-menu">
+                <button
+                  type="button"
+                  className="workspace-header-dropdown-item"
+                  onClick={() => {
+                    setIsHeaderMenuOpen(false);
+                    onAddSwimLane?.();
+                  }}
+                >
+                  <Plus size={14} className="dropdown-item-icon add-icon" />
+                  <span>Create New Swim Lane</span>
+                </button>
+                <button
+                  type="button"
+                  className="workspace-header-dropdown-item"
+                  onClick={() => {
+                    setIsHeaderMenuOpen(false);
+                    setIsArchiveModalOpen(true);
+                  }}
+                >
+                  <Archive size={14} className="dropdown-item-icon archive-icon" />
+                  <span>Archived Tasks</span>
+                  {archivedTasks.length > 0 && (
+                    <span className="dropdown-item-badge">{archivedTasks.length}</span>
+                  )}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1877,11 +1817,17 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
               onRenameSwimLane={onRenameSwimLane}
               onDeleteSwimLane={onDeleteSwimLane}
               onArchiveTask={onArchiveTask}
-              onUnarchiveTask={onUnarchiveTask}
-              onDeleteArchivedTask={onDeleteArchivedTask}
-              archivedTasks={archivedTasks}
               assistantDrawerHeight={assistantDrawerHeight}
               onEditorReady={handleEditorReady}
+              isAssistantOpen={isAssistantOpen}
+              onOpenAssistant={onOpenDraftModal}
+              onCloseAssistant={onCloseAssistant}
+              project={project}
+              agentContextMarkdown={agentContextMarkdown}
+              aiConfig={aiConfig}
+              mcpServers={mcpServers}
+              onApplyAssistantResult={onApplyAssistantResult}
+              onAssistantHeightChange={setAssistantDrawerHeight}
             />
             {effectiveSwimLanes.length > 1 && idx < effectiveSwimLanes.length - 1 && (
               <div
@@ -1896,46 +1842,15 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
         ))}
       </div>
 
-      {/* ── Human AI Assistant Slide-up Bar / Drawer (targets highlighted active lane) ── */}
-      {project && aiConfig && (
-        <HumanAiAssistantModal
-          isOpen={isAssistantOpen}
-          onClose={onCloseAssistant}
-          project={project}
-          todoMarkdown={activeSwimLane?.markdown || rawMarkdown}
-          agentContextMarkdown={agentContextMarkdown}
-          aiConfig={aiConfig}
-          mcpServers={mcpServers}
-          onApplyAssistantResult={(result, confirmedDeletions) => {
-            if (result.todoMarkdown && activeSwimLane) {
-              handleLaneMarkdownChange(activeSwimLane.id, result.todoMarkdown);
-            }
-            onApplyAssistantResult?.(result, confirmedDeletions);
-          }}
-          onHeightChange={setAssistantDrawerHeight}
-        />
-      )}
-
-      {/* ── Fixed Footer at Bottom of Screen ── */}
-      <div className="task-pane-footer">
-        <button
-          type="button"
-          className="new-card-btn"
-          onClick={handleGlobalNewTask}
-        >
-          <Plus size={16} />
-          <span>New Task</span>
-        </button>
-        <button
-          type="button"
-          className={`new-task-btn ai-assistant-footer-btn ${isAssistantOpen ? 'active' : ''}`}
-          onClick={isAssistantOpen ? onCloseAssistant : onOpenDraftModal}
-          title={isAssistantOpen ? 'Close Task Assistant' : 'Activate Task Assistant: Task mode or Architect mode'}
-        >
-          {isAssistantOpen ? <ChevronDown size={16} /> : <Sparkles size={16} />}
-          <span>{isAssistantOpen ? 'Hide Assistant' : 'Task Assistant'}</span>
-        </button>
-      </div>
+      {/* ── Archived Tasks Modal Window ── */}
+      <ArchivedTasksModal
+        isOpen={isArchiveModalOpen}
+        onClose={() => setIsArchiveModalOpen(false)}
+        archivedTasks={archivedTasks}
+        swimLanes={effectiveSwimLanes}
+        onUnarchiveTask={onUnarchiveTask}
+        onDeleteArchivedTask={onDeleteArchivedTask}
+      />
     </div>
   );
 };

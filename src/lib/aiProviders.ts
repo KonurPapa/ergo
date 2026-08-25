@@ -19,6 +19,7 @@ export interface ProviderMeta {
   requiresBaseUrl: boolean;
   defaultModel: string;
   defaultDiscoveryModel: string;
+  defaultSummaryModel: string;
   defaultGeneralModel: string;
   defaultBaseUrl?: string;
   keyPlaceholder?: string;
@@ -39,6 +40,7 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     requiresBaseUrl: false,
     defaultModel: 'gpt-5.4',
     defaultDiscoveryModel: 'gpt-5-mini',
+    defaultSummaryModel: 'gpt-5',
     defaultGeneralModel: 'gpt-5.4',
     keyPlaceholder: 'sk-proj-...',
     keyDocUrl: 'https://platform.openai.com/api-keys',
@@ -67,8 +69,9 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     requiresKey: true,
     requiresBaseUrl: false,
     defaultModel: 'claude-opus-5',
-    defaultDiscoveryModel: 'claude-sonnet-5',
-    defaultGeneralModel: 'claude-fable-5',
+    defaultDiscoveryModel: 'claude-3-5-haiku-20241022',
+    defaultSummaryModel: 'claude-3-7-sonnet-20250219',
+    defaultGeneralModel: 'claude-opus-5',
     keyPlaceholder: 'sk-ant-api03-...',
     keyDocUrl: 'https://console.anthropic.com/settings/keys',
     models: [
@@ -95,7 +98,8 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     requiresKey: true,
     requiresBaseUrl: false,
     defaultModel: 'gemini-3.7-flash',
-    defaultDiscoveryModel: 'gemini-3.7-flash',
+    defaultDiscoveryModel: 'gemini-2.0-flash',
+    defaultSummaryModel: 'gemini-3.7-flash',
     defaultGeneralModel: 'gemini-3.7-pro',
     keyPlaceholder: 'AIzaSy...',
     keyDocUrl: 'https://aistudio.google.com/app/apikey',
@@ -125,6 +129,7 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     requiresBaseUrl: true,
     defaultModel: 'llama3.2',
     defaultDiscoveryModel: 'llama3.2',
+    defaultSummaryModel: 'llama3.2',
     defaultGeneralModel: 'qwen2.5-coder',
     defaultBaseUrl: 'http://localhost:11434',
     keyDocUrl: 'https://ollama.com',

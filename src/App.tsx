@@ -260,6 +260,7 @@ export function App() {
         provider: activeKey.provider,
         model: activeKey.generalModel || activeKey.model || pMeta?.defaultGeneralModel || 'gpt-4o',
         discoveryModel: activeKey.discoveryModel || pMeta?.defaultDiscoveryModel || 'gpt-4o-mini',
+        summaryModel: activeKey.summaryModel || pMeta?.defaultSummaryModel || activeKey.generalModel || activeKey.model || 'gpt-4o',
         generalModel: activeKey.generalModel || activeKey.model || pMeta?.defaultGeneralModel || 'gpt-4o',
         apiKey: activeKey.apiKey,
         baseUrl: activeKey.baseUrl,
@@ -282,6 +283,7 @@ export function App() {
         provider: activeKey.provider,
         model: activeKey.generalModel || activeKey.model || pMeta?.defaultGeneralModel || pMeta?.defaultModel || 'gpt-4o',
         discoveryModel: activeKey.discoveryModel || pMeta?.defaultDiscoveryModel || 'gpt-4o-mini',
+        summaryModel: activeKey.summaryModel || pMeta?.defaultSummaryModel || activeKey.generalModel || activeKey.model || 'gpt-4o',
         generalModel: activeKey.generalModel || activeKey.model || pMeta?.defaultGeneralModel || pMeta?.defaultModel || 'gpt-4o',
         apiKey: activeKey.apiKey,
         baseUrl: activeKey.baseUrl,
@@ -320,6 +322,19 @@ export function App() {
   const [taskExecutionSteps, setTaskExecutionSteps] = useState<Record<number, ExecutionStep[]>>({});
   const [pendingPermissions, setPendingPermissions] = useState<Record<number, { prompt: McpToolPermissionPrompt; resolve: (approved: boolean) => void }>>({});
   const [pendingHumanInputs, setPendingHumanInputs] = useState<Record<number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>>({});
+
+  // AbortController map — one controller per active execution (keyed by taskId)
+  const abortControllersRef = useRef<Map<number, AbortController>>(new Map());
+
+  // Terminate a running agent execution for a given task ID
+  const handleTerminateAgent = useCallback((taskId: number) => {
+    const controller = abortControllersRef.current.get(taskId);
+    if (controller) {
+      controller.abort();
+      abortControllersRef.current.delete(taskId);
+    }
+    setExecutingTaskId(null);
+  }, []);
 
 
   // Folder management handlers
@@ -946,6 +961,10 @@ export function App() {
       setTasks(inProgressTasks);
 
       try {
+        // Create a new AbortController for this execution so the user can terminate it
+        const controller = new AbortController();
+        abortControllersRef.current.set(task.id, controller);
+
         const res = await executeTaskWithAi(
           currentTask,
           currentBrief,
@@ -981,8 +1000,10 @@ export function App() {
                 [task.id]: { prompt: humanInputPrompt, resolve },
               }));
             });
-          }
+          },
+          controller.signal
         );
+
 
         // Completed execution: apply results & persist to TODO.md and AGENT_CONTEXT.md
         const nextTasks = tasks.map((t) => (t.id === res.updatedTask.id ? res.updatedTask : t));
@@ -997,6 +1018,7 @@ export function App() {
       } catch (err) {
         console.error('Task execution error:', err);
       } finally {
+        abortControllersRef.current.delete(task.id);
         setExecutingTaskId((cur) => (cur === task.id ? null : cur));
         setPendingHumanInputs((prev) => {
           const next = { ...prev };
@@ -1132,6 +1154,8 @@ export function App() {
       archivedAtIndex: taskIndex,         // remember original 0-based position
       category: 'Archive',
       categoryHeadingPrefix: '##',
+      swimLaneId: taskToArchive.swimLaneId || (activeProject?.swimLanes?.[0]?.id || 'lane-default'),
+      sourceFileName: taskToArchive.sourceFileName || (activeProject?.swimLanes?.[0]?.filePath?.split('/').pop() || 'TODO.md'),
     };
     const nextArchivedTasks = [
       ...archivedTasks.filter((t) => t.title.trim().toLowerCase() !== normalTitle),
@@ -1159,6 +1183,12 @@ export function App() {
     }
 
     syncAndSaveProject(nextActiveTasks, nextActiveBriefs, true, nextArchivedTasks, nextArchivedBriefs);
+
+    showToast({
+      type: 'info',
+      title: 'Task Archived',
+      message: `"${taskToArchive.title}" was moved to the archive. Find it anytime in the workspace header menu (•••) > Archived Tasks.`,
+    });
   };
 
   // Unarchive Task Handler (Restores task from archive back to active workspace at its original position)
@@ -1391,7 +1421,7 @@ export function App() {
     const fileName = `${slug.toUpperCase().replace(/-/g, '_')}.md`;
     const filePath = `${activeProject.folderPath}/${fileName}`;
 
-    const defaultContent = `<!-- Project: ${activeProject.name} | Folder: ${activeProject.folderPath} -->\n<!-- Linked Context: ${activeProject.agentContextFilePath} -->\n\n## ${title} Tasks\n\n1. Initial Task in ${title}\n    - Define task scope and subtasks\n`;
+    const defaultContent = `<!-- Swimlane Title: ${title} -->\n<!-- Project: ${activeProject.name} | Folder: ${activeProject.folderPath} -->\n<!-- Linked Context: ${activeProject.agentContextFilePath} -->\n\n## ${title} Tasks\n\n1. Initial Task in ${title}\n    - Define task scope and subtasks\n`;
 
     const newLane: SwimLaneDoc = {
       id: `lane-${Date.now()}`,
@@ -1448,10 +1478,11 @@ export function App() {
     });
   };
 
-  // Rename a SwimLane column title
+  // Rename a SwimLane column title and sync with markdown file on disk
   const handleRenameSwimLane = (laneId: string, newTitle: string) => {
     if (!activeProject || !newTitle.trim()) return;
 
+    const trimmedTitle = newTitle.trim();
     const currentLanes: SwimLaneDoc[] = activeProject.swimLanes && activeProject.swimLanes.length > 0
       ? activeProject.swimLanes
       : [{
@@ -1461,11 +1492,35 @@ export function App() {
           markdown: activeProject.todoMarkdown || ''
         }];
 
+    const targetLane = currentLanes.find((l) => l.id === laneId);
+    if (!targetLane) return;
+
+    const oldFilePath = targetLane.filePath;
+    const isPrimaryTodo = oldFilePath.endsWith('/TODO.md') || targetLane.id === 'lane-default' || targetLane.id === 'lane-todo';
+
+    // Calculate new filename for secondary lanes (keep TODO.md as TODO.md so project structure remains standard)
+    let newFilePath = oldFilePath;
+    if (!isPrimaryTodo) {
+      const slug = trimmedTitle.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'swim_lane';
+      const newFileName = `${slug.toUpperCase()}.md`;
+      newFilePath = `${activeProject.folderPath}/${newFileName}`;
+    }
+
+    // Embed or update <!-- Swimlane Title: <title> --> in the lane's markdown
+    let updatedMd = targetLane.markdown;
+    if (updatedMd.includes('<!-- Swimlane Title:')) {
+      updatedMd = updatedMd.replace(/<!--\s*Swimlane Title:\s*.*?\s*-->/i, `<!-- Swimlane Title: ${trimmedTitle} -->`);
+    } else {
+      updatedMd = `<!-- Swimlane Title: ${trimmedTitle} -->\n${updatedMd}`;
+    }
+
     const nextLanes = currentLanes.map((lane) => {
       if (lane.id === laneId) {
         return {
           ...lane,
-          title: newTitle.trim()
+          title: trimmedTitle,
+          filePath: newFilePath,
+          markdown: updatedMd
         };
       }
       return lane;
@@ -1481,6 +1536,22 @@ export function App() {
 
     const agentPath = activeProject.agentContextFilePath || `${activeProject.folderPath}/AGENT_CONTEXT.md`;
     const updatedBriefsMd = serializeAgentContextMarkdown(briefs, archivedBriefs);
+
+    if (oldFilePath !== newFilePath) {
+      // Call rename API to move old file to new file on disk
+      fetch('/api/files/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          oldPath: oldFilePath,
+          newPath: newFilePath,
+          content: updatedMd
+        })
+      }).catch((err) => {
+        console.error('[Ergo] Failed to rename swim lane file on disk:', err);
+      });
+    }
+
     autosave.saveImmediately([
       ...nextLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
       { filePath: agentPath, content: updatedBriefsMd }
@@ -1489,7 +1560,7 @@ export function App() {
     showToast({
       type: 'info',
       title: 'Swim Lane Renamed',
-      message: `Renamed swim lane to "${newTitle.trim()}".`
+      message: `Renamed swim lane to "${trimmedTitle}".`
     });
   };
 
@@ -1796,12 +1867,14 @@ export function App() {
             briefs={briefs}
             archivedTasks={archivedTasks}
             archivedBriefs={archivedBriefs}
+            swimLanes={activeProject?.swimLanes}
             selectedTaskId={selectedTaskId}
             runningTaskIds={runningTaskIds}
             onSelectTask={(id) => setSelectedTaskId(id)}
             onSaveBrief={handleSaveBrief}
             onLiveBriefChange={handleLiveBriefChange}
             onExecuteTask={handleExecuteTask}
+            onTerminateAgent={handleTerminateAgent}
             onUpdateBriefWithAi={handleUpdateBriefWithAi}
             onSyncOverviewWithTask={handleSyncOverviewWithTask}
             onUnarchiveTask={handleUnarchiveTask}

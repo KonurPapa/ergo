@@ -361,6 +361,8 @@ body {
   background: var(--pane-header-bg);
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border-subtle);
+  position: relative;
+  z-index: 30;
 }
 
 .pane-title {
@@ -2156,9 +2158,40 @@ body {
 
 .execute-task-btn.is-working {
   background: rgba(245, 158, 11, 0.18) !important;
-  border-color: rgba(245, 158, 11, 0.5) !important;
   color: #f59e0b !important;
-  box-shadow: 0 4px 14px rgba(245, 158, 11, 0.2) !important;
+  border-color: rgba(245, 158, 11, 0.4) !important;
+}
+
+/* Overview Gathering Context Indicator */
+.overview-gathering-context-box {
+  margin-bottom: 0.75rem;
+  padding: 0.85rem 1rem;
+  background: rgba(56, 189, 248, 0.07);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.08);
+  animation: fadeIn 0.2s ease-in-out;
+}
+
+.overview-gathering-context-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.overview-gathering-context-title {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--accent-cyan);
+  letter-spacing: 0.02em;
+}
+
+.overview-gathering-context-detail {
+  font-size: 0.79rem;
+  color: var(--text-muted);
+  line-height: 1.55;
+  margin: 0;
 }
 
 /* Modals */
@@ -2325,8 +2358,23 @@ body {
   box-shadow: 0 0 15px rgba(99, 102, 241, 0.2);
 }
 
+.step-card.running[class*="overview"] {
+  border-color: var(--accent-amber);
+  box-shadow: 0 0 15px rgba(245, 158, 11, 0.15);
+}
+
 .step-card.success {
   border-color: rgba(16, 185, 129, 0.4);
+}
+
+.step-card.cancelled {
+  border-color: rgba(239, 68, 68, 0.3);
+  opacity: 0.75;
+}
+
+.step-card.error {
+  border-color: rgba(239, 68, 68, 0.5);
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.15);
 }
 
 .step-header {
@@ -3309,14 +3357,14 @@ body {
   background: rgba(255, 255, 255, 0.08);
 }
 
-/* ── Human AI Assistant Slide-up Bar / Bottom Drawer in Task View ── */
+/* ── Human AI Assistant Slide-up Bar / Bottom Drawer in Selected Lane ── */
 .human-assistant-drawer-container {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
-  bottom: 53px;
-  /* Sits cleanly above the task-pane-footer */
+  bottom: 49px;
+  /* Sits cleanly above the swimlane-footer */
   pointer-events: none;
   /* Allows clicks to pass through to the task background */
   z-index: 90;
@@ -3329,6 +3377,28 @@ body {
 .human-assistant-drawer-container.is-open {
   pointer-events: none;
   /* Keep container transparent to clicks so background stays interactable */
+}
+
+/* Lane-level bottom footer for New Task & Task Assistant in selected lane */
+.swimlane-footer {
+  padding: 0.6rem 0.85rem;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--footer-bg);
+  backdrop-filter: blur(8px);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  position: relative;
+  z-index: 10;
+}
+
+.swimlane-footer .new-card-btn,
+.swimlane-footer .new-task-btn {
+  padding: 0.45rem 0.75rem;
+  font-size: 0.8rem;
+  max-width: 180px;
 }
 
 /* Background is now visible and interactable; backdrop overlay removed */
@@ -4572,4 +4642,128 @@ body {
   background: var(--accent-cyan);
   box-shadow: 0 0 8px rgba(6, 182, 212, 0.6);
   width: 2.5px;
+}
+
+/* ── Human Workspace Header Menu & Dropdown ────────────────── */
+.workspace-header-menu-btn {
+  position: relative;
+  transition: all 0.15s ease;
+}
+
+.workspace-header-menu-btn.active {
+  border-color: var(--accent-primary) !important;
+  background: rgba(99, 102, 241, 0.18) !important;
+  color: var(--text-bright, #fff) !important;
+}
+
+.header-menu-archive-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.8);
+}
+
+.workspace-header-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 5px);
+  right: 0;
+  background: var(--dropdown-bg);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm, 6px);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35), 0 0 1px rgba(0, 0, 0, 0.2);
+  z-index: 100;
+  min-width: 195px;
+  padding: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  animation: dropdownFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.workspace-header-dropdown-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-main);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.12s ease;
+}
+
+.workspace-header-dropdown-item:hover {
+  background: var(--dropdown-item-hover);
+  color: var(--text-bright);
+}
+
+.workspace-header-dropdown-item .dropdown-item-icon.add-icon {
+  color: var(--accent-cyan);
+}
+
+.workspace-header-dropdown-item .dropdown-item-icon.archive-icon {
+  color: #f59e0b;
+}
+
+.workspace-header-dropdown-item .dropdown-item-badge {
+  margin-left: auto;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #f59e0b;
+}
+
+/* ── Archived Tasks Modal & Filter Pills ────────────────────────── */
+.archive-filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 9999px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.archive-filter-pill:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-bright);
+  border-color: var(--border-glow);
+}
+
+.archive-filter-pill.active {
+  background: rgba(99, 102, 241, 0.18);
+  border-color: var(--accent-primary);
+  color: var(--text-bright);
+}
+
+.archive-filter-pill .pill-count {
+  font-size: 0.68rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  color: inherit;
+}
+
+.modal-archived-card:hover {
+  border-color: rgba(99, 102, 241, 0.35) !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12) !important;
 }

@@ -18,6 +18,7 @@ import {
   Tag,
   Zap,
   Brain,
+  Sparkles,
   Edit3,
   ChevronDown,
   Sliders,
@@ -50,6 +51,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
   const [providerId, setProviderId] = useState<AIProviderId>('openai');
   const [baseUrl, setBaseUrl] = useState('');
   const [discoveryModel, setDiscoveryModel] = useState('');
+  const [summaryModel, setSummaryModel] = useState('');
   const [generalModel, setGeneralModel] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -66,6 +68,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
 
   // Custom Model Manual Input Toggle State
   const [isCustomDiscovery, setIsCustomDiscovery] = useState(false);
+  const [isCustomSummary, setIsCustomSummary] = useState(false);
   const [isCustomGeneral, setIsCustomGeneral] = useState(false);
 
   const [isTesting, setIsTesting] = useState(false);
@@ -90,12 +93,14 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     setProviderId(pId);
     setBaseUrl(p.defaultBaseUrl || '');
     setDiscoveryModel(pId === 'ollama' ? '' : p.defaultDiscoveryModel);
+    setSummaryModel(pId === 'ollama' ? '' : p.defaultSummaryModel);
     setGeneralModel(pId === 'ollama' ? '' : p.defaultGeneralModel);
     setTestResult(null);
     setShowApiKey(false);
     setOllamaModels([]);
     setIsOllamaConnected(false);
     setIsCustomDiscovery(false);
+    setIsCustomSummary(false);
     setIsCustomGeneral(false);
   };
 
@@ -108,12 +113,15 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     const resolvedBaseUrl = k.baseUrl || p.defaultBaseUrl || '';
     setBaseUrl(resolvedBaseUrl);
     const currentDisc = k.discoveryModel || (k.provider === 'ollama' ? '' : p.defaultDiscoveryModel);
+    const currentSumm = k.summaryModel || (k.provider === 'ollama' ? '' : p.defaultSummaryModel);
     const currentGen = k.generalModel || k.model || (k.provider === 'ollama' ? '' : p.defaultGeneralModel);
     setDiscoveryModel(currentDisc);
+    setSummaryModel(currentSumm);
     setGeneralModel(currentGen);
     setTestResult(null);
     setShowApiKey(false);
     setIsCustomDiscovery(false);
+    setIsCustomSummary(false);
     setIsCustomGeneral(false);
 
     if (k.provider === 'ollama') {
@@ -125,6 +133,9 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
         if (fetched.length > 0) {
           if (!k.discoveryModel || !fetched.some((m) => m.id === k.discoveryModel)) {
             setDiscoveryModel(fetched[0].id);
+          }
+          if (!k.summaryModel || !fetched.some((m) => m.id === k.summaryModel)) {
+            setSummaryModel(fetched[0].id);
           }
           if (!k.generalModel || !fetched.some((m) => m.id === (k.generalModel || k.model))) {
             setGeneralModel(fetched[0].id);
@@ -251,6 +262,9 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
         if (!discoveryModel || !res.models.some((m) => m.id === discoveryModel)) {
           setDiscoveryModel(res.models[0].id);
         }
+        if (!summaryModel || !res.models.some((m) => m.id === summaryModel)) {
+          setSummaryModel(res.models[0].id);
+        }
         if (!generalModel || !res.models.some((m) => m.id === generalModel)) {
           setGeneralModel(res.models[0].id);
         }
@@ -269,8 +283,10 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     const finalName = keyName.trim() || `${providerMeta.name} Key`;
     const effectiveList = getEffectiveModels(providerId);
     const defaultDisc = providerId === 'ollama' ? (effectiveList[0]?.id || '') : providerMeta.defaultDiscoveryModel;
+    const defaultSumm = providerId === 'ollama' ? (effectiveList[0]?.id || '') : providerMeta.defaultSummaryModel;
     const defaultGen = providerId === 'ollama' ? (effectiveList[0]?.id || '') : providerMeta.defaultGeneralModel;
     const resolvedDiscovery = discoveryModel || defaultDisc;
+    const resolvedSummary = summaryModel || defaultSumm;
     const resolvedGeneral = generalModel || defaultGen;
 
     onSaveUserKey({
@@ -280,6 +296,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
       apiKey: apiKey.trim(),
       baseUrl: baseUrl.trim(),
       discoveryModel: resolvedDiscovery,
+      summaryModel: resolvedSummary,
       generalModel: resolvedGeneral,
       model: resolvedGeneral,
       isConnected: true
@@ -547,7 +564,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                       {providerId === 'ollama' ? (
                         isOllamaConnected ? (
                           ollamaModels.length > 0 ? (
-                            `${discoveryModel || 'Select model'} • ${generalModel || 'Select model'}`
+                            `${discoveryModel || 'Select'} • ${summaryModel || 'Select'} • ${generalModel || 'Select'}`
                           ) : (
                             'Connected (No models)'
                           )
@@ -555,7 +572,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                           'Not connected (Click Test Connection)'
                         )
                       ) : (
-                        `${getEffectiveModels(providerId).find((m) => m.id === discoveryModel)?.name || discoveryModel || providerMeta.defaultDiscoveryModel} • ${getEffectiveModels(providerId).find((m) => m.id === generalModel)?.name || generalModel || providerMeta.defaultGeneralModel}`
+                        `${getEffectiveModels(providerId).find((m) => m.id === discoveryModel)?.name || discoveryModel || providerMeta.defaultDiscoveryModel} • ${getEffectiveModels(providerId).find((m) => m.id === summaryModel)?.name || summaryModel || providerMeta.defaultSummaryModel} • ${getEffectiveModels(providerId).find((m) => m.id === generalModel)?.name || generalModel || providerMeta.defaultGeneralModel}`
                       )}
                     </span>
                   )}
@@ -574,7 +591,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 <div
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: 'repeat(2, 1fr)',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
                     gap: '0.85rem',
                     marginTop: '0.5rem',
                     padding: '0.85rem',
@@ -619,7 +636,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                       </button>
                     </div>
                     <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.25, display: 'block', marginBottom: '0.4rem' }}>
-                      Used for quick scanning to assemble relevant context
+                      Scans task headers across lanes & archives
                     </span>
 
                     {isCustomDiscovery ? (
@@ -682,6 +699,101 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         {getEffectiveModels(providerId).map((m) => (
                           <option key={`disc-${m.id}`} value={m.id}>
                             {m.name} {m.id === providerMeta.defaultDiscoveryModel ? '(Default)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+                  {/* Summary Model */}
+                  <div className="input-group" style={{ margin: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                      <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
+                        <Sparkles size={13} color="var(--accent-violet)" />
+                        <span style={{ fontWeight: 700, color: 'var(--text-bright)', fontSize: '0.82rem' }}>Summary Model</span>
+                        <span
+                          style={{
+                            fontSize: '0.62rem',
+                            padding: '0.05rem 0.35rem',
+                            borderRadius: '4px',
+                            background: 'rgba(168, 85, 247, 0.15)',
+                            color: 'var(--accent-violet)',
+                            fontWeight: 600
+                          }}
+                        >
+                          Standard / Balanced
+                        </span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setIsCustomSummary(!isCustomSummary)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: 'var(--accent-cyan)',
+                          fontSize: '0.68rem',
+                          cursor: 'pointer',
+                          textDecoration: 'underline',
+                          padding: 0
+                        }}
+                      >
+                        {isCustomSummary ? 'Select Preset' : 'Custom ID'}
+                      </button>
+                    </div>
+                    <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.25, display: 'block', marginBottom: '0.4rem' }}>
+                      Synthesizes Overview & defines MCP requirements
+                    </span>
+
+                    {isCustomSummary ? (
+                      <input
+                        type="text"
+                        className="input-text"
+                        placeholder="e.g. claude-3-7-sonnet-20250219, gpt-5, gemini-3.7-flash..."
+                        value={summaryModel}
+                        onChange={(e) => setSummaryModel(e.target.value)}
+                        style={{ fontSize: '0.82rem', fontFamily: 'var(--font-mono)' }}
+                      />
+                    ) : providerId === 'ollama' ? (
+                      <div>
+                        <select
+                          className="input-text"
+                          value={summaryModel || providerMeta.defaultSummaryModel}
+                          onChange={(e) => setSummaryModel(e.target.value)}
+                          disabled={!isOllamaConnected || ollamaModels.length === 0 || isLoadingOllamaModels}
+                          style={{
+                            cursor: (!isOllamaConnected || ollamaModels.length === 0) ? 'not-allowed' : 'pointer',
+                            fontSize: '0.82rem',
+                            opacity: (!isOllamaConnected || ollamaModels.length === 0) ? 0.75 : 1
+                          }}
+                        >
+                          {isLoadingOllamaModels ? (
+                            <option value="">Checking local Ollama...</option>
+                          ) : !isOllamaConnected ? (
+                            <option value="">Click 'Test Connection' to discover local models</option>
+                          ) : ollamaModels.length === 0 ? (
+                            <option value="">No models installed locally</option>
+                          ) : (
+                            <>
+                              {!summaryModel && <option value="">Select a local model...</option>}
+                              {ollamaModels.map((m) => (
+                                <option key={`summ-ollama-${m.id}`} value={m.id}>
+                                  {m.name}
+                                </option>
+                              ))}
+                            </>
+                          )}
+                        </select>
+                      </div>
+                    ) : (
+                      <select
+                        className="input-text"
+                        value={summaryModel || providerMeta.defaultSummaryModel}
+                        onChange={(e) => setSummaryModel(e.target.value)}
+                        style={{ cursor: 'pointer', fontSize: '0.82rem' }}
+                      >
+                        {getEffectiveModels(providerId).map((m) => (
+                          <option key={`summ-${m.id}`} value={m.id}>
+                            {m.name} {m.id === providerMeta.defaultSummaryModel ? '(Default)' : ''}
                           </option>
                         ))}
                       </select>
@@ -896,8 +1008,10 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                   const pMeta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === k.provider);
                   const effectiveList = getEffectiveModels(k.provider);
                   const effectiveDiscModel = k.discoveryModel || pMeta?.defaultDiscoveryModel || 'Default';
+                  const effectiveSummModel = k.summaryModel || pMeta?.defaultSummaryModel || 'Default';
                   const effectiveGenModel = k.generalModel || k.model || pMeta?.defaultGeneralModel || 'Default';
                   const discModelName = effectiveList.find((m) => m.id === effectiveDiscModel)?.name || pMeta?.models.find((m) => m.id === effectiveDiscModel)?.name || effectiveDiscModel;
+                  const summModelName = effectiveList.find((m) => m.id === effectiveSummModel)?.name || pMeta?.models.find((m) => m.id === effectiveSummModel)?.name || effectiveSummModel;
                   const genModelName = effectiveList.find((m) => m.id === effectiveGenModel)?.name || pMeta?.models.find((m) => m.id === effectiveGenModel)?.name || effectiveGenModel;
 
                   return (
@@ -936,11 +1050,11 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                               <span
                                 className="badge"
                                 style={{
-                                  fontSize: '0.65rem',
-                                  padding: '0.1rem 0.4rem',
-                                  background: 'var(--btn-secondary-bg)',
-                                  color: 'var(--text-muted)',
-                                  borderColor: 'var(--btn-secondary-border)'
+                                    fontSize: '0.65rem',
+                                    padding: '0.1rem 0.4rem',
+                                    background: 'var(--btn-secondary-bg)',
+                                    color: 'var(--text-muted)',
+                                    borderColor: 'var(--btn-secondary-border)'
                                 }}
                               >
                                 {pMeta?.shortName || k.provider}
@@ -1032,7 +1146,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         style={{
                           display: 'flex',
                           alignItems: 'center',
-                          gap: '0.75rem',
+                          flexWrap: 'wrap',
+                          gap: '0.65rem',
                           paddingTop: '0.4rem',
                           borderTop: '1px solid var(--border-subtle)',
                           fontSize: '0.72rem'
@@ -1046,8 +1161,15 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                           </span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--text-muted)' }}>
+                          <Sparkles size={12} color="var(--accent-violet)" />
+                          <span>Summary:</span>
+                          <span style={{ fontWeight: 600, color: 'var(--text-bright)', background: 'var(--btn-secondary-bg)', border: '1px solid var(--btn-secondary-border)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
+                            {summModelName}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--text-muted)' }}>
                           <Brain size={12} color="var(--accent-cyan)" />
-                          <span>General Tasks:</span>
+                          <span>Task / Builder:</span>
                           <span style={{ fontWeight: 600, color: 'var(--text-bright)', background: 'var(--btn-secondary-bg)', border: '1px solid var(--btn-secondary-border)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
                             {genModelName}
                           </span>

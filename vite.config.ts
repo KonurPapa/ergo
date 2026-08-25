@@ -388,6 +388,48 @@ function ergoFileSystemPlugin(): Plugin {
         }
       }
 
+      if (url === '/api/files/rename' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const { oldPath, newPath, content } = body;
+
+          if (!oldPath || !newPath) {
+            return sendJson(res, 400, { error: 'oldPath and newPath are required' });
+          }
+
+          const oldFullPath = path.resolve(storageDir, oldPath);
+          const newFullPath = path.resolve(storageDir, newPath);
+          const now = Date.now();
+
+          await fs.mkdir(path.dirname(newFullPath), { recursive: true });
+
+          if (typeof content === 'string') {
+            await fs.writeFile(newFullPath, content, 'utf-8');
+            if (oldFullPath !== newFullPath) {
+              try { await fs.unlink(oldFullPath); } catch {}
+            }
+          } else {
+            if (oldFullPath !== newFullPath) {
+              await fs.rename(oldFullPath, newFullPath);
+            }
+          }
+
+          recentWrites.set(oldPath, now);
+          recentWrites.set(oldFullPath, now);
+          recentWrites.set(newPath, now);
+          recentWrites.set(newFullPath, now);
+
+          return sendJson(res, 200, {
+            success: true,
+            oldPath,
+            newPath
+          });
+        } catch (err: any) {
+          console.error('[Ergo FS API] Rename error:', err);
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
       if (url === '/api/projects/create' && req.method === 'POST') {
         try {
           const body = await parseJsonBody(req);
@@ -518,7 +560,7 @@ function ergoFileSystemPlugin(): Plugin {
             filePath: matchedPath
           });
         } catch (err: any) {
-          console.error('[Ergo FS API] Skill read error:', err);
+          console.error('[Ergo FS API] Skills read error:', err);
           return sendJson(res, 500, { error: err.message });
         }
       }
@@ -526,22 +568,22 @@ function ergoFileSystemPlugin(): Plugin {
       if (url === '/api/skills/write' && req.method === 'POST') {
         try {
           const body = await parseJsonBody(req);
-          const skillName = body.skillName || 'human-assistant';
-          const content = body.content || '';
+          const { skillName, content, projectFolder } = body;
 
-          const targets = [
-            path.join(storageDir, 'config', 'skills', skillName, 'SKILL.md'),
-            path.join(process.cwd(), '.ergo', 'config', 'skills', skillName, 'SKILL.md')
-          ];
-
-          for (const target of targets) {
-            try {
-              await fs.mkdir(path.dirname(target), { recursive: true });
-              await fs.writeFile(target, content, 'utf-8');
-            } catch (wErr) {
-              console.warn(`[Ergo FS API] Could not write skill to ${target}:`, wErr);
-            }
+          if (!skillName || typeof content !== 'string') {
+            return sendJson(res, 400, { error: 'skillName and content are required' });
           }
+
+          let skillsDir = path.resolve(storageDir, 'skills');
+          if (projectFolder) {
+            skillsDir = path.resolve(storageDir, projectFolder, 'skills');
+          }
+
+          const targetSkillDir = path.join(skillsDir, skillName);
+          await fs.mkdir(targetSkillDir, { recursive: true });
+          const targetSkillMd = path.join(targetSkillDir, 'SKILL.md');
+
+          await fs.writeFile(targetSkillMd, content, 'utf-8');
 
           return sendJson(res, 200, {
             success: true,
@@ -592,10 +634,27 @@ function ergoFileSystemPlugin(): Plugin {
                       if (pf.name === 'TODO.md') {
                         todoContent = content;
                       }
-                      const title = pf.name === 'TODO.md' ? 'Human Workspace' : pf.name.replace(/\.md$/i, '').replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+                      // Check for embedded title metadata in comments or headings
+                      let title = '';
+                      const titleCommentMatch = content.match(/<!--\s*(?:Swimlane Title|Title):\s*(.*?)\s*-->/i);
+                      if (titleCommentMatch && titleCommentMatch[1]) {
+                        title = titleCommentMatch[1].trim();
+                      } else {
+                        const h1Match = content.match(/^#\s+(?:.*?\s+)?(.*?)(?:\s+Tasks)?\s*$/m);
+                        const h2Match = content.match(/^##\s+(.*?)(?:\s+Tasks)?\s*$/m);
+                        if (h1Match && h1Match[1] && pf.name !== 'TODO.md') {
+                          title = h1Match[1].trim();
+                        } else if (h2Match && h2Match[1] && pf.name !== 'TODO.md') {
+                          title = h2Match[1].trim();
+                        } else {
+                          title = pf.name === 'TODO.md' ? 'Human Workspace' : pf.name.replace(/\.md$/i, '').replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+                        }
+                      }
+
                       swimLanes.push({
                         id: `lane-${pf.name.replace(/\.md$/i, '').toLowerCase()}`,
-                        title,
+                        title: title || (pf.name === 'TODO.md' ? 'Human Workspace' : pf.name.replace(/\.md$/i, '')),
                         filePath: relPath,
                         markdown: content
                       });
