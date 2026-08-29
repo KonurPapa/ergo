@@ -76,7 +76,7 @@ const HumanInputCard: React.FC<HumanInputCardProps> = ({ prompt, onSubmit }) => 
       <div className="ai-human-input-header">
         <div className="ai-human-input-title">
           <HelpCircle size={17} color="var(--accent-amber)" />
-          <span>Clarification Needed &bull; Builder AI</span>
+          <span>Clarification Needed &bull; Manager AI</span>
         </div>
         <span className="ai-human-input-badge">Interactive Prompt</span>
       </div>
@@ -573,17 +573,20 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
           >
             <ChevronDown size={14} className="collapse-chevron" />
           </button>
-          {task.isUnordered ? (
+          {brief?.isUnordered || task.isUnordered ? (
             <span className="ai-task-num-badge ai-task-num-badge-unordered" title={task.category && task.category.trim() ? task.category.trim() : 'Task'}>
               {task.category && task.category.trim() ? task.category.trim() : 'Task'}
             </span>
           ) : (
-            <span className="ai-task-num-badge" title={`${task.category && task.category.trim() ? task.category.trim() : 'Untitled'} #${task.listIndex ?? task.id}`}>
-              {task.category && task.category.trim() ? task.category.trim() : 'Untitled'} #{task.listIndex ?? task.id}
+            <span
+              className="ai-task-num-badge"
+              title={task.category && task.category.trim() && task.category !== 'AI Workspace' ? `${task.category.trim()} #${task.listIndex ?? task.id}` : `#${brief?.itemNumber ?? task.id}`}
+            >
+              {task.category && task.category.trim() && task.category !== 'AI Workspace' ? `${task.category.trim()} #${task.listIndex ?? task.id}` : `#${brief?.itemNumber ?? task.id}`}
             </span>
           )}
-          <span className="ai-task-title-text" title={task.title}>
-            {task.title}
+          <span className="ai-task-title-text" title={brief?.title || task.title}>
+            {brief?.title || task.title}
           </span>
           {renderStatusBadge()}
         </div>
@@ -1074,9 +1077,21 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 
                           {/* Overview document preview if available */}
                           {step.stage === 'overview' && step.status === 'success' && step.overviewDocument && (
-                            <div style={{ marginTop: '0.5rem', padding: '0.6rem 0.75rem', background: 'rgba(245, 158, 11, 0.07)', border: '1px solid rgba(245, 158, 11, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: '1.55' }}>
-                              <div style={{ fontWeight: 700, color: 'var(--accent-amber)', marginBottom: '0.3rem', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Output As</div>
-                              <span>{step.overviewDocument.output_as}</span>
+                            <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                              {step.overviewDocument.brief && (
+                                <div style={{ padding: '0.6rem 0.75rem', background: 'rgba(56, 189, 248, 0.06)', border: '1px solid rgba(56, 189, 248, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+                                  <div style={{ fontWeight: 700, color: 'var(--accent-cyan)', marginBottom: '0.35rem', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                    <span>🥒 Gherkin Execution Brief (Given-When-Then)</span>
+                                  </div>
+                                  <pre style={{ margin: 0, padding: 0, background: 'transparent', color: 'inherit', fontFamily: 'var(--font-mono)', fontSize: '0.74rem', whiteSpace: 'pre-wrap', lineHeight: '1.45' }}>
+                                    {step.overviewDocument.brief}
+                                  </pre>
+                                </div>
+                              )}
+                              <div style={{ padding: '0.5rem 0.75rem', background: 'rgba(245, 158, 11, 0.06)', border: '1px solid rgba(245, 158, 11, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+                                <div style={{ fontWeight: 700, color: 'var(--accent-amber)', marginBottom: '0.25rem', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Output As</div>
+                                <span>{step.overviewDocument.output_as}</span>
+                              </div>
                             </div>
                           )}
 
@@ -1343,7 +1358,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   }, [isHeaderMenuOpen]);
 
   const activeTaskRunningCount = runningTaskIds.length;
-  const doneCount = tasks.filter((t) => t.isDone || t.status === 'done').length;
+  const doneCount = briefs.filter((b) => b.status === 'done').length;
 
   return (
     <div className="pane pane-right obsidian-pane">
@@ -1352,7 +1367,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
         <div className="pane-title">
           <FileCode size={17} color="var(--accent-violet)" />
           <span>AI Workspace</span>
-          <span className="pane-subtitle">{doneCount}/{tasks.length} done</span>
+          <span className="pane-subtitle">{doneCount}/{briefs.length} done</span>
         </div>
 
         <div className="pane-header-actions" style={{ display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
@@ -1406,51 +1421,60 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
 
       {/* ── Scrollable Multi-Task List ── */}
       <div className="pane-content obsidian-body brief-scrollable-workspace">
-        {tasks.length === 0 ? (
+        {briefs.length === 0 ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: '300px' }}>
             <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
               <ListTodo size={48} color="var(--accent-violet)" style={{ opacity: 0.45, marginBottom: '1rem' }} />
-              <h3 style={{ color: 'var(--text-bright)', fontSize: '1.15rem' }}>No tasks in workspace</h3>
+              <h3 style={{ color: 'var(--text-bright)', fontSize: '1.15rem' }}>No AI tasks in workspace</h3>
               <p style={{ fontSize: '0.85rem', marginTop: '0.5rem', maxWidth: '420px', lineHeight: '1.6' }}>
-                Add tasks in the Human Workspace using <strong>New Task</strong> or <strong>AI Assistant</strong>.
+                Tasks in <strong>AGENT_CONTEXT.md</strong> will appear here.
               </p>
             </div>
           </div>
         ) : (
           <div className="ai-tasks-list-container">
-            {tasks.map((task, index) => {
-              const taskBrief =
-                briefs.find((b) => b.title.trim().toLowerCase() === task.title.trim().toLowerCase()) ||
-                briefs.find((b) => b.itemNumber === task.id) ||
-                briefs[index] ||
-                undefined;
-              const terminalSession = terminalSessions.find((s) => s.session.taskId === task.id) ?? null;
+            {briefs.map((brief, index) => {
+              const matchingTask =
+                tasks.find((t) => t.title.trim().toLowerCase() === brief.title.trim().toLowerCase()) ||
+                tasks.find((t) => t.id === brief.itemNumber);
+
+              const effectiveTask: TaskItem = matchingTask || {
+                id: brief.itemNumber || index + 1,
+                title: brief.title,
+                category: 'AI Workspace',
+                status: (brief.status as TaskStatus) || 'not_started',
+                isDone: brief.status === 'done',
+                subtasks: [],
+                isUnordered: brief.isUnordered,
+              };
+
+              const terminalSession = terminalSessions.find((s) => s.session.taskId === effectiveTask.id) ?? null;
               const isTerminalRunning = !!terminalSession?.session.isActive;
-              const isExecuting = executingTaskId === task.id;
+              const isExecuting = executingTaskId === effectiveTask.id;
               const isWorking = isTerminalRunning || isExecuting;
-              const isSelected = selectedTaskId === task.id;
+              const isSelected = selectedTaskId === effectiveTask.id;
 
               return (
                 <AiTaskCard
-                  key={task.id}
-                  task={task}
-                  brief={taskBrief}
+                  key={brief.itemNumber || `brief-${index}`}
+                  task={effectiveTask}
+                  brief={brief}
                   isSelected={isSelected}
                   isWorking={isWorking}
                   terminalSession={terminalSession}
                   isExecuting={isExecuting}
-                  executionSteps={taskExecutionSteps[task.id] || []}
-                  pendingPermission={pendingPermissions[task.id]?.prompt ?? null}
-                  pendingHumanInput={pendingHumanInputs[task.id] ?? null}
-                  onSelect={() => onSelectTask?.(task.id)}
+                  executionSteps={taskExecutionSteps[effectiveTask.id] || []}
+                  pendingPermission={pendingPermissions[effectiveTask.id]?.prompt ?? null}
+                  pendingHumanInput={pendingHumanInputs[effectiveTask.id] ?? null}
+                  onSelect={() => onSelectTask?.(effectiveTask.id)}
                   onSaveBrief={onSaveBrief}
                   onLiveBriefChange={onLiveBriefChange}
                   onExecuteTask={onExecuteTask}
                   onUpdateBriefWithAi={_onUpdateBriefWithAi}
                   onSyncOverviewWithTask={onSyncOverviewWithTask}
-                  onPermissionChoice={(approved) => onPermissionChoice?.(task.id, approved)}
-                  onHumanInputChoice={(answer) => onHumanInputChoice?.(task.id, answer)}
-                  onSessionExit={(code) => onSessionExit?.(task.id, code)}
+                  onPermissionChoice={(approved) => onPermissionChoice?.(effectiveTask.id, approved)}
+                  onHumanInputChoice={(answer) => onHumanInputChoice?.(effectiveTask.id, answer)}
+                  onSessionExit={(code) => onSessionExit?.(effectiveTask.id, code)}
                   onRestartSession={onRestartSession}
                   onKillSession={onKillSession}
                   onTerminateAgent={onTerminateAgent}

@@ -32,3 +32,4 @@ This document details the step-by-step logic, data flow, context boundaries, and
     - this also means the agents can then wait in a queue for access to a particular file, thus keeping things orderly
 5. Builder AI completes the task and outputs its success message/summary
 6. Summary AI writes the summary to the 'Completion' section of the task in AGENT_CONTEXT.md, and writes a 'human review' card back into the human side if the particular task requires human verification
+  - it should move this task to the next swim lane by default after completion (or to another swim lane if specified as part of the task)

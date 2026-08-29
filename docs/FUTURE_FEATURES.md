@@ -56,6 +56,53 @@
     - some sort of master list of which files in a codebase are being accessed and by which agents
         - this would give the user a cool view of what's actually being edited
         - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts
+    - add 'grill-me' to the list of AI assistant abilities, so user can refine their task list
+    - token usage during task execution
+
+
+
+**Uncle Bob's Notes**:
+    - write a function, then write the test for that function
+        - once it passes the test(s), the agent can move on
+    - Implementing Agile framework for agents
+        - make as many small changes/iterations as possible to try to best reach the goal
+        - maybe this looks like implementation plans by multiple agents, and then a judge AI decides which plan is the best
+            - each agent should approach its plan in a different way from the previous plans, so there are varied approaches and ideas
+                - how do we do this without bloating a new agent's context with every other previous plan?
+            - "best" is determined by which one adheres most strictly to the outcome/goal already determined by the initial context assembly AI
+        - research this more and/or have AI put together a plan on what it thinks this should look like
+    
+    AGENT WORKFLOW:
+    1. discovery agent
+        - scans task given by user, related tasks (as it does currently)
+        - assembles full context
+    2. summary agent
+        - creates for each job from the full context:
+            - gherkin scenario (given-when-then structure)
+                - use this as the basis for the 'brief' field in the output: https://www.geeksforgeeks.org/software-testing/writing-scenarios-with-gherkin-syntax/
+                - make sure to include examples in the skill (like the above webpage has), so the AI knows how it's supposed to format the Overview
+                - the gherkin should be written in a way that is easy to understand for a human, so that they can verify that it is correct
+    3. manager executes tasks
+        - JSON input assembled from the previous steps is the "bible prompt" the manager uses
+        - manager directly references the gherkin from earlier to determine how many "pieces" the whole task is comprised of
+        - optional for agents:
+            - the bible prompt contains all the info necessary for the manager to spin up as many agents as needed
+            - when manager spawns an agent, the child:
+                - receives the short context the manager gives it on its specific task
+                - determines what work it needs to do and executes its task
+                - if coding, this needs to write unit-tests and validate its work
+                - writes its piece of the puzzle to the JSON bible
+                - dies
+            - should be a max of X agents that can run concurrently
+        - manager is only finished with the complete task when it has accumulated all the completed pieces of the puzzle and put them together into the finished task
+    4. cleaner (only if coding)
+        - clean up the newly-written code so it is well-organized
+    5. hardener (only if coding)
+        - QA procedure (how to know the task is completed)
+            - for coding, add: "you are a human; you are operating this system entirely via UI; you must prove whether the system works, or needs more work (and specifically what that work is)"
+                - should be modified to something more generic for other tasks
+        - QA failure writes the failure to the JSON bible and repeats the process again from step 3
+        - any repeat causes the previous agents to be torn down and recreated, so context is fresh
 
 
 

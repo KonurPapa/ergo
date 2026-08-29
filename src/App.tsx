@@ -21,12 +21,11 @@ import {
 import { INITIAL_PROJECTS, createNewProjectData, INITIAL_MCP_SERVERS } from './lib/demoData';
 import {
   parseTodoMarkdown,
-  parseSwimLaneMarkdown,
-  serializeTodoMarkdown,
   parseAgentContextMarkdown,
   parseAgentContextWithArchive,
+  serializeTodoMarkdown,
   serializeAgentContextMarkdown,
-  syncBriefsWithTasks
+  parseSwimLaneMarkdown
 } from './lib/parser';
 import { readFilesFromDisk, createProjectOnDisk } from './lib/fileSystem';
 import { storageManager } from './lib/storageManager';
@@ -591,15 +590,16 @@ export function App() {
       }
 
       const parsedBriefsWithArchive = parseAgentContextWithArchive(effectiveAgentMd);
-      const alignedBriefs = syncBriefsWithTasks(parsedBriefsWithArchive.items, allActiveTasks);
 
       setTasks(allActiveTasks);
       setArchivedTasks(allArchivedTasks);
       setHeaderComments(firstHeaderComments);
-      setBriefs(alignedBriefs);
+      setBriefs(parsedBriefsWithArchive.items);
       setArchivedBriefs(parsedBriefsWithArchive.archivedItems);
 
-      if (allActiveTasks.length > 0) {
+      if (parsedBriefsWithArchive.items.length > 0) {
+        setSelectedTaskId((prev) => (prev !== null && parsedBriefsWithArchive.items.some((b) => b.itemNumber === prev) ? prev : parsedBriefsWithArchive.items[0].itemNumber));
+      } else if (allActiveTasks.length > 0) {
         setSelectedTaskId((prev) => (prev !== null && allActiveTasks.some((t) => t.id === prev) ? prev : allActiveTasks[0].id));
       } else {
         setSelectedTaskId(null);
@@ -689,7 +689,7 @@ export function App() {
           if (isActiveProject) {
             if (fileType === 'agent' || relativePath?.endsWith('AGENT_CONTEXT.md')) {
               const parsedBriefs = parseAgentContextMarkdown(content);
-              setBriefs(() => syncBriefsWithTasks(parsedBriefs, tasksRef.current));
+              setBriefs(parsedBriefs);
             } else {
               const currentLanes: SwimLaneDoc[] = ap.swimLanes && ap.swimLanes.length > 0
                 ? ap.swimLanes
@@ -717,7 +717,6 @@ export function App() {
 
               setTasks(allActiveTasks);
               setArchivedTasks(allArchivedTasks);
-              setBriefs((prevBriefs) => syncBriefsWithTasks(prevBriefs, allActiveTasks));
             }
           }
         } catch (err) {
@@ -860,9 +859,6 @@ export function App() {
       nextBriefs = parseAgentContextMarkdown(result.agentContextMarkdown);
     }
 
-    // 2. Renumber and maintain counterpart parity in AGENT_CONTEXT.md
-    nextBriefs = syncBriefsWithTasks(nextBriefs, nextTasks);
-
     // 3. Persist to state and disk immediately
     syncAndSaveProject(nextTasks, nextBriefs, true);
 
@@ -876,6 +872,60 @@ export function App() {
       onAction: () => {
         handleUndoAiChanges();
       }
+    });
+  };
+
+  // Handler for creating a task in the AI side from freeform text selection in a human swim lane
+  const handleCreateTaskFromSelection = (selectedText: string, laneId: string, laneTitle: string) => {
+    if (!selectedText || !selectedText.trim()) return;
+
+    const cleanText = selectedText.trim();
+    // Compute next unique item number for the AI brief
+    const nextItemNumber = briefs.length > 0 ? Math.max(...briefs.map((b) => b.itemNumber || 0)) + 1 : 1;
+
+    // Extract a concise, clean task title from the selection
+    const firstLine = cleanText.split('\n')[0].replace(/^[-*#\d.]+\s*/, '').replace(/^[~~`*_]+|[~~`*_]+$/g, '').trim();
+    const taskTitle = firstLine.length > 70 ? firstLine.slice(0, 67) + '...' : firstLine || `AI Task #${nextItemNumber}`;
+
+    // Create the new AgentContextItem on the AI side with user context = cleanText
+    const newBrief: AgentContextItem = {
+      itemNumber: nextItemNumber,
+      title: taskTitle,
+      status: 'not_started',
+      overview: cleanText,
+      buildAndVerification: '',
+      completion: '',
+      brief: cleanText,
+      built: '',
+      validation: '',
+    };
+
+    // Find or create a matching TaskItem for task execution pipeline
+    const matchingHumanTask = tasks.find(
+      (t) => t.title.trim().toLowerCase() === taskTitle.toLowerCase()
+    );
+
+    const newTask: TaskItem = matchingHumanTask || {
+      id: nextItemNumber,
+      title: taskTitle,
+      category: laneTitle || 'AI Workspace',
+      status: 'not_started',
+      isDone: false,
+      subtasks: [],
+      swimLaneId: laneId,
+    };
+
+    const nextBriefs = [...briefs, newBrief];
+    setSelectedTaskId(nextItemNumber);
+
+    // Persist to state and AGENT_CONTEXT.md immediately
+    syncAndSaveProject(tasks, nextBriefs, true);
+
+    showToast({
+      type: 'success',
+      title: 'AI Task Added',
+      message: `Added task #${nextItemNumber}: "${taskTitle}" to AI Workspace.`,
+      duration: 3500,
     });
   };
 
@@ -1162,14 +1212,13 @@ export function App() {
       archivedTask,
     ];
 
-    // Move corresponding brief to archivedBriefs
+    // Move corresponding brief to archivedBriefs if one exists
     const matchingBrief = briefs.find(
       (b) => b.title.trim().toLowerCase() === normalTitle || b.itemNumber === taskToArchive.id
     );
-    const nextActiveBriefsRaw = briefs.filter(
-      (b) => b.title.trim().toLowerCase() !== normalTitle && b.itemNumber !== taskToArchive.id
-    );
-    const nextActiveBriefs = syncBriefsWithTasks(nextActiveBriefsRaw, nextActiveTasks);
+    const nextActiveBriefs = matchingBrief
+      ? briefs.filter((b) => b !== matchingBrief)
+      : briefs;
 
     const nextArchivedBriefs = matchingBrief
       ? [
@@ -1204,7 +1253,7 @@ export function App() {
     const referenceTask = tasks.length > 0 ? tasks[0] : null;
     const restoredTask: TaskItem = {
       ...taskToUnarchive,
-      id: tasks.length + 1,     // temporary; syncBriefsWithTasks will align
+      id: tasks.length + 1,
       category: referenceTask?.category || 'Untitled',
       categoryHeadingPrefix: referenceTask?.categoryHeadingPrefix || '##',
       categoryHasColon: referenceTask?.categoryHasColon || false,
@@ -1234,10 +1283,9 @@ export function App() {
     const restoredId = nextActiveTasks.find((t) => t.title.trim().toLowerCase() === normalTitle)?.id
       ?? nextActiveTasks[nextActiveTasks.length - 1].id;
 
-    const nextActiveBriefsRaw = matchingArchivedBrief
+    const nextActiveBriefs = matchingArchivedBrief
       ? [...briefs, { ...matchingArchivedBrief, isArchived: false, itemNumber: restoredId }]
       : briefs;
-    const nextActiveBriefs = syncBriefsWithTasks(nextActiveBriefsRaw, nextActiveTasks);
 
     setSelectedTaskId(restoredId);
     syncAndSaveProject(nextActiveTasks, nextActiveBriefs, true, nextArchivedTasks, nextArchivedBriefs);
@@ -1373,12 +1421,7 @@ export function App() {
       setHeaderComments(firstHeaderComments);
     }
 
-    // Sync briefs with all tasks across all swim lanes
-    const updatedBriefs = syncBriefsWithTasks(briefs, allActiveTasks);
-    setBriefs(updatedBriefs);
-
     const primaryTodoMd = updatedLanes[0]?.markdown || newBodyMd;
-    const updatedBriefsMd = serializeAgentContextMarkdown(updatedBriefs, archivedBriefs);
 
     setProjects((prev) =>
       prev.map((p) =>
@@ -1386,17 +1429,14 @@ export function App() {
           ? {
               ...p,
               todoMarkdown: primaryTodoMd,
-              agentContextMarkdown: updatedBriefsMd,
               swimLanes: updatedLanes
             }
           : p
       )
     );
 
-    const agentPath = activeProject.agentContextFilePath || `${activeProject.folderPath}/AGENT_CONTEXT.md`;
     const filesToSave = [
       ...updatedLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
-      { filePath: agentPath, content: updatedBriefsMd }
     ];
 
     autosave.queueSave(filesToSave);
@@ -1444,13 +1484,10 @@ export function App() {
       globalOffset += parsed.items.length;
     }
 
-    const updatedBriefs = syncBriefsWithTasks(briefs, allActiveTasks);
     setTasks(allActiveTasks);
     setArchivedTasks(allArchivedTasks);
-    setBriefs(updatedBriefs);
 
     const primaryTodoMd = nextLanes[0]?.markdown || activeProject.todoMarkdown;
-    const updatedBriefsMd = serializeAgentContextMarkdown(updatedBriefs, archivedBriefs);
 
     setProjects((prev) =>
       prev.map((p) =>
@@ -1458,17 +1495,14 @@ export function App() {
           ? {
               ...p,
               todoMarkdown: primaryTodoMd,
-              agentContextMarkdown: updatedBriefsMd,
               swimLanes: nextLanes
             }
           : p
       )
     );
 
-    const agentPath = activeProject.agentContextFilePath || `${activeProject.folderPath}/AGENT_CONTEXT.md`;
     autosave.saveImmediately([
       ...nextLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
-      { filePath: agentPath, content: updatedBriefsMd }
     ]);
 
     showToast({
@@ -1601,13 +1635,10 @@ export function App() {
       globalOffset += parsed.items.length;
     }
 
-    const updatedBriefs = syncBriefsWithTasks(briefs, allActiveTasks);
     setTasks(allActiveTasks);
     setArchivedTasks(allArchivedTasks);
-    setBriefs(updatedBriefs);
 
     const primaryTodoMd = nextLanes[0]?.markdown || activeProject.todoMarkdown;
-    const updatedBriefsMd = serializeAgentContextMarkdown(updatedBriefs, archivedBriefs);
 
     setProjects((prev) =>
       prev.map((p) =>
@@ -1615,17 +1646,14 @@ export function App() {
           ? {
               ...p,
               todoMarkdown: primaryTodoMd,
-              agentContextMarkdown: updatedBriefsMd,
               swimLanes: nextLanes
             }
           : p
       )
     );
 
-    const agentPath = activeProject.agentContextFilePath || `${activeProject.folderPath}/AGENT_CONTEXT.md`;
     autosave.saveImmediately([
       ...nextLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
-      { filePath: agentPath, content: updatedBriefsMd }
     ]);
 
     // Delete the removed swim lane markdown file from disk so it does not recreate on reload
@@ -1848,6 +1876,7 @@ export function App() {
             onRenameSwimLane={handleRenameSwimLane}
             onDeleteSwimLane={handleDeleteSwimLane}
             onSwimLaneMarkdownChange={handleSwimLaneMarkdownChange}
+            onCreateTaskFromSelection={handleCreateTaskFromSelection}
           />
         </div>
 

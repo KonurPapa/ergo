@@ -96,7 +96,7 @@ flowchart TD
 
 ## 2. Task Execution Pipeline (`executeTaskWithAi`)
 
-When a user clicks **Run Task** on an individual task item (without an active CLI PTY agent), Ergo initiates the **3-step execution pipeline**.
+When a user clicks **Run Task** on an individual task item (without an active CLI PTY agent), Ergo initiates the **4-stage execution pipeline**.
 
 ```mermaid
 flowchart TD
@@ -104,25 +104,32 @@ flowchart TD
     
     subgraph Discovery [Step 1: Context Relevance Scan]
         Step1 -->|Ingests Task Header Index only| HeaderIndex["Task Header Index (Active + Archived)"]
-        HeaderIndex --> RelevanceJson["JSON: { relevantTaskIds, reasoning }"]
+        HeaderIndex --> RelevanceJson["JSON: { relevantTaskIds }"]
+        RelevanceJson --> FullContext["Discovery Payload:\n- Target Task & Subtasks\n- Additional Context Entries\n- Connected MCPs"]
     end
     
-    RelevanceJson --> Step2[Step 2: Builder AI]
+    FullContext --> Step2[Step 2: Summary AI / summary-agent]
     
-    subgraph Execution [Step 2: Task Execution & MCP Loop]
-        Step2 -->|Targeted Context Only| BuilderContext["Targeted Context:\n- Current Task & Brief\n- Relevant Tasks Data\n- MCP Tools & Roots"]
-        BuilderContext --> ProviderBranch{Provider Engine}
+    subgraph Synthesis [Step 2: Overview & Gherkin Brief]
+        Step2 -->|Synthesizes full context| OverviewDoc["Structured Overview Document:\n- brief: Gherkin Scenarios (Given-When-Then)\n- goals: Numbered Checklist\n- output_as: Tool Destination\n- requiredMcps: Filtered MCPs"]
+    end
+    
+    OverviewDoc --> Step3[Step 3: Manager AI / manager-agent]
+    
+    subgraph Execution [Step 3: Task Execution & Puzzle Piece Assembly]
+        Step3 -->|Ingests Structured Bible Prompt| BiblePrompt["Bible Prompt JSON:\n- Task & Subtasks\n- Overview & Gherkin Scenarios\n- Discovered Context Snippets\n- Environment & Active MCPs"]
+        BiblePrompt --> ProviderBranch{Provider Engine}
         ProviderBranch -->|Anthropic / OpenAI / Gemini| ToolLoop[Native MCP Tool Call Loop\n(Max 8 Rounds)]
         ProviderBranch -->|Ollama with Tool Calling| ToolLoop
         ProviderBranch -->|Ollama without Tool Calling| WorkerPattern[Ollama Worker AI Pattern\nPlan -> Worker AIs -> Synthesis]
-        ToolLoop --> BuilderSummary[Builder Output & Tool Call Log]
-        WorkerPattern --> BuilderSummary
+        ToolLoop --> ManagerSummary[Manager Output & Assembled Solution]
+        WorkerPattern --> ManagerSummary
     end
     
-    BuilderSummary --> Step3[Step 3: Logger AI]
+    ManagerSummary --> Step4[Step 4: Logger AI]
     
-    subgraph Logging [Step 3: Completion Record]
-        Step3 -->|JSON Schema Prompt| FinalJson["JSON:\n{ buildAndVerification, completion }"]
+    subgraph Logging [Step 4: Completion Record]
+        Step4 -->|JSON Schema Prompt| FinalJson["JSON:\n{ buildAndVerification, completion, humanReview }"]
         FinalJson --> Persist["Mark Task DONE\nAppend Records to AGENT_CONTEXT.md"]
     end
 ```
@@ -141,26 +148,69 @@ flowchart TD
 - **Output:**
   ```json
   {
-    "relevantTaskIds": [2, 5],
-    "reasoning": "Task #2 established the database schema used by this endpoint."
+    "relevantTaskIds": [2, 5]
   }
   ```
-- **Handoff:** Ergo extracts the *full* data only for the identified relevant task IDs to pass forward to Step 2.
+- **Handoff:** Ergo extracts the full data for the identified relevant task IDs to construct `DiscoveryJobPayload` for Step 2.
 
 ---
 
-### Step 2: Builder AI (Task Actions & MCP Integration)
-- **Objective:** Execute the core work for the task using connected MCP tools and connections.
+### Step 2: Summary AI (`summary-agent` — Overview & Gherkin Brief Synthesizer)
+- **Objective:** Synthesize all discovered context into a structured Overview document (`brief`, `goals`, `output_as`, `requiredMcps`) that serves as the single source of truth for the Manager AI.
+- **Gherkin Scenario Standard (Given-When-Then):**
+  - Following the standard in `FUTURE_FEATURES.md`, the `"brief"` field is formatted as human-verifiable **Gherkin scenarios**.
+  - Uses standard BDD keywords: `Feature:`, `Scenario:`, `Given:`, `When:`, `Then:`, `And:`, `But:`.
+  - Structured in plain English so human reviewers can immediately read and verify acceptance criteria before and during execution.
+  - Incorporates preconditions and discovered context in `Given` clauses, discrete triggers in `When` clauses, and observable verifiable outcomes in `Then`/`And` clauses (covering both happy paths and edge cases).
+- **Output Schema:**
+  ```json
+  {
+    "brief": "Feature: User Registration & Validation\n  Scenario: Successful registration\n    Given the user is on the registration page\n    When the user enters valid credentials and clicks register\n    Then the user is redirected to the welcome page\n    And a confirmation notice is displayed",
+    "goals": "1. Implement registration form UI\n2. Add input validation rules\n3. Wire auth API handler",
+    "output_as": "Write updated files to src/auth/... via Filesystem MCP, then record completion summary in AGENT_CONTEXT.md.",
+    "requiredMcps": ["Filesystem MCP"]
+  }
+  ```
+
+---
+
+### Step 3: Manager AI (`manager-agent` — Task Execution & Puzzle Piece Assembly)
+- **Objective:** Systematically execute the task using connected MCP tools against a concise, non-bloated **JSON Bible Prompt**, directly referencing the Gherkin scenarios to solve every "piece" of the puzzle.
+- **The JSON Bible Prompt**:
+  - The Manager receives a scoped, structured JSON master blueprint assembled from Discovery and Summary:
+  ```json
+  {
+    "task": { "id": 1, "title": "User Registration", "category": "Auth", "status": "todo", "subtasks": [] },
+    "overview": {
+      "brief": "Feature: User Registration...",
+      "goals": "1. Implement UI...",
+      "output_as": "Write updated files...",
+      "requiredMcps": ["Filesystem MCP"]
+    },
+    "discoveredContext": [
+      { "taskId": 2, "title": "DB Schema", "category": "Database", "sourceDocument": "AGENT_CONTEXT.md" }
+    ],
+    "environment": {
+      "projectName": "Default Workspace",
+      "projectPath": "/workspace",
+      "allowedRoots": ["/workspace/.ergo"],
+      "activeMcps": ["Filesystem MCP"]
+    }
+  }
+  ```
+- **Gherkin Puzzle Piece Decomposition & Accumulation Rule**:
+  - **Decomposition**: The Manager decomposes the Gherkin scenarios into discrete "puzzle pieces" (preconditions in `Given`, implementation actions in `When`, verifiable outcomes in `Then`/`And`, and edge case recovery).
+  - **Accumulation Rule**: The Manager is **only finished** with the complete task when it has accumulated all completed pieces of the puzzle and assembled them into the finished task.
 - **Strict Filesystem Boundaries:**
   - The AI has access **ONLY** to write files within the `.ergo` directory (`~/.ergo`) or folders explicitly permitted under **Connections -> Allowed Folders**.
   - Writing to the app's codebase repository or outside approved boundaries is strictly forbidden and rejected at the MCP host gateway with HTTP 403.
   - All project files, generated scripts, and artifacts live under `.ergo` (`projects/<project-id>/...`) or permitted external folders.
 - **Interactive Mid-Build Human Clarification (`ask_human` Tool):**
   - All providers have access to the built-in `ask_human` tool (`{ question: string, options?: string[], context?: string, allowFreeform?: boolean }`).
-  - When the Builder AI is missing critical information, credentials, or faces architectural forks, it invokes `ask_human`.
+  - When the Manager AI is missing critical information, credentials, or faces architectural forks, it invokes `ask_human`.
   - **Human Side:** The task card displays an amber, pulsing **Needs Input** indicator badge (`.task-needs-input-badge-pill`) and highlights the card.
   - **AI Side:** `BriefPane` and `ExecutionModal` render a Claude Code-style interactive prompt card (`.ai-human-input-card`) offering selectable option buttons, free-form text input, and Ctrl+Enter keyboard submission.
-  - Submitting returns the user's answer directly back to the Builder loop as a tool result and resumes execution.
+  - Submitting returns the user's answer directly back to the Manager loop as a tool result and resumes execution.
 
 - **Execution Logic by Provider:**
 
@@ -182,11 +232,11 @@ flowchart TD
   1. **Plan:** Main AI breaks down the task into a numbered list of concrete work items.
   2. **Workers:** Spawns separate worker AI calls for each work item with task context.
   3. **Synthesis:** Main AI aggregates worker results and outputs a consolidated completion summary.
-  4. Flags `usedWorkerPattern = true` so Step 3 can document the lack of direct tool access.
+  4. Flags `usedWorkerPattern = true` so Step 4 can document the lack of direct tool access.
 
 ---
 
-### Step 3: Logger AI (Completion Recording, Artifacts, & Human Review Evaluation)
+### Step 4: Logger AI (Completion Recording, Artifacts, & Human Review Evaluation)
 - **Objective:** Generate formal build documentation, list all created/modified files with direct IDE open links, evaluate human review requirements, and append records to `AGENT_CONTEXT.md` and `TODO.md`.
 - **Inputs & Context:**
   - Current Task metadata, original subtasks, and human review flags.

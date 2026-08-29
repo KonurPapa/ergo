@@ -13,7 +13,8 @@ import {
   type SwimLaneDoc,
   type DiscoveryJobPayload,
   type DiscoveredTaskContextEntry,
-  type OverviewDocument
+  type OverviewDocument,
+  type ManagerBiblePayload
 } from '../types';
 import { callMcpTool, formatConnectionsForAiPrompt, getAllowedRoots } from './mcpClient';
 import { storageManager } from './storageManager';
@@ -1137,7 +1138,7 @@ function extractStringFromAiValue(val: any, fallback: string = ''): string {
       .filter(Boolean);
     if (list.length === 0) return fallback;
     return list
-      .map((line, idx) => (/^[0-9]+[\.\)\-]/.test(line) ? line : `${idx + 1}. ${line}`))
+      .map((line, idx) => (/^[0-9]+[.)-]/.test(line) ? line : `${idx + 1}. ${line}`))
       .join('\n');
   }
   if (typeof val === 'object') {
@@ -1200,27 +1201,29 @@ export function buildVerboseOverviewAndRequiredMcps(
     }
   }
 
-  // 2. Build dense, concrete done-state acceptance brief & sections
+  // 2. Build dense, human-verifiable Gherkin done-state acceptance brief & sections
   const contextNotes = _discoveryPayload.additionalContext.length > 0
-    ? ` referencing context from task #${_discoveryPayload.additionalContext.map((c) => `${c.taskId} ("${c.title}")`).join(', ')}`
+    ? `\n    And relevant context from task #${_discoveryPayload.additionalContext.map((c) => `${c.taskId} ("${c.title}")`).join(', #')} is incorporated`
     : '';
 
-  const concreteSteps: string[] = [];
+  const gherkinSteps: string[] = [];
   if (task.subtasks.length > 0) {
-    task.subtasks.forEach((s, idx) => {
-      const cleanText = s.text.replace(/^[0-9]+[\.\)\-]\s*/, '').replace(/\.$/, '').trim();
-      concreteSteps.push(`(${idx + 1}) ${cleanText}`);
+    task.subtasks.forEach((s) => {
+      const cleanText = s.text.replace(/^[0-9]+[.)-]\s*/, '').replace(/\.$/, '').trim();
+      gherkinSteps.push(`    And the agent completes: ${cleanText}`);
     });
-    concreteSteps.push(`(${task.subtasks.length + 1}) Ensure all interactive elements, state transitions, and edge cases operate cleanly with proper error handling and no silent failures`);
-    concreteSteps.push(`(${task.subtasks.length + 2}) Verify all functionality via build and runtime checks before outputting final completion notes`);
   } else {
-    concreteSteps.push(`(1) Implement and register the core features and logic for "${task.title}" under ${task.category || 'workspace'} modules`);
-    concreteSteps.push(`(2) Ensure all user interactions, UI elements, and API handlers operate without failing silently`);
-    concreteSteps.push(`(3) Wire up state management, persistence, and event listeners according to active project conventions`);
-    concreteSteps.push(`(4) Verify all changed files pass type checks and unit tests before completing`);
+    gherkinSteps.push(`    And the agent implements the core feature deliverables for "${task.title}"`);
   }
 
-  const fallbackBrief = `Implement "${task.title}" (${task.category || 'General'})${contextNotes}: ${concreteSteps.join('; ')}`;
+  const fallbackBrief =
+`Feature: ${task.title} (${task.category || 'General'})
+  Scenario: Successful implementation of ${task.title}
+    Given the workspace environment and dependencies for ${task.category || 'the project'} are initialized${contextNotes}
+    When the user or pipeline triggers execution of task #${task.id}
+${gherkinSteps.join('\n')}
+    Then all acceptance checks, state transitions, and edge cases operate cleanly without silent failures
+    And all changed files pass type checks and verification before completion`;
 
   const rawAiBrief = extractStringFromAiValue(parsedAiOverview?.brief || (parsedAiOverview as any)?.summary);
   const isRawTitle = rawAiBrief.toLowerCase() === task.title.toLowerCase().trim() ||
@@ -1256,6 +1259,60 @@ export function buildVerboseOverviewAndRequiredMcps(
   return {
     overviewDoc: { brief: briefText, goals, output_as, raw },
     requiredMcps: resolvedMcps
+  };
+}
+
+/**
+  * Assembles the concise, structured JSON "Bible Prompt" for Step 3 Manager AI.
+  * Filters out raw document blobs and extracts only the essential task data,
+  * Gherkin scenarios, goals, tool output target, and scoped discovered context.
+  */
+export function buildManagerBiblePayload(
+  discoveryPayload: DiscoveryJobPayload,
+  overviewDoc: OverviewDocument,
+  project: { name?: string; folderPath?: string } | undefined,
+  connectedMcps: MCPServer[],
+  allowedRoots: { name: string; path: string }[]
+): ManagerBiblePayload {
+  const activeMcps = connectedMcps
+    .filter((m) => m.status === 'connected')
+    .map((m) => m.name);
+
+  const discoveredContext = discoveryPayload.additionalContext.map((c) => ({
+    taskId: c.taskId,
+    title: c.title,
+    category: c.category,
+    sourceDocument: c.sourceDocument,
+    overviewSnippet: c.overview ? (c.overview.length > 250 ? c.overview.slice(0, 250) + '...' : c.overview) : undefined
+  }));
+
+  return {
+    task: {
+      id: discoveryPayload.targetTask.id,
+      title: discoveryPayload.targetTask.title,
+      category: discoveryPayload.targetTask.category,
+      status: discoveryPayload.targetTask.status,
+      subtasks: discoveryPayload.targetTask.subtasks.map((s) => ({
+        id: s.id,
+        text: s.text,
+        isDone: s.isDone,
+        isHumanReview: s.isHumanReview
+      })),
+      sourceFileName: discoveryPayload.targetTask.sourceFileName
+    },
+    overview: {
+      brief: overviewDoc.brief,
+      goals: overviewDoc.goals,
+      output_as: overviewDoc.output_as,
+      requiredMcps: discoveryPayload.requiredMcps || []
+    },
+    discoveredContext,
+    environment: {
+      projectName: project?.name || 'Default Workspace',
+      projectPath: project?.folderPath || '~/.ergo',
+      allowedRoots: allowedRoots.map((r) => r.path),
+      activeMcps
+    }
   };
 }
 
@@ -2135,9 +2192,12 @@ export async function executeTaskWithAi(
       time: new Date().toLocaleTimeString(),
       stage: 'overview',
       title: 'Summary AI: Building Task Overview & Tool Plan',
-      detail: 'Synthesizing context from Discovery JSON payload into structured Overview document & required MCP tools for Builder AI...',
+      detail: 'Synthesizing context from Discovery JSON payload into structured Overview document with Gherkin brief for Builder AI...',
       status: 'running'
     });
+
+    const summarySkillRaw = await storageManager.loadSkillDoc('summary-agent');
+    const summarySkillDoc = stripSkillFrontmatter(summarySkillRaw);
 
     const connectedMcpSummary = connectedMcps
       .filter((m) => m.status === 'connected')
@@ -2145,26 +2205,55 @@ export async function executeTaskWithAi(
 
     const overviewSystemPrompt =
       `You are the Summary AI in Ergo's task execution pipeline.\n` +
-      `Your role is to analyze the Discovery JSON payload and synthesize the single authoritative instruction manual and execution prompt ("Overview") for the Builder AI.\n\n` +
-      `CRITICAL INSTRUCTION FOR "brief":\n` +
+      `Your role is to analyze the Discovery JSON payload (target task, subtasks, category, and additional context from related workspace tasks) and synthesize the single authoritative instruction manual and execution prompt ("Overview") for the Builder AI.\n\n` +
+      (summarySkillDoc ? `SUMMARY AGENT SKILL GUIDELINES:\n${summarySkillDoc}\n\n` : '') +
+      `CRITICAL INSTRUCTION FOR "brief" (GHERKIN SCENARIO STANDARD):\n` +
       `The "brief" field is the MAIN MISSION PROMPT sent to the Builder AI. Assume this string is the ONLY thing the Builder AI will receive, and NONE of the other JSON fields (title, category, additionalContext, etc.) will be sent to it.\n` +
-      `Therefore, the brief MUST be completely self-contained. It must explicitly state WHAT the task is, WHAT feature/module is being created or modified, WHAT context/dependencies from discovered tasks to use, and provide the complete numbered sequence of concrete done-state behaviors, interactions, and acceptance checks.\n\n` +
-      `REQUIRED FORMAT FOR "brief":\n` +
-      `Start with: "Implement <exact feature/task subject based on targetTask.title and category> <referencing any relevant discovered task context if present>: "\n` +
-      `Followed by numbered done-state specifications:\n` +
-      `"(1) <exact component/UI placement and behavior in docked/floating/normal states>; (2) <exact user interactions, event handlers, and state transitions>; (3) <edge case handling, blocked states, and graceful error recovery with no silent failures>; (4) <state persistence, theme support, or boundary rules>; (5) <concrete acceptance check and verification outcome>"\n\n` +
-      `DO NOT write generic boilerplate (like "All UI components and handlers handle errors"). Write concrete details specifically tailored to WHAT this task is!\n\n` +
-      `MODEL EXAMPLE:\n` +
-      `"Implement the Interactive Floating Sheet Picker (Frontend) referencing Table Schema from task #3: (1) the dropdown appears in the Sheets header bar, in both its docked and torn-out form; (2) 'View in panel' opens a floating panel showing the current sheet, draggable/snappable/resizable like every other panel; (3) 'View in window' opens a second browser window with the same view, and a blocked pop-up says so instead of failing silently; (4) paging the canvas to a different sheet leaves BOTH pinned views on the sheet they were opened at; (5) the pinned view's own sheet picker (◀ ▶ and the list) changes what it shows, and that becomes the new pin; (6) zoom in the pinned view scrolls inside it and never pans the canvas underneath; (7) the rail button toggles the panel and lights when it's open; (8) closing a view forgets its pin, so the next open starts at the current sheet; (9) the popup follows the app's light/dark theme and closes cleanly."\n\n` +
+      `Therefore, the brief MUST be completely self-contained and formatted as human-readable GHERKIN SCENARIOS (Given-When-Then structure).\n` +
+      `The Gherkin scenarios MUST be written in clean, clear English so a human can read and immediately verify that the requirements, workflows, and acceptance criteria are 100% correct.\n\n` +
+      `GHERKIN SYNTAX KEYWORDS:\n` +
+      `- Feature: Describes the overarching task, capability, or user-facing feature being implemented or modified.\n` +
+      `- Scenario: Describes a concrete use case, behavior, interaction, or edge case. Use multiple scenarios to cover the primary workflow, alternate flows, and edge cases.\n` +
+      `- Given: Describes the initial context, setup state, preconditions, or dependencies (including context referenced from discovered tasks).\n` +
+      `- When: Describes the specific action, event, or trigger executed by the user or system.\n` +
+      `- Then: Describes the expected outcome, observable behavior, or verifiable result.\n` +
+      `- And / But: Extends Given, When, or Then with additional conditions, sequential steps, or assertions.\n\n` +
+      `EXAMPLES OF GHERKIN BRIEFS:\n\n` +
+      `Example 1 (Feature Validation):\n` +
+      `Feature: User Registration & Input Validation\n` +
+      `  Scenario: Successful registration with valid details\n` +
+      `    Given the user is on the registration page\n` +
+      `    When the user enters a valid username, email, and password\n` +
+      `    And the user clicks the register button\n` +
+      `    Then the user should be redirected to the welcome page\n` +
+      `    And the user should see a registration confirmation message\n\n` +
+      `  Scenario: Unsuccessful registration with invalid email\n` +
+      `    Given the user is on the registration page\n` +
+      `    When the user enters a valid username and password, but an invalid email address\n` +
+      `    And the user clicks the register button\n` +
+      `    Then the user should see an error message indicating an invalid email format\n\n` +
+      `Example 2 (Interactive Component & Workspace Context):\n` +
+      `Feature: Interactive Floating Sheet Picker (Frontend)\n` +
+      `  Scenario: Open sheet picker in floating panel\n` +
+      `    Given the Table Schema from task #3 is loaded in workspace\n` +
+      `    And the user is viewing the Sheets header bar in docked or torn-out state\n` +
+      `    When the user opens the sheet picker dropdown and selects "View in panel"\n` +
+      `    Then a floating panel opens displaying the active sheet view\n` +
+      `    And the panel is draggable, snappable, and resizable across the workspace canvas\n` +
+      `    And the rail button toggles panel visibility and indicates active state\n\n` +
+      `  Scenario: Open sheet picker in popup window with blocked popup handling\n` +
+      `    Given the user opens the sheet picker dropdown\n` +
+      `    When the user selects "View in window" and the browser blocks popups\n` +
+      `    Then the UI displays an explicit warning notice instead of failing silently\n\n` +
       `- **goals**: Explicit numbered checklist of core deliverables and subtasks to complete.\n` +
       `- **output_as**: The exact method and destination for the output based on available tools (e.g. "Write updated files to src/... via filesystem MCP write_file, then output completion notes").\n` +
-      `- **requiredMcps**: Return an array containing ONLY the specific MCP server names/IDs or tools strictly required for THIS TASK (e.g. ["Filesystem MCP"] or ["Git Operations MCP"]).\n` +
+      `- **requiredMcps**: Return an array containing ONLY the specific MCP server names/IDs or tools strictly required for THIS TASK (e.g. ["Filesystem MCP"]).\n` +
       `  - CRITICAL: Do NOT list all available MCPs. Only pick the 0, 1, or 2 MCPs that this specific task actually uses.\n` +
       `  - If no external MCP tools are needed (pure reasoning / text), return [].\n\n` +
       `Available Connected MCP Servers in Workspace:\n${connectedMcpSummary.length > 0 ? connectedMcpSummary.join('\n') : '(none connected)'}\n\n` +
       `Return ONLY valid JSON (no markdown fences) matching exactly:\n` +
       `{\n` +
-      `  "brief": "<fully self-contained done-state mission prompt stating WHAT the task is, referencing context, and giving numbered behavioral specs>",\n` +
+      `  "brief": "<fully self-contained Gherkin scenarios (Given-When-Then) written in plain English for human verification>",\n` +
       `  "goals": "<detailed numbered success criteria>",\n` +
       `  "output_as": "<exact output method and destination>",\n` +
       `  "requiredMcps": ["<only needed MCP server IDs/names for this task>"]\n` +
@@ -2214,50 +2303,75 @@ export async function executeTaskWithAi(
       time: new Date().toLocaleTimeString(),
       stage: 'overview',
       title: 'Summary AI: Overview & Tool Plan Ready',
-      detail: `Overview built — output format: ${overviewDoc.output_as.slice(0, 90)}${discoveryPayload.requiredMcps.length > 0 ? ` (MCPs: ${discoveryPayload.requiredMcps.join(', ')})` : ''}`,
+      detail: `Overview built (Gherkin brief) — output format: ${overviewDoc.output_as.slice(0, 90)}${discoveryPayload.requiredMcps.length > 0 ? ` (MCPs: ${discoveryPayload.requiredMcps.join(', ')})` : ''}`,
       status: 'success',
       overviewDocument: overviewDoc,
       discoveryPayload
     });
 
-    // ── STEP 3: Builder AI ───────────────────────────────────────────
+    // ── STEP 3: Manager AI → Executes Tasks & Assembles Puzzle Pieces ─
     onStepUpdate({
-      id: 'step-builder-init',
+      id: 'step-manager-init',
       time: new Date().toLocaleTimeString(),
       stage: 'thinking',
-      title: 'Builder AI: Starting Execution',
-      detail: `Following Overview — output as: ${overviewDoc.output_as.slice(0, 100)}...`,
+      title: 'Manager AI: Starting Task Execution & Assembly',
+      detail: `Decomposing Gherkin scenarios into puzzle pieces — target output: ${overviewDoc.output_as.slice(0, 95)}...`,
       status: 'running'
     });
 
-    // Build context from the Overview document — this is what the Builder reads as its primary source
+    const managerSkillRaw = await storageManager.loadSkillDoc('manager-agent');
+    const managerSkillDoc = stripSkillFrontmatter(managerSkillRaw);
+
+    const managerBible = buildManagerBiblePayload(
+      discoveryPayload,
+      overviewDoc,
+      project,
+      connectedMcps,
+      allowedRoots
+    );
+
+    console.log(
+      '%c[Ergo Agent Pipeline] ── Step 3: Manager AI Bible Prompt ──',
+      'color: #10b981; font-weight: bold; font-size: 13px;'
+    );
+    console.log('📖 Manager Bible Payload:', managerBible);
+    console.log('📄 Stringified Bible Prompt:\n' + JSON.stringify(managerBible, null, 2));
+
+    // Build context from the Bible Prompt & Overview document — this is what the Manager reads as its master blueprint
     const currentTaskContext =
-      `# TASK OVERVIEW (your primary instruction document — re-read this as needed)\n\n` +
-      `## Brief\n${overviewDoc.brief}\n\n` +
-      `## Goals\n${overviewDoc.goals}\n\n` +
-      `## Output As\n${overviewDoc.output_as}\n\n` +
+      `# TASK EXECUTION BIBLE (your master blueprint — re-read as needed)\n\n` +
+      `\`\`\`json\n${JSON.stringify(managerBible, null, 2)}\n\`\`\`\n\n` +
+      `## Gherkin Scenario Blueprint & Puzzle Pieces:\n${overviewDoc.brief}\n\n` +
+      `## Target Deliverables & Checklist:\n${overviewDoc.goals}\n\n` +
+      `## Output Target & Destination:\n${overviewDoc.output_as}\n\n` +
       `---\n\n` +
       `Task ID: #${task.id} | Title: "${task.title}" | Category: ${task.category}\n` +
       `Subtasks:\n${task.subtasks.length > 0 ? task.subtasks.map((s) => `  - [${s.isDone ? 'x' : ' '}] ${s.text}`).join('\n') : '  (none)'}\n` +
       (brief?.buildAndVerification ? `\nExisting Build Notes:\n${brief.buildAndVerification}` : '');
 
 
-    const builderSystemPrompt =
-      `You are the Builder AI in Ergo's task execution pipeline. Your job is to EXECUTE the task described in the Overview document.\n\n` +
+    const managerSystemPrompt =
+      `You are the Manager AI (Step 3) in Ergo's task execution pipeline. Your job is to EXECUTE the task described in the Bible Prompt and ASSEMBLE all completed puzzle pieces.\n\n` +
       `PROJECT: "${project.name}" (${project.folderPath})\n\n` +
+      (managerSkillDoc ? `MANAGER AGENT SKILL GUIDELINES:\n${managerSkillDoc}\n\n` : '') +
       `FILESYSTEM BOUNDARIES & STORAGE DIRECTORY (STRICT ENFORCEMENT):\n` +
       `- You have access ONLY to write files within the .ergo directory (~/.ergo) or folders explicitly permitted under allowed roots.\n` +
       `- Allowed Roots: ${allowedRoots.map((r) => `"${r.path}" (${r.name})`).join(', ')}\n` +
       `- You MUST NEVER write to or modify the application codebase directory or any folder outside the allowed roots.\n` +
       `- All project data, generated code, scripts, files, and artifacts MUST be written inside .ergo (e.g. \`projects/${project.id || project.folderPath}/...\`) or within explicitly allowed folders.\n\n` +
       `${runtimeConnectionsPrompt}\n\n` +
-      `CORE INSTRUCTIONS:\n` +
-      `1. The Overview document (provided in the user message) is your single source of truth. Re-read it whenever you are uncertain about direction.\n` +
-      `2. Make ALL decisions about tools, format, and output location based on the "Output As" field in the Overview.\n` +
-      `3. Use the available MCP tools to do the actual work (read files, call APIs, write results, etc.).\n` +
-      `4. Call tools in logical order — gather/read first, then act/write.\n` +
-      `5. INTERACTIVE HUMAN INPUT: If you lack critical information, encounter ambiguity, need credentials/confirmation, or need the user to choose an architectural path, call the "ask_human" tool.\n` +
-      `6. When finished, produce a clear summary of exactly what was accomplished and the final output location.`;
+      `CORE MANAGER EXECUTION RULES:\n` +
+      `1. The JSON Bible Prompt and Gherkin scenarios are your single source of truth.\n` +
+      `2. Directly reference the Gherkin scenarios (Given-When-Then) to determine all distinct "pieces" of the puzzle the complete task is comprised of:\n` +
+      `   - Piece 1: Preconditions & Dependencies (satisfy all 'Given' conditions).\n` +
+      `   - Piece 2: Actions & Implementation (execute all 'When' operations via tools).\n` +
+      `   - Piece 3: Acceptance Checks & Verifications (fulfill all 'Then' / 'And' criteria with zero silent failures).\n` +
+      `   - Piece 4: Edge Cases (implement and verify alternate scenarios and error recovery).\n` +
+      `3. Accumulation Rule: You are ONLY finished with the complete task when you have accumulated all the completed pieces of the puzzle and put them together into the finished task.\n` +
+      `4. Make ALL decisions about tools, format, and output location based on the "Output As" field in the Bible.\n` +
+      `5. Use the available MCP tools to do the actual work (gather/read first, then act/write).\n` +
+      `6. INTERACTIVE HUMAN INPUT: If you lack critical information, encounter ambiguity, need credentials/confirmation, or need the user to choose an architectural path, call the "ask_human" tool.\n` +
+      `7. When finished, produce a clear, consolidated summary of every completed puzzle piece, modified files, and verification checks.`;
 
     let builderResult: {
       text: string;
@@ -2269,55 +2383,55 @@ export async function executeTaskWithAi(
 
     if (aiConfig.provider === 'anthropic') {
       builderResult = await runAnthropicBuilderLoop(
-        builderSystemPrompt, currentTaskContext,
+        managerSystemPrompt, currentTaskContext,
         mcpToolsToAnthropicFormat(connectedMcps),
         aiConfig, connectedMcps, onStepUpdate, onRequestPermission,
         task.id, onRequestHumanInput, 8, signal
       );
     } else if (aiConfig.provider === 'openai') {
       builderResult = await runOpenAiBuilderLoop(
-        builderSystemPrompt, currentTaskContext,
+        managerSystemPrompt, currentTaskContext,
         mcpToolsToOpenAiFormat(connectedMcps),
         aiConfig, connectedMcps, onStepUpdate, onRequestPermission,
         task.id, onRequestHumanInput, 8, signal
       );
     } else if (aiConfig.provider === 'gemini') {
       builderResult = await runGeminiBuilderLoop(
-        builderSystemPrompt, currentTaskContext,
+        managerSystemPrompt, currentTaskContext,
         mcpToolsToGeminiFormat(connectedMcps),
         aiConfig, connectedMcps, onStepUpdate, onRequestPermission,
         task.id, onRequestHumanInput, 8, signal
       );
     } else if (aiConfig.provider === 'ollama') {
       builderResult = await runOllamaBuilderLoop(
-        builderSystemPrompt, currentTaskContext,
+        managerSystemPrompt, currentTaskContext,
         mcpToolsToOpenAiFormat(connectedMcps),
         aiConfig, connectedMcps, onStepUpdate, onRequestPermission,
         task.id, onRequestHumanInput, 8, signal
       );
     } else {
       const singleShotText = await callAiEngine(
-        currentTaskContext, builderSystemPrompt, aiConfig, 'general', 'text', signal
+        currentTaskContext, managerSystemPrompt, aiConfig, 'general', 'text', signal
       );
       builderResult = { text: singleShotText, toolCallCount: 0, toolCallLog: [], createdFiles: [] };
     }
 
     onStepUpdate({
-      id: 'step-builder-done',
+      id: 'step-manager-done',
       time: new Date().toLocaleTimeString(),
       stage: 'execution',
-      title: `Builder AI: Execution Complete (${builderResult.toolCallCount} tool call${builderResult.toolCallCount !== 1 ? 's' : ''})`,
-      detail: (builderResult.text || 'Builder AI completed execution.').slice(0, 300),
+      title: `Manager AI: All Task Pieces Executed & Assembled (${builderResult.toolCallCount} tool call${builderResult.toolCallCount !== 1 ? 's' : ''})`,
+      detail: (builderResult.text || 'Manager AI completed execution and assembled all puzzle pieces.').slice(0, 300),
       status: 'success'
     });
 
-    console.log('%c[Ergo Task Execution] ── Step 2/3: Builder AI ──', 'color: #34d399; font-weight: bold;');
+    console.log('%c[Ergo Task Execution] ── Step 3: Manager AI ──', 'color: #34d399; font-weight: bold;');
     console.log('Tool calls:', builderResult.toolCallCount, '| Worker pattern:', builderResult.usedWorkerPattern);
     console.log('Tool log:', builderResult.toolCallLog);
     console.log('Created files:', builderResult.createdFiles);
-    console.log('Builder output:', builderResult.text);
+    console.log('Manager output:', builderResult.text);
 
-    // ── STEP 3: Logger AI ────────────────────────────────────────────
+    // ── STEP 4: Logger AI ────────────────────────────────────────────
     onStepUpdate({
       id: 'step-logger',
       time: new Date().toLocaleTimeString(),
@@ -2333,12 +2447,12 @@ export async function executeTaskWithAi(
 
     const loggerSystemPrompt =
       `You are the Logger AI in Ergo's task execution pipeline. Write a completion log for a task that was just executed.\n` +
-      `Write clear, professional markdown. Be accurate and specific — do NOT fabricate details not present in the builder summary.\n\n` +
+      `Write clear, professional markdown. Be accurate and specific — do NOT fabricate details not present in the manager summary.\n\n` +
       `LIST COMPLETED WORK & CREATED ARTIFACTS:\n` +
       `- In "createdFiles" (array of string file paths), list all files created, written, or modified during execution.\n` +
       `- In the "completion" markdown field, include a clear "**Completed Work & Created Files:**" section with markdown links (e.g. \`[filename](path/to/file)\`). If code was written, summarize what was implemented so the user can click to inspect it.\n\n` +
       `EVALUATE HUMAN REVIEW REQUIREMENTS:\n` +
-      `- Determine if the user needs to verify the builder's changes at the end or conduct follow-up verification.\n` +
+      `- Determine if the user needs to verify the manager's changes at the end or conduct follow-up verification.\n` +
       `- Human review is needed for: higher-order or complex tasks, sensitive changes (auth, database schemas, financial/billing, deletion, external API integrations, production deployments), or if the task/subtask originally specified human review.\n` +
       `- If human review is needed, produce clear, actionable verification steps in "humanReviewSteps" (array of strings) and set "needsHumanReview": true.\n` +
       `- If the task was simple, low-risk, or fully verified automatically with no human verification required, set "needsHumanReview": false and "humanReviewSteps": [].\n\n` +
@@ -2359,7 +2473,7 @@ export async function executeTaskWithAi(
       `Tool calls made: ${builderResult.toolCallCount}\n` +
       `Files written during execution: ${builderResult.createdFiles.length > 0 ? builderResult.createdFiles.join(', ') : 'none detected'}\n` +
       (builderResult.usedWorkerPattern ? `Execution method: Worker AI pattern (model does not support native tool-calling)\n` : '') +
-      `\nBUILDER AI SUMMARY:\n${builderResult.text || '(no output)'}\n` +
+      `\nMANAGER AI SUMMARY & PIECE ASSEMBLY:\n${builderResult.text || '(no output)'}\n` +
       `\nTOOL CALL LOG:\n${builderResult.toolCallLog.join('\n') || '(none)'}\n` +
       `\nEXISTING OVERVIEW:\n${brief?.overview || brief?.brief || '(none)'}\n` +
       (workerPatternNote
@@ -2607,24 +2721,47 @@ async function runOfflineExecution(
   discoveryPayload.requiredMcps = requiredMcps;
 
   console.log(
-    '%c[Ergo Agent Pipeline] ── Step 3: Summary AI Output (Updated JSON Payload - Offline Mode) ──',
+    '%c[Ergo Agent Pipeline] ── Step 2: Summary AI Output (Updated JSON Payload - Offline Mode) ──',
     'color: #f59e0b; font-weight: bold; font-size: 13px;'
   );
   console.log('📦 Updated Job JSON Object (Summary & MCP Plan Added):', discoveryPayload);
   console.log('📄 Stringified Updated Payload:\n' + JSON.stringify(discoveryPayload, null, 2));
 
+  const managerBible = buildManagerBiblePayload(
+    discoveryPayload,
+    overviewDoc,
+    project || { name: 'Default Workspace', folderPath: '~/.ergo' },
+    connectedMcps,
+    [{ name: 'Workspace', path: project?.folderPath || '~/.ergo' }]
+  );
+
+  console.log(
+    '%c[Ergo Agent Pipeline] ── Step 3: Manager AI Bible Prompt (Offline Mode) ──',
+    'color: #10b981; font-weight: bold; font-size: 13px;'
+  );
+  console.log('📖 Manager Bible Payload (Offline):', managerBible);
+  console.log('📄 Stringified Bible Prompt:\n' + JSON.stringify(managerBible, null, 2));
+
   const totalScanned = discoveryPayload.discoverySummary.totalTasksScanned;
   const offlineSteps: Partial<ExecutionStep>[] = [
     { id: 'step-1', stage: 'context', title: 'Discovery AI: Reading Shared Context & Scanning All Documents', detail: `Scanning all task headers and workspace documents for #${task.id}: "${task.title}" (Found ${totalScanned} workspace tasks across all swim lanes & archives)...`, status: 'running' },
     { id: 'step-2', stage: 'mcp_call', title: `Executing MCP Tool (${targetServerId} / ${toolName})`, detail: `Resolving tool dependencies and executing ${toolName}() across safe roots...`, mcpToolUsed: toolName, status: 'pending' },
-    { id: 'step-3', stage: 'execution', title: 'Executing Subtasks & Implementation Steps', detail: `Processing subtasks: ${task.subtasks.map((s) => s.text).join('; ') || 'Implementing core logic'}`, status: 'pending' },
+    { id: 'step-3', stage: 'execution', title: 'Manager AI: Executing Puzzle Pieces & Implementation Steps', detail: `Processing Gherkin scenarios & subtasks: ${task.subtasks.map((s) => s.text).join('; ') || 'Implementing core logic'}`, status: 'pending' },
     { id: 'step-4', stage: 'built_record', title: 'Rendering Interactive MCP App Widget', detail: 'Building visual interactive UI result and code diff preview...', status: 'pending', widgetType: getWidgetTypeForTask(task), widgetData: getWidgetDataForTask(task) },
     { id: 'step-5', stage: 'done', title: 'Updating Dual-File AGENT_CONTEXT.md & TODO.md', detail: 'Recording Built decisions, Validation results, and marking task as completed.', status: 'pending' }
   ];
 
-  onStepUpdate({ id: offlineSteps[0].id!, time: new Date().toLocaleTimeString(), stage: offlineSteps[0].stage!, title: offlineSteps[0].title!, detail: offlineSteps[0].detail!, status: 'running', discoveryPayload });
-  await new Promise((r) => setTimeout(r, 700));
   onStepUpdate({ id: offlineSteps[0].id!, time: new Date().toLocaleTimeString(), stage: offlineSteps[0].stage!, title: 'Discovery AI: Context Identified', detail: `Scanned ${totalScanned} task headers across all swim lanes & archives. Loaded task #${task.id} & parsed brief constraints.`, status: 'success', discoveryPayload });
+  onStepUpdate({
+    id: 'step-overview',
+    time: new Date().toLocaleTimeString(),
+    stage: 'overview',
+    title: 'Summary AI: Overview & Tool Plan Ready',
+    detail: `Overview built (Gherkin brief) — output format: ${overviewDoc.output_as.slice(0, 90)}${discoveryPayload.requiredMcps.length > 0 ? ` (MCPs: ${discoveryPayload.requiredMcps.join(', ')})` : ''}`,
+    status: 'success',
+    overviewDocument: overviewDoc,
+    discoveryPayload
+  });
 
   const matchingServer = connectedMcps.find((s) => s.id === targetServerId);
   const matchingTool = matchingServer?.tools.find((t) => t.name === toolName);
@@ -2646,14 +2783,14 @@ async function runOfflineExecution(
       taskId: task.id,
       question: `Which configuration or approach should be applied for "${task.title}"?`,
       options: ['Option A (Recommended Default)', 'Option B (Alternative Strategy)', 'Option C (Minimal Setup)'],
-      context: 'The Builder AI needs user clarification on which path to take before proceeding.',
+      context: 'The Manager AI needs user clarification on which path to take before proceeding.',
       allowFreeform: true
     };
     onStepUpdate({
       id: inputStepId,
       time: new Date().toLocaleTimeString(),
       stage: 'human_input',
-      title: 'Clarification Needed: Question from Builder AI',
+      title: 'Clarification Needed: Question from Manager AI',
       detail: promptData.question,
       status: 'running',
       humanInputPrompt: promptData

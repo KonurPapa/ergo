@@ -1109,21 +1109,25 @@ body {
   display: block;
 }
 
-.card-add-subtask-btn {
-  background: rgba(6, 182, 212, 0.12);
-  border: 1px solid rgba(6, 182, 212, 0.3);
-  color: var(--accent-cyan);
+.card-add-subtask-btn,
+.card-add-task-btn {
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  color: var(--accent-primary);
 }
 
 .tiptap-editor-root .tiptap ol>li:hover .card-add-subtask-btn,
 .tiptap-editor-root .tiptap ul:not(li ul)>li:hover .card-add-subtask-btn,
-.card-add-subtask-btn:hover {
+.tiptap-editor-root .tiptap ol>li:hover .card-add-task-btn,
+.tiptap-editor-root .tiptap ul:not(li ul)>li:hover .card-add-task-btn,
+.card-add-subtask-btn:hover,
+.card-add-task-btn:hover {
   opacity: 1;
-  background: rgba(6, 182, 212, 0.25);
-  border-color: var(--accent-cyan);
+  background: var(--accent-primary);
+  border-color: var(--accent-primary-hover);
   color: #ffffff;
-  box-shadow: 0 2px 8px rgba(6, 182, 212, 0.3);
-  transform: scale(1.05);
+  box-shadow: 0 2px 10px rgba(99, 102, 241, 0.4);
+  transform: scale(1.08);
 }
 
 .card-menu-btn {
@@ -1473,13 +1477,28 @@ body {
 }
 
 .tiptap-editor-root .tiptap ol>li ul>li::before,
-.tiptap-editor-root .tiptap ul:not(li ul)>li ul>li::before {
+.tiptap-editor-root .tiptap ul:not(li ul)>li ul>li::before,
+.tiptap-editor-root .tiptap ol>li ol>li::before,
+.tiptap-editor-root .tiptap ul:not(li ul)>li ol>li::before,
+.tiptap-editor-root .tiptap li ul li::before,
+.tiptap-editor-root .tiptap li ol li::before {
   content: none !important;
+  display: none !important;
 }
 
 .tiptap-editor-root .tiptap ol>li ul>li::marker,
-.tiptap-editor-root .tiptap ul:not(li ul)>li ul>li::marker {
+.tiptap-editor-root .tiptap ul:not(li ul)>li ul>li::marker,
+.tiptap-editor-root .tiptap ol>li ol>li::marker,
+.tiptap-editor-root .tiptap ul:not(li ul)>li ol>li::marker,
+.tiptap-editor-root .tiptap li ul li::marker,
+.tiptap-editor-root .tiptap li ol li::marker {
   content: none !important;
+  display: none !important;
+}
+
+.tiptap-editor-root .tiptap li ol>li,
+.tiptap-editor-root .tiptap li ul>li {
+  counter-increment: none !important;
 }
 
 /* Card Section Container styling */
@@ -4766,4 +4785,106 @@ body {
 .modal-archived-card:hover {
   border-color: rgba(99, 102, 241, 0.35) !important;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12) !important;
+}
+
+/* ── Freeform Selection "Run" & Style Controls Floating Tooltip ──── */
+.selection-run-tooltip {
+  position: fixed;
+  z-index: 99999;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
+  padding: 0.24rem 0.38rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-glow);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), 0 0 14px rgba(99, 102, 241, 0.25);
+  transform: translateX(-50%);
+  animation: runTooltipPop 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.selection-tooltip-run-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  padding: 0.22rem 0.55rem;
+  background: rgba(99, 102, 241, 0.15);
+  color: var(--accent-primary);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.selection-tooltip-run-btn:hover {
+  background: var(--accent-primary);
+  color: #ffffff;
+  border-color: var(--accent-primary-hover);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4), 0 0 10px rgba(99, 102, 241, 0.3);
+  transform: translateY(-1px);
+}
+
+.selection-tooltip-run-btn:active {
+  transform: translateY(0);
+}
+
+.selection-tooltip-run-btn svg {
+  transition: transform 0.15s ease;
+}
+
+.selection-tooltip-run-btn:hover svg {
+  transform: scale(1.1);
+}
+
+.selection-tooltip-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--border-subtle);
+  margin: 0 0.15rem;
+}
+
+.selection-tooltip-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.selection-tooltip-btn:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-bright);
+}
+
+.selection-tooltip-btn.is-active {
+  background: rgba(99, 102, 241, 0.2);
+  color: var(--accent-primary);
+}
+
+.selection-tooltip-btn:active {
+  transform: scale(0.94);
+}
+
+@keyframes runTooltipPop {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.85) translateY(-4px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(-50%) scale(1) translateY(0);
+  }
 }

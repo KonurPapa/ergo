@@ -173,7 +173,7 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
               <div className="ai-human-input-header">
                 <div className="ai-human-input-title">
                   <HelpCircle size={17} color="var(--accent-amber)" />
-                  <span>Clarification Needed &bull; Builder AI</span>
+                  <span>Clarification Needed &bull; Manager AI</span>
                 </div>
                 <span className="ai-human-input-badge">Mid-Build Input</span>
               </div>
@@ -283,6 +283,26 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
                 </div>
 
                 <div className="step-detail">{step.detail}</div>
+
+                {/* Overview document preview if available */}
+                {step.stage === 'overview' && step.status === 'success' && step.overviewDocument && (
+                  <div style={{ marginTop: '0.6rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                    {step.overviewDocument.brief && (
+                      <div style={{ padding: '0.6rem 0.75rem', background: 'rgba(56, 189, 248, 0.06)', border: '1px solid rgba(56, 189, 248, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+                        <div style={{ fontWeight: 700, color: 'var(--accent-cyan)', marginBottom: '0.35rem', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                          🥒 Gherkin Execution Brief (Given-When-Then)
+                        </div>
+                        <pre style={{ margin: 0, padding: 0, background: 'transparent', color: 'inherit', fontFamily: 'var(--font-mono)', fontSize: '0.74rem', whiteSpace: 'pre-wrap', lineHeight: '1.45' }}>
+                          {step.overviewDocument.brief}
+                        </pre>
+                      </div>
+                    )}
+                    <div style={{ padding: '0.5rem 0.75rem', background: 'rgba(245, 158, 11, 0.06)', border: '1px solid rgba(245, 158, 11, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+                      <div style={{ fontWeight: 700, color: 'var(--accent-amber)', marginBottom: '0.25rem', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Output As</div>
+                      <span>{step.overviewDocument.output_as}</span>
+                    </div>
+                  </div>
+                )}
 
                 {/* Render Interactive MCP App UI Widget if present */}
                 {step.widgetType && renderMcpAppWidget(step.widgetType, step.widgetData)}

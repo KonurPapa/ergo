@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import {
   type TaskItem as TaskItemType,
   type ProjectData,
@@ -31,6 +32,7 @@ const CustomListItem = ListItem.extend({
 
 import {
   Plus,
+  Play,
   FileText,
   Sparkles,
   Bold,
@@ -495,6 +497,8 @@ interface SwimLaneColumnProps {
   onArchiveTask?: (taskTitle: string) => void;
   assistantDrawerHeight: number;
   onEditorReady?: (laneId: string, editorInstance: any) => void;
+  // Freeform text selection handler to create AI task
+  onCreateTaskFromSelection?: (selectedText: string, laneId: string, laneTitle: string) => void;
   // Selected lane action drawer props
   isAssistantOpen?: boolean;
   onOpenAssistant?: () => void;
@@ -522,6 +526,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   onRenameSwimLane,
   onDeleteSwimLane,
   onArchiveTask,
+  onCreateTaskFromSelection,
   assistantDrawerHeight,
   onEditorReady,
   isAssistantOpen = false,
@@ -548,6 +553,17 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
 
   const onArchiveTaskRef = useRef(onArchiveTask);
   onArchiveTaskRef.current = onArchiveTask;
+
+  const onCreateTaskFromSelectionRef = useRef(onCreateTaskFromSelection);
+  onCreateTaskFromSelectionRef.current = onCreateTaskFromSelection;
+
+  // Freeform Text Selection Run Tooltip State
+  const [selectionTooltip, setSelectionTooltip] = useState<{
+    visible: boolean;
+    text: string;
+    x: number;
+    y: number;
+  } | null>(null);
 
   // Local parsed items for this swim lane
   const laneParsed = useMemo(() => parseSwimLaneMarkdown(lane, 0), [lane]);
@@ -834,14 +850,14 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                           container.appendChild(runningPill);
                         }
 
-                        // Add Subtask button
+                        // Add Task to AI Workspace button
                         const addBtn = document.createElement('button');
-                        addBtn.className = 'card-action-btn card-add-subtask-btn';
+                        addBtn.className = 'card-action-btn card-add-task-btn card-add-subtask-btn';
                         addBtn.setAttribute('contenteditable', 'false');
                         addBtn.type = 'button';
-                        addBtn.title = 'Add subtask';
-                        addBtn.setAttribute('aria-label', 'Add subtask');
-                        addBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`;
+                        addBtn.title = 'Add Task (to AI Workspace)';
+                        addBtn.setAttribute('aria-label', 'Add Task to AI Workspace');
+                        addBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`;
 
                         addBtn.addEventListener('mousedown', (e) => {
                           e.preventDefault();
@@ -851,10 +867,25 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                         addBtn.addEventListener('click', (e) => {
                           e.preventDefault();
                           e.stopPropagation();
-                          const rawPos = typeof getPos === 'function' ? getPos() : pos + 1;
-                          if (rawPos == null) return;
-                          const currentPos = Number(rawPos) - 1;
-                          insertSubtaskAtCardPos({ state: view.state, view }, currentPos);
+
+                          let taskContextText = '';
+                          if (matchedTask) {
+                            taskContextText = matchedTask.title;
+                            if (matchedTask.subtasks && matchedTask.subtasks.length > 0) {
+                              taskContextText += '\n' + matchedTask.subtasks.map((st) => `- ${st.text}`).join('\n');
+                            }
+                          }
+                          if (!taskContextText) {
+                            try {
+                              taskContextText = view.state.doc.textBetween(pos, pos + node.nodeSize, '\n').trim();
+                            } catch {
+                              taskContextText = node.textContent.trim();
+                            }
+                          }
+
+                          if (taskContextText && onCreateTaskFromSelectionRef.current) {
+                            onCreateTaskFromSelectionRef.current(taskContextText, lane.id, lane.title);
+                          }
                         });
 
                         // Task Options menu button with nested Archive functionality
@@ -1200,7 +1231,108 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       const markdown = storage.markdown.getMarkdown();
       onMarkdownChange(lane.id, markdown);
     },
+    onSelectionUpdate: ({ editor: currentEditor }) => {
+      updateSelectionTooltip(currentEditor);
+    },
+    onBlur: () => {
+      setTimeout(() => {
+        const activeEl = document.activeElement;
+        if (!activeEl?.classList.contains('selection-run-tooltip') && !activeEl?.closest('.selection-run-tooltip')) {
+          setSelectionTooltip(null);
+        }
+      }, 180);
+    },
   });
+
+  const updateSelectionTooltip = useCallback((currentEditor: any) => {
+    if (!currentEditor || currentEditor.isDestroyed) {
+      setSelectionTooltip(null);
+      return;
+    }
+    const { from, to, empty } = currentEditor.state.selection;
+    if (empty || from === to) {
+      setSelectionTooltip(null);
+      return;
+    }
+
+    const text = currentEditor.state.doc.textBetween(from, to, '\n').trim();
+    if (!text) {
+      setSelectionTooltip(null);
+      return;
+    }
+
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+      const range = sel.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      if (rect.width > 0 || rect.height > 0) {
+        setSelectionTooltip({
+          visible: true,
+          text,
+          x: rect.left + rect.width / 2,
+          y: rect.bottom + 6,
+        });
+        return;
+      }
+    }
+
+    try {
+      const endCoords = currentEditor.view.coordsAtPos(to);
+      const startCoords = currentEditor.view.coordsAtPos(from);
+      setSelectionTooltip({
+        visible: true,
+        text,
+        x: (startCoords.left + endCoords.right) / 2,
+        y: Math.max(startCoords.bottom, endCoords.bottom) + 6,
+      });
+    } catch {
+      setSelectionTooltip(null);
+    }
+  }, []);
+
+  const handleRunSelection = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!selectionTooltip?.text) return;
+
+    const textToRun = selectionTooltip.text;
+    setSelectionTooltip(null);
+
+    if (editor) {
+      const { to } = editor.state.selection;
+      editor.commands.setTextSelection(to);
+    }
+    if (window.getSelection()) {
+      window.getSelection()?.removeAllRanges();
+    }
+
+    onCreateTaskFromSelection?.(textToRun, lane.id, lane.title);
+  }, [selectionTooltip, editor, onCreateTaskFromSelection, lane.id, lane.title]);
+
+  useEffect(() => {
+    const handleScrollOrResize = () => {
+      if (editor && !editor.state.selection.empty) {
+        updateSelectionTooltip(editor);
+      } else {
+        setSelectionTooltip(null);
+      }
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSelectionTooltip(null);
+      }
+    };
+
+    window.addEventListener('resize', handleScrollOrResize);
+    window.addEventListener('scroll', handleScrollOrResize, true);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('resize', handleScrollOrResize);
+      window.removeEventListener('scroll', handleScrollOrResize, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [editor, updateSelectionTooltip]);
 
   useEffect(() => {
     if (editor && onEditorReady) {
@@ -1406,7 +1538,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       {isActive && project && aiConfig && (
         <HumanAiAssistantModal
           isOpen={isAssistantOpen}
-          onClose={onCloseAssistant || (() => {})}
+          onClose={onCloseAssistant || (() => { })}
           project={project}
           todoMarkdown={lane.markdown}
           agentContextMarkdown={agentContextMarkdown}
@@ -1492,6 +1624,85 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         </div>
       )}
 
+      {/* Freeform Selection "Run" & Style Controls Floating Tooltip */}
+      {selectionTooltip && selectionTooltip.visible && typeof document !== 'undefined' && createPortal(
+        <div
+          className="selection-run-tooltip"
+          style={{
+            top: `${selectionTooltip.y}px`,
+            left: `${selectionTooltip.x}px`,
+          }}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+        >
+          {/* Add Task Action */}
+          <button
+            type="button"
+            className="selection-tooltip-run-btn"
+            onClick={handleRunSelection}
+            title="Add as task to AI Workspace"
+          >
+            <Plus size={12} strokeWidth={2.5} />
+            <span>Add Task</span>
+          </button>
+
+          <div className="selection-tooltip-divider" />
+
+          {/* Bold */}
+          <button
+            type="button"
+            className={`selection-tooltip-btn ${editor?.isActive('bold') ? 'is-active' : ''}`}
+            onClick={() => editor?.chain().focus().toggleBold().run()}
+            title="Bold (**text**)"
+          >
+            <Bold size={13} />
+          </button>
+
+          {/* Italic */}
+          <button
+            type="button"
+            className={`selection-tooltip-btn ${editor?.isActive('italic') ? 'is-active' : ''}`}
+            onClick={() => editor?.chain().focus().toggleItalic().run()}
+            title="Italic (*text*)"
+          >
+            <Italic size={13} />
+          </button>
+
+          {/* Inline Code */}
+          <button
+            type="button"
+            className={`selection-tooltip-btn ${editor?.isActive('code') ? 'is-active' : ''}`}
+            onClick={() => editor?.chain().focus().toggleCode().run()}
+            title="Inline Code (`code`)"
+          >
+            <Code size={13} />
+          </button>
+
+          {/* Link */}
+          <button
+            type="button"
+            className={`selection-tooltip-btn ${editor?.isActive('link') ? 'is-active' : ''}`}
+            onClick={setLink}
+            title="Link ([text](url))"
+          >
+            <LinkIcon size={13} />
+          </button>
+
+          {/* Subtask (Bullet) */}
+          <button
+            type="button"
+            className={`selection-tooltip-btn ${editor?.isActive('bulletList') ? 'is-active' : ''}`}
+            onClick={() => editor?.chain().focus().toggleBulletList().run()}
+            title="Subtask / Bullet List (- item)"
+          >
+            <List size={13} />
+          </button>
+        </div>,
+        document.body
+      )}
+
     </div>
   );
 };
@@ -1522,6 +1733,7 @@ interface TaskPaneProps {
   onRenameSwimLane?: (laneId: string, newTitle: string) => void;
   onDeleteSwimLane?: (laneId: string) => void;
   onSwimLaneMarkdownChange?: (laneId: string, newMarkdown: string) => void;
+  onCreateTaskFromSelection?: (selectedText: string, laneId: string, laneTitle: string) => void;
 }
 
 export const TaskPane: React.FC<TaskPaneProps> = ({
@@ -1549,6 +1761,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   onRenameSwimLane,
   onDeleteSwimLane,
   onSwimLaneMarkdownChange,
+  onCreateTaskFromSelection,
 }) => {
   const [showStyles, setShowStyles] = useState(false);
   const [assistantDrawerHeight, setAssistantDrawerHeight] = useState<number>(0);
@@ -1817,6 +2030,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
               onRenameSwimLane={onRenameSwimLane}
               onDeleteSwimLane={onDeleteSwimLane}
               onArchiveTask={onArchiveTask}
+              onCreateTaskFromSelection={onCreateTaskFromSelection}
               assistantDrawerHeight={assistantDrawerHeight}
               onEditorReady={handleEditorReady}
               isAssistantOpen={isAssistantOpen}

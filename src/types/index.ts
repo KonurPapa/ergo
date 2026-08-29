@@ -178,10 +178,11 @@ export interface HumanInputPrompt {
 /**
  * Structured Overview document produced by the Summary AI.
  * This is the single source of truth handed to the Builder AI.
+ * The brief is structured as human-verifiable Gherkin scenarios (Given-When-Then).
  * The user can edit it mid-task to steer the agent.
  */
 export interface OverviewDocument {
-  brief: string;         // Detailed, concrete done-state acceptance specification and execution brief
+  brief: string;         // Human-verifiable Gherkin scenarios (Given-When-Then) detailing done-state acceptance specifications
   goals: string;         // Specific success criteria and expected outcomes
   output_as: string;     // Format and location of the final output (MCP, file, markdown, etc.)
   context?: string;      // (Optional)
@@ -241,9 +242,43 @@ export interface DiscoveryJobPayload {
     totalTasksScanned: number;
     relevantTasksCount: number;
   };
-  // Assembled by Step 3 Summary AI
+  // Assembled by Step 2 Summary AI
   overview?: OverviewDocument;
   requiredMcps?: string[];
+}
+
+/**
+ * Structured JSON "Bible Prompt" assembled from Discovery and Summary steps.
+ * This is the concise, non-bloated execution blueprint used by the Step 3 Manager AI.
+ */
+export interface ManagerBiblePayload {
+  task: {
+    id: number;
+    title: string;
+    category: string;
+    status: string;
+    subtasks: { id?: string; text: string; isDone: boolean; isHumanReview?: boolean }[];
+    sourceFileName?: string;
+  };
+  overview: {
+    brief: string; // The human-verifiable Gherkin scenarios (Given-When-Then)
+    goals: string; // Numbered checklist of deliverables
+    output_as: string; // Exact destination & tool method
+    requiredMcps?: string[];
+  };
+  discoveredContext: Array<{
+    taskId: number;
+    title: string;
+    category: string;
+    sourceDocument: string;
+    overviewSnippet?: string;
+  }>;
+  environment: {
+    projectName: string;
+    projectPath: string;
+    allowedRoots: string[];
+    activeMcps: string[];
+  };
 }
 
 export interface ExecutionStep {

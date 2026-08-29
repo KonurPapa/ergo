@@ -57,12 +57,14 @@ async function ensureStorageInitialized(storageDir: string) {
       await fs.writeFile(secretsFile, JSON.stringify(defaultSecrets, null, 2), 'utf-8');
     }
 
-    // Skills (Ensure all 4 skills exist in local filesystem: ~/.ergo and .ergo)
+    // Skills (Ensure all 6 skills exist in local filesystem: ~/.ergo and .ergo)
     const skillNames = [
       'human-assistant',
       'assistant-context-analyzer',
       'assistant-todo-builder',
-      'assistant-context-syncer'
+      'assistant-context-syncer',
+      'summary-agent',
+      'manager-agent'
     ];
 
     for (const skillName of skillNames) {
@@ -584,6 +586,18 @@ function ergoFileSystemPlugin(): Plugin {
           const targetSkillMd = path.join(targetSkillDir, 'SKILL.md');
 
           await fs.writeFile(targetSkillMd, content, 'utf-8');
+
+          // Also save directly to user's local .ergo and storage config folders
+          const configSkillTargets = [
+            path.join(process.cwd(), '.ergo', 'config', 'skills', skillName, 'SKILL.md'),
+            path.join(storageDir, 'config', 'skills', skillName, 'SKILL.md')
+          ];
+          for (const target of configSkillTargets) {
+            try {
+              await fs.mkdir(path.dirname(target), { recursive: true });
+              await fs.writeFile(target, content, 'utf-8');
+            } catch {}
+          }
 
           return sendJson(res, 200, {
             success: true,
