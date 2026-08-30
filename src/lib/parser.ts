@@ -242,20 +242,21 @@ export function parseTodoMarkdown(markdown: string): ParsedTodoResult {
  */
 export function parseSwimLaneMarkdown(
   swimLane: SwimLaneDoc,
-  startIdOffset: number = 0
+  _startIdOffset: number = 0
 ): ParsedTodoResult {
   const fileName = swimLane.filePath ? swimLane.filePath.split('/').pop() || 'TODO.md' : 'TODO.md';
   const result = parseTodoMarkdown(swimLane.markdown);
 
   const items = result.items.map((item, idx) => ({
     ...item,
-    id: startIdOffset + idx + 1,
+    id: `${swimLane.id}_task_${idx + 1}`,
     swimLaneId: swimLane.id,
     sourceFileName: fileName
   }));
 
-  const archivedItems = result.archivedItems.map((item) => ({
+  const archivedItems = result.archivedItems.map((item, idx) => ({
     ...item,
+    id: `${swimLane.id}_archived_${idx + 1}`,
     swimLaneId: swimLane.id,
     sourceFileName: fileName
   }));
@@ -337,10 +338,9 @@ export function serializeTodoMarkdown(
 
 /**
  * Synchronizes AgentContextItem array with updated TaskItem array:
- * - Renumbers briefs to mirror task item numbers and titles (1, 2, 3...)
- * - Preserves existing brief, built, validation, humanReview contents for matching tasks by title
- * - Removes briefs for deleted tasks
- * - Creates clean default briefs for newly added tasks without cross-polluting other tasks
+ * - Preserves existing brief contents for matching tasks by sourceTaskId or title
+ * - Preserves standalone and freeform AI tasks
+ * - Removes obsolete briefs if explicit cleanup is needed
  */
 export function syncBriefsWithTasks(
   prevBriefs: AgentContextItem[],
@@ -352,9 +352,11 @@ export function syncBriefsWithTasks(
     const task = currentTasks[i];
     const newNumber = i + 1;
 
-    // Try finding matching brief by task title (case-insensitive)
-    let match = prevBriefs.find(
-      (b) => b.title.trim().toLowerCase() === task.title.trim().toLowerCase()
+    // Try finding matching brief by sourceTaskId or by title
+    const match = prevBriefs.find(
+      (b) =>
+        (b.sourceTaskId && b.sourceTaskId === task.id) ||
+        b.title.trim().toLowerCase() === task.title.trim().toLowerCase()
     );
 
     if (match) {
@@ -363,6 +365,9 @@ export function syncBriefsWithTasks(
       const completion = match.completion || match.validation || match.humanReview || match.followUps || '';
       updatedBriefs.push({
         ...match,
+        id: match.id || `brief_${task.id}`,
+        sourceTaskId: task.id,
+        sourceLaneId: task.swimLaneId || match.sourceLaneId,
         itemNumber: newNumber,
         title: task.title,
         isUnordered: task.isUnordered,
@@ -377,6 +382,9 @@ export function syncBriefsWithTasks(
     } else {
       const overview = `Overview for ${task.title}`;
       updatedBriefs.push({
+        id: `brief_${task.id}`,
+        sourceTaskId: task.id,
+        sourceLaneId: task.swimLaneId,
         itemNumber: newNumber,
         title: task.title,
         isUnordered: task.isUnordered,
@@ -390,6 +398,17 @@ export function syncBriefsWithTasks(
         humanReview: '',
         followUps: '',
       });
+    }
+  }
+
+  // Also preserve any standalone / freeform AI briefs from prevBriefs that are not linked to tasks
+  for (const prev of prevBriefs) {
+    if (prev.sourceTaskId && !currentTasks.some((t) => t.id === prev.sourceTaskId)) {
+      // Linked task was removed; skip or preserve as unlinked
+      continue;
+    }
+    if (!prev.sourceTaskId && !updatedBriefs.some((b) => b.id === prev.id || b.title === prev.title)) {
+      updatedBriefs.push(prev);
     }
   }
 
@@ -414,6 +433,35 @@ function parseAgentContextBlock(markdown: string, isArchived: boolean = false): 
     const itemNumber = headerMatch[1] ? parseInt(headerMatch[1], 10) : items.length + 1;
     const title = headerMatch[2].trim();
 
+    // Extract metadata comments if present (e.g. <!-- ergo-meta: {"sourceTaskId":"lane-1_task_1"} -->)
+    let metaSourceTaskId: string | number | undefined;
+    let metaSourceLaneId: string | undefined;
+    let metaSourceLaneTitle: string | undefined;
+    let metaSourceContent: string | undefined;
+    let metaSourceHeading: string | undefined;
+    let metaId: string | undefined;
+
+    const jsonMetaMatch = section.match(/<!--\s*ergo-meta:\s*(\{.*?\})\s*-->/i);
+    if (jsonMetaMatch) {
+      try {
+        const parsedMeta = JSON.parse(jsonMetaMatch[1]);
+        if (parsedMeta.sourceTaskId !== undefined) metaSourceTaskId = parsedMeta.sourceTaskId;
+        if (parsedMeta.sourceLaneId) metaSourceLaneId = parsedMeta.sourceLaneId;
+        if (parsedMeta.sourceLaneTitle) metaSourceLaneTitle = parsedMeta.sourceLaneTitle;
+        if (parsedMeta.sourceContent) metaSourceContent = parsedMeta.sourceContent;
+        if (parsedMeta.sourceHeading) metaSourceHeading = parsedMeta.sourceHeading;
+        if (parsedMeta.id) metaId = parsedMeta.id;
+      } catch {}
+    } else {
+      const altMetaMatch = section.match(/<!--\s*sourceTaskId:\s*([^|\s]+)(?:\s*\|\s*sourceLaneId:\s*([^>\s]+))?\s*-->/i);
+      if (altMetaMatch) {
+        metaSourceTaskId = altMetaMatch[1].trim();
+        if (altMetaMatch[2]) metaSourceLaneId = altMetaMatch[2].trim();
+      }
+    }
+
+    const uniqueId = metaId || (metaSourceTaskId ? `brief_${metaSourceTaskId}` : `brief_${itemNumber}`);
+
     // Extract Status
     const statusMatch = section.match(/\*\*Status:\*\*\s*(.+)$/m);
     const statusStr = statusMatch ? statusMatch[1].trim() : 'not started';
@@ -433,6 +481,7 @@ function parseAgentContextBlock(markdown: string, isArchived: boolean = false): 
       extractSectionContent(section, 'Followups');
 
     items.push({
+      id: uniqueId,
       itemNumber,
       title,
       isUnordered,
@@ -446,7 +495,12 @@ function parseAgentContextBlock(markdown: string, isArchived: boolean = false): 
       humanReview: completion,
       followUps: completion,
       rawContent: section,
-      isArchived
+      isArchived,
+      sourceTaskId: metaSourceTaskId,
+      sourceLaneId: metaSourceLaneId,
+      sourceLaneTitle: metaSourceLaneTitle,
+      sourceContent: metaSourceContent,
+      sourceHeading: metaSourceHeading
     });
   }
 
@@ -497,8 +551,21 @@ function serializeAgentContextItemsList(items: AgentContextItem[]): string {
     if (item.isUnordered) {
       md += `### ${item.title}\n\n`;
     } else {
-      md += `### ${item.itemNumber}. ${item.title}\n\n`;
+      md += `### ${item.itemNumber != null ? `${item.itemNumber}. ` : ''}${item.title}\n\n`;
     }
+
+    // Embed metadata comments if linkage exists
+    if (item.sourceTaskId || item.sourceLaneId || item.id || item.sourceContent || item.sourceHeading) {
+      const metaObj: Record<string, any> = {};
+      if (item.id) metaObj.id = item.id;
+      if (item.sourceTaskId) metaObj.sourceTaskId = item.sourceTaskId;
+      if (item.sourceLaneId) metaObj.sourceLaneId = item.sourceLaneId;
+      if (item.sourceLaneTitle) metaObj.sourceLaneTitle = item.sourceLaneTitle;
+      if (item.sourceContent) metaObj.sourceContent = item.sourceContent;
+      if (item.sourceHeading) metaObj.sourceHeading = item.sourceHeading;
+      md += `<!-- ergo-meta: ${JSON.stringify(metaObj)} -->\n\n`;
+    }
+
     md += `**Status:** ${item.status}\n\n`;
 
     const overviewContent = item.overview || item.brief;

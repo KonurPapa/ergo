@@ -999,6 +999,7 @@ function buildTaskHeaderIndex(
     for (const { task, fileName } of entries) {
       const brief = allBriefs.find(
         (b) =>
+          (b.sourceTaskId != null && b.sourceTaskId === task.id) ||
           b.title.trim().toLowerCase() === task.title.trim().toLowerCase() ||
           b.itemNumber === task.id
       );
@@ -1021,7 +1022,7 @@ function buildTaskHeaderIndex(
  * Used to pass only the relevant tasks' context to the Builder AI.
  */
 export function getRelevantTasksContext(
-  relevantIds: number[],
+  relevantIds: (string | number)[],
   swimLanesOrTodo: SwimLaneDoc[] | string | undefined,
   agentContextMarkdown: string,
   todoFallback: string = ''
@@ -1036,7 +1037,10 @@ export function getRelevantTasksContext(
     if (!entry) continue;
     const { task, fileName, laneTitle } = entry;
     const brief = allBriefs.find(
-      (b) => b.title.trim().toLowerCase() === task.title.trim().toLowerCase() || b.itemNumber === task.id
+      (b) =>
+        (b.sourceTaskId != null && b.sourceTaskId === task.id) ||
+        b.title.trim().toLowerCase() === task.title.trim().toLowerCase() ||
+        b.itemNumber === task.id
     );
     lines.push(`\n### Task #${task.id}: ${task.title} (${task.category}) [Origin: ${fileName} / "${laneTitle}"]${task.isArchived ? ' [ARCHIVED]' : ''}`);
     if (task.subtasks.length > 0) {
@@ -1057,7 +1061,7 @@ export function getRelevantTasksContext(
  */
 export function buildDiscoveryJobPayload(
   targetTask: TaskItem,
-  relevantTaskIds: number[],
+  relevantTaskIds: (string | number)[],
   swimLanesOrTodo: SwimLaneDoc[] | string | undefined,
   agentContextMarkdown: string,
   todoFallback: string = ''
@@ -1074,7 +1078,10 @@ export function buildDiscoveryJobPayload(
     if (!entry) continue;
     const { task, fileName, laneTitle } = entry;
     const brief = allBriefs.find(
-      (b) => b.title.trim().toLowerCase() === task.title.trim().toLowerCase() || b.itemNumber === task.id
+      (b) =>
+        (b.sourceTaskId != null && b.sourceTaskId === task.id) ||
+        b.title.trim().toLowerCase() === task.title.trim().toLowerCase() ||
+        b.itemNumber === task.id
     );
 
     additionalContext.push({
@@ -1476,7 +1483,7 @@ async function executeMcpToolCall(
   connectedMcps: MCPServer[],
   onStepUpdate: (step: ExecutionStep) => void,
   onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<boolean>,
-  currentTaskId: number = 0,
+  currentTaskId: string | number = 0,
   onRequestHumanInput?: (prompt: HumanInputPrompt) => Promise<string>
 ): Promise<{ resultContent: string; approved: boolean; writtenFile?: string }> {
   // ── Built-in interactive human clarification tool ──
@@ -1611,7 +1618,7 @@ async function runAnthropicBuilderLoop(
   connectedMcps: MCPServer[],
   onStepUpdate: (step: ExecutionStep) => void,
   onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<boolean>,
-  currentTaskId: number = 0,
+  currentTaskId: string | number = 0,
   onRequestHumanInput?: (prompt: HumanInputPrompt) => Promise<string>,
   maxRounds = 8,
   signal?: AbortSignal
@@ -1688,7 +1695,7 @@ async function runOpenAiBuilderLoop(
   connectedMcps: MCPServer[],
   onStepUpdate: (step: ExecutionStep) => void,
   onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<boolean>,
-  currentTaskId: number = 0,
+  currentTaskId: string | number = 0,
   onRequestHumanInput?: (prompt: HumanInputPrompt) => Promise<string>,
   maxRounds = 8,
   signal?: AbortSignal
@@ -1753,7 +1760,7 @@ async function runGeminiBuilderLoop(
   connectedMcps: MCPServer[],
   onStepUpdate: (step: ExecutionStep) => void,
   onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<boolean>,
-  currentTaskId: number = 0,
+  currentTaskId: string | number = 0,
   onRequestHumanInput?: (prompt: HumanInputPrompt) => Promise<string>,
   maxRounds = 8,
   signal?: AbortSignal
@@ -1819,7 +1826,7 @@ async function runOllamaBuilderLoop(
   connectedMcps: MCPServer[],
   onStepUpdate: (step: ExecutionStep) => void,
   onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<boolean>,
-  currentTaskId: number = 0,
+  currentTaskId: string | number = 0,
   onRequestHumanInput?: (prompt: HumanInputPrompt) => Promise<string>,
   maxRounds = 8,
   signal?: AbortSignal
@@ -2584,7 +2591,11 @@ export async function executeTaskWithAi(
     console.log('%c[Ergo Task Execution] ── Pipeline Complete ✅ ──', 'color: #10b981; font-weight: bold;');
 
     const updatedBrief: AgentContextItem = {
-      itemNumber: task.id,
+      ...brief,
+      id: brief?.id || `brief_${task.id}`,
+      sourceTaskId: task.id,
+      sourceLaneId: task.swimLaneId || brief?.sourceLaneId,
+      itemNumber: brief?.itemNumber,
       title: task.title,
       status: reviewSubtasks.length > 0 ? 'partly_done' : 'done',
       overview: overviewContent,
@@ -2624,14 +2635,18 @@ export async function executeTaskWithAi(
 
       // Return partial state — keep the task in_progress / preserve any existing brief content
       const partialBrief: AgentContextItem = {
-        itemNumber: task.id,
+        ...brief,
+        id: brief?.id || `brief_${task.id}`,
+        sourceTaskId: task.id,
+        sourceLaneId: task.swimLaneId || brief?.sourceLaneId,
+        itemNumber: brief?.itemNumber,
         title: task.title,
         status: 'not_started',
-        overview: brief?.overview || brief?.brief || `Task #${task.id}: ${task.title}`,
+        overview: brief?.overview || brief?.brief || `Task (${task.title})`,
         buildAndVerification: brief?.buildAndVerification || '',
         completion: '',
         createdFiles: [],
-        brief: brief?.overview || brief?.brief || `Task #${task.id}: ${task.title}`,
+        brief: brief?.overview || brief?.brief || `Task (${task.title})`,
         built: brief?.buildAndVerification || '',
         validation: '', humanReview: '', followUps: ''
       };
@@ -2869,11 +2884,22 @@ async function runOfflineExecution(
   }
 
   const updatedBrief: AgentContextItem = {
-    itemNumber: task.id, title: task.title, status: reviewSubtasks.length > 0 ? 'partly_done' : 'done',
-    overview: overviewContent, buildAndVerification: buildVerificationContent, completion: completionContent,
+    ...brief,
+    id: brief?.id || `brief_${task.id}`,
+    sourceTaskId: task.id,
+    sourceLaneId: task.swimLaneId || brief?.sourceLaneId,
+    itemNumber: brief?.itemNumber,
+    title: task.title,
+    status: reviewSubtasks.length > 0 ? 'partly_done' : 'done',
+    overview: overviewContent,
+    buildAndVerification: buildVerificationContent,
+    completion: completionContent,
     createdFiles: sampleCreatedFiles,
-    brief: overviewContent, built: buildVerificationContent, validation: completionContent,
-    humanReview: completionContent, followUps: completionContent
+    brief: overviewContent,
+    built: buildVerificationContent,
+    validation: completionContent,
+    humanReview: completionContent,
+    followUps: completionContent
   };
   const updatedTask: TaskItem = {
     ...task,

@@ -85,7 +85,7 @@ export function App() {
   const [briefs, setBriefs] = useState<AgentContextItem[]>([]);
   const [archivedBriefs, setArchivedBriefs] = useState<AgentContextItem[]>([]);
   const [headerComments, setHeaderComments] = useState<string>('');
-  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | number | null>(null);
 
   // Autosave Hook (defaults to 5 seconds inactivity timeout, writes directly to workspace files)
   const autosave = useAutosave({
@@ -156,7 +156,7 @@ export function App() {
   const [activeCliAgentId, setActiveCliAgentId] = useState<string | null>(null);
   // Live spawned terminal sessions, one per task
   const [terminalSessions, setTerminalSessions] = useState<SpawnedSession[]>([]);
-  const [_activeTerminalTaskId, setActiveTerminalTaskId] = useState<number | null>(null);
+  const [_activeTerminalTaskId, setActiveTerminalTaskId] = useState<string | number | null>(null);
 
 
   // Theme State (Default: 'light')
@@ -317,16 +317,16 @@ export function App() {
   const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
   const [isAiScreenOpen, setIsAiScreenOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [executingTaskId, setExecutingTaskId] = useState<number | null>(null);
-  const [taskExecutionSteps, setTaskExecutionSteps] = useState<Record<number, ExecutionStep[]>>({});
-  const [pendingPermissions, setPendingPermissions] = useState<Record<number, { prompt: McpToolPermissionPrompt; resolve: (approved: boolean) => void }>>({});
-  const [pendingHumanInputs, setPendingHumanInputs] = useState<Record<number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>>({});
+  const [executingTaskId, setExecutingTaskId] = useState<string | number | null>(null);
+  const [taskExecutionSteps, setTaskExecutionSteps] = useState<Record<string | number, ExecutionStep[]>>({});
+  const [pendingPermissions, setPendingPermissions] = useState<Record<string | number, { prompt: McpToolPermissionPrompt; resolve: (approved: boolean) => void }>>({});
+  const [pendingHumanInputs, setPendingHumanInputs] = useState<Record<string | number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>>({});
 
   // AbortController map — one controller per active execution (keyed by taskId)
-  const abortControllersRef = useRef<Map<number, AbortController>>(new Map());
+  const abortControllersRef = useRef<Map<string | number, AbortController>>(new Map());
 
   // Terminate a running agent execution for a given task ID
-  const handleTerminateAgent = useCallback((taskId: number) => {
+  const handleTerminateAgent = useCallback((taskId: string | number) => {
     const controller = abortControllersRef.current.get(taskId);
     if (controller) {
       controller.abort();
@@ -576,17 +576,15 @@ export function App() {
 
       let allActiveTasks: TaskItem[] = [];
       let allArchivedTasks: TaskItem[] = [];
-      let globalOffset = 0;
       let firstHeaderComments = '';
 
       for (const lane of effectiveSwimLanes) {
-        const parsed = parseSwimLaneMarkdown(lane, globalOffset);
+        const parsed = parseSwimLaneMarkdown(lane);
         allActiveTasks = [...allActiveTasks, ...parsed.items];
         allArchivedTasks = [...allArchivedTasks, ...parsed.archivedItems];
         if (!firstHeaderComments && parsed.headerComments) {
           firstHeaderComments = parsed.headerComments;
         }
-        globalOffset += parsed.items.length;
       }
 
       const parsedBriefsWithArchive = parseAgentContextWithArchive(effectiveAgentMd);
@@ -598,7 +596,16 @@ export function App() {
       setArchivedBriefs(parsedBriefsWithArchive.archivedItems);
 
       if (parsedBriefsWithArchive.items.length > 0) {
-        setSelectedTaskId((prev) => (prev !== null && parsedBriefsWithArchive.items.some((b) => b.itemNumber === prev) ? prev : parsedBriefsWithArchive.items[0].itemNumber));
+        const firstBrief = parsedBriefsWithArchive.items[0];
+        const defaultId = firstBrief.sourceTaskId || firstBrief.id || firstBrief.itemNumber || null;
+        setSelectedTaskId((prev) =>
+          prev !== null &&
+          parsedBriefsWithArchive.items.some(
+            (b) => b.id === prev || b.sourceTaskId === prev || b.itemNumber === prev
+          )
+            ? prev
+            : defaultId
+        );
       } else if (allActiveTasks.length > 0) {
         setSelectedTaskId((prev) => (prev !== null && allActiveTasks.some((t) => t.id === prev) ? prev : allActiveTasks[0].id));
       } else {
@@ -706,13 +713,11 @@ export function App() {
 
               let allActiveTasks: TaskItem[] = [];
               let allArchivedTasks: TaskItem[] = [];
-              let globalOffset = 0;
 
               for (const lane of updatedLanes) {
-                const parsed = parseSwimLaneMarkdown(lane, globalOffset);
+                const parsed = parseSwimLaneMarkdown(lane);
                 allActiveTasks = [...allActiveTasks, ...parsed.items];
                 allArchivedTasks = [...allArchivedTasks, ...parsed.archivedItems];
-                globalOffset += parsed.items.length;
               }
 
               setTasks(allActiveTasks);
@@ -875,23 +880,38 @@ export function App() {
     });
   };
 
-  // Handler for creating a task in the AI side from freeform text selection in a human swim lane
-  const handleCreateTaskFromSelection = (selectedText: string, laneId: string, laneTitle: string) => {
+  // Handler for creating a task in the AI side from a human task card or freeform text selection in a human swim lane
+  const handleCreateTaskFromSelection = (
+    selectedText: string,
+    laneId: string,
+    laneTitle: string,
+    sourceTask?: TaskItem
+  ) => {
     if (!selectedText || !selectedText.trim()) return;
 
     const cleanText = selectedText.trim();
     // Compute next unique item number for the AI brief
     const nextItemNumber = briefs.length > 0 ? Math.max(...briefs.map((b) => b.itemNumber || 0)) + 1 : 1;
 
-    // Extract a concise, clean task title from the selection
-    const firstLine = cleanText.split('\n')[0].replace(/^[-*#\d.]+\s*/, '').replace(/^[~~`*_]+|[~~`*_]+$/g, '').trim();
-    const taskTitle = firstLine.length > 70 ? firstLine.slice(0, 67) + '...' : firstLine || `AI Task #${nextItemNumber}`;
+    // Extract a concise, clean task title from the selection or source task
+    let taskTitle = sourceTask?.title;
+    if (!taskTitle) {
+      const firstLine = cleanText.split('\n')[0].replace(/^[-*#\d.]+\s*/, '').replace(/^[~~`*_]+|[~~`*_]+$/g, '').trim();
+      taskTitle = firstLine.length > 70 ? firstLine.slice(0, 67) + '...' : firstLine || `AI Task #${nextItemNumber}`;
+    }
 
-    // Create the new AgentContextItem on the AI side with user context = cleanText
+    const newId = sourceTask ? `brief_${sourceTask.id}` : `brief_freeform_${Date.now()}`;
+
+    // Create the new AgentContextItem on the AI side with user context = cleanText and unique linkages
     const newBrief: AgentContextItem = {
+      id: newId,
+      sourceTaskId: sourceTask?.id,
+      sourceLaneId: laneId,
+      sourceLaneTitle: laneTitle,
+      sourceContent: sourceTask ? undefined : cleanText,
       itemNumber: nextItemNumber,
       title: taskTitle,
-      status: 'not_started',
+      status: sourceTask?.status || 'not_started',
       overview: cleanText,
       buildAndVerification: '',
       completion: '',
@@ -900,23 +920,29 @@ export function App() {
       validation: '',
     };
 
-    // Find or create a matching TaskItem for task execution pipeline
-    const matchingHumanTask = tasks.find(
-      (t) => t.title.trim().toLowerCase() === taskTitle.toLowerCase()
-    );
+    // If a brief already exists for this exact sourceTaskId, update it instead of adding a duplicate
+    const existingIndex = sourceTask?.id
+      ? briefs.findIndex(
+          (b) =>
+            (b.sourceTaskId != null && b.sourceTaskId === sourceTask.id) ||
+            b.title.trim().toLowerCase() === sourceTask.title.trim().toLowerCase()
+        )
+      : -1;
 
-    const newTask: TaskItem = matchingHumanTask || {
-      id: nextItemNumber,
-      title: taskTitle,
-      category: laneTitle || 'AI Workspace',
-      status: 'not_started',
-      isDone: false,
-      subtasks: [],
-      swimLaneId: laneId,
-    };
+    let nextBriefs: AgentContextItem[];
+    if (existingIndex >= 0) {
+      nextBriefs = [...briefs];
+      nextBriefs[existingIndex] = {
+        ...nextBriefs[existingIndex],
+        ...newBrief,
+        id: nextBriefs[existingIndex].id || newBrief.id,
+      };
+    } else {
+      nextBriefs = [...briefs, newBrief];
+    }
 
-    const nextBriefs = [...briefs, newBrief];
-    setSelectedTaskId(nextItemNumber);
+    const selectId = sourceTask ? sourceTask.id : (newBrief.id || null);
+    setSelectedTaskId(selectId);
 
     // Persist to state and AGENT_CONTEXT.md immediately
     syncAndSaveProject(tasks, nextBriefs, true);
@@ -924,7 +950,7 @@ export function App() {
     showToast({
       type: 'success',
       title: 'AI Task Added',
-      message: `Added task #${nextItemNumber}: "${taskTitle}" to AI Workspace.`,
+      message: `Added "${taskTitle}" to AI Workspace (${laneTitle}).`,
       duration: 3500,
     });
   };
@@ -1004,7 +1030,12 @@ export function App() {
       setTaskExecutionSteps((prev) => ({ ...prev, [task.id]: [] }));
 
       const currentTask = tasks.find((t) => t.id === task.id) || task;
-      const currentBrief = briefs.find((b) => b.itemNumber === task.id);
+      const currentBrief = briefs.find(
+        (b) =>
+          (b.sourceTaskId != null && b.sourceTaskId === task.id) ||
+          b.title.trim().toLowerCase() === task.title.trim().toLowerCase() ||
+          b.itemNumber === task.id
+      );
 
       // Set task status to in_progress
       const inProgressTasks = tasks.map((t) => (t.id === task.id ? { ...t, status: 'in_progress' as const } : t));
@@ -1054,13 +1085,17 @@ export function App() {
           controller.signal
         );
 
-
         // Completed execution: apply results & persist to TODO.md and AGENT_CONTEXT.md
         const nextTasks = tasks.map((t) => (t.id === res.updatedTask.id ? res.updatedTask : t));
-        const existingBriefIdx = briefs.findIndex((b) => b.itemNumber === res.updatedBrief.itemNumber);
+        const existingBriefIdx = briefs.findIndex(
+          (b) =>
+            (b.id && b.id === res.updatedBrief.id) ||
+            (b.sourceTaskId && res.updatedBrief.sourceTaskId && b.sourceTaskId === res.updatedBrief.sourceTaskId) ||
+            b.title.trim().toLowerCase() === res.updatedBrief.title.trim().toLowerCase()
+        );
         let nextBriefs: AgentContextItem[];
         if (existingBriefIdx !== -1) {
-          nextBriefs = briefs.map((b) => (b.itemNumber === res.updatedBrief.itemNumber ? res.updatedBrief : b));
+          nextBriefs = briefs.map((b, idx) => (idx === existingBriefIdx ? res.updatedBrief : b));
         } else {
           nextBriefs = [...briefs, res.updatedBrief];
         }
@@ -1079,7 +1114,7 @@ export function App() {
     }
   };
 
-  const handlePermissionChoice = (taskId: number, approved: boolean) => {
+  const handlePermissionChoice = (taskId: string | number, approved: boolean) => {
     const pending = pendingPermissions[taskId];
     if (pending) {
       pending.resolve(approved);
@@ -1091,7 +1126,7 @@ export function App() {
     }
   };
 
-  const handleHumanInputChoice = (taskId: number, answer: string) => {
+  const handleHumanInputChoice = (taskId: string | number, answer: string) => {
     const pending = pendingHumanInputs[taskId];
     if (pending) {
       pending.resolve(answer);
@@ -1103,7 +1138,7 @@ export function App() {
     }
   };
 
-  const handleSessionExit = (taskId: number, code: number) => {
+  const handleSessionExit = (taskId: string | number, code: number) => {
     setTerminalSessions((prev) =>
       prev.map((s) =>
         s.session.taskId === taskId
@@ -1126,7 +1161,11 @@ export function App() {
         const nextTasks = tasks.map((t) => (t.id === taskId ? updatedTask : t));
 
         const buildDate = new Date().toISOString().split('T')[0];
-        const existingBrief = briefs.find((b) => b.itemNumber === taskId);
+        const existingBrief = briefs.find(
+          (b) =>
+            (b.sourceTaskId != null && b.sourceTaskId === taskId) ||
+            b.title.trim().toLowerCase() === task.title.trim().toLowerCase()
+        );
         const fallbackCompletion = `**Completion Summary (${buildDate}):**\n- CLI Agent completed task execution successfully (exit code 0).\n- Status: Done / Verified.`;
         const completionText: string = (existingBrief?.completion || existingBrief?.validation) || fallbackCompletion;
 
@@ -1140,18 +1179,24 @@ export function App() {
               validation: completionText,
             }
           : {
-              itemNumber: taskId,
+              id: `brief_${taskId}`,
+              sourceTaskId: taskId,
               title: task.title,
               status: 'done',
-              overview: `Task #${taskId} (${task.title})`,
+              overview: `Task (${task.title})`,
               buildAndVerification: `Executed in CLI agent terminal.`,
               completion: completionText,
             };
 
-        const existingIdx = briefs.findIndex((b) => b.itemNumber === taskId);
+        const existingIdx = briefs.findIndex(
+          (b) =>
+            (b.id && b.id === updatedBrief.id) ||
+            (b.sourceTaskId != null && b.sourceTaskId === taskId) ||
+            b.title.trim().toLowerCase() === task.title.trim().toLowerCase()
+        );
         let nextBriefs: AgentContextItem[];
         if (existingIdx !== -1) {
-          nextBriefs = briefs.map((b) => (b.itemNumber === taskId ? updatedBrief : b));
+          nextBriefs = briefs.map((b, idx) => (idx === existingIdx ? updatedBrief : b));
         } else {
           nextBriefs = [...briefs, updatedBrief];
         }
@@ -1161,7 +1206,7 @@ export function App() {
     }
   };
 
-  const handleKillSession = (taskId: number) => {
+  const handleKillSession = (taskId: string | number) => {
     setTerminalSessions((prev) =>
       prev.map((s) =>
         s.session.taskId === taskId
@@ -1173,62 +1218,87 @@ export function App() {
 
   // Immediate Save Brief Edits
   const handleSaveBrief = (updatedBrief: AgentContextItem) => {
-    const existingIdx = briefs.findIndex((b) => b.itemNumber === updatedBrief.itemNumber);
+    const existingIdx = briefs.findIndex(
+      (b) =>
+        (b.id && b.id === updatedBrief.id) ||
+        (b.sourceTaskId && updatedBrief.sourceTaskId && b.sourceTaskId === updatedBrief.sourceTaskId) ||
+        b.title.trim().toLowerCase() === updatedBrief.title.trim().toLowerCase()
+    );
     let nextBriefs: AgentContextItem[];
     if (existingIdx !== -1) {
-      nextBriefs = briefs.map((b) => (b.itemNumber === updatedBrief.itemNumber ? updatedBrief : b));
+      nextBriefs = briefs.map((b, idx) => (idx === existingIdx ? updatedBrief : b));
     } else {
       nextBriefs = [...briefs, updatedBrief];
     }
     syncAndSaveProject(tasks, nextBriefs, true);
   };
 
-  // Live Typing Handler from BriefPane (Triggers Debounced Autosave to disk)
   // Archive Task Handler (Moves task and corresponding brief into archive section immediately)
   // Takes the live title string read from the editor node, matching by title is immune to stale indices.
   const handleArchiveTask = (taskTitle: string) => {
     if (!taskTitle) return;
     const normalTitle = taskTitle.trim().toLowerCase();
     const taskToArchive = tasks.find((t) => t.title.trim().toLowerCase() === normalTitle);
-    if (!taskToArchive) return;
+    const matchingBrief = briefs.find(
+      (b) => (taskToArchive && b.sourceTaskId === taskToArchive.id) || b.title.trim().toLowerCase() === normalTitle
+    );
 
-    const taskIndex = tasks.findIndex((t) => t.title.trim().toLowerCase() === normalTitle);
-    const nextActiveTasks = tasks.filter((t) => t.title.trim().toLowerCase() !== normalTitle);
+    if (!taskToArchive && !matchingBrief) return;
 
     // Assign a unique ID in the 1000+ range for the archived task
-    const nextArchiveId = archivedTasks.length > 0 ? Math.max(...archivedTasks.map((t) => t.id), 1000) + 1 : 1001;
-    const archivedTask: TaskItem = {
-      ...taskToArchive,
-      id: nextArchiveId,
-      isArchived: true,
-      archivedAtIndex: taskIndex,         // remember original 0-based position
-      category: 'Archive',
-      categoryHeadingPrefix: '##',
-      swimLaneId: taskToArchive.swimLaneId || (activeProject?.swimLanes?.[0]?.id || 'lane-default'),
-      sourceFileName: taskToArchive.sourceFileName || (activeProject?.swimLanes?.[0]?.filePath?.split('/').pop() || 'TODO.md'),
-    };
-    const nextArchivedTasks = [
-      ...archivedTasks.filter((t) => t.title.trim().toLowerCase() !== normalTitle),
-      archivedTask,
-    ];
+    const nextArchiveId = (archivedTasks.length > 0 || archivedBriefs.length > 0)
+      ? Math.max(
+          ...archivedTasks.map((t) => (typeof t.id === 'number' ? t.id : 1000)),
+          ...archivedBriefs.map((b) => b.itemNumber || 0),
+          1000
+        ) + 1
+      : 1001;
 
-    // Move corresponding brief to archivedBriefs if one exists
-    const matchingBrief = briefs.find(
-      (b) => b.title.trim().toLowerCase() === normalTitle || b.itemNumber === taskToArchive.id
-    );
-    const nextActiveBriefs = matchingBrief
-      ? briefs.filter((b) => b !== matchingBrief)
-      : briefs;
+    let nextActiveTasks = tasks;
+    let nextArchivedTasks = archivedTasks;
 
-    const nextArchivedBriefs = matchingBrief
-      ? [
-          ...archivedBriefs.filter((b) => b.title.trim().toLowerCase() !== normalTitle),
-          { ...matchingBrief, isArchived: true, itemNumber: nextArchiveId },
-        ]
-      : archivedBriefs;
+    if (taskToArchive) {
+      const taskIndex = tasks.findIndex((t) => t.title.trim().toLowerCase() === normalTitle);
+      nextActiveTasks = tasks.filter((t) => t.title.trim().toLowerCase() !== normalTitle);
+      const archivedTask: TaskItem = {
+        ...taskToArchive,
+        id: nextArchiveId,
+        isArchived: true,
+        archivedAtIndex: taskIndex,         // remember original 0-based position
+        category: 'Archive',
+        categoryHeadingPrefix: '##',
+        swimLaneId: taskToArchive.swimLaneId || (activeProject?.swimLanes?.[0]?.id || 'lane-default'),
+        sourceFileName: taskToArchive.sourceFileName || (activeProject?.swimLanes?.[0]?.filePath?.split('/').pop() || 'TODO.md'),
+      };
+      nextArchivedTasks = [
+        ...archivedTasks.filter((t) => t.title.trim().toLowerCase() !== normalTitle),
+        archivedTask,
+      ];
+    }
 
-    if (selectedTaskId === taskToArchive.id) {
-      setSelectedTaskId(nextActiveTasks.length > 0 ? nextActiveTasks[0].id : null);
+    let nextActiveBriefs = briefs;
+    let nextArchivedBriefs = archivedBriefs;
+
+    if (matchingBrief) {
+      nextActiveBriefs = briefs.filter((b) => b !== matchingBrief);
+      nextArchivedBriefs = [
+        ...archivedBriefs.filter((b) => b.title.trim().toLowerCase() !== normalTitle),
+        { ...matchingBrief, isArchived: true, itemNumber: nextArchiveId, sourceTaskId: nextArchiveId },
+      ];
+    }
+
+    if (
+      selectedTaskId === taskToArchive?.id ||
+      selectedTaskId === matchingBrief?.id ||
+      selectedTaskId === matchingBrief?.sourceTaskId
+    ) {
+      setSelectedTaskId(
+        nextActiveTasks.length > 0
+          ? nextActiveTasks[0].id
+          : nextActiveBriefs.length > 0
+          ? nextActiveBriefs[0].sourceTaskId || nextActiveBriefs[0].id || nextActiveBriefs[0].itemNumber || null
+          : null
+      );
     }
 
     syncAndSaveProject(nextActiveTasks, nextActiveBriefs, true, nextArchivedTasks, nextArchivedBriefs);
@@ -1236,24 +1306,58 @@ export function App() {
     showToast({
       type: 'info',
       title: 'Task Archived',
-      message: `"${taskToArchive.title}" was moved to the archive. Find it anytime in the workspace header menu (•••) > Archived Tasks.`,
+      message: `"${taskToArchive?.title || matchingBrief?.title}" was moved to the archive. Find it anytime in the workspace header menu (•••) > Archived Tasks.`,
     });
   };
 
-  // Unarchive Task Handler (Restores task from archive back to active workspace at its original position)
-  const handleUnarchiveTask = (taskId: number) => {
+  // Remove AI Task Handler (Removes unstarted task from AGENT_CONTEXT.md / AI workspace without touching human workspace)
+  const handleRemoveAiTask = (targetId: string | number) => {
+    const briefToRemove = briefs.find(
+      (b) => b.id === targetId || b.sourceTaskId === targetId || b.itemNumber === targetId
+    );
+    if (!briefToRemove) return;
+
+    const nextBriefs = briefs.filter(
+      (b) => b.id !== targetId && b.sourceTaskId !== targetId && b.itemNumber !== targetId
+    );
+    if (
+      selectedTaskId === targetId ||
+      selectedTaskId === briefToRemove.sourceTaskId ||
+      selectedTaskId === briefToRemove.id
+    ) {
+      setSelectedTaskId(
+        nextBriefs.length > 0
+          ? nextBriefs[0].sourceTaskId || nextBriefs[0].id || nextBriefs[0].itemNumber || null
+          : null
+      );
+    }
+    setBriefs(nextBriefs);
+    syncAndSaveProject(tasks, nextBriefs, true);
+
+    showToast({
+      type: 'info',
+      title: 'Task Removed from AI Workspace',
+      message: `Removed "${briefToRemove.title}" from the AI workspace. You can re-add it anytime from the human workspace.`,
+      duration: 3500,
+    });
+  };
+
+  // Unarchive Task Handler (Restores task from archive back to active workspace)
+  const handleUnarchiveTask = (taskId: string | number) => {
     const taskToUnarchive = archivedTasks.find((t) => t.id === taskId);
     if (!taskToUnarchive) return;
 
     const normalTitle = taskToUnarchive.title.trim().toLowerCase();
     const nextArchivedTasks = archivedTasks.filter((t) => t.id !== taskToUnarchive.id);
 
-    // Restore the task's category to match the surrounding active tasks so it
-    // doesn't create a stray "## Archive" section inside the active list.
+    const restoredLaneId = taskToUnarchive.swimLaneId || (activeProject?.swimLanes?.[0]?.id || 'lane-default');
+    const restoredId = `${restoredLaneId}_task_${Date.now()}`;
+
     const referenceTask = tasks.length > 0 ? tasks[0] : null;
     const restoredTask: TaskItem = {
       ...taskToUnarchive,
-      id: tasks.length + 1,
+      id: restoredId,
+      swimLaneId: restoredLaneId,
       category: referenceTask?.category || 'Untitled',
       categoryHeadingPrefix: referenceTask?.categoryHeadingPrefix || '##',
       categoryHasColon: referenceTask?.categoryHasColon || false,
@@ -1261,30 +1365,24 @@ export function App() {
       archivedAtIndex: undefined,
     };
 
-    // Splice back at the original position if we have it, otherwise append
-    let nextActiveTasks: TaskItem[];
-    const originalIndex = taskToUnarchive.archivedAtIndex;
-    if (originalIndex !== undefined && originalIndex >= 0 && originalIndex <= tasks.length) {
-      nextActiveTasks = [...tasks.slice(0, originalIndex), restoredTask, ...tasks.slice(originalIndex)];
-    } else {
-      nextActiveTasks = [...tasks, restoredTask];
-    }
-    // Re-number IDs to be sequential after splice
-    nextActiveTasks = nextActiveTasks.map((t, i) => ({ ...t, id: i + 1 }));
+    const nextActiveTasks = [...tasks, restoredTask];
 
     const matchingArchivedBrief = archivedBriefs.find(
-      (b) => b.title.trim().toLowerCase() === normalTitle
+      (b) => (taskToUnarchive && b.sourceTaskId === taskToUnarchive.id) || b.title.trim().toLowerCase() === normalTitle
     );
-    const nextArchivedBriefs = archivedBriefs.filter(
-      (b) => b.title.trim().toLowerCase() !== normalTitle
-    );
-
-    // Find what the restored task's new ID is after re-numbering
-    const restoredId = nextActiveTasks.find((t) => t.title.trim().toLowerCase() === normalTitle)?.id
-      ?? nextActiveTasks[nextActiveTasks.length - 1].id;
+    const nextArchivedBriefs = archivedBriefs.filter((b) => b !== matchingArchivedBrief);
 
     const nextActiveBriefs = matchingArchivedBrief
-      ? [...briefs, { ...matchingArchivedBrief, isArchived: false, itemNumber: restoredId }]
+      ? [
+          ...briefs,
+          {
+            ...matchingArchivedBrief,
+            isArchived: false,
+            id: `brief_${restoredId}`,
+            sourceTaskId: restoredId,
+            sourceLaneId: restoredLaneId,
+          },
+        ]
       : briefs;
 
     setSelectedTaskId(restoredId);
@@ -1292,7 +1390,7 @@ export function App() {
   };
 
   // Permanent Delete Archived Task Handler
-  const handleDeleteArchivedTask = (taskId: number) => {
+  const handleDeleteArchivedTask = (taskId: string | number) => {
     const taskToDelete = archivedTasks.find((t) => t.id === taskId);
     if (!taskToDelete) return;
 
@@ -1308,17 +1406,26 @@ export function App() {
   // Save Archived Brief Edit
   const handleSaveArchivedBrief = (updatedBrief: AgentContextItem) => {
     const nextArchivedBriefs = archivedBriefs.map((b) =>
-      b.title.trim().toLowerCase() === updatedBrief.title.trim().toLowerCase() ? updatedBrief : b
+      (b.id && b.id === updatedBrief.id) ||
+      (b.sourceTaskId && updatedBrief.sourceTaskId && b.sourceTaskId === updatedBrief.sourceTaskId) ||
+      b.title.trim().toLowerCase() === updatedBrief.title.trim().toLowerCase()
+        ? updatedBrief
+        : b
     );
     syncAndSaveProject(tasks, briefs, true, archivedTasks, nextArchivedBriefs);
   };
 
   // Live Typing Handler from BriefPane (Triggers Debounced Autosave to disk)
   const handleLiveBriefChange = (updatedBrief: AgentContextItem) => {
-    const existingIdx = briefs.findIndex((b) => b.itemNumber === updatedBrief.itemNumber);
+    const existingIdx = briefs.findIndex(
+      (b) =>
+        (b.id && b.id === updatedBrief.id) ||
+        (b.sourceTaskId && updatedBrief.sourceTaskId && b.sourceTaskId === updatedBrief.sourceTaskId) ||
+        b.title.trim().toLowerCase() === updatedBrief.title.trim().toLowerCase()
+    );
     let nextBriefs: AgentContextItem[];
     if (existingIdx !== -1) {
-      nextBriefs = briefs.map((b) => (b.itemNumber === updatedBrief.itemNumber ? updatedBrief : b));
+      nextBriefs = briefs.map((b, idx) => (idx === existingIdx ? updatedBrief : b));
     } else {
       nextBriefs = [...briefs, updatedBrief];
     }
@@ -1362,7 +1469,11 @@ export function App() {
     );
 
     const updatedBrief: AgentContextItem = {
-      itemNumber: task.id,
+      ...existingBrief,
+      id: existingBrief?.id || `brief_${task.id}`,
+      sourceTaskId: task.id,
+      sourceLaneId: task.swimLaneId || existingBrief?.sourceLaneId,
+      itemNumber: existingBrief?.itemNumber,
       title: task.title,
       status: task.status,
       overview: syncedOverview,
@@ -1443,7 +1554,7 @@ export function App() {
   };
 
   // Add new SwimLane column (creates additional markdown file)
-  const handleAddSwimLane = () => {
+  const handleAddSwimLane = (afterLaneId?: string) => {
     if (!activeProject) return;
 
     const currentLanes: SwimLaneDoc[] = activeProject.swimLanes && activeProject.swimLanes.length > 0
@@ -1470,7 +1581,21 @@ export function App() {
       markdown: defaultContent
     };
 
-    const nextLanes = [...currentLanes, newLane];
+    let nextLanes: SwimLaneDoc[];
+    if (afterLaneId) {
+      const targetIdx = currentLanes.findIndex((l) => l.id === afterLaneId);
+      if (targetIdx !== -1) {
+        nextLanes = [
+          ...currentLanes.slice(0, targetIdx + 1),
+          newLane,
+          ...currentLanes.slice(targetIdx + 1),
+        ];
+      } else {
+        nextLanes = [...currentLanes, newLane];
+      }
+    } else {
+      nextLanes = [...currentLanes, newLane];
+    }
 
     // Re-parse tasks with new lane
     let allActiveTasks: TaskItem[] = [];
@@ -1807,7 +1932,7 @@ export function App() {
   };
 
   const runningTaskIds = useMemo(() => {
-    const ids: number[] = [];
+    const ids: (string | number)[] = [];
     terminalSessions.forEach((s) => {
       if (s.session.isActive && !ids.includes(s.session.taskId)) {
         ids.push(s.session.taskId);
@@ -1921,6 +2046,8 @@ export function App() {
             onSessionExit={handleSessionExit}
             onRestartSession={handleExecuteTask}
             onKillSession={handleKillSession}
+            onArchiveTask={handleArchiveTask}
+            onRemoveAiTask={handleRemoveAiTask}
           />
         </div>
 

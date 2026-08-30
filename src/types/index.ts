@@ -8,7 +8,7 @@ export interface Subtask {
 }
 
 export interface TaskItem {
-  id: number; // e.g. 1, 2, 3
+  id: string | number; // e.g. "lane-default_task_1" or 1, 2, 3
   title: string;
   category: string;
   categoryHeadingPrefix?: string; // e.g. "##", "#", "###"
@@ -38,7 +38,8 @@ export interface SwimLaneDoc {
 }
 
 export interface AgentContextItem {
-  itemNumber: number;
+  id?: string; // unique ID for this AI brief/task
+  itemNumber?: number; // 1-based display number or legacy number
   title: string;
   isUnordered?: boolean;
   status: TaskStatus | string;
@@ -47,6 +48,12 @@ export interface AgentContextItem {
   completion: string;
   isArchived?: boolean;
   createdFiles?: string[];
+  // Linkage metadata:
+  sourceTaskId?: string | number; // ID of the source task in the swim lane (if tied to a task)
+  sourceLaneId?: string;          // ID of the swim lane (e.g. "lane-default")
+  sourceLaneTitle?: string;       // Title of the swim lane (e.g. "Human Workspace")
+  sourceContent?: string;         // Freeform content snippet if tied to a freeform section
+  sourceHeading?: string;         // Heading under which it was selected (if any)
   // Compatibility fields
   brief?: string;
   built?: string;
@@ -168,7 +175,7 @@ export interface ProjectData {
 
 export interface HumanInputPrompt {
   id: string;
-  taskId: number;
+  taskId: string | number;
   question: string;
   options?: string[];
   context?: string;
@@ -207,7 +214,7 @@ export interface SelectionPayload {
  * Delineated context entry for an individual related task discovered in the workspace
  */
 export interface DiscoveredTaskContextEntry {
-  taskId: number;
+  taskId: string | number;
   title: string;
   category: string;
   status: string;
@@ -228,7 +235,7 @@ export interface DiscoveredTaskContextEntry {
  */
 export interface DiscoveryJobPayload {
   targetTask: {
-    id: number;
+    id: string | number;
     title: string;
     category: string;
     status: string;
@@ -253,7 +260,7 @@ export interface DiscoveryJobPayload {
  */
 export interface ManagerBiblePayload {
   task: {
-    id: number;
+    id: string | number;
     title: string;
     category: string;
     status: string;
@@ -267,7 +274,7 @@ export interface ManagerBiblePayload {
     requiredMcps?: string[];
   };
   discoveredContext: Array<{
-    taskId: number;
+    taskId: string | number;
     title: string;
     category: string;
     sourceDocument: string;
@@ -283,6 +290,7 @@ export interface ManagerBiblePayload {
 
 export interface ExecutionStep {
   id: string;
+  taskId?: string | number;
   time: string;
   stage: 'context' | 'overview' | 'mcp_call' | 'thinking' | 'execution' | 'human_input' | 'built_record' | 'done' | 'terminating';
   title: string;
@@ -382,7 +390,7 @@ export interface CliAgentConfig {
  * One session per task; concurrent tasks get their own session.
  */
 export interface TerminalSession {
-  taskId: number;
+  taskId: string | number;
   taskTitle: string;
   isActive: boolean;   // PTY process still alive
   exitCode?: number;

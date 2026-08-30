@@ -32,7 +32,6 @@ const CustomListItem = ListItem.extend({
 
 import {
   Plus,
-  Play,
   FileText,
   Sparkles,
   Bold,
@@ -58,7 +57,6 @@ import {
   AlertCircle,
   X,
   Edit2,
-  Columns,
   MoreHorizontal
 } from 'lucide-react';
 
@@ -486,19 +484,23 @@ interface SwimLaneColumnProps {
   width?: string;
   isActive: boolean;
   onActivate: () => void;
-  selectedTaskId?: number | null;
-  runningTaskIds?: number[];
-  pendingHumanInputs?: Record<number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>;
+  selectedTaskId?: string | number | null;
+  runningTaskIds?: (string | number)[];
+  pendingHumanInputs?: Record<string | number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>;
   showStyles: boolean;
-  onSelectTask?: (taskId: number) => void;
+  onToggleStyles: () => void;
+  onSelectTask?: (taskId: string | number) => void;
   onMarkdownChange: (laneId: string, newMarkdown: string) => void;
   onRenameSwimLane?: (laneId: string, newTitle: string) => void;
   onDeleteSwimLane?: (laneId: string) => void;
+  onAddSwimLaneAfter?: (laneId: string) => void;
+  onOpenArchivedTasks?: () => void;
+  archivedTasksCount?: number;
   onArchiveTask?: (taskTitle: string) => void;
   assistantDrawerHeight: number;
   onEditorReady?: (laneId: string, editorInstance: any) => void;
-  // Freeform text selection handler to create AI task
-  onCreateTaskFromSelection?: (selectedText: string, laneId: string, laneTitle: string) => void;
+  // Freeform text selection or task card handler to create AI task
+  onCreateTaskFromSelection?: (selectedText: string, laneId: string, laneTitle: string, sourceTask?: TaskItemType) => void;
   // Selected lane action drawer props
   isAssistantOpen?: boolean;
   onOpenAssistant?: () => void;
@@ -521,10 +523,14 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   runningTaskIds = [],
   pendingHumanInputs,
   showStyles,
+  onToggleStyles,
   onSelectTask,
   onMarkdownChange,
   onRenameSwimLane,
   onDeleteSwimLane,
+  onAddSwimLaneAfter,
+  onOpenArchivedTasks,
+  archivedTasksCount = 0,
   onArchiveTask,
   onCreateTaskFromSelection,
   assistantDrawerHeight,
@@ -565,8 +571,8 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
     y: number;
   } | null>(null);
 
-  // Local parsed items for this swim lane
-  const laneParsed = useMemo(() => parseSwimLaneMarkdown(lane, 0), [lane]);
+  // Local parsed items for this swim lane (each gets unique lane-scoped IDs)
+  const laneParsed = useMemo(() => parseSwimLaneMarkdown(lane), [lane]);
   const laneTasks = laneParsed.items;
   const laneTasksRef = useRef(laneTasks);
   laneTasksRef.current = laneTasks;
@@ -623,7 +629,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                 if (itemIndex !== null) {
                   // Resolve matching task by index or id
                   const targetTask = laneTasksRef.current[itemIndex - 1];
-                  const targetId = targetTask ? targetTask.id : itemIndex;
+                  const targetId = targetTask ? targetTask.id : `${lane.id}_task_${itemIndex}`;
                   if (selectedTaskIdRef.current !== targetId) {
                     onSelectTaskRef.current(targetId);
                   }
@@ -657,7 +663,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                   const isCollapsed = collapsedCardsState.has(cardKey);
 
                   const matchedTask = currentTasks[orderedItemCounter - 1];
-                  const cardTaskId = matchedTask ? matchedTask.id : orderedItemCounter;
+                  const cardTaskId = matchedTask ? matchedTask.id : `${lane.id}_task_${orderedItemCounter}`;
 
                   const isCardActive = currentSelectedTaskId === cardTaskId;
                   const isCardRunning = currentRunningTaskIds ? currentRunningTaskIds.includes(cardTaskId) : false;
@@ -807,7 +813,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                         btn.setAttribute('contenteditable', 'false');
                         btn.title = isCollapsed ? 'Expand subtasks' : 'Collapse subtasks';
                         btn.setAttribute('aria-label', isCollapsed ? 'Expand subtasks' : 'Collapse subtasks');
-                        btn.innerHTML = `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+                        btn.innerHTML = `<svg class="collapse-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
 
                         btn.addEventListener('mousedown', (e) => {
                           e.preventDefault();
@@ -837,7 +843,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                   if (!isCollapsed) {
                     const cardActionsWidget = Decoration.widget(
                       pos + 1,
-                      (view, getPos) => {
+                      (view) => {
                         const container = document.createElement('div');
                         container.className = 'card-actions-wrapper';
                         container.setAttribute('contenteditable', 'false');
@@ -884,7 +890,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                           }
 
                           if (taskContextText && onCreateTaskFromSelectionRef.current) {
-                            onCreateTaskFromSelectionRef.current(taskContextText, lane.id, lane.title);
+                            onCreateTaskFromSelectionRef.current(taskContextText, lane.id, lane.title, matchedTask);
                           }
                         });
 
@@ -1233,6 +1239,17 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
     },
     onSelectionUpdate: ({ editor: currentEditor }) => {
       updateSelectionTooltip(currentEditor);
+      if (onSelectTaskRef.current && currentEditor) {
+        const { from } = currentEditor.state.selection;
+        const itemIndex = getTaskIndexAtPos(currentEditor.state.doc, from);
+        if (itemIndex !== null) {
+          const targetTask = laneTasksRef.current[itemIndex - 1];
+          const targetId = targetTask ? targetTask.id : `${lane.id}_task_${itemIndex}`;
+          if (selectedTaskIdRef.current !== targetId) {
+            onSelectTaskRef.current(targetId);
+          }
+        }
+      }
     },
     onBlur: () => {
       setTimeout(() => {
@@ -1306,7 +1323,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       window.getSelection()?.removeAllRanges();
     }
 
-    onCreateTaskFromSelection?.(textToRun, lane.id, lane.title);
+    onCreateTaskFromSelection?.(textToRun, lane.id, lane.title, undefined);
   }, [selectionTooltip, editor, onCreateTaskFromSelection, lane.id, lane.title]);
 
   useEffect(() => {
@@ -1366,7 +1383,6 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   }, [editor]);
 
   const laneDoneCount = laneTasks.filter((t) => t.isDone).length;
-  const fileName = lane.filePath ? lane.filePath.split('/').pop() || lane.title : lane.title;
 
   return (
     <div
@@ -1374,40 +1390,55 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       onClick={() => onActivate()}
       style={totalLanes > 1 && width ? { width, minWidth: '260px', flex: `0 0 ${width}` } : undefined}
     >
-      {/* Column Sub-Header (Only shown in multi-swimlane mode to avoid duplicate headers in single lane mode) */}
-      {totalLanes > 1 && (
-        <div className="swimlane-column-header">
-          <div className="swimlane-title-container">
-            {isEditingTitle ? (
-              <input
-                type="text"
-                className="swimlane-title-input"
-                value={editedTitle}
-                onChange={(e) => setEditedTitle(e.target.value)}
-                onBlur={handleTitleCommit}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleTitleCommit();
-                  if (e.key === 'Escape') {
-                    setEditedTitle(lane.title);
-                    setIsEditingTitle(false);
-                  }
-                }}
-                autoFocus
-              />
-            ) : (
-              <div
-                style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', minWidth: 0 }}
-                onClick={() => setIsEditingTitle(true)}
-                title="Click to rename swim lane"
-              >
-                <span className="swimlane-title-text">{lane.title}</span>
-              </div>
-            )}
-            <span className="pane-subtitle" style={{ fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
-              {laneDoneCount}/{laneTasks.length} done
-            </span>
-          </div>
+      {/* Column Header */}
+      <div className="swimlane-column-header">
+        <div className="swimlane-title-container">
+          <FileText size={15} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
+          {isEditingTitle ? (
+            <input
+              type="text"
+              className="swimlane-title-input"
+              value={editedTitle}
+              onChange={(e) => setEditedTitle(e.target.value)}
+              onBlur={handleTitleCommit}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleTitleCommit();
+                if (e.key === 'Escape') {
+                  setEditedTitle(lane.title);
+                  setIsEditingTitle(false);
+                }
+              }}
+              autoFocus
+            />
+          ) : (
+            <div
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', minWidth: 0 }}
+              onClick={() => setIsEditingTitle(true)}
+              title="Click to rename swim lane"
+            >
+              <span className="swimlane-title-text">{lane.title}</span>
+            </div>
+          )}
+          <span className="swimlane-done-badge">
+            {laneDoneCount}/{laneTasks.length} done
+          </span>
+        </div>
 
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+          {/* Styles Toolbar Toggle folded into lane header */}
+          <button
+            type="button"
+            className={`swimlane-menu-btn ${showStyles ? 'active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleStyles();
+            }}
+            title={showStyles ? 'Hide formatting bar' : 'Show formatting bar'}
+          >
+            <Type size={14} />
+          </button>
+
+          {/* Lane Options Menu */}
           <div style={{ position: 'relative' }} ref={menuRef}>
             <button
               type="button"
@@ -1428,6 +1459,37 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                   className="swimlane-dropdown-item"
                   onClick={() => {
                     setIsMenuOpen(false);
+                    onAddSwimLaneAfter?.(lane.id);
+                  }}
+                >
+                  <Plus size={13} style={{ color: 'var(--accent-cyan)' }} />
+                  <span>Create New Swim Lane</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="swimlane-dropdown-item"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    onOpenArchivedTasks?.();
+                  }}
+                >
+                  <Archive size={13} style={{ color: '#f59e0b' }} />
+                  <span>Archived Tasks</span>
+                  {archivedTasksCount > 0 && (
+                    <span className="dropdown-item-badge" style={{ marginLeft: 'auto', fontSize: '0.7rem', padding: '0.05rem 0.35rem', borderRadius: '8px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.35)', color: '#f59e0b', fontWeight: 600 }}>
+                      {archivedTasksCount}
+                    </span>
+                  )}
+                </button>
+
+                <div className="swimlane-dropdown-divider" />
+
+                <button
+                  type="button"
+                  className="swimlane-dropdown-item"
+                  onClick={() => {
+                    setIsMenuOpen(false);
                     setIsEditingTitle(true);
                   }}
                 >
@@ -1435,24 +1497,24 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                   <span>Rename Lane</span>
                 </button>
 
-                <div className="swimlane-dropdown-divider" />
-
-                <button
-                  type="button"
-                  className="swimlane-dropdown-item is-danger"
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    setIsDeleteLaneModalOpen(true);
-                  }}
-                >
-                  <Trash2 size={13} />
-                  <span>Delete Lane</span>
-                </button>
+                {totalLanes > 1 && (
+                  <button
+                    type="button"
+                    className="swimlane-dropdown-item is-danger"
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      setIsDeleteLaneModalOpen(true);
+                    }}
+                  >
+                    <Trash2 size={13} />
+                    <span>Delete Lane</span>
+                  </button>
+                )}
               </div>
             )}
           </div>
         </div>
-      )}
+      </div>
 
       {/* Formatting Toolbar (when Styles is toggled) */}
       {showStyles && (
@@ -1597,7 +1659,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
             </div>
             <div className="modal-body" style={{ padding: '1rem 1.25rem', fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
               <p style={{ margin: 0, marginBottom: '0.75rem' }}>
-                Are you sure you want to remove swim lane <strong>"{lane.title}"</strong> ({fileName})?
+                Are you sure you want to remove swim lane <strong>"{lane.title}"</strong>?
               </p>
               <div className="archive-delete-warning-box">
                 <AlertCircle size={15} style={{ flexShrink: 0, color: 'var(--accent-rose)' }} />
@@ -1670,6 +1732,16 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
             <Italic size={13} />
           </button>
 
+          {/* Strikethrough */}
+          <button
+            type="button"
+            className={`selection-tooltip-btn ${editor?.isActive('strike') ? 'is-active' : ''}`}
+            onClick={() => editor?.chain().focus().toggleStrike().run()}
+            title="Strikethrough (~~text~~)"
+          >
+            <Strikethrough size={13} />
+          </button>
+
           {/* Inline Code */}
           <button
             type="button"
@@ -1702,7 +1774,6 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         </div>,
         document.body
       )}
-
     </div>
   );
 };
@@ -1712,10 +1783,10 @@ interface TaskPaneProps {
   rawMarkdown: string;
   tasks: TaskItemType[];
   archivedTasks?: TaskItemType[];
-  selectedTaskId?: number | null;
-  runningTaskIds?: number[];
-  pendingHumanInputs?: Record<number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>;
-  onSelectTask?: (taskId: number) => void;
+  selectedTaskId?: string | number | null;
+  runningTaskIds?: (string | number)[];
+  pendingHumanInputs?: Record<string | number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>;
+  onSelectTask?: (taskId: string | number) => void;
   onMarkdownChange: (newMarkdown: string) => void;
   onOpenDraftModal: () => void;
   isAssistantOpen?: boolean;
@@ -1726,19 +1797,19 @@ interface TaskPaneProps {
   mcpServers?: MCPServer[];
   onApplyAssistantResult?: (result: HumanAiAssistantResult, confirmedDeletions: boolean) => void;
   onArchiveTask?: (taskTitle: string) => void;
-  onUnarchiveTask?: (taskId: number) => void;
-  onDeleteArchivedTask?: (taskId: number) => void;
+  onUnarchiveTask?: (taskId: string | number) => void;
+  onDeleteArchivedTask?: (taskId: string | number) => void;
   swimLanes?: SwimLaneDoc[];
-  onAddSwimLane?: () => void;
+  onAddSwimLane?: (afterLaneId?: string) => void;
   onRenameSwimLane?: (laneId: string, newTitle: string) => void;
   onDeleteSwimLane?: (laneId: string) => void;
   onSwimLaneMarkdownChange?: (laneId: string, newMarkdown: string) => void;
-  onCreateTaskFromSelection?: (selectedText: string, laneId: string, laneTitle: string) => void;
+  onCreateTaskFromSelection?: (selectedText: string, laneId: string, laneTitle: string, sourceTask?: TaskItemType) => void;
 }
 
 export const TaskPane: React.FC<TaskPaneProps> = ({
   rawMarkdown,
-  tasks,
+  tasks: _tasks,
   archivedTasks = [],
   selectedTaskId,
   runningTaskIds = [],
@@ -1811,9 +1882,6 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
     ];
   }, [swimLanes, project?.todoFilePath, rawMarkdown]);
 
-  const totalTasks = tasks.length;
-  const totalDoneTasks = tasks.filter((t) => t.isDone).length;
-
   const handleLaneMarkdownChange = (laneId: string, newMarkdown: string) => {
     if (onSwimLaneMarkdownChange) {
       onSwimLaneMarkdownChange(laneId, newMarkdown);
@@ -1830,26 +1898,6 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
       setActiveSwimLaneId(effectiveSwimLanes[0]?.id || 'lane-default');
     }
   }, [effectiveSwimLanes, activeSwimLaneId]);
-
-  // Inline Title Editing for Single Swim Lane mode
-  const singleLane = effectiveSwimLanes[0];
-  const [isEditingSingleTitle, setIsEditingSingleTitle] = useState(false);
-  const [singleTitleVal, setSingleTitleVal] = useState(singleLane?.title || 'Human Workspace');
-
-  useEffect(() => {
-    if (singleLane?.title) {
-      setSingleTitleVal(singleLane.title);
-    }
-  }, [singleLane?.title]);
-
-  const handleSingleTitleCommit = () => {
-    setIsEditingSingleTitle(false);
-    if (singleTitleVal.trim() && singleTitleVal.trim() !== singleLane?.title && onRenameSwimLane && singleLane) {
-      onRenameSwimLane(singleLane.id, singleTitleVal.trim());
-    } else {
-      setSingleTitleVal(singleLane?.title || 'Human Workspace');
-    }
-  };
 
   // Lane widths state (in pixels) for draggable resizing in multi-swimlane mode
   const [laneWidths, setLaneWidths] = useState<Record<string, number>>({});
@@ -1897,119 +1945,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
 
   return (
     <div className="pane pane-left obsidian-pane">
-      {/* ── Main Pane Header ── */}
-      <div className="pane-header obsidian-header">
-        <div className="pane-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, flex: 1 }}>
-          <FileText size={17} color="var(--accent-cyan)" />
-          {effectiveSwimLanes.length === 1 ? (
-            isEditingSingleTitle ? (
-              <input
-                type="text"
-                className="swimlane-title-input"
-                style={{ maxWidth: '220px', padding: '0.15rem 0.4rem', fontSize: '0.88rem' }}
-                value={singleTitleVal}
-                onChange={(e) => setSingleTitleVal(e.target.value)}
-                onBlur={handleSingleTitleCommit}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleSingleTitleCommit();
-                  if (e.key === 'Escape') {
-                    setSingleTitleVal(singleLane?.title || 'Human Workspace');
-                    setIsEditingSingleTitle(false);
-                  }
-                }}
-                autoFocus
-              />
-            ) : (
-              <div
-                style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer' }}
-                onClick={() => setIsEditingSingleTitle(true)}
-                title="Click to rename"
-              >
-                <span>{singleLane?.title || 'Human Workspace'}</span>
-              </div>
-            )
-          ) : (
-            <span>Human Workspace</span>
-          )}
-          <span className="pane-subtitle">{totalDoneTasks}/{totalTasks} done</span>
-          {effectiveSwimLanes.length > 1 && (
-            <span className="swimlane-count-pill" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(99, 102, 241, 0.15)', color: '#818cf8', fontSize: '0.72rem', fontWeight: 600 }}>
-              <Columns size={11} />
-              <span>{effectiveSwimLanes.length} Lanes</span>
-            </span>
-          )}
-        </div>
 
-        <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
-          {/* Styles Toolbar Toggle */}
-          <button
-            type="button"
-            className={`btn btn-secondary ${showStyles ? 'active' : ''}`}
-            style={{
-              padding: '0.3rem 0.65rem',
-              fontSize: '0.8rem',
-              borderColor: showStyles ? 'var(--accent-primary)' : undefined,
-              background: showStyles ? 'rgba(99, 102, 241, 0.18)' : undefined,
-              color: showStyles ? 'var(--text-bright, #fff)' : undefined,
-            }}
-            onClick={() => setShowStyles((prev) => !prev)}
-            title={showStyles ? 'Hide markdown formatting bar' : 'Show markdown formatting bar'}
-          >
-            <Type size={13} />
-            <span>Styles</span>
-          </button>
-
-          {/* Workspace Actions Menu (Create Swim Lane & Archived Tasks) */}
-          <div style={{ position: 'relative' }} ref={headerMenuRef}>
-            <button
-              type="button"
-              className={`btn btn-secondary workspace-header-menu-btn ${isHeaderMenuOpen ? 'active' : ''}`}
-              style={{
-                padding: '0.3rem 0.65rem',
-                fontSize: '0.8rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.35rem',
-              }}
-              onClick={() => setIsHeaderMenuOpen((prev) => !prev)}
-              title="Workspace actions"
-              aria-label="Workspace actions"
-            >
-              <MoreHorizontal size={14} />
-            </button>
-
-            {isHeaderMenuOpen && (
-              <div className="workspace-header-dropdown-menu">
-                <button
-                  type="button"
-                  className="workspace-header-dropdown-item"
-                  onClick={() => {
-                    setIsHeaderMenuOpen(false);
-                    onAddSwimLane?.();
-                  }}
-                >
-                  <Plus size={14} className="dropdown-item-icon add-icon" />
-                  <span>Create New Swim Lane</span>
-                </button>
-                <button
-                  type="button"
-                  className="workspace-header-dropdown-item"
-                  onClick={() => {
-                    setIsHeaderMenuOpen(false);
-                    setIsArchiveModalOpen(true);
-                  }}
-                >
-                  <Archive size={14} className="dropdown-item-icon archive-icon" />
-                  <span>Archived Tasks</span>
-                  {archivedTasks.length > 0 && (
-                    <span className="dropdown-item-badge">{archivedTasks.length}</span>
-                  )}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
 
       {/* ── Swim Lanes Container ── */}
       <div className={`swimlanes-wrapper ${effectiveSwimLanes.length > 1 ? 'is-multi-column' : 'is-single-column'}`}>
@@ -2025,10 +1961,14 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
               runningTaskIds={runningTaskIds}
               pendingHumanInputs={pendingHumanInputs}
               showStyles={showStyles}
+              onToggleStyles={() => setShowStyles((prev) => !prev)}
               onSelectTask={onSelectTask}
               onMarkdownChange={handleLaneMarkdownChange}
               onRenameSwimLane={onRenameSwimLane}
               onDeleteSwimLane={onDeleteSwimLane}
+              onAddSwimLaneAfter={(laneId) => onAddSwimLane?.(laneId)}
+              onOpenArchivedTasks={() => setIsArchiveModalOpen(true)}
+              archivedTasksCount={archivedTasks.length}
               onArchiveTask={onArchiveTask}
               onCreateTaskFromSelection={onCreateTaskFromSelection}
               assistantDrawerHeight={assistantDrawerHeight}

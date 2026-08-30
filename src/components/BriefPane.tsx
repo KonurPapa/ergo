@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   type TaskItem,
+  type TaskStatus,
   type AgentContextItem,
   type SpawnedSession,
   type ExecutionStep,
@@ -39,7 +40,8 @@ import {
   Eye,
   ExternalLink,
   Check,
-  MoreHorizontal
+  MoreHorizontal,
+  Trash2
 } from 'lucide-react';
 
 import { RichTextToolbar } from './RichTextToolbar';
@@ -170,30 +172,32 @@ interface BriefPaneProps {
   archivedTasks?: TaskItem[];
   archivedBriefs?: AgentContextItem[];
   swimLanes?: import('../types').SwimLaneDoc[];
-  selectedTaskId: number | null;
-  runningTaskIds?: number[];
-  onSelectTask?: (taskId: number) => void;
+  selectedTaskId: string | number | null;
+  runningTaskIds?: (string | number)[];
+  onSelectTask?: (taskId: string | number) => void;
   onSaveBrief: (updatedBrief: AgentContextItem) => void;
   onLiveBriefChange?: (updatedBrief: AgentContextItem) => void;
   onExecuteTask: (task: TaskItem) => void;
   onUpdateBriefWithAi?: (task: TaskItem) => void;
   onSyncOverviewWithTask?: (task: TaskItem) => Promise<string | void>;
-  onUnarchiveTask?: (taskId: number) => void;
-  onDeleteArchivedTask?: (taskId: number) => void;
+  onUnarchiveTask?: (taskId: string | number) => void;
+  onDeleteArchivedTask?: (taskId: string | number) => void;
   onSaveArchivedBrief?: (brief: AgentContextItem) => void;
   autosaveStatus?: 'idle' | 'pending' | 'saving' | 'saved' | 'error';
   autosaveDelaySec?: number;
   terminalSessions?: SpawnedSession[];
-  executingTaskId?: number | null;
-  taskExecutionSteps?: Record<number, ExecutionStep[]>;
-  pendingPermissions?: Record<number, { prompt: McpToolPermissionPrompt; resolve: (approved: boolean) => void }>;
-  pendingHumanInputs?: Record<number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>;
-  onPermissionChoice?: (taskId: number, approved: boolean) => void;
-  onHumanInputChoice?: (taskId: number, answer: string) => void;
-  onSessionExit?: (taskId: number, code: number) => void;
+  executingTaskId?: string | number | null;
+  taskExecutionSteps?: Record<string | number, ExecutionStep[]>;
+  pendingPermissions?: Record<string | number, { prompt: McpToolPermissionPrompt; resolve: (approved: boolean) => void }>;
+  pendingHumanInputs?: Record<string | number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>;
+  onPermissionChoice?: (taskId: string | number, approved: boolean) => void;
+  onHumanInputChoice?: (taskId: string | number, answer: string) => void;
+  onSessionExit?: (taskId: string | number, code: number) => void;
   onRestartSession?: (task: TaskItem) => void;
-  onKillSession?: (taskId: number) => void;
-  onTerminateAgent?: (taskId: number) => void;
+  onKillSession?: (taskId: string | number) => void;
+  onTerminateAgent?: (taskId: string | number) => void;
+  onArchiveTask?: (taskTitle: string) => void;
+  onRemoveAiTask?: (targetId: string | number) => void;
 }
 
 interface AiTaskCardProps {
@@ -216,8 +220,10 @@ interface AiTaskCardProps {
   onHumanInputChoice?: (answer: string) => void;
   onSessionExit?: (code: number) => void;
   onRestartSession?: (task: TaskItem) => void;
-  onKillSession?: (taskId: number) => void;
-  onTerminateAgent?: (taskId: number) => void;
+  onKillSession?: (taskId: string | number) => void;
+  onTerminateAgent?: (taskId: string | number) => void;
+  onArchiveTask?: (taskTitle: string) => void;
+  onRemoveAiTask?: (targetId: string | number) => void;
 }
 
 const AiTaskCard: React.FC<AiTaskCardProps> = ({
@@ -242,6 +248,8 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   onRestartSession,
   onKillSession,
   onTerminateAgent,
+  onArchiveTask,
+  onRemoveAiTask,
 }) => {
   const [isTaskCollapsed, setIsTaskCollapsed] = useState(!isSelected);
   const [isEditing, setIsEditing] = useState(false);
@@ -251,6 +259,8 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   const [completionText, setCompletionText] = useState('');
   const [viewModeSection2, setViewModeSection2] = useState<'auto' | 'notes' | 'terminal' | 'steps'>('auto');
   const [openedFileFeedback, setOpenedFileFeedback] = useState<string | null>(null);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const overviewRef = useRef<HTMLTextAreaElement>(null);
   const buildVerificationRef = useRef<HTMLTextAreaElement>(null);
@@ -258,6 +268,73 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   const [activeFocusedRef, setActiveFocusedRef] = useState<React.RefObject<HTMLTextAreaElement | null> | null>(null);
 
   const cardRef = useRef<HTMLDivElement>(null);
+
+  // Close card options dropdown on outside click or Escape
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setIsMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isMenuOpen]);
+
+  // Determine if this task has already been started (e.g. Overview section written up / structured / in-progress)
+  const isTaskStarted = React.useMemo(() => {
+    if (isWorking || isExecuting || task.isDone) return true;
+    if (task.status && task.status !== 'not_started') return true;
+    if (brief?.status && brief.status !== 'not_started') return true;
+    if (executionSteps && executionSteps.length > 0) return true;
+    if (terminalSession?.session) return true;
+
+    if (buildVerificationText && buildVerificationText.trim().length > 0) return true;
+    if (completionText && completionText.trim().length > 0) return true;
+    if (brief?.built && brief.built.trim().length > 0) return true;
+    if (brief?.validation && brief.validation.trim().length > 0) return true;
+
+    const currentOverview = (overviewText || brief?.overview || '').trim();
+    if (
+      currentOverview.includes('Scenario:') ||
+      currentOverview.includes('Given ') ||
+      currentOverview.includes('## Goals') ||
+      currentOverview.includes('## Output As') ||
+      currentOverview.includes('## Brief')
+    ) {
+      return true;
+    }
+
+    const initialText = (brief?.brief || task.title || '').trim();
+    if (currentOverview.length > 0 && currentOverview !== initialText && currentOverview.length > initialText.length + 20) {
+      return true;
+    }
+
+    return false;
+  }, [
+    isWorking,
+    isExecuting,
+    task.isDone,
+    task.status,
+    task.title,
+    brief?.status,
+    brief?.built,
+    brief?.validation,
+    brief?.overview,
+    brief?.brief,
+    executionSteps,
+    terminalSession,
+    buildVerificationText,
+    completionText,
+    overviewText,
+  ]);
 
   const createdFilesList = React.useMemo(() => {
     const list: string[] = [];
@@ -290,12 +367,12 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     return list;
   }, [task.createdFiles, brief?.createdFiles, completionText]);
 
-  // Auto-expand and scroll into view when selected
+  // Auto-expand and scroll into view when selected, collapse when another task is selected
   useEffect(() => {
     setIsTaskCollapsed(!isSelected);
     if (isSelected && cardRef.current) {
       const timer = setTimeout(() => {
-        cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }, 60);
       return () => clearTimeout(timer);
     }
@@ -417,7 +494,11 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 
     if (onLiveBriefChange) {
       onLiveBriefChange({
-        itemNumber: task.id,
+        ...brief,
+        id: brief?.id || `brief_${task.id}`,
+        sourceTaskId: task.id,
+        sourceLaneId: task.swimLaneId || brief?.sourceLaneId,
+        itemNumber: brief?.itemNumber,
         title: task.title,
         status: task.status,
         overview: newOverview,
@@ -434,7 +515,11 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 
   const handleSave = () => {
     onSaveBrief({
-      itemNumber: task.id,
+      ...brief,
+      id: brief?.id || `brief_${task.id}`,
+      sourceTaskId: task.id,
+      sourceLaneId: task.swimLaneId || brief?.sourceLaneId,
+      itemNumber: brief?.itemNumber,
       title: task.title,
       status: task.status,
       overview: overviewText,
@@ -461,7 +546,11 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 
       if (onLiveBriefChange) {
         onLiveBriefChange({
-          itemNumber: task.id,
+          ...brief,
+          id: brief.id || `brief_${task.id}`,
+          sourceTaskId: task.id,
+          sourceLaneId: task.swimLaneId || brief.sourceLaneId,
+          itemNumber: brief.itemNumber,
           title: task.title,
           status: task.status,
           overview: originalOverview,
@@ -481,7 +570,9 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 
       if (onLiveBriefChange) {
         onLiveBriefChange({
-          itemNumber: task.id,
+          id: `brief_${task.id}`,
+          sourceTaskId: task.id,
+          sourceLaneId: task.swimLaneId,
           title: task.title,
           status: task.status,
           overview: '',
@@ -552,11 +643,18 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     );
   };
 
+  const isTaskDone = Boolean(task.isDone || task.status === 'done' || brief?.status === 'done');
+
   return (
     <div
       ref={cardRef}
-      className={`ai-task-card ${isSelected ? 'is-selected' : ''} ${isWorking ? 'is-running' : ''} ${task.isDone ? 'is-done' : ''}`}
-      onClick={onSelect}
+      className={`ai-task-card ${isSelected ? 'is-selected' : ''} ${isWorking ? 'is-running' : ''} ${task.isDone ? 'is-done' : ''} ${isMenuOpen ? 'has-open-menu' : ''}`}
+      onClick={() => {
+        onSelect();
+        if (isTaskCollapsed) {
+          setIsTaskCollapsed(false);
+        }
+      }}
     >
       {/* ── Task Card Header ── */}
       <div className="ai-task-card-header">
@@ -596,8 +694,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
             <>
               <button
                 type="button"
-                className="btn btn-secondary"
-                style={{ padding: '0.25rem 0.55rem', fontSize: '0.76rem' }}
+                className="ai-card-btn"
                 onClick={handleCancel}
                 title="Cancel edits"
               >
@@ -606,8 +703,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
               </button>
               <button
                 type="button"
-                className="btn btn-primary"
-                style={{ padding: '0.25rem 0.55rem', fontSize: '0.76rem' }}
+                className="ai-card-btn is-primary"
                 onClick={handleSave}
                 title="Save changes"
               >
@@ -617,28 +713,10 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
             </>
           ) : (
             <>
-              {isSelected && (
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  style={{ padding: '0.25rem 0.55rem', fontSize: '0.76rem' }}
-                  onClick={() => {
-                    setIsEditing(true);
-                    setViewModeSection2('notes');
-                    setIsTaskCollapsed(false);
-                  }}
-                  title="Edit task notes"
-                >
-                  <Edit3 size={12} />
-                  <span>Edit</span>
-                </button>
-              )}
-
-              {(isSelected || isWorking) && (
+              {!isTaskDone && (
                 <button
                   type="button"
                   className={`execute-task-btn ${isWorking ? 'is-working' : ''}`}
-                  style={{ padding: '0.25rem 0.65rem', fontSize: '0.76rem', height: 'auto', minHeight: '1.75rem', maxWidth: 'none' }}
                   onClick={() => {
                     setIsTaskCollapsed(false);
                     setCollapsedSections({
@@ -653,12 +731,12 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                 >
                   {isWorking ? (
                     <>
-                      <Loader2 size={13} className="spin-animate" />
+                      <Loader2 size={12} className="spin-animate" />
                       <span>Working...</span>
                     </>
                   ) : (
                     <>
-                      <Play size={13} />
+                      <Play size={12} />
                       <span>Run Task</span>
                     </>
                   )}
@@ -666,6 +744,93 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
               )}
             </>
           )}
+
+          {/* Task Options Dropdown Menu */}
+          <div style={{ position: 'relative' }} ref={menuRef}>
+            <button
+              type="button"
+              className={`swimlane-menu-btn ${isMenuOpen ? 'active' : ''}`}
+              style={{ width: '26px', height: '26px' }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsMenuOpen((prev) => !prev);
+              }}
+              title="Task options"
+              aria-label="Task options"
+            >
+              <MoreHorizontal size={13} />
+            </button>
+
+            {isMenuOpen && (
+              <div className="swimlane-dropdown-menu" style={{ right: 0, minWidth: '185px' }} onClick={(e) => e.stopPropagation()}>
+                {isTaskDone && (
+                  <>
+                    <button
+                      type="button"
+                      className="swimlane-dropdown-item"
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        setIsTaskCollapsed(false);
+                        setCollapsedSections({
+                          overview: true,
+                          build: false,
+                          completion: true,
+                        });
+                        onExecuteTask(task);
+                      }}
+                    >
+                      <RotateCcw size={13} style={{ color: 'var(--accent-cyan)' }} />
+                      <span>Rerun Task</span>
+                    </button>
+
+                    <div className="swimlane-dropdown-divider" />
+                  </>
+                )}
+
+                <button
+                  type="button"
+                  className="swimlane-dropdown-item"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    setIsEditing(true);
+                    setViewModeSection2('notes');
+                    setIsTaskCollapsed(false);
+                  }}
+                >
+                  <Edit3 size={13} />
+                  <span>Edit Task</span>
+                </button>
+
+                <div className="swimlane-dropdown-divider" />
+
+                {isTaskStarted ? (
+                  <button
+                    type="button"
+                    className="swimlane-dropdown-item"
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      onArchiveTask?.(task.title || brief?.title || '');
+                    }}
+                  >
+                    <Archive size={13} style={{ color: '#f59e0b' }} />
+                    <span>Archive Task</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="swimlane-dropdown-item is-danger"
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      onRemoveAiTask?.(brief?.id || brief?.sourceTaskId || brief?.itemNumber || task.id);
+                    }}
+                  >
+                    <Trash2 size={13} />
+                    <span>Remove from AI Workspace</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1331,6 +1496,8 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   onRestartSession,
   onKillSession,
   onTerminateAgent,
+  onArchiveTask,
+  onRemoveAiTask,
 }) => {
   const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
@@ -1362,127 +1529,132 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
 
   return (
     <div className="pane pane-right obsidian-pane">
-      {/* ── Pane Header ── */}
-      <div className="pane-header obsidian-header">
-        <div className="pane-title">
-          <FileCode size={17} color="var(--accent-violet)" />
-          <span>AI Workspace</span>
-          <span className="pane-subtitle">{doneCount}/{briefs.length} done</span>
-        </div>
-
-        <div className="pane-header-actions" style={{ display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
-          {activeTaskRunningCount > 0 && (
-            <span className="running-indicator-badge">
-              <span className="live-pulse-dot" />
-              <span>{activeTaskRunningCount} running</span>
-            </span>
-          )}
-
-          {/* AI Workspace Header Actions Menu */}
-          <div style={{ position: 'relative' }} ref={headerMenuRef}>
-            <button
-              type="button"
-              className={`btn btn-secondary workspace-header-menu-btn ${isHeaderMenuOpen ? 'active' : ''}`}
-              style={{
-                padding: '0.3rem 0.65rem',
-                fontSize: '0.8rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.35rem',
-              }}
-              onClick={() => setIsHeaderMenuOpen((prev) => !prev)}
-              title="Workspace actions"
-              aria-label="Workspace actions"
-            >
-              <MoreHorizontal size={14} />
-            </button>
-
-            {isHeaderMenuOpen && (
-              <div className="workspace-header-dropdown-menu">
-                <button
-                  type="button"
-                  className="workspace-header-dropdown-item"
-                  onClick={() => {
-                    setIsHeaderMenuOpen(false);
-                    setIsArchiveModalOpen(true);
-                  }}
-                >
-                  <Archive size={14} className="dropdown-item-icon archive-icon" />
-                  <span>Archived Tasks</span>
-                  {archivedTasks.length > 0 && (
-                    <span className="dropdown-item-badge">{archivedTasks.length}</span>
-                  )}
-                </button>
-              </div>
-            )}
+      <div className="ai-workspace-column">
+        {/* ── Pane Header ── */}
+        <div className="ai-workspace-column-header">
+          <div className="ai-workspace-title-container">
+            <FileCode size={15} style={{ color: 'var(--accent-violet)', flexShrink: 0 }} />
+            <span className="ai-workspace-title-text">AI Workspace</span>
+            <span className="swimlane-done-badge">{doneCount}/{briefs.length} done</span>
           </div>
-        </div>
-      </div>
 
-      {/* ── Scrollable Multi-Task List ── */}
-      <div className="pane-content obsidian-body brief-scrollable-workspace">
-        {briefs.length === 0 ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: '300px' }}>
-            <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-              <ListTodo size={48} color="var(--accent-violet)" style={{ opacity: 0.45, marginBottom: '1rem' }} />
-              <h3 style={{ color: 'var(--text-bright)', fontSize: '1.15rem' }}>No AI tasks in workspace</h3>
-              <p style={{ fontSize: '0.85rem', marginTop: '0.5rem', maxWidth: '420px', lineHeight: '1.6' }}>
-                Tasks in <strong>AGENT_CONTEXT.md</strong> will appear here.
-              </p>
+          <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
+            {activeTaskRunningCount > 0 && (
+              <span className="running-indicator-badge">
+                <span className="live-pulse-dot" />
+                <span>{activeTaskRunningCount} running</span>
+              </span>
+            )}
+
+            {/* AI Workspace Header Actions Menu */}
+            <div style={{ position: 'relative' }} ref={headerMenuRef}>
+              <button
+                type="button"
+                className={`swimlane-menu-btn ${isHeaderMenuOpen ? 'active' : ''}`}
+                onClick={() => setIsHeaderMenuOpen((prev) => !prev)}
+                title="Workspace actions"
+                aria-label="Workspace actions"
+              >
+                <MoreHorizontal size={15} />
+              </button>
+
+              {isHeaderMenuOpen && (
+                <div className="swimlane-dropdown-menu" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    className="swimlane-dropdown-item"
+                    onClick={() => {
+                      setIsHeaderMenuOpen(false);
+                      setIsArchiveModalOpen(true);
+                    }}
+                  >
+                    <Archive size={13} style={{ color: '#f59e0b' }} />
+                    <span>Archived Tasks</span>
+                    {archivedTasks.length > 0 && (
+                      <span className="dropdown-item-badge" style={{ marginLeft: 'auto', fontSize: '0.7rem', padding: '0.05rem 0.35rem', borderRadius: '8px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.35)', color: '#f59e0b', fontWeight: 600 }}>
+                        {archivedTasks.length}
+                      </span>
+                    )}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
-        ) : (
-          <div className="ai-tasks-list-container">
-            {briefs.map((brief, index) => {
-              const matchingTask =
-                tasks.find((t) => t.title.trim().toLowerCase() === brief.title.trim().toLowerCase()) ||
-                tasks.find((t) => t.id === brief.itemNumber);
+        </div>
 
-              const effectiveTask: TaskItem = matchingTask || {
-                id: brief.itemNumber || index + 1,
-                title: brief.title,
-                category: 'AI Workspace',
-                status: (brief.status as TaskStatus) || 'not_started',
-                isDone: brief.status === 'done',
-                subtasks: [],
-                isUnordered: brief.isUnordered,
-              };
+        {/* ── Scrollable Multi-Task List ── */}
+        <div className="brief-scrollable-workspace">
+          {briefs.length === 0 ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: '300px' }}>
+              <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                <ListTodo size={48} color="var(--accent-violet)" style={{ opacity: 0.45, marginBottom: '1rem' }} />
+                <h3 style={{ color: 'var(--text-bright)', fontSize: '1.15rem' }}>No AI tasks in workspace</h3>
+                <p style={{ fontSize: '0.85rem', marginTop: '0.5rem', maxWidth: '420px', lineHeight: '1.6' }}>
+                  Tasks in <strong>AGENT_CONTEXT.md</strong> will appear here.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="ai-tasks-list-container">
+              {briefs.map((brief, index) => {
+                const matchingTask =
+                  (brief.sourceTaskId ? tasks.find((t) => t.id === brief.sourceTaskId) : null) ||
+                  tasks.find((t) => t.title.trim().toLowerCase() === brief.title.trim().toLowerCase());
 
-              const terminalSession = terminalSessions.find((s) => s.session.taskId === effectiveTask.id) ?? null;
-              const isTerminalRunning = !!terminalSession?.session.isActive;
-              const isExecuting = executingTaskId === effectiveTask.id;
-              const isWorking = isTerminalRunning || isExecuting;
-              const isSelected = selectedTaskId === effectiveTask.id;
+                const effectiveTask: TaskItem = matchingTask || {
+                  id: brief.sourceTaskId || brief.id || `brief-${brief.itemNumber || index + 1}`,
+                  title: brief.title,
+                  category: brief.sourceLaneTitle || 'AI Workspace',
+                  status: (brief.status as TaskStatus) || 'not_started',
+                  isDone: brief.status === 'done',
+                  subtasks: [],
+                  isUnordered: brief.isUnordered,
+                  swimLaneId: brief.sourceLaneId,
+                };
 
-              return (
-                <AiTaskCard
-                  key={brief.itemNumber || `brief-${index}`}
-                  task={effectiveTask}
-                  brief={brief}
-                  isSelected={isSelected}
-                  isWorking={isWorking}
-                  terminalSession={terminalSession}
-                  isExecuting={isExecuting}
-                  executionSteps={taskExecutionSteps[effectiveTask.id] || []}
-                  pendingPermission={pendingPermissions[effectiveTask.id]?.prompt ?? null}
-                  pendingHumanInput={pendingHumanInputs[effectiveTask.id] ?? null}
-                  onSelect={() => onSelectTask?.(effectiveTask.id)}
-                  onSaveBrief={onSaveBrief}
-                  onLiveBriefChange={onLiveBriefChange}
-                  onExecuteTask={onExecuteTask}
-                  onUpdateBriefWithAi={_onUpdateBriefWithAi}
-                  onSyncOverviewWithTask={onSyncOverviewWithTask}
-                  onPermissionChoice={(approved) => onPermissionChoice?.(effectiveTask.id, approved)}
-                  onHumanInputChoice={(answer) => onHumanInputChoice?.(effectiveTask.id, answer)}
-                  onSessionExit={(code) => onSessionExit?.(effectiveTask.id, code)}
-                  onRestartSession={onRestartSession}
-                  onKillSession={onKillSession}
-                  onTerminateAgent={onTerminateAgent}
-                />
-              );
-            })}
-          </div>
-        )}
+                const terminalSession = terminalSessions.find((s) => s.session.taskId === effectiveTask.id) ?? null;
+                const isTerminalRunning = !!terminalSession?.session.isActive;
+                const isExecuting = executingTaskId === effectiveTask.id;
+                const isWorking = isTerminalRunning || isExecuting;
+                const isSelected =
+                  selectedTaskId != null &&
+                  (selectedTaskId === effectiveTask.id ||
+                    (matchingTask != null && selectedTaskId === matchingTask.id) ||
+                    (brief.sourceTaskId != null && selectedTaskId === brief.sourceTaskId) ||
+                    (brief.id != null && selectedTaskId === brief.id));
+
+                return (
+                  <AiTaskCard
+                    key={brief.id || brief.sourceTaskId || brief.itemNumber || `brief-${index}`}
+                    task={effectiveTask}
+                    brief={brief}
+                    isSelected={isSelected}
+                    isWorking={isWorking}
+                    terminalSession={terminalSession}
+                    isExecuting={isExecuting}
+                    executionSteps={taskExecutionSteps[effectiveTask.id] || []}
+                    pendingPermission={pendingPermissions[effectiveTask.id]?.prompt ?? null}
+                    pendingHumanInput={pendingHumanInputs[effectiveTask.id] ?? null}
+                    onSelect={() => onSelectTask?.(brief.sourceTaskId || brief.id || effectiveTask.id)}
+                    onSaveBrief={onSaveBrief}
+                    onLiveBriefChange={onLiveBriefChange}
+                    onExecuteTask={onExecuteTask}
+                    onUpdateBriefWithAi={_onUpdateBriefWithAi}
+                    onSyncOverviewWithTask={onSyncOverviewWithTask}
+                    onPermissionChoice={(approved) => onPermissionChoice?.(effectiveTask.id, approved)}
+                    onHumanInputChoice={(answer) => onHumanInputChoice?.(effectiveTask.id, answer)}
+                    onSessionExit={(code) => onSessionExit?.(effectiveTask.id, code)}
+                    onRestartSession={onRestartSession}
+                    onKillSession={onKillSession}
+                    onTerminateAgent={onTerminateAgent}
+                    onArchiveTask={onArchiveTask}
+                    onRemoveAiTask={(targetId) => onRemoveAiTask?.(targetId)}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── Archived Tasks Modal Window ── */}

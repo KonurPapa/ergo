@@ -23,8 +23,8 @@ interface ArchivedTasksModalProps {
   swimLanes: SwimLaneDoc[];
   briefs?: AgentContextItem[];
   archivedBriefs?: AgentContextItem[];
-  onUnarchiveTask?: (taskId: number) => void;
-  onDeleteArchivedTask?: (taskId: number) => void;
+  onUnarchiveTask?: (taskId: string | number) => void;
+  onDeleteArchivedTask?: (taskId: string | number) => void;
 }
 
 export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
@@ -40,9 +40,9 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
   const [selectedLaneId, setSelectedLaneId] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [taskToDelete, setTaskToDelete] = useState<TaskItem | null>(null);
-  const [expandedBriefs, setExpandedBriefs] = useState<Record<number, boolean>>({});
+  const [expandedBriefs, setExpandedBriefs] = useState<Record<string | number, boolean>>({});
 
-  const toggleBriefExpansion = (taskId: number) => {
+  const toggleBriefExpansion = (taskId: string | number) => {
     setExpandedBriefs((prev) => ({ ...prev, [taskId]: !prev[taskId] }));
   };
 
@@ -396,17 +396,18 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
                   {group.tasks.map((task) => {
                     const taskPositionNum =
-                      task.archivedAtIndex != null
+                      task.listIndex ??
+                      (task.archivedAtIndex != null
                         ? task.archivedAtIndex + 1
-                        : task.id > 1000
+                        : typeof task.id === 'number' && task.id > 1000
                         ? task.id - 1000
-                        : task.id;
+                        : 1);
 
                     const taskBrief =
+                      (task.id ? archivedBriefs.find((b) => b.sourceTaskId === task.id) : null) ||
                       archivedBriefs.find((b) => b.title.trim().toLowerCase() === task.title.trim().toLowerCase()) ||
-                      archivedBriefs.find((b) => b.itemNumber === task.id) ||
+                      (task.id ? briefs.find((b) => b.sourceTaskId === task.id) : null) ||
                       briefs.find((b) => b.title.trim().toLowerCase() === task.title.trim().toLowerCase()) ||
-                      briefs.find((b) => b.itemNumber === task.id) ||
                       undefined;
 
                     const isBriefOpen = !!expandedBriefs[task.id];

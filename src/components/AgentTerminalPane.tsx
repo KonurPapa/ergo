@@ -30,10 +30,10 @@ interface AgentTerminalPaneProps {
   isOpen: boolean;
   onClose: () => void;
   sessions: SpawnedSession[];
-  activeTaskId: number | null;
-  onSelectSession: (taskId: number) => void;
-  onCloseSession: (taskId: number) => void;
-  onSessionExit: (taskId: number, code: number) => void;
+  activeTaskId: string | number | null;
+  onSelectSession: (taskId: string | number) => void;
+  onCloseSession: (taskId: string | number) => void;
+  onSessionExit: (taskId: string | number, code: number) => void;
   cliConfig: CliAgentConfig | null;
 }
 
