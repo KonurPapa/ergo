@@ -9,6 +9,8 @@ import {
   type HumanInputPrompt
 } from '../types';
 import { AgentTerminal } from './AgentTerminal';
+import { StepStatusIcon, StepUsageBadge, PieceChip, BiblePreview } from './ExecutionStepExtras';
+import { BvTokenCounterCard, BvHeaderTokenBadge } from './BvTokenCounterCard';
 import {
   FileCode,
   Edit3,
@@ -41,7 +43,9 @@ import {
   ExternalLink,
   Check,
   MoreHorizontal,
-  Trash2
+  Trash2,
+  PanelRightClose,
+  PanelRightOpen
 } from 'lucide-react';
 
 import { RichTextToolbar } from './RichTextToolbar';
@@ -198,6 +202,9 @@ interface BriefPaneProps {
   onTerminateAgent?: (taskId: string | number) => void;
   onArchiveTask?: (taskTitle: string) => void;
   onRemoveAiTask?: (targetId: string | number) => void;
+  // Popout Panel Controls
+  isPanelOpen?: boolean;
+  onTogglePanel?: () => void;
 }
 
 interface AiTaskCardProps {
@@ -1019,6 +1026,13 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}
                   onClick={(e) => e.stopPropagation()}
                 >
+                  <BvHeaderTokenBadge
+                    task={task}
+                    brief={brief}
+                    executionSteps={executionSteps}
+                    isExecuting={isExecuting}
+                  />
+
                   {/* Case 1: Terminal Session Active or Existed */}
                   {terminalSession ? (
                     <>
@@ -1153,6 +1167,14 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
               </div>
 
               <div className="brief-body-wrapper">
+                {/* Small Token Usage Counter Card anchored to the top of the BV section */}
+                <BvTokenCounterCard
+                  task={task}
+                  brief={brief}
+                  executionSteps={executionSteps}
+                  isExecuting={isExecuting}
+                />
+
                 {/* Sub-view 1: Embedded Terminal */}
                 {showTerminal && terminalSession ? (
                   <div className="embedded-terminal-wrapper">
@@ -1222,23 +1244,23 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                     {/* Execution Steps */}
                     <div className="execution-steps">
                       {executionSteps.map((step) => (
-                        <div key={step.id} className={`step-card ${step.status}`}>
+                        <div key={step.id} className={`step-card ${step.status} stage-${step.stage}`} style={step.stage === 'mcp_call' && step.pieceId ? { marginLeft: '1.1rem' } : undefined}>
                           <div className="step-header">
                             <div className="step-title">
-                              {step.status === 'running' && (step.stage === 'human_input' ? <HelpCircle size={15} color="var(--accent-amber)" className="pulse-animate" /> : step.stage === 'overview' ? <Sparkles size={15} color="var(--accent-amber)" className="spin-animate" /> : <Loader2 size={15} className="spin-animate" color="var(--accent-primary)" />)}
-                              {step.status === 'success' && <CheckCircle2 size={15} color="var(--accent-emerald)" />}
-                              {step.status === 'warning' && <ShieldAlert size={15} color="var(--accent-rose)" />}
-                              {step.status === 'pending' && <CircleDot size={15} color="var(--text-dim)" />}
-                              {step.status === 'cancelled' && <XCircle size={15} color="var(--accent-rose)" />}
-                              {step.status === 'error' && <XCircle size={15} color="var(--accent-rose)" />}
+                              <StepStatusIcon step={step} />
+                              <PieceChip pieceId={step.stage === 'mcp_call' ? step.pieceId : undefined} />
                               <span style={{ fontSize: '0.88rem', color: step.status === 'cancelled' ? 'var(--text-muted)' : undefined }}>{step.title}</span>
                             </div>
-                            <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-                              {step.time}
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                              <StepUsageBadge usage={step.usage} />
+                              <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
+                                {step.time}
+                              </span>
                             </span>
                           </div>
 
-                          <div className="step-detail" style={{ fontSize: '0.82rem' }}>{step.detail}</div>
+                          <div className="step-detail" style={{ fontSize: '0.82rem', whiteSpace: 'pre-wrap' }}>{step.detail}</div>
+                          <BiblePreview markdown={step.bibleMarkdown} filePath={step.bibleMarkdown ? step.bibleFilePath : undefined} />
 
                           {/* Overview document preview if available */}
                           {step.stage === 'overview' && step.status === 'success' && step.overviewDocument && (
@@ -1498,6 +1520,8 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   onTerminateAgent,
   onArchiveTask,
   onRemoveAiTask,
+  isPanelOpen = true,
+  onTogglePanel,
 }) => {
   const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
@@ -1527,8 +1551,86 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   const activeTaskRunningCount = runningTaskIds.length;
   const doneCount = briefs.filter((b) => b.status === 'done').length;
 
+  // ── Collapsed Vertical Menu Rail View ──
+  if (isPanelOpen === false) {
+    return (
+      <div
+        className="ai-workspace-vertical-rail"
+        onClick={onTogglePanel}
+        title="Expand AI Workspace Panel"
+      >
+        {/* Top Expand Button */}
+        <button
+          type="button"
+          className="ai-rail-expand-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            onTogglePanel?.();
+          }}
+          title="Expand AI Workspace Panel"
+          aria-label="Expand AI Workspace Panel"
+        >
+          <PanelRightOpen size={16} />
+        </button>
+
+        {/* Vertical Middle Section: Icon, Rotated Label, Counts */}
+        <div className="ai-rail-middle-section">
+          <div className="ai-rail-icon-wrapper">
+            <FileCode size={16} style={{ color: 'var(--accent-violet)' }} />
+            {activeTaskRunningCount > 0 && (
+              <span className="live-pulse-dot ai-rail-pulse" title={`${activeTaskRunningCount} running task${activeTaskRunningCount > 1 ? 's' : ''}`} />
+            )}
+          </div>
+
+          <div className="ai-rail-text-label">
+            <span>AI WORKSPACE</span>
+          </div>
+
+          <div className="ai-rail-count-badge" title={`${doneCount} of ${briefs.length} tasks completed`}>
+            <span>{doneCount}/{briefs.length}</span>
+          </div>
+
+          {activeTaskRunningCount > 0 && (
+            <div className="ai-rail-running-badge" title={`${activeTaskRunningCount} task${activeTaskRunningCount > 1 ? 's' : ''} currently running`}>
+              <Loader2 size={11} className="spin-animate" />
+              <span>{activeTaskRunningCount}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Bottom Rail Actions */}
+        <div className="ai-rail-bottom-section" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            className="ai-rail-action-btn"
+            onClick={() => setIsArchiveModalOpen(true)}
+            title="View Archived Tasks"
+            aria-label="View Archived Tasks"
+          >
+            <Archive size={14} color="#f59e0b" />
+            {archivedTasks.length > 0 && (
+              <span className="ai-rail-mini-badge">{archivedTasks.length}</span>
+            )}
+          </button>
+        </div>
+
+        {/* Archived Tasks Modal Window */}
+        <ArchivedTasksModal
+          isOpen={isArchiveModalOpen}
+          onClose={() => setIsArchiveModalOpen(false)}
+          archivedTasks={archivedTasks}
+          swimLanes={swimLanes}
+          briefs={briefs}
+          archivedBriefs={archivedBriefs}
+          onUnarchiveTask={onUnarchiveTask}
+          onDeleteArchivedTask={onDeleteArchivedTask}
+        />
+      </div>
+    );
+  }
+
   return (
-    <div className="pane pane-right obsidian-pane">
+    <div className="pane pane-right obsidian-pane ai-workspace-popout-panel">
       <div className="ai-workspace-column">
         {/* ── Pane Header ── */}
         <div className="ai-workspace-column-header">
@@ -1579,6 +1681,19 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                 </div>
               )}
             </div>
+
+            {/* Collapse AI Workspace Panel Button */}
+            {onTogglePanel && (
+              <button
+                type="button"
+                className="swimlane-menu-btn ai-panel-collapse-btn"
+                onClick={onTogglePanel}
+                title="Collapse AI Workspace panel"
+                aria-label="Collapse AI Workspace panel"
+              >
+                <PanelRightClose size={14} />
+              </button>
+            )}
           </div>
         </div>
 

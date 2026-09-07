@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Coin Collector Game</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+    body {
+      background: radial-gradient(circle at center, #1a1c29 0%, #0c0d14 100%);
+      color: #fff;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .header {
+      margin-bottom: 12px;
+      text-align: center;
+    }
+    .title {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      background: linear-gradient(135deg, #ffd700, #ff8800);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      text-shadow: 0 0 20px rgba(255, 215, 0, 0.2);
+    }
+    .hud {
+      display: flex;
+      gap: 24px;
+      justify-content: center;
+      align-items: center;
+      margin-top: 6px;
+    }
+    .stat-box {
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 12px;
+      padding: 6px 16px;
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 15px;
+    }
+    .stat-val {
+      font-weight: bold;
+      color: #ffd700;
+      font-size: 18px;
+    }
+    #game-container {
+      position: relative;
+      width: 800px;
+      height: 540px;
+      background: rgba(15, 17, 26, 0.85);
+      border: 2px solid rgba(255, 255, 255, 0.15);
+      border-radius: 16px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 30px rgba(99, 102, 241, 0.15);
+      overflow: hidden;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    .footer {
+      margin-top: 14px;
+      font-size: 13px;
+      color: #94a3b8;
+      display: flex;
+      gap: 16px;
+    }
+    .key-badge {
+      display: inline-block;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-family: monospace;
+      font-size: 11px;
+      color: #e2e8f0;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="title">✨ COIN QUEST</div>
+    <div class="hud">
+      <div class="stat-box">Score: <span id="score" class="stat-val">0</span></div>
+      <div class="stat-box">Coins Collected: <span id="coins" class="stat-val">0</span></div>
+      <div class="stat-box">Speed: <span id="speed" class="stat-val">Normal</span></div>
+    </div>
+  </div>
+
+  <div id="game-container">
+    <canvas id="gameCanvas" width="800" height="540"></canvas>
+  </div>
+
+  <div class="footer">
+    <span>Controls: <span class="key-badge">W</span><span class="key-badge">A</span><span class="key-badge">S</span><span class="key-badge">D</span> or <span class="key-badge">Arrow Keys</span> to Move</span>
+    <span>•</span>
+    <span>Pick up <span style="color:#ffd700;font-weight:bold;">★ Coins</span> to score points!</span>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const coinsEl = document.getElementById('coins');
+    const speedEl = document.getElementById('speed');
+
+    let score = 0;
+    let coinsCollected = 0;
+
+    // Keys state
+    const keys = {
+      up: false,
+      down: false,
+      left: false,
+      right: false
+    };
+
+    window.addEventListener('keydown', (e) => {
+      const k = e.key.toLowerCase();
+      if (k === 'w' || k === 'arrowup') keys.up = true;
+      if (k === 's' || k === 'arrowdown') keys.down = true;
+      if (k === 'a' || k === 'arrowleft') keys.left = true;
+      if (k === 'd' || k === 'arrowright') keys.right = true;
+    });
+
+    window.addEventListener('keyup', (e) => {
+      const k = e.key.toLowerCase();
+      if (k === 'w' || k === 'arrowup') keys.up = false;
+      if (k === 's' || k === 'arrowdown') keys.down = false;
+      if (k === 'a' || k === 'arrowleft') keys.left = false;
+      if (k === 'd' || k === 'arrowright') keys.right = false;
+    });
+
+    // Player
+    const player = {
+      x: canvas.width / 2,
+      y: canvas.height / 2,
+      radius: 18,
+      speed: 4.5,
+      color: '#38bdf8',
+      trail: [],
+      facing: 0
+    };
+
+    // Coins
+    let coins = [];
+    const MAX_COINS = 7;
+
+    function spawnCoin() {
+      const margin = 40;
+      const coin = {
+        x: margin + Math.random() * (canvas.width - margin * 2),
+        y: margin + Math.random() * (canvas.height - margin * 2),
+        radius: 12,
+        value: 10,
+        pulse: Math.random() * Math.PI * 2,
+        sparkleAngle: 0
+      };
+      coins.push(coin);
+    }
+
+    for (let i = 0; i < MAX_COINS; i++) {
+      spawnCoin();
+    }
+
+    // Particles
+    let particles = [];
+
+    function createExplosion(x, y, color) {
+      for (let i = 0; i < 18; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 1.5 + Math.random() * 4.5;
+        particles.push({
+          x,
+          y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          radius: 2 + Math.random() * 3,
+          color: color,
+          alpha: 1,
+          life: 1
+        });
+      }
+    }
+
+    // Floating text
+    let floatingTexts = [];
+    function addFloatingText(text, x, y, color = '#ffd700') {
+      floatingTexts.push({
+        text,
+        x,
+        y,
+        alpha: 1,
+        vy: -1.2
+      });
+    }
+
+    function update() {
+      // Movement
+      let dx = 0;
+      let dy = 0;
+      if (keys.up) dy -= 1;
+      if (keys.down) dy += 1;
+      if (keys.left) dx -= 1;
+      if (keys.right) dx += 1;
+
+      if (dx !== 0 && dy !== 0) {
+        dx *= 0.7071;
+        dy *= 0.7071;
+      }
+
+      player.x += dx * player.speed;
+      player.y += dy * player.speed;
+
+      // Bound checks
+      if (player.x < player.radius) player.x = player.radius;
+      if (player.x > canvas.width - player.radius) player.x = canvas.width - player.radius;
+      if (player.y < player.radius) player.y = player.radius;
+      if (player.y > canvas.height - player.radius) player.y = canvas.height - player.radius;
+
+      // Trail
+      if (dx !== 0 || dy !== 0) {
+        player.trail.push({ x: player.x, y: player.y, alpha: 0.5 });
+      }
+      for (let i = player.trail.length - 1; i >= 0; i--) {
+        player.trail[i].alpha -= 0.04;
+        if (player.trail[i].alpha <= 0) {
+          player.trail.splice(i, 1);
+        }
+      }
+
+      // Check coin collisions
+      for (let i = coins.length - 1; i >= 0; i--) {
+        const c = coins[i];
+        const dist = Math.hypot(player.x - c.x, player.y - c.y);
+        if (dist < player.radius + c.radius) {
+          // Collected
+          score += c.value;
+          coinsCollected += 1;
+          scoreEl.textContent = score;
+          coinsEl.textContent = coinsCollected;
+
+          // Milestone speedup
+          if (coinsCollected % 10 === 0) {
+            player.speed = Math.min(8, player.speed + 0.3);
+            speedEl.textContent = `Boosted! (${player.speed.toFixed(1)}x)`;
+            speedEl.style.color = '#38bdf8';
+          }
+
+          createExplosion(c.x, c.y, '#fbbf24');
+          addFloatingText(`+${c.value}`, c.x, c.y - 10);
+          coins.splice(i, 1);
+          spawnCoin();
+        }
+      }
+
+      // Update particles
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vx *= 0.96;
+        p.vy *= 0.96;
+        p.alpha -= 0.025;
+        if (p.alpha <= 0) {
+          particles.splice(i, 1);
+        }
+      }
+
+      // Update floating texts
+      for (let i = floatingTexts.length - 1; i >= 0; i--) {
+        const ft = floatingTexts[i];
+        ft.y += ft.vy;
+        ft.alpha -= 0.02;
+        if (ft.alpha <= 0) {
+          floatingTexts.splice(i, 1);
+        }
+      }
+    }
+
+    function draw() {
+      // Clear background with subtle grid
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Grid
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+      ctx.lineWidth = 1;
+      const gridSize = 40;
+      for (let x = 0; x < canvas.width; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      }
+
+      // Draw Player Trail
+      for (let t of player.trail) {
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, player.radius * 0.8, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(56, 189, 248, ${t.alpha * 0.4})`;
+        ctx.fill();
+      }
+
+      // Draw Coins
+      const now = performance.now() * 0.003;
+      for (let c of coins) {
+        const pulseRadius = c.radius + Math.sin(now * 3 + c.pulse) * 2;
+
+        // Glow
+        const gradient = ctx.createRadialGradient(c.x, c.y, 2, c.x, c.y, pulseRadius * 2);
+        gradient.addColorStop(0, 'rgba(251, 191, 36, 0.8)');
+        gradient.addColorStop(0.5, 'rgba(245, 158, 11, 0.3)');
+        gradient.addColorStop(1, 'rgba(245, 158, 11, 0)');
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, pulseRadius * 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Main Coin Body
+        ctx.fillStyle = '#f59e0b';
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, pulseRadius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Inner Coin Detail
+        ctx.fillStyle = '#fef08a';
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, pulseRadius * 0.75, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Star / symbol in coin
+        ctx.fillStyle = '#d97706';
+        ctx.font = `bold ${Math.floor(pulseRadius * 0.9)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('★', c.x, c.y + 1);
+      }
+
+      // Draw Player
+      // Player Outer Glow
+      const pGrad = ctx.createRadialGradient(player.x, player.y, 5, player.x, player.y, player.radius * 1.8);
+      pGrad.addColorStop(0, 'rgba(56, 189, 248, 0.7)');
+      pGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+      ctx.fillStyle = pGrad;
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.radius * 1.8, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Player Body
+      ctx.fillStyle = player.color;
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Player Core
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.radius * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Draw Particles
+      for (let p of particles) {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, p.alpha);
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Draw Floating Texts
+      for (let ft of floatingTexts) {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, ft.alpha);
+        ctx.fillStyle = '#ffd700';
+        ctx.font = 'bold 16px monospace';
+        ctx.textAlign = 'center';
+        ctx.shadowColor = 'rgba(0,0,0,0.8)';
+        ctx.shadowBlur = 4;
+        ctx.fillText(ft.text, ft.x, ft.y);
+        ctx.restore();
+      }
+
+      requestAnimationFrame(() => {
+        update();
+        draw();
+      });
+    }
+
+    // Start
+    draw();
+  </script>
+</body>
+</html>

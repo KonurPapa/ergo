@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { type ProjectData, type FolderMetadata } from '../types';
+import { type ProjectData, type FolderMetadata, type AgentPipelineOptions } from '../types';
 import { type AutosaveStatus } from '../hooks/useAutosave';
 import {
   Settings,
@@ -19,7 +19,13 @@ import {
   RefreshCw,
   Sun,
   Moon,
-  Palette
+  Palette,
+  Workflow,
+  Users,
+  Repeat,
+  Sparkles,
+  FlaskConical,
+  Search
 } from 'lucide-react';
 
 interface SettingsModalProps {
@@ -39,7 +45,51 @@ interface SettingsModalProps {
   onSaveImmediately: () => void;
   theme: 'light' | 'dark';
   onThemeChange: (theme: 'light' | 'dark') => void;
+  agentPipelineOptions: AgentPipelineOptions;
+  onSetAgentPipelineOptions: (next: AgentPipelineOptions) => void;
 }
+
+/** Bounds for the numeric pipeline knobs (kept in sync with the helper text below). */
+const PIPELINE_LIMITS = {
+  maxConcurrentAgents: { min: 1, max: 8 },
+  maxQaRetries: { min: 0, max: 5 },
+  maxToolRoundsPerAgent: { min: 5, max: 120 },
+  discoveryRelevanceThreshold: { min: 10, max: 90 }
+} as const;
+
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+const pipelineInputBoxStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '0.6rem',
+  background: 'rgba(0, 0, 0, 0.3)',
+  padding: '0.5rem 0.85rem',
+  borderRadius: '6px',
+  border: '1px solid var(--border-subtle)',
+  width: 'fit-content'
+};
+
+const pipelineNumberInputStyle: React.CSSProperties = {
+  width: '65px',
+  background: 'transparent',
+  border: 'none',
+  outline: 'none',
+  color: 'var(--accent-cyan)',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '0.9rem',
+  fontWeight: 600
+};
+
+const pipelineHelpStyle: React.CSSProperties = {
+  fontSize: '0.74rem',
+  color: 'var(--text-muted)',
+  lineHeight: '1.4',
+  marginTop: '0.4rem'
+};
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
@@ -57,7 +107,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onToggleAutosave,
   onSaveImmediately,
   theme,
-  onThemeChange
+  onThemeChange,
+  agentPipelineOptions,
+  onSetAgentPipelineOptions
 }) => {
   const [isScanning, setIsScanning] = useState(false);
   const [storagePathInput, setStoragePathInput] = useState(
@@ -70,6 +122,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const todoPath = activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`;
   const agentPath = activeProject?.agentContextFilePath || `${activeProject?.folderPath}/AGENT_CONTEXT.md`;
+
+  const setPipelineOption = <K extends keyof AgentPipelineOptions>(key: K, value: AgentPipelineOptions[K]) => {
+    onSetAgentPipelineOptions({ ...agentPipelineOptions, [key]: value });
+  };
+  const setPipelineNumber = (key: 'maxConcurrentAgents' | 'maxQaRetries' | 'maxToolRoundsPerAgent' | 'discoveryRelevanceThreshold', raw: string) => {
+    const parsed = parseInt(raw, 10);
+    if (isNaN(parsed)) return;
+    const { min, max } = PIPELINE_LIMITS[key];
+    setPipelineOption(key, clampInt(parsed, min, max));
+  };
 
   const handleScan = async () => {
     setIsScanning(true);
@@ -479,6 +541,178 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 }}
               />
               <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>seconds</span>
+            </div>
+          </div>
+
+          {/* Section 3b: Agent Execution Pipeline Tuning */}
+          <div
+            style={{
+              background: 'rgba(255, 255, 255, 0.025)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: '8px',
+              padding: '1.1rem'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
+              <Workflow size={16} color="var(--accent-violet)" />
+              <span style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--text-bright)' }}>Agent Pipeline</span>
+            </div>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.85rem', lineHeight: '1.4' }}>
+              Tuning for the task execution engine (Discovery → Summary → Manager fan-out → Cleaner → Hardener). Every knob trades tokens and latency against thoroughness.
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.85rem' }}>
+              {/* Max concurrent sub-agents */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
+                  <Users size={13} color="var(--accent-primary)" />
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)' }}>Max concurrent sub-agents</span>
+                </div>
+                <div style={pipelineInputBoxStyle}>
+                  <input
+                    type="number"
+                    min={PIPELINE_LIMITS.maxConcurrentAgents.min}
+                    max={PIPELINE_LIMITS.maxConcurrentAgents.max}
+                    step="1"
+                    value={agentPipelineOptions.maxConcurrentAgents}
+                    onChange={(e) => setPipelineNumber('maxConcurrentAgents', e.target.value)}
+                    style={pipelineNumberInputStyle}
+                    aria-label="Maximum concurrent sub-agents"
+                  />
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>workers (1–8)</span>
+                </div>
+                <p style={pipelineHelpStyle}>More workers finish faster but share the prompt cache less well and can hit rate limits.</p>
+              </div>
+
+              {/* QA retries */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
+                  <RotateCw size={13} color="var(--accent-rose)" />
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)' }}>QA retries</span>
+                </div>
+                <div style={pipelineInputBoxStyle}>
+                  <input
+                    type="number"
+                    min={PIPELINE_LIMITS.maxQaRetries.min}
+                    max={PIPELINE_LIMITS.maxQaRetries.max}
+                    step="1"
+                    value={agentPipelineOptions.maxQaRetries}
+                    onChange={(e) => setPipelineNumber('maxQaRetries', e.target.value)}
+                    style={pipelineNumberInputStyle}
+                    aria-label="Maximum QA retries"
+                  />
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>retries (0–5)</span>
+                </div>
+                <p style={pipelineHelpStyle}>Each Hardener failure re-runs the Manager with fresh context plus the diagnostics; 0 means report and stop.</p>
+              </div>
+
+              {/* Tool rounds per agent */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
+                  <Repeat size={13} color="var(--accent-cyan)" />
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)' }}>Tool rounds per agent</span>
+                </div>
+                <div style={pipelineInputBoxStyle}>
+                  <input
+                    type="number"
+                    min={PIPELINE_LIMITS.maxToolRoundsPerAgent.min}
+                    max={PIPELINE_LIMITS.maxToolRoundsPerAgent.max}
+                    step="5"
+                    value={agentPipelineOptions.maxToolRoundsPerAgent}
+                    onChange={(e) => setPipelineNumber('maxToolRoundsPerAgent', e.target.value)}
+                    style={pipelineNumberInputStyle}
+                    aria-label="Maximum tool-call rounds per agent"
+                  />
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>rounds (5–120)</span>
+                </div>
+                <p style={pipelineHelpStyle}>Upper bound on LLM round-trips per agent loop; higher lets long jobs finish but each round re-reads the whole context.</p>
+              </div>
+
+              {/* Discovery Relevance Threshold */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
+                  <Search size={13} color="var(--accent-emerald)" />
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)' }}>Discovery Title Threshold</span>
+                </div>
+                <div style={pipelineInputBoxStyle}>
+                  <input
+                    type="number"
+                    min={PIPELINE_LIMITS.discoveryRelevanceThreshold.min}
+                    max={PIPELINE_LIMITS.discoveryRelevanceThreshold.max}
+                    step="5"
+                    value={agentPipelineOptions.discoveryRelevanceThreshold ?? 50}
+                    onChange={(e) => setPipelineNumber('discoveryRelevanceThreshold', e.target.value)}
+                    style={pipelineNumberInputStyle}
+                    aria-label="Discovery candidate task title match threshold percentage"
+                  />
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>% match (10–90%)</span>
+                </div>
+                <p style={pipelineHelpStyle}>Minimum title match probability before Discovery inspects candidate subtasks; halts upon finding the first matching subtask.</p>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginTop: '0.9rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-subtle)' }}>
+              {/* Cleaner pass toggle */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <Sparkles size={13} color="var(--accent-amber)" />
+                    <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)' }}>Cleaner pass for coding tasks</span>
+                    <span
+                      className={`badge ${agentPipelineOptions.enableCleaner ? 'badge-done' : ''}`}
+                      style={{
+                        fontSize: '0.62rem',
+                        padding: '0.05rem 0.35rem',
+                        background: agentPipelineOptions.enableCleaner ? undefined : 'rgba(255,255,255,0.06)',
+                        color: agentPipelineOptions.enableCleaner ? undefined : 'var(--text-muted)'
+                      }}
+                    >
+                      {agentPipelineOptions.enableCleaner ? 'ON' : 'OFF'}
+                    </span>
+                  </div>
+                  <p style={{ ...pipelineHelpStyle, marginTop: '0.25rem' }}>Lint/format sweep over newly written code — one extra agent run, skipped automatically for non-coding tasks.</p>
+                </div>
+                <button
+                  type="button"
+                  className={`toggle-switch-btn ${agentPipelineOptions.enableCleaner ? 'is-active' : ''}`}
+                  onClick={() => setPipelineOption('enableCleaner', !agentPipelineOptions.enableCleaner)}
+                  aria-label="Toggle cleaner pass for coding tasks"
+                  style={{ flexShrink: 0, marginTop: '0.1rem' }}
+                >
+                  <div className="toggle-switch-thumb" />
+                </button>
+              </div>
+
+              {/* Hardener QA toggle */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <FlaskConical size={13} color="#a78bfa" />
+                    <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)' }}>Hardener QA pass</span>
+                    <span
+                      className={`badge ${agentPipelineOptions.enableHardener ? 'badge-done' : ''}`}
+                      style={{
+                        fontSize: '0.62rem',
+                        padding: '0.05rem 0.35rem',
+                        background: agentPipelineOptions.enableHardener ? undefined : 'rgba(255,255,255,0.06)',
+                        color: agentPipelineOptions.enableHardener ? undefined : 'var(--text-muted)'
+                      }}
+                    >
+                      {agentPipelineOptions.enableHardener ? 'ON' : 'OFF'}
+                    </span>
+                  </div>
+                  <p style={{ ...pipelineHelpStyle, marginTop: '0.25rem' }}>Independent QA agent proves the Gherkin scenarios pass; catches silent failures at the cost of one more read-only run (plus any retries above).</p>
+                </div>
+                <button
+                  type="button"
+                  className={`toggle-switch-btn ${agentPipelineOptions.enableHardener ? 'is-active' : ''}`}
+                  onClick={() => setPipelineOption('enableHardener', !agentPipelineOptions.enableHardener)}
+                  aria-label="Toggle hardener QA pass"
+                  style={{ flexShrink: 0, marginTop: '0.1rem' }}
+                >
+                  <div className="toggle-switch-thumb" />
+                </button>
+              </div>
             </div>
           </div>
 

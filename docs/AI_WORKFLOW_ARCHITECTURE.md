@@ -102,22 +102,22 @@ When a user clicks **Run Task** on an individual task item (without an active CL
 flowchart TD
     RunTask([Run Task Triggered]) --> Step1[Step 1: Discovery AI]
     
-    subgraph Discovery [Step 1: Context Relevance Scan]
+    subgraph Discovery [Step 1: Context Relevance Scan & Baseline Markdown Context]
         Step1 -->|Ingests Task Header Index only| HeaderIndex["Task Header Index (Active + Archived)"]
         HeaderIndex --> RelevanceJson["JSON: { relevantTaskIds }"]
-        RelevanceJson --> FullContext["Discovery Payload:\n- Target Task & Subtasks\n- Additional Context Entries\n- Connected MCPs"]
+        RelevanceJson --> FullContext["Baseline Markdown Context:\n- Target Task & Subtasks\n- Pointers & Context Snippets\n- Connected MCPs"]
     end
     
     FullContext --> Step2[Step 2: Summary AI / summary-agent]
     
-    subgraph Synthesis [Step 2: Overview & Gherkin Brief]
-        Step2 -->|Synthesizes full context| OverviewDoc["Structured Overview Document:\n- brief: Gherkin Scenarios (Given-When-Then)\n- goals: Numbered Checklist\n- output_as: Tool Destination\n- requiredMcps: Filtered MCPs"]
+    subgraph Synthesis [Step 2: Overview & Markdown Bible Synthesis]
+        Step2 -->|Synthesizes full context into Markdown| OverviewDoc["Master Markdown Bible Document:\n- Gherkin Scenarios (Given-When-Then)\n- Goals Numbered Checklist\n- Output Destination & Tool Method\n- Filtered Required MCPs"]
     end
     
     OverviewDoc --> Step3[Step 3: Manager AI / manager-agent]
     
     subgraph Execution [Step 3: Task Execution & Puzzle Piece Assembly]
-        Step3 -->|Ingests Structured Bible Prompt| BiblePrompt["Bible Prompt JSON:\n- Task & Subtasks\n- Overview & Gherkin Scenarios\n- Discovered Context Snippets\n- Environment & Active MCPs"]
+        Step3 -->|Ingests Structured Markdown Bible| BiblePrompt["Markdown Bible Prompt (TASK_CONTEXT.md):\n- Metadata & Subtasks\n- Overview & Gherkin Scenarios\n- Discovered Context Snippets\n- Environment & Active MCPs\n- Append-Only Event Log"]
         BiblePrompt --> ProviderBranch{Provider Engine}
         ProviderBranch -->|Anthropic / OpenAI / Gemini| ToolLoop[Native MCP Tool Call Loop\n(Max 8 Rounds)]
         ProviderBranch -->|Ollama with Tool Calling| ToolLoop
@@ -125,7 +125,7 @@ flowchart TD
         ToolLoop --> ManagerSummary[Manager Output & Assembled Solution]
         WorkerPattern --> ManagerSummary
     end
-    
+
     ManagerSummary --> Step4[Step 4: Logger AI]
     
     subgraph Logging [Step 4: Completion Record]
@@ -136,68 +136,85 @@ flowchart TD
 
 ---
 
-### Step 1: Discovery AI (Context Relevance Scan)
-- **Objective:** Find applicable knowledge from other workspace tasks (including completed and archived tasks) without reading the entire repository or entire context documents.
-- **Token Efficiency Safeguard:** Does **NOT** ingest full `TODO.md` or `AGENT_CONTEXT.md`.
+### Step 1: Discovery AI (Context Relevance Scan & Baseline Markdown Assembly)
+- **Objective:** Find applicable knowledge from other workspace tasks (including completed and archived tasks) without reading the entire repository or dumping full context documents.
+- **Token Efficiency Safeguards:**
+  - Uses a lightweight/fast model (`gpt-4o-mini`, `gemini-2.5-flash`, `claude-3-5-haiku`, `llama3.2`) for fast context acquisition.
+  - Skims only the lightweight **Task Header Index** containing `#N. Title (Category) [ARCHIVED] [DONE]` and truncated overview snippets (~150 chars).
+  - Adheres to "pass pointers over payloads" (concise summaries and references rather than raw document dumps).
 - **Context Provided:**
-  - A lightweight **Task Header Index** containing `#N. Title (Category) [ARCHIVED] [DONE]` and truncated overview snippets (~150 chars).
-  - Target task title, category, and subtasks.
+  - Task Header Index and target task title, category, and subtasks.
+  - Project guideline files (e.g. `AGENTS.md` / `CLAUDE.md`) if present.
 - **Execution Logic:**
-  - Calls `callAiEngine` with `taskType: 'discovery'`, `responseFormat: 'json'`.
   - Determines if any prior tasks contain architectural decisions, shared schemas, or dependencies relevant to the current task.
-- **Output:**
-  ```json
-  {
-    "relevantTaskIds": [2, 5]
-  }
-  ```
-- **Handoff:** Ergo extracts the full data for the identified relevant task IDs to construct `DiscoveryJobPayload` for Step 2.
+  - Assembles the clean baseline **Markdown Context Document**, cleanly separating the byte-stable prefix (system instructions, schemas, caching anchors) from volatile per-task data.
+- **Output:** Identifies relevant task IDs and structures the baseline Markdown context for Step 2.
 
 ---
 
-### Step 2: Summary AI (`summary-agent` — Overview & Gherkin Brief Synthesizer)
-- **Objective:** Synthesize all discovered context into a structured Overview document (`brief`, `goals`, `output_as`, `requiredMcps`) that serves as the single source of truth for the Manager AI.
+### Step 2: Summary AI (`summary-agent` — Overview & Markdown Bible Synthesizer)
+- **Objective:** Synthesize all discovered context into a complete, structured **Markdown Context Document (Master Bible)** (`brief`, `goals`, `output_as`, `requiredMcps`) that serves as the single source of truth for the Manager AI.
 - **Gherkin Scenario Standard (Given-When-Then):**
-  - Following the standard in `FUTURE_FEATURES.md`, the `"brief"` field is formatted as human-verifiable **Gherkin scenarios**.
+  - Following the standard in `FUTURE_FEATURES.md`, the `"brief"` section is formatted as human-verifiable **Gherkin scenarios**.
   - Uses standard BDD keywords: `Feature:`, `Scenario:`, `Given:`, `When:`, `Then:`, `And:`, `But:`.
   - Structured in plain English so human reviewers can immediately read and verify acceptance criteria before and during execution.
   - Incorporates preconditions and discovered context in `Given` clauses, discrete triggers in `When` clauses, and observable verifiable outcomes in `Then`/`And` clauses (covering both happy paths and edge cases).
-- **Output Schema:**
-  ```json
-  {
-    "brief": "Feature: User Registration & Validation\n  Scenario: Successful registration\n    Given the user is on the registration page\n    When the user enters valid credentials and clicks register\n    Then the user is redirected to the welcome page\n    And a confirmation notice is displayed",
-    "goals": "1. Implement registration form UI\n2. Add input validation rules\n3. Wire auth API handler",
-    "output_as": "Write updated files to src/auth/... via Filesystem MCP, then record completion summary in AGENT_CONTEXT.md.",
-    "requiredMcps": ["Filesystem MCP"]
-  }
+- **Master Markdown Bible Document Format:**
+  ```markdown
+  # TASK EXECUTION BIBLE: User Registration & Validation
+
+  ## Metadata
+  - **Task ID**: #1
+  - **Category**: Auth
+  - **Status**: todo
+  - **Source Document**: TODO.md ("Todo" Lane)
+  - **Project**: Default Workspace (/workspace)
+
+  ## Target Task & Subtasks
+  - [ ] Implement registration form UI
+  - [ ] Add input validation rules
+  - [ ] Wire auth API handler
+
+  ## Overview & Acceptance Criteria (Gherkin Scenarios)
+  ```gherkin
+  Feature: User Registration & Input Validation
+    Scenario: Successful registration with valid details
+      Given the user is on the registration page
+      When the user enters a valid username, email, and password
+      And the user clicks the register button
+      Then the user should be redirected to the welcome page
+      And the user should see a registration confirmation message
+
+    Scenario: Unsuccessful registration with invalid email
+      Given the user is on the registration page
+      When the user enters an invalid email format
+      And the user clicks the register button
+      Then the user should see an error message indicating an invalid email format
+  ```
+
+  ## Goals Checklist
+  1. Implement registration form UI
+  2. Add input validation rules
+  3. Wire auth API handler
+
+  ## Output Destination & Method
+  - **Destination**: Write updated files to `src/auth/...` via Filesystem MCP, then record completion summary in `AGENT_CONTEXT.md`.
+  - **Required MCPs**: Filesystem MCP
+  - **Allowed Boundaries**: `/workspace/.ergo`
+
+  ## Discovered Context References
+  - **Task #2 (DB Schema)** [from `AGENT_CONTEXT.md`]: User schema includes username, email, password hash.
+
+  ## Execution Event Log (Append-Only)
+  - [Progress notes, subagent results, and test diagnostics will be recorded here]
   ```
 
 ---
 
 ### Step 3: Manager AI (`manager-agent` — Task Execution & Puzzle Piece Assembly)
-- **Objective:** Systematically execute the task using connected MCP tools against a concise, non-bloated **JSON Bible Prompt**, directly referencing the Gherkin scenarios to solve every "piece" of the puzzle.
-- **The JSON Bible Prompt**:
-  - The Manager receives a scoped, structured JSON master blueprint assembled from Discovery and Summary:
-  ```json
-  {
-    "task": { "id": 1, "title": "User Registration", "category": "Auth", "status": "todo", "subtasks": [] },
-    "overview": {
-      "brief": "Feature: User Registration...",
-      "goals": "1. Implement UI...",
-      "output_as": "Write updated files...",
-      "requiredMcps": ["Filesystem MCP"]
-    },
-    "discoveredContext": [
-      { "taskId": 2, "title": "DB Schema", "category": "Database", "sourceDocument": "AGENT_CONTEXT.md" }
-    ],
-    "environment": {
-      "projectName": "Default Workspace",
-      "projectPath": "/workspace",
-      "allowedRoots": ["/workspace/.ergo"],
-      "activeMcps": ["Filesystem MCP"]
-    }
-  }
-  ```
+- **Objective:** Systematically execute the task using connected MCP tools against the structured **Markdown Bible Document (`TASK_CONTEXT.md`)**, directly referencing the Gherkin scenarios to solve every "piece" of the puzzle.
+- **The Markdown Bible Document**:
+  - The Manager receives the scoped, structured Markdown master blueprint assembled from Discovery and Summary, and treats it as an append-only event log.
 - **Gherkin Puzzle Piece Decomposition & Accumulation Rule**:
   - **Decomposition**: The Manager decomposes the Gherkin scenarios into discrete "puzzle pieces" (preconditions in `Given`, implementation actions in `When`, verifiable outcomes in `Then`/`And`, and edge case recovery).
   - **Accumulation Rule**: The Manager is **only finished** with the complete task when it has accumulated all completed pieces of the puzzle and assembled them into the finished task.

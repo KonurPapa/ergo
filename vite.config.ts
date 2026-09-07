@@ -63,8 +63,12 @@ async function ensureStorageInitialized(storageDir: string) {
       'assistant-context-analyzer',
       'assistant-todo-builder',
       'assistant-context-syncer',
+      'discovery-agent',
       'summary-agent',
-      'manager-agent'
+      'manager-agent',
+      'worker-agent',
+      'cleaner-agent',
+      'hardener-agent'
     ];
 
     for (const skillName of skillNames) {
@@ -136,6 +140,85 @@ function parseJsonBody(req: IncomingMessage): Promise<any> {
       }
     });
     req.on('error', reject);
+  });
+}
+
+/**
+ * Loads the allowed directory roots (storage dir + user-approved folders from config/roots.json),
+ * resolved to absolute paths. Every filesystem / git / shell tool call is checked against this list.
+ */
+async function loadAllowedRoots(storageDir: string): Promise<string[]> {
+  const roots = [path.resolve(storageDir)];
+  try {
+    const rootsContent = await fs.readFile(path.join(path.resolve(storageDir, 'config'), 'roots.json'), 'utf-8');
+    const parsedRoots = JSON.parse(rootsContent);
+    if (Array.isArray(parsedRoots)) {
+      for (const r of parsedRoots) {
+        let p = (r?.path || '').trim();
+        if (!p) continue;
+        if (p.startsWith('~')) p = path.join(os.homedir(), p.slice(1));
+        const resolvedRoot = path.resolve(p);
+        if (!roots.includes(resolvedRoot)) roots.push(resolvedRoot);
+      }
+    }
+  } catch {}
+  return roots;
+}
+
+type BoundaryCheck = { ok: true; fullPath: string } | { ok: false; error: string };
+
+/** Resolves a user/AI supplied path ('~' aware, relative to the storage dir) and enforces the allowed-roots boundary. */
+async function resolveInsideAllowedRoots(rawPath: string, storageDir: string): Promise<BoundaryCheck> {
+  let targetPath = (rawPath || '').trim();
+  if (targetPath.startsWith('~')) targetPath = path.join(os.homedir(), targetPath.slice(1));
+  const fullPath = path.isAbsolute(targetPath) ? path.resolve(targetPath) : path.resolve(storageDir, targetPath || '.');
+  const allowedRoots = await loadAllowedRoots(storageDir);
+  const isAllowed = allowedRoots.some((root) => fullPath === root || fullPath.startsWith(root + path.sep));
+  if (!isAllowed) {
+    return {
+      ok: false,
+      error: `Access denied: "${rawPath}" resolves to "${fullPath}", which is outside the approved folder boundaries. The AI may only read/write inside ~/.ergo or folders explicitly permitted under Connections -> Allowed Folders (currently: ${allowedRoots.join(', ')}). Choose a path inside one of those roots.`
+    };
+  }
+  return { ok: true, fullPath };
+}
+
+function looksBinary(buf: Buffer): boolean {
+  const sample = buf.subarray(0, Math.min(buf.length, 8000));
+  for (let i = 0; i < sample.length; i++) {
+    if (sample[i] === 0) return true;
+  }
+  return false;
+}
+
+function capText(text: string, max: number): { text: string; truncated: boolean; omitted: number } {
+  if (text.length <= max) return { text, truncated: false, omitted: 0 };
+  const omitted = text.length - max;
+  return { text: text.slice(0, max) + `\n[truncated ${omitted} chars]`, truncated: true, omitted };
+}
+
+/** Runs a shell command with a timeout; never rejects — a failing command is a normal, high-signal result. */
+async function runShellCommand(command: string, cwd: string, timeoutMs: number): Promise<{ exitCode: number; stdout: string; stderr: string; timedOut: boolean; durationMs: number }> {
+  const { exec } = await import('node:child_process');
+  const started = Date.now();
+  return new Promise((resolve) => {
+    exec(command, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env: process.env }, (error: any, stdout: any, stderr: any) => {
+      const timedOut = Boolean(error && error.killed && error.signal === 'SIGTERM');
+      let exitCode = 0;
+      let extraErr = '';
+      if (error) {
+        if (typeof error.code === 'number') exitCode = error.code;
+        else if (timedOut) exitCode = 124;
+        else { exitCode = 1; extraErr = `\n${error.message}`; }
+      }
+      resolve({
+        exitCode,
+        stdout: String(stdout || ''),
+        stderr: String(stderr || '') + extraErr + (timedOut ? `\n[command timed out after ${timeoutMs} ms and was killed]` : ''),
+        timedOut,
+        durationMs: Date.now() - started
+      });
+    });
   });
 }
 
@@ -836,58 +919,105 @@ function ergoFileSystemPlugin(): Plugin {
             return sendJson(res, 400, { error: 'toolName is required' });
           }
 
-          // 1. Filesystem MCP Harness
-          if (serverId === 'mcp-filesystem' || toolName === 'read_file' || toolName === 'write_file' || toolName === 'list_directory' || toolName === 'create_directory' || toolName === 'search_files' || toolName === 'get_file_info') {
-            let targetPath = (args.path || args.filePath || '').trim();
-            if (targetPath.startsWith('~')) {
-              targetPath = path.join(os.homedir(), targetPath.slice(1));
-            }
-            const fullPath = path.isAbsolute(targetPath) ? path.resolve(targetPath) : path.resolve(storageDir, targetPath);
-
-            // Safe Roots boundary check - strictly storageDir (~/.ergo) + user's explicit allowed folders
-            const configDir = path.resolve(storageDir, 'config');
-            let allowedRoots = [path.resolve(storageDir)];
-            try {
-              const rootsContent = await fs.readFile(path.join(configDir, 'roots.json'), 'utf-8');
-              const parsedRoots = JSON.parse(rootsContent);
-              if (Array.isArray(parsedRoots)) {
-                for (const r of parsedRoots) {
-                  let p = (r.path || '').trim();
-                  if (!p) continue;
-                  if (p.startsWith('~')) p = path.join(os.homedir(), p.slice(1));
-                  const resolvedRoot = path.resolve(p);
-                  if (!allowedRoots.includes(resolvedRoot)) {
-                    allowedRoots.push(resolvedRoot);
-                  }
-                }
+          // 1. Filesystem + Shell MCP Harness (root-sandboxed)
+          const FS_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'list_directory', 'create_directory', 'search_files', 'get_file_info', 'run_command']);
+          if (serverId === 'mcp-filesystem' || FS_TOOLS.has(toolName)) {
+            // ── run_command: shell inside an allowed root ──
+            if (toolName === 'run_command') {
+              const command = typeof args.command === 'string' ? args.command.trim() : '';
+              if (!command) return sendJson(res, 400, { error: 'run_command requires a non-empty "command" string.' });
+              const cwdCheck = await resolveInsideAllowedRoots(typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd : storageDir, storageDir);
+              if (!cwdCheck.ok) return sendJson(res, 403, { error: cwdCheck.error });
+              try {
+                const st = await fs.stat(cwdCheck.fullPath);
+                if (!st.isDirectory()) return sendJson(res, 400, { error: `cwd "${args.cwd}" is not a directory.` });
+              } catch {
+                return sendJson(res, 404, { error: `cwd "${args.cwd}" does not exist.` });
               }
-            } catch {}
-
-            const isAllowed = allowedRoots.some((root) => {
-              const normRoot = path.resolve(root);
-              return fullPath === normRoot || fullPath.startsWith(normRoot + path.sep);
-            });
-
-            if (!isAllowed) {
-              return sendJson(res, 403, {
-                error: `Access denied: "${targetPath}" is outside approved folder boundaries. The AI is restricted to write only within ~/.ergo or folders explicitly permitted under Connections -> Allowed Folders.`
+              const requested = typeof args.timeoutMs === 'number' && args.timeoutMs > 0 ? args.timeoutMs : 60_000;
+              const timeoutMs = Math.min(requested, 300_000);
+              const result = await runShellCommand(command, cwdCheck.fullPath, timeoutMs);
+              const out = capText(result.stdout, 20_000);
+              const errOut = capText(result.stderr, 20_000);
+              return sendJson(res, 200, {
+                success: true,
+                data: {
+                  command,
+                  cwd: cwdCheck.fullPath,
+                  exitCode: result.exitCode,
+                  stdout: out.text,
+                  stderr: errOut.text,
+                  timedOut: result.timedOut,
+                  durationMs: result.durationMs
+                }
               });
             }
 
+            const targetPath = (args.path || args.filePath || '').trim();
+            if (!targetPath) return sendJson(res, 400, { error: `${toolName} requires a "path" argument.` });
+            const check = await resolveInsideAllowedRoots(targetPath, storageDir);
+            if (!check.ok) return sendJson(res, 403, { error: check.error });
+            const fullPath = check.fullPath;
+
             if (toolName === 'read_file') {
+              let stat;
               try {
-                const content = await fs.readFile(fullPath, 'utf-8');
-                return sendJson(res, 200, { success: true, data: { content, path: targetPath } });
+                stat = await fs.stat(fullPath);
               } catch {
                 return sendJson(res, 404, { error: `File not found: ${targetPath}` });
               }
+              if (stat.isDirectory()) return sendJson(res, 400, { error: `"${targetPath}" is a directory — use list_directory instead.` });
+              if (stat.size > 5 * 1024 * 1024) return sendJson(res, 400, { error: `"${targetPath}" is ${stat.size} bytes (> 5 MB). Use get_file_info or search_files with contentPattern instead of reading it whole.` });
+              const buf = await fs.readFile(fullPath);
+              if (looksBinary(buf)) return sendJson(res, 400, { error: `"${targetPath}" looks like a binary file. Use get_file_info for metadata instead.` });
+              const allLines = buf.toString('utf-8').split('\n');
+              const totalLines = allLines.length;
+              const offset = typeof args.offset === 'number' && args.offset > 0 ? Math.floor(args.offset) : 1;
+              const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.floor(args.limit) : totalLines;
+              const startLine = Math.min(offset, Math.max(totalLines, 1));
+              const endLine = Math.min(startLine + limit - 1, totalLines);
+              let content = allLines.slice(startLine - 1, endLine).join('\n');
+              let truncated = endLine < totalLines || startLine > 1;
+              const MAX_CHARS = 60_000;
+              if (content.length > MAX_CHARS) {
+                content = content.slice(0, MAX_CHARS) + `\n[truncated at ${MAX_CHARS} chars — call read_file again with offset/limit to read the rest]`;
+                truncated = true;
+              }
+              return sendJson(res, 200, { success: true, data: { content, path: targetPath, totalLines, startLine, endLine, truncated } });
             }
 
             if (toolName === 'write_file') {
               const content = typeof args.content === 'string' ? args.content : '';
               await fs.mkdir(path.dirname(fullPath), { recursive: true });
               await fs.writeFile(fullPath, content, 'utf-8');
-              return sendJson(res, 200, { success: true, data: { path: targetPath, writtenAt: new Date().toISOString() } });
+              return sendJson(res, 200, { success: true, data: { path: targetPath, bytes: Buffer.byteLength(content, 'utf-8'), writtenAt: new Date().toISOString() } });
+            }
+
+            if (toolName === 'edit_file') {
+              const oldString = typeof args.old_string === 'string' ? args.old_string : '';
+              const newString = typeof args.new_string === 'string' ? args.new_string : '';
+              const replaceAll = args.replace_all === true;
+              if (!oldString) return sendJson(res, 400, { error: 'edit_file requires a non-empty "old_string" (the exact text to replace). To create a new file use write_file.' });
+              let existing: string;
+              try {
+                existing = await fs.readFile(fullPath, 'utf-8');
+              } catch {
+                return sendJson(res, 404, { error: `File not found: ${targetPath}. edit_file only modifies existing files — use write_file to create it.` });
+              }
+              const occurrences = existing.split(oldString).length - 1;
+              if (occurrences === 0) {
+                return sendJson(res, 409, { error: `old_string not found in ${targetPath} — read the file first (read_file) and copy the exact text, including whitespace and indentation.` });
+              }
+              if (occurrences > 1 && !replaceAll) {
+                return sendJson(res, 409, { error: `old_string matches ${occurrences} places in ${targetPath}. Include more surrounding lines so it is unique, or pass replace_all: true to replace every occurrence.` });
+              }
+              const updated = replaceAll ? existing.split(oldString).join(newString) : existing.replace(oldString, newString);
+              await fs.writeFile(fullPath, updated, 'utf-8');
+              const idx = updated.indexOf(newString);
+              const previewStart = Math.max(0, idx - 100);
+              const preview = updated.slice(previewStart, Math.min(updated.length, idx + newString.length + 100));
+              recentWrites.set(fullPath, Date.now());
+              return sendJson(res, 200, { success: true, data: { path: targetPath, replacements: replaceAll ? occurrences : 1, preview } });
             }
 
             if (toolName === 'list_directory') {
@@ -928,25 +1058,75 @@ function ergoFileSystemPlugin(): Plugin {
             }
 
             if (toolName === 'search_files') {
-              const query = (args.query || args.pattern || '').toLowerCase();
+              const query = typeof (args.query ?? args.pattern) === 'string' ? String(args.query ?? args.pattern).toLowerCase() : '';
+              const contentPatternRaw = typeof args.contentPattern === 'string' ? args.contentPattern : '';
+              const maxResults = Math.min(typeof args.maxResults === 'number' && args.maxResults > 0 ? Math.floor(args.maxResults) : 50, 200);
+              let contentRegex: RegExp | null = null;
+              if (contentPatternRaw) {
+                try {
+                  contentRegex = new RegExp(contentPatternRaw, 'i');
+                } catch (e: any) {
+                  return sendJson(res, 400, { error: `Invalid contentPattern regex: ${e.message}` });
+                }
+              }
+              if (!query && !contentRegex) return sendJson(res, 400, { error: 'search_files requires "query" (filename substring) and/or "contentPattern" (regex).' });
+              try {
+                const st = await fs.stat(fullPath);
+                if (!st.isDirectory()) return sendJson(res, 400, { error: `"${targetPath}" is not a directory.` });
+              } catch {
+                return sendJson(res, 404, { error: `Directory not found: ${targetPath}` });
+              }
+
               const matched: string[] = [];
+              const contentMatches: Array<{ path: string; line: number; text: string }> = [];
+              let truncated = false;
+              const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'coverage']);
 
               async function walk(dir: string) {
-                const files = await fs.readdir(dir, { withFileTypes: true });
+                if (truncated) return;
+                let files;
+                try {
+                  files = await fs.readdir(dir, { withFileTypes: true });
+                } catch {
+                  return;
+                }
                 for (const file of files) {
+                  if (truncated) return;
+                  if (SKIP_DIRS.has(file.name)) continue;
                   const resolved = path.join(dir, file.name);
-                  if (file.name.startsWith('.') || file.name === 'node_modules' || file.name === 'dist') continue;
+                  const rel = path.relative(fullPath, resolved) || file.name;
                   if (file.isDirectory()) {
                     await walk(resolved);
-                  } else if (file.name.toLowerCase().includes(query)) {
-                    matched.push(path.relative(process.cwd(), resolved));
+                    continue;
+                  }
+                  if (!file.isFile()) continue;
+                  if (query && file.name.toLowerCase().includes(query)) {
+                    matched.push(rel);
+                    if (matched.length >= maxResults) truncated = true;
+                  }
+                  if (contentRegex) {
+                    try {
+                      const st = await fs.stat(resolved);
+                      if (st.size > 2 * 1024 * 1024) continue;
+                      const buf = await fs.readFile(resolved);
+                      if (looksBinary(buf)) continue;
+                      const lines = buf.toString('utf-8').split('\n');
+                      for (let i = 0; i < lines.length; i++) {
+                        if (contentRegex.test(lines[i])) {
+                          contentMatches.push({ path: rel, line: i + 1, text: lines[i].trim().slice(0, 200) });
+                          if (contentMatches.length >= maxResults) { truncated = true; break; }
+                        }
+                      }
+                    } catch {}
                   }
                 }
               }
 
               await walk(fullPath);
-              return sendJson(res, 200, { success: true, data: { query, matched } });
+              return sendJson(res, 200, { success: true, data: { root: targetPath, query: query || undefined, contentPattern: contentPatternRaw || undefined, matched, contentMatches, truncated } });
             }
+
+            return sendJson(res, 400, { error: `Unknown filesystem tool "${toolName}".` });
           }
 
           // 2. Fetch / Web MCP Harness
@@ -1001,39 +1181,36 @@ function ergoFileSystemPlugin(): Plugin {
             }
           }
 
-          // 3. Git Operations MCP Harness
+          // 3. Git Operations MCP Harness (cwd must be inside an allowed root; defaults to the storage dir)
           if (serverId === 'mcp-git' || toolName.startsWith('git_')) {
-            const { exec } = await import('node:child_process');
-            const { promisify } = await import('node:util');
-            const execAsync = promisify(exec);
+            const cwdCheck = await resolveInsideAllowedRoots(typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd : storageDir, storageDir);
+            if (!cwdCheck.ok) return sendJson(res, 403, { error: cwdCheck.error });
 
+            const shellQuote = (v: string) => `'${String(v).replace(/'/g, `'\\''`)}'`;
             let gitCommand = 'git status --short';
-            if (toolName === 'git_status') gitCommand = 'git status --short';
-            if (toolName === 'git_diff') gitCommand = 'git diff -U2';
-            if (toolName === 'git_log') gitCommand = 'git log -n 5 --oneline';
+            if (toolName === 'git_status') gitCommand = 'git status --short --branch';
+            if (toolName === 'git_diff') gitCommand = `git diff -U2${typeof args.path === 'string' && args.path.trim() ? ' -- ' + shellQuote(args.path.trim()) : ''}`;
+            if (toolName === 'git_log') {
+              const count = Math.min(typeof args.count === 'number' && args.count > 0 ? Math.floor(args.count) : 10, 50);
+              gitCommand = `git log -n ${count} --oneline`;
+            }
             if (toolName === 'git_commit') {
-              const msg = args.message ? ` -m "${args.message.replace(/"/g, '\\"')}"` : ' -m "Update from Ergo"';
-              gitCommand = `git commit ${msg}`;
+              const msg = typeof args.message === 'string' ? args.message.trim() : '';
+              if (!msg) return sendJson(res, 400, { error: 'git_commit requires a non-empty "message".' });
+              gitCommand = `git commit -m ${shellQuote(msg)}`;
             }
 
-            try {
-              const { stdout, stderr } = await execAsync(gitCommand, { cwd: process.cwd() });
-              return sendJson(res, 200, {
-                success: true,
-                data: {
-                  command: gitCommand,
-                  output: (stdout || stderr || '').trim()
-                }
-              });
-            } catch (err: any) {
-              return sendJson(res, 200, {
-                success: true,
-                data: {
-                  command: gitCommand,
-                  output: err.stdout || err.message
-                }
-              });
-            }
+            const result = await runShellCommand(gitCommand, cwdCheck.fullPath, 60_000);
+            const output = capText((result.stdout || '') + (result.stderr ? (result.stdout ? '\n' : '') + result.stderr : ''), 20_000);
+            return sendJson(res, 200, {
+              success: true,
+              data: {
+                command: gitCommand,
+                cwd: cwdCheck.fullPath,
+                exitCode: result.exitCode,
+                output: output.text.trim()
+              }
+            });
           }
 
           // Default custom tool execution simulated response

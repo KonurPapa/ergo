@@ -28,6 +28,7 @@ export interface TaskItem {
   createdFiles?: string[];
   swimLaneId?: string; // ID of the swim lane / document this task belongs to
   sourceFileName?: string; // e.g. "TODO.md", "BACKLOG.md"
+  totalUsage?: TokenUsage; // Running or final token accounting for this task
 }
 
 export interface SwimLaneDoc {
@@ -48,6 +49,7 @@ export interface AgentContextItem {
   completion: string;
   isArchived?: boolean;
   createdFiles?: string[];
+  totalUsage?: TokenUsage; // Running or final token accounting for this task
   // Linkage metadata:
   sourceTaskId?: string | number; // ID of the source task in the swim lane (if tied to a task)
   sourceLaneId?: string;          // ID of the swim lane (e.g. "lane-default")
@@ -127,6 +129,8 @@ export interface AIProviderConfig {
   discoveryModel?: string;
   summaryModel?: string;
   generalModel?: string;
+  /** Optional cheaper/faster model used for fan-out worker sub-agents (defaults to generalModel). */
+  workerModel?: string;
   apiKey?: string;
   baseUrl?: string;
   isCustomKey?: boolean;
@@ -140,6 +144,7 @@ export interface ProviderCredentials {
   discoveryModel?: string;
   summaryModel?: string;
   generalModel?: string;
+  workerModel?: string;
   isConnected?: boolean;
 }
 
@@ -155,6 +160,7 @@ export interface UserApiKey {
   discoveryModel?: string;
   summaryModel?: string;
   generalModel?: string;
+  workerModel?: string;
   isConnected?: boolean;
   createdAt?: string;
 }
@@ -195,6 +201,9 @@ export interface OverviewDocument {
   context?: string;      // (Optional)
   constraints?: string;  // (Optional)
   raw?: string;          // Raw markdown rendition of the overview
+  taskKind?: TaskKind;   // Classified by the Summary AI; drives Cleaner/Hardener gating
+  requiresHardener?: boolean; // Evaluated by Summary AI: large tasks warrant Hardener QA, small/generic tasks skip it
+  hardenerReason?: string;    // Rationale for why Hardener is required or skipped
 }
 
 /**
@@ -252,6 +261,12 @@ export interface DiscoveryJobPayload {
   // Assembled by Step 2 Summary AI
   overview?: OverviewDocument;
   requiredMcps?: string[];
+  // Step 1 Discovery: compact Markdown baseline context handed to the Summary AI (pointers, not payloads)
+  baselineMarkdown?: string;
+  // Project guideline files found by Discovery (AGENTS.md / CLAUDE.md), excerpted
+  guidelineDocs?: Array<{ path: string; excerpt: string }>;
+  // Short free-text notes from the Discovery AI (dependencies, shared schemas, precedents)
+  discoveryNotes?: string;
 }
 
 /**
@@ -288,15 +303,70 @@ export interface ManagerBiblePayload {
   };
 }
 
+/**
+ * Pipeline stages emitted as ExecutionStep updates.
+ *  - context: Step 1 Discovery
+ *  - overview: Step 2 Summary (Gherkin brief)
+ *  - decompose: Step 3 Manager decomposing Gherkin into puzzle pieces
+ *  - subagent: a worker sub-agent executing one puzzle piece
+ *  - mcp_call: an individual tool call (manager or worker)
+ *  - verify: Manager verifying accumulated pieces against Gherkin scenarios
+ *  - cleaner: Step 4 lint/format pass (coding tasks only)
+ *  - hardener: Step 5 QA / eval harness
+ *  - retry: QA failure fed back into a fresh Step 3 attempt
+ */
+export type ExecutionStage =
+  | 'context'
+  | 'overview'
+  | 'decompose'
+  | 'subagent'
+  | 'mcp_call'
+  | 'thinking'
+  | 'execution'
+  | 'verify'
+  | 'cleaner'
+  | 'hardener'
+  | 'retry'
+  | 'human_input'
+  | 'built_record'
+  | 'done'
+  | 'terminating';
+
+export type AgentRole = 'discovery' | 'summary' | 'manager' | 'worker' | 'cleaner' | 'hardener' | 'logger';
+
+/** Token accounting for a single LLM call or an aggregate across calls. */
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  /** Prompt tokens served from the provider's prompt cache (Anthropic cache_read, OpenAI cached_tokens, Gemini cachedContentTokenCount). */
+  cachedInputTokens: number;
+  /** Tokens written to cache this call (Anthropic only). */
+  cacheWriteTokens: number;
+  /** Number of LLM round-trips aggregated into this record. */
+  calls: number;
+}
+
 export interface ExecutionStep {
   id: string;
   taskId?: string | number;
   time: string;
-  stage: 'context' | 'overview' | 'mcp_call' | 'thinking' | 'execution' | 'human_input' | 'built_record' | 'done' | 'terminating';
+  stage: ExecutionStage;
   title: string;
   detail: string;
   mcpToolUsed?: string;
   status: 'pending' | 'running' | 'success' | 'warning' | 'error' | 'cancelled';
+  /** Which pipeline agent emitted this step. */
+  agentRole?: AgentRole;
+  /** Puzzle piece this step belongs to (worker sub-agents). */
+  pieceId?: string;
+  /** Token usage for this step (per-agent or cumulative, see title/detail). */
+  usage?: TokenUsage;
+  /** Running tally of all tokens used during this task up to this step. */
+  totalUsage?: TokenUsage;
+  /** Snapshot of the TASK_CONTEXT.md bible (rendered markdown) for UI preview. */
+  bibleMarkdown?: string;
+  /** Relative path (under the storage root) of the persisted TASK_CONTEXT.md for this run. */
+  bibleFilePath?: string;
   widgetType?: 'code_diff' | 'analytics_chart' | 'figma_preview' | 'slack_draft' | 'bluebeam_diff' | 'vscode_preview';
   widgetData?: any;
   humanInputPrompt?: HumanInputPrompt;
@@ -327,6 +397,8 @@ export interface AppSettings {
   theme?: 'light' | 'dark';
   storageDirectory?: string; // default: "~/.ergo"
   lastOpenedAt?: string;
+  /** Agent execution pipeline tuning (concurrency, QA retries, tool rounds). */
+  agentPipeline?: Partial<AgentPipelineOptions>;
 }
 
 export interface StorageDirectoryConfig {
@@ -417,4 +489,104 @@ export interface HumanAiAssistantResult {
   requiresDeletionApproval?: boolean;
   deletionReason?: string;
   aggregatedReport?: string;
+}
+
+// ─── Agent Execution Pipeline Types ─────────────────────────────────────────
+
+/** Coarse classification of a task; gates the Cleaner (lint/format) and shapes the Hardener's QA prompt. */
+export type TaskKind = 'coding' | 'writing' | 'research' | 'ops' | 'data' | 'other';
+
+/** User-tunable knobs for the agent execution pipeline (persisted in settings.json). */
+export interface AgentPipelineOptions {
+  /** Maximum worker sub-agents running concurrently (fan-out limit). */
+  maxConcurrentAgents: number;
+  /** How many times a Hardener QA failure may trigger a fresh Step 3 retry. */
+  maxQaRetries: number;
+  /** Maximum LLM round-trips (tool-call rounds) any single agent loop may take. */
+  maxToolRoundsPerAgent: number;
+  /** Run the Cleaner (lint/format) pass for coding tasks. */
+  enableCleaner: boolean;
+  /** Run the Hardener (QA / eval harness) pass. */
+  enableHardener: boolean;
+  /** Minimum title match probability percentage (10-90, default 50) for candidate tasks in discovery before reading subtasks. */
+  discoveryRelevanceThreshold: number;
+}
+
+export type PuzzlePieceKind = 'given' | 'when' | 'then' | 'edge';
+export type PuzzlePieceStatus = 'pending' | 'running' | 'done' | 'failed' | 'blocked' | 'skipped';
+
+/**
+ * One discrete, verifiable unit of work decomposed by the Manager from the Gherkin scenarios.
+ * Each piece is executed by an isolated worker sub-agent with a clean, scoped context.
+ */
+export interface PuzzlePiece {
+  id: string;                 // e.g. "P1"
+  kind: PuzzlePieceKind;      // given = preconditions, when = implementation, then = acceptance checks, edge = alternate flows / recovery
+  title: string;
+  /** Self-contained instructions for the worker (it sees nothing else about the task besides the shared bible prefix). */
+  instructions: string;
+  /** Gherkin scenario titles this piece satisfies or verifies. */
+  scenarioRefs: string[];
+  /** Files this piece is allowed to create/modify (write scope + lock set). Empty = read-only piece. */
+  files: string[];
+  /** Piece IDs that must be done before this piece may start. */
+  dependsOn: string[];
+  status: PuzzlePieceStatus;
+  /** Condensed result summary written back to the bible event log by the worker. */
+  summary?: string;
+  /** High-signal failure diagnostics preserved for retries. */
+  lastError?: string;
+  attempts: number;
+}
+
+export type BibleEventKind =
+  | 'info'
+  | 'decompose'
+  | 'piece_start'
+  | 'piece_done'
+  | 'piece_failed'
+  | 'lock'
+  | 'human'
+  | 'verify'
+  | 'cleaner'
+  | 'qa_pass'
+  | 'qa_fail'
+  | 'retry'
+  | 'error';
+
+/** One append-only entry in the TASK_CONTEXT.md Execution Event Log. */
+export interface BibleEvent {
+  at: string;          // ISO timestamp
+  actor: string;       // e.g. "manager", "worker:P2", "hardener"
+  kind: BibleEventKind;
+  text: string;        // condensed, human-readable
+  pieceId?: string;
+}
+
+/** Stable (per-run, byte-identical) sections of the TASK_CONTEXT.md bible. */
+export interface BibleSections {
+  title: string;
+  metadata: {
+    taskId: string | number;
+    category: string;
+    status: string;
+    sourceDocument: string;
+    projectName: string;
+    projectPath: string;
+    taskKind: TaskKind;
+    runId: string;
+    requiresHardener?: boolean;
+    hardenerReason?: string;
+  };
+  subtasks: Array<{ text: string; isDone: boolean; isHumanReview?: boolean }>;
+  /** Gherkin scenarios (Given-When-Then) — the acceptance criteria. */
+  gherkin: string;
+  /** Numbered deliverable goals checklist. */
+  goals: string;
+  outputAs: string;
+  requiredMcps: string[];
+  allowedRoots: string[];
+  discoveredContext: Array<{ taskId: string | number; title: string; category: string; sourceDocument: string; snippet?: string }>;
+  guidelines: Array<{ path: string; excerpt: string }>;
+  discoveryNotes?: string;
 }

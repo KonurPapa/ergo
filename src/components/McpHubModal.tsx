@@ -468,10 +468,13 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                       {/* Discovered Tools List */}
                       {isConnected && server.tools.length > 0 && (
                         <div style={{ background: 'var(--code-bg)', border: '1px solid var(--code-border)', padding: '0.75rem 0.85rem', borderRadius: 'var(--radius-sm)', marginTop: '0.35rem', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)' }}>
-                          <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                          <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                             <Shield size={13} />
                             <span>Tools & Security Auto-Approval Policies</span>
                           </div>
+                          <p style={{ fontSize: '0.72rem', color: 'var(--text-dim)', margin: '0 0 0.5rem 0', lineHeight: 1.4 }}>
+                            Control AI action permissions globally. Write operations require manual approval by default for safety. Toggle Auto-Approve to relax permissions for worker subagents.
+                          </p>
 
                           {server.tools.map((tool) => (
                             <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.35rem 0', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>

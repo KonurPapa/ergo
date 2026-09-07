@@ -10,7 +10,8 @@ import {
   type HumanInputPrompt
 } from '../types';
 import { executeTaskWithAi } from '../lib/ai';
-import { Play, X, CheckCircle2, Loader2, Send, Layers, Code, ShieldAlert, ShieldCheck, HelpCircle } from 'lucide-react';
+import { StepStatusIcon, StepUsageBadge, PieceChip, BiblePreview } from './ExecutionStepExtras';
+import { Play, X, CheckCircle2, Send, Layers, Code, ShieldAlert, ShieldCheck, HelpCircle } from 'lucide-react';
 
 interface ExecutionModalProps {
   isOpen: boolean;
@@ -270,19 +271,23 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
           {/* Execution Steps Terminal */}
           <div className="execution-steps">
             {steps.map((step) => (
-              <div key={step.id} className={`step-card ${step.status}`}>
+              <div key={step.id} className={`step-card ${step.status} stage-${step.stage}`} style={step.stage === 'mcp_call' && step.pieceId ? { marginLeft: '1.1rem' } : undefined}>
                 <div className="step-header">
                   <div className="step-title">
-                    {step.status === 'running' && <Loader2 size={16} className="animate-spin" color="var(--accent-primary)" />}
-                    {step.status === 'success' && <CheckCircle2 size={16} color="var(--accent-emerald)" />}
+                    <StepStatusIcon step={step} size={16} />
+                    <PieceChip pieceId={step.stage === 'mcp_call' ? step.pieceId : undefined} />
                     <span>{step.title}</span>
                   </div>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-                    {step.time}
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <StepUsageBadge usage={step.usage} />
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
+                      {step.time}
+                    </span>
                   </span>
                 </div>
 
-                <div className="step-detail">{step.detail}</div>
+                <div className="step-detail" style={{ whiteSpace: 'pre-wrap' }}>{step.detail}</div>
+                <BiblePreview markdown={step.bibleMarkdown} filePath={step.bibleMarkdown ? step.bibleFilePath : undefined} />
 
                 {/* Overview document preview if available */}
                 {step.stage === 'overview' && step.status === 'success' && step.overviewDocument && (

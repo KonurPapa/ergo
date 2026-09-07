@@ -15,7 +15,8 @@ import {
   type ExecutionStep,
   type McpToolPermissionPrompt,
   type HumanInputPrompt,
-  type SwimLaneDoc
+  type SwimLaneDoc,
+  type AgentPipelineOptions
 } from './types';
 
 import { INITIAL_PROJECTS, createNewProjectData, INITIAL_MCP_SERVERS } from './lib/demoData';
@@ -42,6 +43,23 @@ import { SettingsModal } from './components/SettingsModal';
 import { FolderPickerModal } from './components/FolderPickerModal';
 import { ToastContainer, type ToastMessage } from './components/Toast';
 import { executeTaskWithAi, syncTaskOverviewWithAi } from './lib/ai';
+import { DEFAULT_AGENT_PIPELINE_OPTIONS } from './lib/agentPipeline/contracts';
+
+/** Merge persisted (possibly partial / stale) pipeline settings over the defaults, ignoring undefined values. */
+function mergeAgentPipelineOptions(
+  base: AgentPipelineOptions,
+  patch?: Partial<AgentPipelineOptions> | null
+): AgentPipelineOptions {
+  if (!patch) return base;
+  const next: AgentPipelineOptions = { ...base };
+  if (typeof patch.maxConcurrentAgents === 'number' && Number.isFinite(patch.maxConcurrentAgents)) next.maxConcurrentAgents = patch.maxConcurrentAgents;
+  if (typeof patch.maxQaRetries === 'number' && Number.isFinite(patch.maxQaRetries)) next.maxQaRetries = patch.maxQaRetries;
+  if (typeof patch.maxToolRoundsPerAgent === 'number' && Number.isFinite(patch.maxToolRoundsPerAgent)) next.maxToolRoundsPerAgent = patch.maxToolRoundsPerAgent;
+  if (typeof patch.enableCleaner === 'boolean') next.enableCleaner = patch.enableCleaner;
+  if (typeof patch.enableHardener === 'boolean') next.enableHardener = patch.enableHardener;
+  if (typeof patch.discoveryRelevanceThreshold === 'number' && Number.isFinite(patch.discoveryRelevanceThreshold)) next.discoveryRelevanceThreshold = patch.discoveryRelevanceThreshold;
+  return next;
+}
 
 
 export function App() {
@@ -92,8 +110,30 @@ export function App() {
     defaultDelaySec: 5,
   });
 
-  // MCP & AI Settings State
-  const [mcpServers, setMcpServers] = useState<MCPServer[]>(INITIAL_MCP_SERVERS);
+  // MCP & AI Settings State (persisted to localStorage so tool permissions are global)
+  const [mcpServers, setMcpServers] = useState<MCPServer[]>(() => {
+    const saved = localStorage.getItem('ergo_mcp_servers');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return INITIAL_MCP_SERVERS.map((initServer) => {
+            const match = parsed.find((s: MCPServer) => s.id === initServer.id);
+            if (!match) return initServer;
+            return {
+              ...initServer,
+              status: match.status ?? initServer.status,
+              tools: initServer.tools.map((initTool) => {
+                const toolMatch = match.tools?.find((t: any) => t.id === initTool.id || t.name === initTool.name);
+                return toolMatch ? { ...initTool, autoApprove: Boolean(toolMatch.autoApprove) } : initTool;
+              })
+            };
+          }).concat(parsed.filter((s: MCPServer) => !INITIAL_MCP_SERVERS.some((init) => init.id === s.id)));
+        }
+      } catch {}
+    }
+    return INITIAL_MCP_SERVERS;
+  });
 
   // User API Keys State (Loaded from config/secrets.json or fallback)
   const [userApiKeys, setUserApiKeys] = useState<UserApiKey[]>(() => {
@@ -166,6 +206,9 @@ export function App() {
     return 'light';
   });
 
+  // Agent Execution Pipeline tuning (concurrency, QA retries, tool rounds, cleaner/hardener gates)
+  const [agentPipelineOptions, setAgentPipelineOptions] = useState<AgentPipelineOptions>(DEFAULT_AGENT_PIPELINE_OPTIONS);
+
   // Apply theme attribute to root HTML document element
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -214,6 +257,10 @@ export function App() {
           if (res.settings.theme === 'light' || res.settings.theme === 'dark') {
             setTheme(res.settings.theme);
           }
+          if (res.settings.agentPipeline) {
+            const persisted = res.settings.agentPipeline;
+            setAgentPipelineOptions((prev) => mergeAgentPipelineOptions(prev, persisted));
+          }
         }
       } catch (err) {
         console.warn('[App] Error initializing storage layer:', err);
@@ -232,10 +279,11 @@ export function App() {
         autosaveDelaySec: autosave.delaySec,
         autosaveEnabled: autosave.isEnabled,
         theme,
+        agentPipeline: agentPipelineOptions,
         lastOpenedAt: new Date().toISOString()
       });
     }
-  }, [activeProjectId, activeKeyId, autosave.delaySec, autosave.isEnabled, theme]);
+  }, [activeProjectId, activeKeyId, autosave.delaySec, autosave.isEnabled, theme, agentPipelineOptions]);
 
   // Sync secrets (config/secrets.json)
   useEffect(() => {
@@ -261,6 +309,7 @@ export function App() {
         discoveryModel: activeKey.discoveryModel || pMeta?.defaultDiscoveryModel || 'gpt-4o-mini',
         summaryModel: activeKey.summaryModel || pMeta?.defaultSummaryModel || activeKey.generalModel || activeKey.model || 'gpt-4o',
         generalModel: activeKey.generalModel || activeKey.model || pMeta?.defaultGeneralModel || 'gpt-4o',
+        workerModel: activeKey.workerModel || undefined,
         apiKey: activeKey.apiKey,
         baseUrl: activeKey.baseUrl,
         isConnected: true
@@ -284,6 +333,7 @@ export function App() {
         discoveryModel: activeKey.discoveryModel || pMeta?.defaultDiscoveryModel || 'gpt-4o-mini',
         summaryModel: activeKey.summaryModel || pMeta?.defaultSummaryModel || activeKey.generalModel || activeKey.model || 'gpt-4o',
         generalModel: activeKey.generalModel || activeKey.model || pMeta?.defaultGeneralModel || pMeta?.defaultModel || 'gpt-4o',
+        workerModel: activeKey.workerModel || undefined,
         apiKey: activeKey.apiKey,
         baseUrl: activeKey.baseUrl,
         isConnected: true
@@ -309,6 +359,13 @@ export function App() {
       localStorage.removeItem('ergo_active_key_id');
     }
   }, [activeKeyId]);
+
+  // Persist MCP servers and tool permissions to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('ergo_mcp_servers', JSON.stringify(mcpServers));
+    } catch {}
+  }, [mcpServers]);
 
   // Modal Open States
   const [isDraftModalOpen, setIsDraftModalOpen] = useState(false);
@@ -500,6 +557,22 @@ export function App() {
     setEditingKey(null);
     setIsAiScreenOpen(true);
   };
+
+  // Popout AI Workspace Panel State (default: open)
+  const [isAiPanelOpen, setIsAiPanelOpen] = useState<boolean>(() => {
+    const saved = localStorage.getItem('ergo_ai_panel_open');
+    return saved !== null ? saved === 'true' : true;
+  });
+
+  const handleToggleAiPanel = useCallback(() => {
+    setIsAiPanelOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('ergo_ai_panel_open', String(next));
+      } catch {}
+      return next;
+    });
+  }, []);
 
   // Resizable Split Pane State (default: 2/3 for Human lanes, 1/3 for AI workspace)
   const [splitWidth, setSplitWidth] = useState<number>(66.667); // percentage
@@ -1082,7 +1155,8 @@ export function App() {
               }));
             });
           },
-          controller.signal
+          controller.signal,
+          agentPipelineOptions
         );
 
         // Completed execution: apply results & persist to TODO.md and AGENT_CONTEXT.md
@@ -1967,15 +2041,26 @@ export function App() {
         autosaveStatus={autosave.status}
         autosaveDelaySec={autosave.delaySec}
         isAutosaveEnabled={autosave.isEnabled}
+        isAiPanelOpen={isAiPanelOpen}
+        onToggleAiPanel={handleToggleAiPanel}
+        runningAiTaskCount={runningTaskIds.length}
       />
 
       {/* Main Dual-Pane Workspace */}
       <div
-        className={`workspace-body ${isDragging ? 'is-dragging' : ''}`}
+        className={`workspace-body ${isDragging ? 'is-dragging' : ''} ${isAiPanelOpen ? 'ai-panel-open' : 'ai-panel-collapsed'}`}
         ref={workspaceRef}
       >
-        {/* Left Pane: Obsidian-style Markdown Editor */}
-        <div style={{ width: `${splitWidth}%`, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        {/* Left Pane: Obsidian-style Markdown Editor & Task Swim Lanes */}
+        <div style={{
+          width: isAiPanelOpen ? `${splitWidth}%` : 'calc(100% - 44px)',
+          flex: isAiPanelOpen ? undefined : 1,
+          display: 'flex',
+          flexDirection: 'column',
+          height: '100%',
+          overflow: 'hidden',
+          transition: isDragging ? 'none' : 'width 0.22s cubic-bezier(0.16, 1, 0.3, 1), flex 0.22s cubic-bezier(0.16, 1, 0.3, 1)'
+        }}>
           <TaskPane
             rawMarkdown={activeProject?.todoMarkdown || ''}
             tasks={tasks}
@@ -2005,17 +2090,31 @@ export function App() {
           />
         </div>
 
-        {/* Resizable Divider Bar */}
-        <div
-          className={`resize-divider ${isDragging ? 'active' : ''}`}
-          onMouseDown={handleMouseDown}
-          title="Drag to resize pane width"
-        >
-          <div className="resize-handle-bar" />
-        </div>
+        {/* Resizable Divider Bar (Only active when AI Panel is open) */}
+        {isAiPanelOpen && (
+          <div
+            className={`resize-divider ${isDragging ? 'active' : ''}`}
+            onMouseDown={handleMouseDown}
+            title="Drag to resize AI Workspace panel width"
+          >
+            <div className="resize-handle-bar" />
+          </div>
+        )}
 
-        {/* Right Pane: AI Workspace */}
-        <div style={{ width: `${100 - splitWidth}%`, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        {/* Right Pane: Popout AI Workspace Panel / Collapsed Vertical Menu Rail */}
+        <div
+          className={`ai-workspace-pane-wrapper ${isAiPanelOpen ? 'is-open' : 'is-collapsed'}`}
+          style={{
+            width: isAiPanelOpen ? `${100 - splitWidth}%` : '44px',
+            minWidth: isAiPanelOpen ? '320px' : '44px',
+            maxWidth: isAiPanelOpen ? '80%' : '44px',
+            display: 'flex',
+            flexDirection: 'column',
+            height: '100%',
+            overflow: 'hidden',
+            transition: isDragging ? 'none' : 'width 0.22s cubic-bezier(0.16, 1, 0.3, 1), min-width 0.22s cubic-bezier(0.16, 1, 0.3, 1)'
+          }}
+        >
           <BriefPane
             tasks={tasks}
             briefs={briefs}
@@ -2048,6 +2147,8 @@ export function App() {
             onKillSession={handleKillSession}
             onArchiveTask={handleArchiveTask}
             onRemoveAiTask={handleRemoveAiTask}
+            isPanelOpen={isAiPanelOpen}
+            onTogglePanel={handleToggleAiPanel}
           />
         </div>
 
@@ -2145,6 +2246,8 @@ export function App() {
         onSaveImmediately={handleManualSaveNow}
         theme={theme}
         onThemeChange={setTheme}
+        agentPipelineOptions={agentPipelineOptions}
+        onSetAgentPipelineOptions={setAgentPipelineOptions}
       />
 
       {/* Modal 8: Local Root Directory Picker */}

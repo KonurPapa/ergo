@@ -1,4 +1,4 @@
-import { type TaskItem, type AgentContextItem, type TaskStatus, type SwimLaneDoc } from '../types';
+import { type TaskItem, type AgentContextItem, type TaskStatus, type SwimLaneDoc, type TokenUsage } from '../types';
 
 export const ARCHIVE_DELIMITER = '<!-- ARCHIVE -->';
 
@@ -440,6 +440,7 @@ function parseAgentContextBlock(markdown: string, isArchived: boolean = false): 
     let metaSourceContent: string | undefined;
     let metaSourceHeading: string | undefined;
     let metaId: string | undefined;
+    let metaTotalUsage: TokenUsage | undefined;
 
     const jsonMetaMatch = section.match(/<!--\s*ergo-meta:\s*(\{.*?\})\s*-->/i);
     if (jsonMetaMatch) {
@@ -451,12 +452,25 @@ function parseAgentContextBlock(markdown: string, isArchived: boolean = false): 
         if (parsedMeta.sourceContent) metaSourceContent = parsedMeta.sourceContent;
         if (parsedMeta.sourceHeading) metaSourceHeading = parsedMeta.sourceHeading;
         if (parsedMeta.id) metaId = parsedMeta.id;
+        if (parsedMeta.totalUsage) metaTotalUsage = parsedMeta.totalUsage;
       } catch {}
     } else {
       const altMetaMatch = section.match(/<!--\s*sourceTaskId:\s*([^|\s]+)(?:\s*\|\s*sourceLaneId:\s*([^>\s]+))?\s*-->/i);
       if (altMetaMatch) {
         metaSourceTaskId = altMetaMatch[1].trim();
         if (altMetaMatch[2]) metaSourceLaneId = altMetaMatch[2].trim();
+      }
+    }
+
+    if (!metaTotalUsage) {
+      const tokenUsageMatch = section.match(/<!--\s*task_token_usage:\s*(\{.*?\})\s*-->/i);
+      if (tokenUsageMatch) {
+        try {
+          const parsedUsage = JSON.parse(tokenUsageMatch[1]);
+          if (typeof parsedUsage.inputTokens === 'number') {
+            metaTotalUsage = parsedUsage;
+          }
+        } catch {}
       }
     }
 
@@ -500,7 +514,8 @@ function parseAgentContextBlock(markdown: string, isArchived: boolean = false): 
       sourceLaneId: metaSourceLaneId,
       sourceLaneTitle: metaSourceLaneTitle,
       sourceContent: metaSourceContent,
-      sourceHeading: metaSourceHeading
+      sourceHeading: metaSourceHeading,
+      totalUsage: metaTotalUsage
     });
   }
 
@@ -555,7 +570,7 @@ function serializeAgentContextItemsList(items: AgentContextItem[]): string {
     }
 
     // Embed metadata comments if linkage exists
-    if (item.sourceTaskId || item.sourceLaneId || item.id || item.sourceContent || item.sourceHeading) {
+    if (item.sourceTaskId || item.sourceLaneId || item.id || item.sourceContent || item.sourceHeading || item.totalUsage) {
       const metaObj: Record<string, any> = {};
       if (item.id) metaObj.id = item.id;
       if (item.sourceTaskId) metaObj.sourceTaskId = item.sourceTaskId;
@@ -563,6 +578,7 @@ function serializeAgentContextItemsList(items: AgentContextItem[]): string {
       if (item.sourceLaneTitle) metaObj.sourceLaneTitle = item.sourceLaneTitle;
       if (item.sourceContent) metaObj.sourceContent = item.sourceContent;
       if (item.sourceHeading) metaObj.sourceHeading = item.sourceHeading;
+      if (item.totalUsage) metaObj.totalUsage = item.totalUsage;
       md += `<!-- ergo-meta: ${JSON.stringify(metaObj)} -->\n\n`;
     }
 

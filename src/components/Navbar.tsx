@@ -16,7 +16,9 @@ import {
   CheckCheck,
   AlertCircle,
   Clock,
-  Settings
+  Settings,
+  PanelRightClose,
+  PanelRightOpen
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -40,6 +42,10 @@ interface NavbarProps {
   autosaveStatus: AutosaveStatus;
   autosaveDelaySec: number;
   isAutosaveEnabled: boolean;
+  // Popout AI Panel Controls
+  isAiPanelOpen?: boolean;
+  onToggleAiPanel?: () => void;
+  runningAiTaskCount?: number;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -61,7 +67,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSaveImmediately,
   autosaveStatus,
   autosaveDelaySec,
-  isAutosaveEnabled
+  isAutosaveEnabled,
+  isAiPanelOpen = true,
+  onToggleAiPanel,
+  runningAiTaskCount = 0
 }) => {
   const connectedCount = mcpServers.filter((s) => s.status === 'connected').length;
 
@@ -441,6 +450,27 @@ export const Navbar: React.FC<NavbarProps> = ({
           <Settings size={16} color="var(--accent-cyan)" />
           {/* <span>Settings</span> */}
         </button>
+
+        {/* Toggle Popout AI Workspace Panel */}
+        {onToggleAiPanel && (
+          <button
+            type="button"
+            className={`btn btn-secondary btn-ai-panel-toggle ${isAiPanelOpen ? 'is-active' : ''}`}
+            onClick={onToggleAiPanel}
+            title={isAiPanelOpen ? 'Collapse AI Workspace panel (give more space to swim lanes)' : 'Open AI Workspace panel'}
+            aria-label={isAiPanelOpen ? 'Collapse AI Workspace panel' : 'Open AI Workspace panel'}
+          >
+            {isAiPanelOpen ? (
+              <PanelRightClose size={16} color="var(--accent-violet)" />
+            ) : (
+              <PanelRightOpen size={16} color={runningAiTaskCount > 0 ? 'var(--accent-cyan)' : 'var(--text-muted)'} />
+            )}
+            <span style={{ fontSize: '0.78rem', fontWeight: 600 }}>AI Workspace</span>
+            {runningAiTaskCount > 0 && (
+              <span className="live-pulse-dot" title={`${runningAiTaskCount} task${runningAiTaskCount > 1 ? 's' : ''} running`} style={{ width: '7px', height: '7px' }} />
+            )}
+          </button>
+        )}
       </div>
     </header>
   );

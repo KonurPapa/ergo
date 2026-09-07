@@ -70,6 +70,9 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
   const [isCustomDiscovery, setIsCustomDiscovery] = useState(false);
   const [isCustomSummary, setIsCustomSummary] = useState(false);
   const [isCustomGeneral, setIsCustomGeneral] = useState(false);
+  // Worker (sub-agent) model: '' means "same as Tasks model"
+  const [workerModel, setWorkerModel] = useState('');
+  const [isCustomWorker, setIsCustomWorker] = useState(false);
 
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -95,6 +98,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     setDiscoveryModel(pId === 'ollama' ? '' : p.defaultDiscoveryModel);
     setSummaryModel(pId === 'ollama' ? '' : p.defaultSummaryModel);
     setGeneralModel(pId === 'ollama' ? '' : p.defaultGeneralModel);
+    setWorkerModel('');
+    setIsCustomWorker(false);
     setTestResult(null);
     setShowApiKey(false);
     setOllamaModels([]);
@@ -118,6 +123,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     setDiscoveryModel(currentDisc);
     setSummaryModel(currentSumm);
     setGeneralModel(currentGen);
+    setWorkerModel(k.workerModel || '');
+    setIsCustomWorker(false);
     setTestResult(null);
     setShowApiKey(false);
     setIsCustomDiscovery(false);
@@ -298,6 +305,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
       discoveryModel: resolvedDiscovery,
       summaryModel: resolvedSummary,
       generalModel: resolvedGeneral,
+      workerModel: workerModel.trim() || undefined,
       model: resolvedGeneral,
       isConnected: true
     });
@@ -899,6 +907,72 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         {getEffectiveModels(providerId).map((m) => (
                           <option key={`gen-${m.id}`} value={m.id}>
                             {m.name} {m.id === providerMeta.defaultGeneralModel ? '(Default)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+                  {/* Worker (sub-agent) Model */}
+                  <div className="input-group" style={{ margin: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                      <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
+                        <Brain size={13} color="var(--accent-primary)" />
+                        <span style={{ fontWeight: 700, color: 'var(--text-bright)', fontSize: '0.82rem' }}>Worker Model</span>
+                        <span
+                          style={{
+                            fontSize: '0.62rem',
+                            padding: '0.05rem 0.35rem',
+                            borderRadius: '4px',
+                            background: 'rgba(99, 102, 241, 0.15)',
+                            color: 'var(--accent-primary)',
+                            fontWeight: 600
+                          }}
+                        >
+                          Sub-agents (optional)
+                        </span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setIsCustomWorker(!isCustomWorker)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: 'var(--accent-cyan)',
+                          fontSize: '0.68rem',
+                          cursor: 'pointer',
+                          textDecoration: 'underline',
+                          padding: 0
+                        }}
+                      >
+                        {isCustomWorker ? 'Select Preset' : 'Custom ID'}
+                      </button>
+                    </div>
+                    <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.25, display: 'block', marginBottom: '0.4rem' }}>
+                      Runs the fan-out worker pieces and the Cleaner. Leave as "Same as Tasks Model" unless you want cheaper/faster workers.
+                    </span>
+
+                    {isCustomWorker ? (
+                      <input
+                        type="text"
+                        className="input-text"
+                        placeholder="Leave empty to reuse the Tasks Model"
+                        value={workerModel}
+                        onChange={(e) => setWorkerModel(e.target.value)}
+                        style={{ fontSize: '0.82rem', fontFamily: 'var(--font-mono)' }}
+                      />
+                    ) : (
+                      <select
+                        className="input-text"
+                        value={workerModel}
+                        onChange={(e) => setWorkerModel(e.target.value)}
+                        disabled={providerId === 'ollama' && (!isOllamaConnected || ollamaModels.length === 0)}
+                        style={{ cursor: 'pointer', fontSize: '0.82rem' }}
+                      >
+                        <option value="">Same as Tasks Model</option>
+                        {(providerId === 'ollama' ? ollamaModels : getEffectiveModels(providerId)).map((m) => (
+                          <option key={`worker-${m.id}`} value={m.id}>
+                            {m.name}
                           </option>
                         ))}
                       </select>
