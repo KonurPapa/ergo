@@ -57,7 +57,13 @@
         - this would give the user a cool view of what's actually being edited
         - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts
     - add 'grill-me' to the list of AI assistant abilities, so user can refine their task list
-    - token usage during task execution
+    - ~~token usage during task execution~~
+    - global rules markdown file needs to be added at execution runtime to the AGENTS.md / CLAUDE.md files, which should also store the list of model routing
+        - these files also need to be exportable so the user can take them elsewhere if they want
+    - user needs to easily be able to create skills, and call them in tasks with '/'
+    - user needs to be able to reference files with '@'
+        - does this open a modal to select the file, which is a deep link to the file on disk?
+    - needs a `/remember` skill that the user can call to force the AI to store that knowledge in its vector DB
 
 
 

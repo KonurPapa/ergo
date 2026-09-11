@@ -15,7 +15,7 @@ Write for two readers at once: a human who must be able to read the scenarios an
 
 1. **`brief` — Gherkin scenarios (the mission prompt).** Format the brief as human-readable Gherkin using the standard Given-When-Then structure. Assume it is the ONLY description of the task the executing agents will read, so make it self-contained: fold in the relevant facts from the baseline (schemas, file paths, conventions, dependencies) as `Given` clauses.
 2. **`goals` — numbered checklist.** Explicit, concrete deliverables and subtasks, one per line, in dependency order.
-3. **`output_as` — destination & method.** Exactly where the output goes and how: file paths (inside the Allowed Boundaries listed in the baseline), MCP tool used, or "record findings in AGENT_CONTEXT.md" for pure reasoning tasks.
+3. **`output_as` — destination & method.** Exactly where the output goes and how: file paths (inside the Allowed Boundaries listed in the baseline) and the MCP tool used (e.g. "Write <path> using Filesystem MCP"). Do NOT instruct executing agents to write to AGENT_CONTEXT.md or TODO.md (the pipeline logger handles workspace docs and completion records automatically). For pure reasoning tasks with no file deliverables, state "Pure reasoning/analysis task; no file output required."
 4. **`requiredMcps` — strictly filtered.** Only the MCP server names/ids this task actually needs (0–2 is typical). Never list everything that is connected; extra tools bloat every later prompt and invite tool hallucinations. Return `[]` for pure reasoning/writing tasks that need no external tools.
 5. **`taskKind` — classification.** One of `coding`, `writing`, `research`, `ops`, `data`, `other`. `coding` turns on the lint/format Cleaner pass and the QA-engineer persona of the Hardener, so choose it whenever source code, scripts, markup or configuration files are produced or modified.
 6. **`requiresHardener` & `hardenerReason` — QA scope determination.** Set `requiresHardener` to `true` ONLY for large, high-impact tasks (multi-file coding, architectural additions, complex end-to-end flows) that warrant an independent QA agent proving the scenarios. Set to `false` for small tasks, minor tweaks, or generic tasks using simple MCP tools (Slack, Calendar, simple lookups, note taking) where an extra read-only agent would waste tokens. Supply a short string explaining your decision in `hardenerReason`.
@@ -118,10 +118,10 @@ Return ONLY valid JSON (no markdown fences, no prose) matching exactly:
 {
   "brief": "Feature: <Task Subject>\n  Scenario: <Primary Happy Path>\n    Given <preconditions and discovered context>\n    When <actions performed>\n    Then <expected outcomes>\n    And <additional verifications>\n\n  Scenario: <Edge Case / Error Handling>\n    Given <initial state>\n    When <error or edge condition occurs>\n    Then <explicit visible handling with zero silent failures>",
   "goals": "1. <Specific deliverable 1>\n2. <Specific deliverable 2>\n3. <Verification check>",
-  "output_as": "Write <exact paths> via the Filesystem MCP, then record the completion summary in AGENT_CONTEXT.md.",
+  "output_as": "Write <exact paths> via the Filesystem MCP.",
   "requiredMcps": ["Filesystem MCP"],
   "taskKind": "coding",
-  "requiresHardener": true,
-  "hardenerReason": "Large coding task with multiple file deliverables requiring independent QA validation."
+  "requiresHardener": false,
+  "hardenerReason": "Standalone single deliverable or simple scope; Hardener QA skipped to conserve tokens (set true ONLY for large multi-file architectural tasks)."
 }
 ```

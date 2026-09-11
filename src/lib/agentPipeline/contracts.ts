@@ -31,14 +31,14 @@ import {
 export const DEFAULT_AGENT_PIPELINE_OPTIONS: AgentPipelineOptions = {
   maxConcurrentAgents: 3,
   maxQaRetries: 2,
-  maxToolRoundsPerAgent: 15,
+  maxToolRoundsPerAgent: 10,
   enableCleaner: true,
   enableHardener: true,
   discoveryRelevanceThreshold: 50
 };
 
 /** Max characters of any single tool result fed back into a model (per-turn payload trimming). */
-export const TOOL_RESULT_CHAR_CAP = 12_000;
+export const TOOL_RESULT_CHAR_CAP = 5_000;
 /** Max characters for a worker's condensed summary appended to the bible event log. */
 export const PIECE_SUMMARY_CHAR_CAP = 1_200;
 /** Max characters excerpted from a project guideline file (AGENTS.md / CLAUDE.md). */
@@ -58,8 +58,11 @@ export function addUsage(target: TokenUsage, delta: Partial<TokenUsage>): TokenU
 }
 
 export function formatUsage(u: TokenUsage): string {
-  const cached = u.cachedInputTokens > 0 ? ` (${u.cachedInputTokens.toLocaleString()} cached)` : '';
-  return `${u.calls} call${u.calls === 1 ? '' : 's'} · in ${u.inputTokens.toLocaleString()}${cached} · out ${u.outputTokens.toLocaleString()}`;
+  const parts: string[] = [];
+  if (u.cachedInputTokens > 0) parts.push(`${u.cachedInputTokens.toLocaleString()} cached`);
+  if (u.cacheWriteTokens > 0) parts.push(`${u.cacheWriteTokens.toLocaleString()} written`);
+  const cacheStr = parts.length > 0 ? ` (${parts.join(', ')})` : '';
+  return `${u.calls} call${u.calls === 1 ? '' : 's'} · in ${u.inputTokens.toLocaleString()}${cacheStr} · out ${u.outputTokens.toLocaleString()}`;
 }
 
 // ─── Tools ──────────────────────────────────────────────────────────────────
@@ -188,23 +191,59 @@ export interface PipelineContext extends PipelineCallbacks {
   emit: (step: Omit<ExecutionStep, 'time' | 'taskId'> & Partial<Pick<ExecutionStep, 'time' | 'taskId'>>) => void;
 }
 
+/** Resolved provider and credentials for an individual execution agent role. */
+export interface ResolvedRoleTarget {
+  provider: AIProviderId;
+  model: string;
+  apiKey?: string;
+  baseUrl?: string;
+}
+
 /** Resolve which model a role should use — decided once per run (route at task boundaries). */
 export function resolveModelForRole(config: AIProviderConfig, role: AgentRole): string {
+  if (config.roleConfigs?.[role]?.model?.trim()) {
+    return config.roleConfigs[role]!.model!.trim();
+  }
   const general = config.generalModel || config.model || '';
   switch (role) {
     case 'discovery':
       return config.discoveryModel || general;
     case 'summary':
-    case 'logger':
       return config.summaryModel || general;
+    case 'logger':
+      return config.loggerModel || config.summaryModel || general;
     case 'worker':
-    case 'cleaner':
       return config.workerModel || general;
+    case 'cleaner':
+      return config.cleanerModel || config.workerModel || general;
     case 'manager':
+      return config.generalModel || general;
     case 'hardener':
+      return config.hardenerModel || config.generalModel || general;
     default:
       return general;
   }
+}
+
+/** Resolve the provider, model, and credentials to execute a specific agent role. */
+export function resolveRoleTarget(config: AIProviderConfig, role: AgentRole): ResolvedRoleTarget {
+  const model = resolveModelForRole(config, role);
+  const roleOverride = config.roleConfigs?.[role];
+  const provider = (roleOverride?.provider && roleOverride.provider !== 'none' && roleOverride.provider !== 'mock')
+    ? roleOverride.provider
+    : config.provider;
+
+  // Retrieve provider-specific credentials if available, falling back to top-level credentials
+  const creds = config.providerKeys?.[provider];
+  const apiKey = creds?.apiKey || (provider === config.provider ? config.apiKey : undefined);
+  const baseUrl = creds?.baseUrl || (provider === config.provider ? config.baseUrl : undefined);
+
+  return {
+    provider,
+    model,
+    apiKey,
+    baseUrl
+  };
 }
 
 export function throwIfAborted(signal?: AbortSignal): void {

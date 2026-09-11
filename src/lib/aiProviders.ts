@@ -1,10 +1,147 @@
-import { type AIProviderId, type ProviderCredentials } from '../types';
+import { type AIProviderId, type AgentRole, type ProviderCredentials, type CliDetectedAgent, type CliExecutionResult } from '../types';
 
 export interface ProviderModel {
   id: string;
   name: string;
   description: string;
   tier?: 'light' | 'standard' | 'advanced' | 'reasoning';
+}
+
+export interface AgentRoleMeta {
+  role: AgentRole;
+  name: string;
+  score: number; // 0 - 10
+  scoreLabel: string;
+  tier: 'light' | 'standard' | 'advanced' | 'reasoning';
+  description: string;
+  defaultModels: Partial<Record<AIProviderId, string>>;
+}
+
+export const AGENT_ROLES: AgentRole[] = [
+  'discovery',
+  'summary',
+  'manager',
+  'worker',
+  'cleaner',
+  'hardener',
+  'logger'
+];
+
+export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
+  discovery: {
+    role: 'discovery',
+    name: 'Discovery Agent',
+    score: 3.0,
+    scoreLabel: '3.0 / 10 (Light)',
+    tier: 'light',
+    description: 'Scans repository structure, parses context, detects relevant files and tech stack. Needs low token latency and fast JSON generation; high reasoning is unnecessary.',
+    defaultModels: {
+      openai: 'gpt-5-mini',
+      anthropic: 'claude-3-5-haiku-20241022',
+      gemini: 'gemini-2.5-flash',
+      ollama: 'llama3.2',
+      cli_subscription: 'claude-code'
+    }
+  },
+  summary: {
+    role: 'summary',
+    name: 'Summary Agent',
+    score: 6.5,
+    scoreLabel: '6.5 / 10 (Standard)',
+    tier: 'standard',
+    description: 'Synthesizes discovery evidence and task brief into a structured, executable specification (the "Bible") with Gherkin acceptance criteria.',
+    defaultModels: {
+      openai: 'gpt-5',
+      anthropic: 'claude-3-7-sonnet-20250219',
+      gemini: 'gemini-3.7-flash',
+      ollama: 'llama3.2',
+      cli_subscription: 'claude-code'
+    }
+  },
+  manager: {
+    role: 'manager',
+    name: 'Manager Agent',
+    score: 9.0,
+    scoreLabel: '9.0 / 10 (Frontier)',
+    tier: 'advanced',
+    description: 'Frontier brain: plans puzzle pieces, directs workers, verifies execution against criteria, and remediates failed scenarios. Requires peak reasoning and architectural capability.',
+    defaultModels: {
+      openai: 'gpt-5.4',
+      anthropic: 'claude-opus-5',
+      gemini: 'gemini-3.7-pro',
+      ollama: 'qwen2.5-coder',
+      cli_subscription: 'claude-code'
+    }
+  },
+  worker: {
+    role: 'worker',
+    name: 'Worker Agent(s)',
+    score: 7.0,
+    scoreLabel: '7.0 / 10 (Standard+)',
+    tier: 'standard',
+    description: 'Subagents executing concrete puzzle pieces, writing code, editing files, and running local tools/commands according to specifications.',
+    defaultModels: {
+      openai: 'gpt-5',
+      anthropic: 'claude-sonnet-5',
+      gemini: 'gemini-3.7-flash',
+      ollama: 'qwen2.5-coder',
+      cli_subscription: 'claude-code'
+    }
+  },
+  cleaner: {
+    role: 'cleaner',
+    name: 'Cleaner Agent',
+    score: 3.5,
+    scoreLabel: '3.5 / 10 (Light)',
+    tier: 'light',
+    description: 'Post-execution code cleanup: runs linter, fixes formatting, and tidies newly created files without modifying functionality.',
+    defaultModels: {
+      openai: 'gpt-5-mini',
+      anthropic: 'claude-3-5-haiku-20241022',
+      gemini: 'gemini-2.5-flash',
+      ollama: 'llama3.2',
+      cli_subscription: 'claude-code'
+    }
+  },
+  hardener: {
+    role: 'hardener',
+    name: 'Hardener Agent (QA)',
+    score: 9.0,
+    scoreLabel: '9.0 / 10 (Frontier QA)',
+    tier: 'advanced',
+    description: 'Adversarial quality assurance harness: tests edge cases, verifies contract scenarios via browser/commands, and catches regressions before completion.',
+    defaultModels: {
+      openai: 'gpt-5.4',
+      anthropic: 'claude-opus-5',
+      gemini: 'gemini-3.7-pro',
+      ollama: 'qwen2.5-coder',
+      cli_subscription: 'claude-code'
+    }
+  },
+  logger: {
+    role: 'logger',
+    name: 'Logger Agent',
+    score: 5.0,
+    scoreLabel: '5.0 / 10 (Standard)',
+    tier: 'standard',
+    description: 'Documents the build and verification journey, records artifacts and file diffs, and evaluates human review requirements for TODO.md.',
+    defaultModels: {
+      openai: 'gpt-5',
+      anthropic: 'claude-3-5-haiku-20241022',
+      gemini: 'gemini-3.7-flash',
+      ollama: 'llama3.2',
+      cli_subscription: 'claude-code'
+    }
+  }
+};
+
+export function getDefaultModelForRole(provider: AIProviderId, role: AgentRole): string {
+  const roleMeta = AGENT_ROLE_INFO[role];
+  if (roleMeta && roleMeta.defaultModels[provider]) {
+    return roleMeta.defaultModels[provider];
+  }
+  const providerMeta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === provider);
+  return providerMeta?.defaultModel || '';
 }
 
 export interface ProviderMeta {
@@ -134,8 +271,121 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     defaultBaseUrl: 'http://localhost:11434',
     keyDocUrl: 'https://ollama.com',
     models: []
+  },
+  {
+    id: 'cli_subscription',
+    name: 'Subscription (Local CLI Bridge)',
+    shortName: 'Subscription',
+    description: 'Spend against your Claude Pro/Team or ChatGPT Plus subscription via local CLI agent (No API key needed)',
+    icon: '⚡',
+    badgeColor: '#10b981',
+    requiresKey: false,
+    requiresBaseUrl: false,
+    defaultModel: 'claude-code',
+    defaultDiscoveryModel: 'claude-code',
+    defaultSummaryModel: 'claude-code',
+    defaultGeneralModel: 'claude-code',
+    keyPlaceholder: 'Not required for subscription mode',
+    keyDocUrl: 'https://docs.anthropic.com/claude/docs/claude-code',
+    models: [
+      { id: 'claude-code', name: 'Claude Code (Claude Pro / Team / Max)', description: 'Official Anthropic coding CLI spending against Claude Pro/Team subscription', tier: 'advanced' },
+      { id: 'codex', name: 'OpenAI Codex CLI (ChatGPT Plus / Team / Pro)', description: 'Official OpenAI coding CLI spending against ChatGPT Plus/Team subscription', tier: 'advanced' },
+      { id: 'gemini', name: 'Google Gemini CLI (Google One AI / Pro)', description: 'Official Google Gemini CLI spending against Google One AI / Gemini subscription', tier: 'advanced' },
+      { id: 'antigravity', name: 'Antigravity CLI (Google Antigravity)', description: 'Google Deepmind coding CLI spending against Antigravity subscription', tier: 'advanced' },
+      { id: 'aider', name: 'Aider CLI', description: 'Open-source terminal pair programming CLI', tier: 'standard' },
+      { id: 'custom', name: 'Custom CLI Command', description: 'Run a custom local binary command or executable path', tier: 'standard' }
+    ]
   }
 ];
+
+export async function fetchDetectedCliAgents(customCommand?: string): Promise<{ agents: CliDetectedAgent[]; custom: CliDetectedAgent | null }> {
+  try {
+    const url = customCommand ? `/api/cli/detect?customCommand=${encodeURIComponent(customCommand)}` : '/api/cli/detect';
+    const res = await fetch(url);
+    if (!res.ok) {
+      return { agents: [], custom: null };
+    }
+    const data = await res.json();
+    return { agents: data.agents || [], custom: data.custom || null };
+  } catch (err) {
+    console.warn('[Ergo CLI] Failed to detect CLI agents:', err);
+    return { agents: [], custom: null };
+  }
+}
+
+export async function executeCliHeadless(options: {
+  cli: string;
+  prompt: string;
+  systemPrompt?: string;
+  cwd?: string;
+  args?: string[];
+  timeoutMs?: number;
+}): Promise<CliExecutionResult> {
+  const res = await fetch('/api/cli/execute', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `CLI execution failed with status ${res.status}`);
+  }
+  return res.json();
+}
+
+export interface CliAuthStatus {
+  cli: string;
+  isInstalled: boolean;
+  isAuthenticated: boolean;
+  userEmail: string | null;
+  message: string;
+}
+
+export async function fetchCliAuthStatus(cli = 'claude'): Promise<CliAuthStatus> {
+  try {
+    const res = await fetch(`/api/cli/auth-status?cli=${encodeURIComponent(cli)}`);
+    if (!res.ok) {
+      return { cli, isInstalled: false, isAuthenticated: false, userEmail: null, message: `HTTP ${res.status}` };
+    }
+    return res.json();
+  } catch (err: any) {
+    return { cli, isInstalled: false, isAuthenticated: false, userEmail: null, message: err.message };
+  }
+}
+
+export async function installCli(cli = 'claude'): Promise<{ success: boolean; output: string; error?: string }> {
+  try {
+    const res = await fetch('/api/cli/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cli })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { success: false, output: '', error: data.error || `Installation request failed with HTTP ${res.status}` };
+    }
+    return data;
+  } catch (err: any) {
+    return { success: false, output: '', error: err.message || 'Failed to connect to installation endpoint' };
+  }
+}
+
+export async function triggerCliLogin(cli = 'claude'): Promise<{ success: boolean; authUrl: string | null; output: string; pid?: number; error?: string }> {
+  try {
+    const res = await fetch('/api/cli/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cli })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { success: false, authUrl: null, output: '', pid: undefined, error: data.error || `Login request failed with HTTP ${res.status}` };
+    }
+    return data;
+  } catch (err: any) {
+    return { success: false, authUrl: null, output: '', pid: undefined, error: err.message || 'Failed to connect to login endpoint' };
+  }
+}
 
 export async function fetchOpenAIModels(apiKey: string): Promise<ProviderModel[]> {
   const res = await fetch('https://api.openai.com/v1/models', {
@@ -454,6 +704,29 @@ export async function testAiConnection(
           message: `Failed to reach Ollama at ${baseUrl}. Ensure Ollama is running (e.g. 'ollama serve') and CORS allows browser requests (OLLAMA_ORIGINS="*"). ${e.message || ''}`
         };
       }
+    }
+
+    if (providerId === 'cli_subscription') {
+      const cliTarget = credentials.cliCustomCommand || credentials.model || 'claude-code';
+      const isCustom = cliTarget === 'custom' || Boolean(credentials.cliCustomCommand);
+      const detection = await fetchDetectedCliAgents(credentials.cliCustomCommand);
+
+      const targetAgent = isCustom
+        ? detection.custom
+        : detection.agents.find((a) => a.id === cliTarget || a.command === cliTarget) || detection.agents[0];
+
+      if (targetAgent?.isInstalled) {
+        return {
+          success: true,
+          message: `Ready! Detected ${targetAgent.name} at ${targetAgent.detectedPath} (${targetAgent.version || 'installed'}). Running under your ${targetAgent.subscriptionTier}.`,
+          models: SUPPORTED_AI_PROVIDERS.find((p) => p.id === 'cli_subscription')?.models || []
+        };
+      }
+
+      return {
+        success: false,
+        message: `${targetAgent ? targetAgent.name : 'Selected CLI'} was not found in system PATH. Install with: ${targetAgent?.installCommand || 'npm install -g @anthropic-ai/claude-code'} and run login once.`
+      };
     }
 
     return { success: false, message: 'Unsupported provider ID.' };

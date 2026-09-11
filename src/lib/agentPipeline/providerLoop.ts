@@ -106,6 +106,75 @@ function safeParseArgs(raw: any): Record<string, any> {
   return {};
 }
 
+/**
+ * Parses tool calls formatted inside message text/content (common in local Ollama models like Llama, Qwen, DeepSeek).
+ */
+export function extractToolCallsFromContent(content: string, tools: ToolDefinition[]): ToolCallRequest[] {
+  if (!content || !content.trim()) return [];
+  const validToolNames = new Set(tools.map((t) => t.name));
+  const calls: ToolCallRequest[] = [];
+
+  // 1. Tag format: <tool_call> ... </tool_call>
+  const tagRegex = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
+  let tagMatch: RegExpExecArray | null;
+  while ((tagMatch = tagRegex.exec(content)) !== null) {
+    const raw = tagMatch[1].trim();
+    try {
+      const parsed = JSON.parse(raw);
+      const name = parsed.name || parsed.tool || parsed.function?.name;
+      if (name && validToolNames.has(name)) {
+        calls.push({
+          id: `call_text_${calls.length + 1}`,
+          name,
+          args: safeParseArgs(parsed.arguments ?? parsed.parameters ?? parsed.args ?? parsed)
+        });
+      }
+    } catch {}
+  }
+  if (calls.length > 0) return calls;
+
+  // 2. Fenced json/tool_call block format: ```json ... ``` or ```tool_call ... ```
+  const fenceRegex = /```(?:json|tool_call)?\s*([\s\S]*?)```/gi;
+  let fenceMatch: RegExpExecArray | null;
+  while ((fenceMatch = fenceRegex.exec(content)) !== null) {
+    const raw = fenceMatch[1].trim();
+    try {
+      const parsed = JSON.parse(raw);
+      const items = Array.isArray(parsed) ? parsed : [parsed];
+      for (const item of items) {
+        if (!item || typeof item !== 'object') continue;
+        const name = item.name || item.tool || item.function?.name;
+        if (name && validToolNames.has(name)) {
+          calls.push({
+            id: `call_text_${calls.length + 1}`,
+            name,
+            args: safeParseArgs(item.arguments ?? item.parameters ?? item.args ?? item)
+          });
+        }
+      }
+    } catch {}
+  }
+  if (calls.length > 0) return calls;
+
+  // 3. Raw JSON object format in content: {"name": "write_file", "arguments": ...}
+  try {
+    const jsonMatch = content.match(/\{\s*"(?:name|tool|function)"\s*:\s*"([a-zA-Z0-9_-]+)"[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      const name = parsed.name || parsed.tool || parsed.function?.name;
+      if (name && validToolNames.has(name)) {
+        calls.push({
+          id: `call_text_1`,
+          name,
+          args: safeParseArgs(parsed.arguments ?? parsed.parameters ?? parsed.args ?? parsed)
+        });
+      }
+    }
+  } catch {}
+
+  return calls;
+}
+
 async function dispatchToolCalls(req: ToolLoopRequest, calls: ToolCallRequest[]): Promise<ToolCallResult[]> {
   if (!req.onToolCalls) {
     return calls.map((c) => ({ id: c.id, name: c.name, content: 'ERROR: no tools are available in this phase.', isError: true }));
@@ -129,6 +198,8 @@ export async function runToolLoop(req: ToolLoopRequest): Promise<ToolLoopResult>
       return runOpenAiCompatible(req, tools, usage, 'ollama');
     case 'gemini':
       return runGemini(req, tools, usage);
+    case 'cli_subscription':
+      return runCliSubscription(req, tools, usage);
     default:
       return makeResult('', 0, 0, usage, 'error', `Unsupported provider: ${req.provider}`);
   }
@@ -146,6 +217,10 @@ async function runAnthropic(req: ToolLoopRequest, tools: ToolDefinition[], usage
 
   const messages: any[] = [{ role: 'user', content: req.initialUserMessage }];
   const anthropicTools = tools.length > 0 ? toAnthropicTools(tools) : undefined;
+  if (anthropicTools && anthropicTools.length > 0) {
+    // Cache breakpoint on the last tool caches all tool definitions across turns
+    anthropicTools[anthropicTools.length - 1].cache_control = { type: 'ephemeral' };
+  }
   let lastText = '';
   let toolCallCount = 0;
   let firstResponseFired = false;
@@ -253,7 +328,16 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
   for (let round = 1; round <= req.maxRounds; round++) {
     throwIfAborted(req.signal);
     const body: any = { model: req.model || (isOllama ? 'llama3.2' : 'gpt-5.4'), messages };
-    if (isOllama) body.stream = false;
+    if (isOllama) {
+      body.stream = false;
+      body.options = {
+        num_ctx: 16384,
+        num_predict: req.maxTokens || 4096,
+        temperature: 0.2
+      };
+    } else {
+      if (req.maxTokens) body.max_tokens = req.maxTokens;
+    }
     if (oaTools) {
       body.tools = oaTools;
       if (!isOllama) body.tool_choice = 'auto';
@@ -294,9 +378,40 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
     if (!message) return makeResult(lastText, round, toolCallCount, usage, 'error', `${isOllama ? 'Ollama' : 'OpenAI'} returned no message.`);
     if (typeof message.content === 'string' && message.content.trim()) lastText = message.content;
 
-    const toolCalls: any[] = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+    const toolCalls: any[] = Array.isArray(message.tool_calls) ? [...message.tool_calls] : [];
     if (noToolSupport) return makeResult(lastText, round, toolCallCount, usage, 'no_tool_support');
-    if (toolCalls.length === 0) return makeResult(lastText, round, toolCallCount, usage, 'end');
+
+    // Fallback: If model returned no native tool_calls, check if tool calls were emitted in content (common in Ollama)
+    if (toolCalls.length === 0 && message.content) {
+      const textCalls = extractToolCallsFromContent(message.content, tools);
+      if (textCalls.length > 0) {
+        for (const tc of textCalls) {
+          toolCalls.push({
+            id: tc.id,
+            type: 'function',
+            function: {
+              name: tc.name,
+              arguments: JSON.stringify(tc.args)
+            }
+          });
+        }
+      }
+    }
+
+    if (toolCalls.length === 0) {
+      // If mutating tools are available (e.g. write_file) and this is round 1 of a multi-turn run,
+      // nudge the model instead of abruptly quitting.
+      const hasMutatingTools = tools.some((t) => !t.readOnly);
+      if (round === 1 && req.maxRounds > 1 && hasMutatingTools && !/STATUS:\s*FAILED/i.test(lastText)) {
+        messages.push({ role: 'assistant', content: message.content || '(acknowledged)' });
+        messages.push({
+          role: 'user',
+          content: 'You have not called any tools yet. If creating or updating deliverables, call the write_file tool now with the target path and complete content.'
+        });
+        continue;
+      }
+      return makeResult(lastText, round, toolCallCount, usage, 'end');
+    }
 
     const normalizedCalls = toolCalls.map((tc, i) => ({
       id: tc.id || `call_${round}_${i}`,
@@ -314,7 +429,7 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
     for (const c of normalizedCalls) {
       const r = byId.get(c.id);
       const content = r ? r.content || '(no output)' : 'Tool produced no result.';
-      if (isOllama) messages.push({ role: 'tool', name: c.name, content });
+      if (isOllama) messages.push({ role: 'tool', tool_name: c.name, name: c.name, content });
       else messages.push({ role: 'tool', tool_call_id: c.id, content });
     }
   }
@@ -394,5 +509,73 @@ async function runGemini(req: ToolLoopRequest, tools: ToolDefinition[], usage: T
       })
     });
   }
+  return makeResult(lastText, req.maxRounds, toolCallCount, usage, 'max_rounds');
+}
+
+// ─── CLI Subscription Bridge (Headless) ──────────────────────────────────────
+
+async function runCliSubscription(req: ToolLoopRequest, tools: ToolDefinition[], usage: TokenUsage): Promise<ToolLoopResult> {
+  const binary = req.model === 'claude-code' ? 'claude' : req.model === 'antigravity' ? 'agy' : (req.model || 'claude');
+  const systemText = joinSystem(req);
+  let conversationHistory = req.initialUserMessage;
+  let lastText = '';
+  let toolCallCount = 0;
+
+  for (let round = 1; round <= req.maxRounds; round++) {
+    throwIfAborted(req.signal);
+
+    let toolsInstruction = '';
+    if (tools.length > 0) {
+      toolsInstruction = `\n\nAvailable tools: ${tools.map((t) => t.name).join(', ')}. If calling a tool, format as <tool_call>{"name": "...", "args": {...}}</tool_call>.`;
+    }
+
+    const res = await fetch('/api/cli/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cli: binary,
+        prompt: conversationHistory + toolsInstruction,
+        systemPrompt: systemText,
+        timeoutMs: 180_000
+      }),
+      signal: req.signal
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return makeResult(lastText, round, toolCallCount, usage, 'error', err.error || `CLI returned HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    if (!data.success && !data.output) {
+      return makeResult(lastText, round, toolCallCount, usage, 'error', data.stderr || 'CLI execution failed.');
+    }
+
+    lastText = data.output || '';
+    req.onFirstResponse?.();
+
+    // Approximate usage delta for accounting
+    const delta: TokenUsage = {
+      inputTokens: Math.ceil(conversationHistory.length / 4),
+      outputTokens: Math.ceil(lastText.length / 4),
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      calls: 1
+    };
+    addUsage(usage, delta);
+    req.onUsage?.(delta);
+
+    // Check for tool calls in response
+    const calls = extractToolCallsFromContent(lastText, tools);
+    if (calls.length === 0) {
+      return makeResult(lastText, round, toolCallCount, usage, 'end');
+    }
+
+    toolCallCount += calls.length;
+    const results = await dispatchToolCalls(req, calls);
+    const toolResultsText = results.map((r) => `Tool ${r.name} result:\n${r.content}`).join('\n\n');
+    conversationHistory += `\n\n${lastText}\n\nTool Execution Results:\n${toolResultsText}\n\nPlease continue based on these results.`;
+  }
+
   return makeResult(lastText, req.maxRounds, toolCallCount, usage, 'max_rounds');
 }

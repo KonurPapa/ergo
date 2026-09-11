@@ -144,6 +144,9 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set(['write_file', '
 /** Filesystem tools whose target path is checked against a piece's write scope and the lock registry. */
 export const FILE_MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set(['write_file', 'edit_file', 'create_directory']);
 
+/** Filesystem tools that actually create or modify files (excluding directories). */
+export const FILE_WRITING_TOOL_NAMES: ReadonlySet<string> = new Set(['write_file', 'edit_file']);
+
 export function isReadOnlyTool(name: string): boolean {
   return !MUTATING_TOOL_NAMES.has(name);
 }

@@ -29,7 +29,7 @@ import { BibleStore, FileLockRegistry } from './bible';
 import { runDiscovery } from './discovery';
 import { runSummary } from './summary';
 import { buildToolDefinitions } from './toolSchemas';
-import { runManager, type ManagerRunResult } from './manager';
+import { runManager, isStraightforwardTask, type ManagerRunResult } from './manager';
 import { runCleaner } from './cleaner';
 import { runHardener, type HardenerResult } from './hardener';
 import { runLogger } from './logger';
@@ -54,6 +54,7 @@ export function evaluateHardenerNecessity(params: {
   allScenariosPass: boolean;
   attempt: number;
   createdFiles?: string[];
+  isStraightforward?: boolean;
 }): HardenerEvaluation {
   if (!params.enableHardenerOption) {
     return {
@@ -62,7 +63,18 @@ export function evaluateHardenerNecessity(params: {
     };
   }
 
-  // If this is a retry attempt, re-run Hardener to verify fixes
+  const fileList = params.createdFiles || [];
+  const isSingleStandaloneFile = params.createdFilesCount === 1;
+
+  // Single standalone / straightforward task with passed manager scenarios: cleanly skip Hardener (even on retry attempts)
+  if ((isSingleStandaloneFile || params.isStraightforward) && params.piecesCount <= 2 && params.allScenariosPass) {
+    return {
+      shouldRun: false,
+      reason: `Straightforward standalone deliverable (${fileList[0] || 'deliverable'}) verified by manager. Skipping Hardener to conserve tokens.`
+    };
+  }
+
+  // If this is a retry attempt for non-straightforward tasks, re-run Hardener to verify fixes
   if (params.attempt > 1) {
     return {
       shouldRun: true,
@@ -70,19 +82,18 @@ export function evaluateHardenerNecessity(params: {
     };
   }
 
-  const fileList = params.createdFiles || [];
-  const hasWebDeliverable = fileList.some((f) => /\.(html|htm|jsx|tsx|vue|svelte)$/i.test(f));
-  const isSingleStandaloneFile = params.createdFilesCount === 1 && !hasWebDeliverable;
-
-  // Single standalone non-web file with passed manager scenarios: cleanly skip Hardener
-  if (isSingleStandaloneFile && params.piecesCount <= 2 && params.allScenariosPass) {
-    return {
-      shouldRun: false,
-      reason: `Single standalone file created (${fileList[0] || 'deliverable'}) and scenarios verified by manager. Skipping Hardener to conserve tokens.`
-    };
+  // Tier 1: Summary Agent's upfront classification
+  if (params.summaryRequiresHardener === false) {
+    // If summary explicitly said skip, only run if scope empirically exploded
+    const exploded = params.createdFilesCount >= 3 || params.piecesCount >= 3;
+    if (!exploded) {
+      return {
+        shouldRun: false,
+        reason: params.summaryReason || `Summary classified task as small/generic (${params.taskKind}, ${params.createdFilesCount} files, ${params.piecesCount} piece(s)). Hardener skipped for token efficiency.`
+      };
+    }
   }
 
-  // Tier 1: Summary Agent's upfront classification
   if (params.summaryRequiresHardener === true) {
     // Quality-control sanity check: if it was a complete no-op (0 files modified, 1 simple piece, scenarios already pass), skip
     if (params.createdFilesCount === 0 && params.piecesCount <= 1 && params.allScenariosPass) {
@@ -93,20 +104,12 @@ export function evaluateHardenerNecessity(params: {
     }
     return {
       shouldRun: true,
-      reason: params.summaryReason || (hasWebDeliverable ? 'Web deliverable detected; running Hardener QA validation.' : 'Summary classified task as large/complex requiring independent QA proof.')
-    };
-  }
-
-  // Web deliverable safeguard: web tasks benefit from QA validation (e.g. headless browser checks)
-  if (hasWebDeliverable) {
-    return {
-      shouldRun: true,
-      reason: `Web deliverable detected (${fileList.filter((f) => /\.(html|htm|jsx|tsx|vue|svelte)$/i.test(f)).join(', ')}); running Hardener to verify via browser/UI testing.`
+      reason: params.summaryReason || 'Summary classified task as large/complex requiring independent QA proof.'
     };
   }
 
   // Tier 2: Post-execution empirical scope safeguard
-  // If Summary thought it was a small task, check if the actual execution expanded
+  const hasWebDeliverable = fileList.some((f) => /\.(html|htm|jsx|tsx|vue|svelte)$/i.test(f));
   const isEmpiricallyLarge =
     params.createdFilesCount >= 2 ||
     params.piecesCount >= 3 ||
@@ -116,6 +119,13 @@ export function evaluateHardenerNecessity(params: {
     return {
       shouldRun: true,
       reason: `Escalated to Hardener post-execution: task execution exceeded small scope (${params.createdFilesCount} files created/modified, ${params.piecesCount} puzzle pieces, all scenarios pass: ${params.allScenariosPass}).`
+    };
+  }
+
+  if (hasWebDeliverable && params.createdFilesCount > 1) {
+    return {
+      shouldRun: true,
+      reason: `Multi-file web deliverable detected (${fileList.filter((f) => /\.(html|htm|jsx|tsx|vue|svelte)$/i.test(f)).join(', ')}); running Hardener to verify via browser/UI testing.`
     };
   }
 
@@ -154,6 +164,10 @@ export async function executeTaskWithAi(
   const runId = makeRunId();
   const runDir = BibleStore.runDirFor(project.id || slugify(project.name || 'project'), task.id, runId);
   const resolvedOptions: AgentPipelineOptions = { ...DEFAULT_AGENT_PIPELINE_OPTIONS, ...(options || {}) };
+  if (aiConfig.provider === 'ollama') {
+    // Local Ollama running on local hardware must serialize worker agents to prevent VRAM thrashing and timeouts
+    resolvedOptions.maxConcurrentAgents = 1;
+  }
   let bible: BibleStore | null = null;
 
   const ctx: PipelineContext = {
@@ -216,11 +230,16 @@ export async function executeTaskWithAi(
 
       // Run Cleaner only for coding tasks that produced code, skipping standalone static files (e.g. single .html)
       const filesArray = Array.from(createdFiles);
-      const isStandaloneStatic = filesArray.length === 1 && /\.(html|htm|md|txt)$/i.test(filesArray[0]);
+      const isStraightforward = isStraightforwardTask(bible);
+      const isAllStatic = filesArray.length > 0 && filesArray.every((f) => /\.(html|htm|md|txt|css|svg)$/i.test(f));
+      const isStandaloneStatic = (filesArray.length === 1 && /\.(html|htm|md|txt)$/i.test(filesArray[0])) || (isStraightforward && isAllStatic);
       if (summary.taskKind === 'coding' && resolvedOptions.enableCleaner && filesArray.length > 0 && !isStandaloneStatic) {
         await runCleaner(ctx, bible, tools, filesArray, attempt);
       } else if (isStandaloneStatic) {
-        bible.appendEvent({ actor: 'pipeline', kind: 'info', text: `Step 4 Cleaner skipped: single standalone file (${filesArray[0]}) needs no package lint/format pass.` });
+        bible.appendEvent({ actor: 'pipeline', kind: 'info', text: `Step 4 Cleaner skipped: standalone static deliverable (${filesArray.join(', ') || 'file'}) needs no package lint/format pass.` });
+        await bible.persist();
+      } else if (filesArray.length === 0) {
+        bible.appendEvent({ actor: 'pipeline', kind: 'info', text: 'Step 4 Cleaner skipped: no created files recorded.' });
         await bible.persist();
       }
 
@@ -233,7 +252,8 @@ export async function executeTaskWithAi(
         piecesCount: mgr.pieces.length,
         allScenariosPass: mgr.allScenariosPass,
         attempt,
-        createdFiles: Array.from(createdFiles)
+        createdFiles: Array.from(createdFiles),
+        isStraightforward
       });
 
       if (!hardenerEval.shouldRun) {
@@ -247,7 +267,32 @@ export async function executeTaskWithAi(
           detail: hardenerEval.reason,
           status: 'success'
         });
-        break;
+
+        // If manager passed all scenarios, the straightforward task is complete
+        if (mgr.allScenariosPass) {
+          break;
+        }
+
+        // If manager verification failed (e.g. deliverable missing on disk), retry up to maxAttempts
+        if (attempt >= maxAttempts) {
+          break;
+        }
+
+        diagnostics = mgr.verificationSummary;
+        bible.appendEvent({
+          actor: 'pipeline',
+          kind: 'retry',
+          text: `Manager execution failed verification on attempt ${attempt}; re-running with diagnostics:\n${diagnostics}`
+        });
+        await bible.persist();
+        ctx.emit({
+          id: `step-retry-${attempt}`,
+          stage: 'retry',
+          title: `Manager Execution Failed — Retrying (attempt ${attempt + 1} of ${maxAttempts})`,
+          detail: diagnostics.slice(0, 200),
+          status: 'warning'
+        });
+        continue;
       }
 
       hardener = await runHardener(ctx, bible, tools, summary.taskKind, Array.from(createdFiles), attempt);
@@ -275,6 +320,12 @@ export async function executeTaskWithAi(
       qaAttempts: attempt,
       allScenariosPass: mgr.allScenariosPass
     });
+    bible.sections.metadata.status = result.updatedTask.status;
+    bible.sections.subtasks = result.updatedTask.subtasks.map((s) => ({
+      text: s.text,
+      isDone: Boolean(s.isDone),
+      isHumanReview: Boolean(s.isHumanReview)
+    }));
     bible.appendEvent({ actor: 'pipeline', kind: 'info', text: `Run complete — status ${result.updatedTask.status}; usage ${formatUsage(ctx.usage)}.` });
     await bible.persist();
     console.log('%c[Ergo Agent Pipeline] ── Pipeline Complete ✅ ──', 'color: #10b981; font-weight: bold;');

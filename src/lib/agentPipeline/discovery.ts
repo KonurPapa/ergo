@@ -7,9 +7,10 @@
  */
 import { type DiscoveryJobPayload, type TokenUsage } from '../../types';
 import { buildDiscoveryJobPayload, buildTaskHeaderIndex, extractAllWorkspaceTasks } from '../ai';
+import { searchMemory, isEmbeddingReady, type SearchResult } from '../memory';
 import { parseJsonLoose } from '../llmClient';
 import { callMcpTool } from '../mcpClient';
-import { GUIDELINE_EXCERPT_CHAR_CAP, type PipelineContext, addUsage, emptyUsage, isAbortError, resolveModelForRole, throwIfAborted } from './contracts';
+import { GUIDELINE_EXCERPT_CHAR_CAP, type PipelineContext, addUsage, emptyUsage, isAbortError, resolveRoleTarget, throwIfAborted } from './contracts';
 import { runToolLoop } from './providerLoop';
 import { loadPipelineSkill } from './skills';
 
@@ -17,6 +18,7 @@ export interface DiscoveryResult {
   payload: DiscoveryJobPayload;
   baselineMarkdown: string;
   usage: TokenUsage;
+  memoryHits: SearchResult[];
 }
 
 interface GuidelineDoc {
@@ -93,7 +95,7 @@ function connectedServerLines(ctx: PipelineContext): string[] {
 }
 
 /** Builds the compact Markdown baseline context handed to the Summary AI. */
-function buildBaselineMarkdown(ctx: PipelineContext, payload: DiscoveryJobPayload, guidelines: GuidelineDoc[], notes: string): string {
+function buildBaselineMarkdown(ctx: PipelineContext, payload: DiscoveryJobPayload, guidelines: GuidelineDoc[], notes: string, memoryHits: SearchResult[]): string {
   const { task, brief, project } = ctx;
   const out: string[] = [];
   out.push(`# BASELINE CONTEXT: ${task.title}`, '');
@@ -139,6 +141,19 @@ function buildBaselineMarkdown(ctx: PipelineContext, payload: DiscoveryJobPayloa
 
   if (notes) out.push('## Discovery Notes', notes, '');
 
+  // Inject memory-first context (retrieved at 0 token cost from local vector DB)
+  if (memoryHits.length > 0) {
+    out.push('## Prior Knowledge (from Local Memory)');
+    out.push('_The following was retrieved from the local vector memory database at zero token cost._');
+    for (const hit of memoryHits) {
+      const sim = `${(hit.similarity * 100).toFixed(0)}%`;
+      const tags = hit.chunk.metadata.tags?.length ? ` [${hit.chunk.metadata.tags.join(', ')}]` : '';
+      const source = hit.chunk.metadata.source ? ` (${hit.chunk.metadata.source})` : '';
+      out.push(`- **[${sim} match${tags}${source}]**: ${hit.chunk.text.slice(0, 400)}`);
+    }
+    out.push('');
+  }
+
   out.push('## Environment');
   out.push(`- **Project**: ${project.name} (${project.folderPath})`);
   out.push(`- **Allowed boundaries**: ${ctx.allowedRoots.map((r) => r.path).join(', ') || project.folderPath}`);
@@ -158,9 +173,39 @@ export async function runDiscovery(ctx: PipelineContext): Promise<DiscoveryResul
     stage: 'context',
     agentRole: 'discovery',
     title: 'Discovery AI: Scanning Task Headers & Guidelines',
-    detail: 'Skimming task headers across all swim lanes (active + archived), looking for AGENTS.md / CLAUDE.md, and detecting connected tools…',
+    detail: 'Querying local vector memory, skimming task headers across all swim lanes (active + archived), looking for AGENTS.md / CLAUDE.md, and detecting connected tools…',
     status: 'running'
   });
+
+  // ── Memory-First: query local vector DB BEFORE any file exploration (0 tokens) ──
+  let memoryHits: SearchResult[] = [];
+  if (isEmbeddingReady()) {
+    try {
+      const query = `${task.title} ${task.category || ''} ${task.subtasks.map((s) => s.text).join(' ')}`.trim();
+      memoryHits = await searchMemory(query, undefined, 8, 0.3);
+      if (memoryHits.length > 0) {
+        ctx.emit({
+          id: 'step-discovery-memory',
+          stage: 'context',
+          agentRole: 'discovery',
+          title: `Memory-First: ${memoryHits.length} Prior Knowledge Hit(s)`,
+          detail: `Retrieved ${memoryHits.length} relevant chunk(s) from local vector memory (0 tokens). Top match: "${memoryHits[0].chunk.text.slice(0, 80)}…" (${(memoryHits[0].similarity * 100).toFixed(0)}% similarity).`,
+          status: 'running'
+        });
+      } else {
+        ctx.emit({
+          id: 'step-discovery-memory',
+          stage: 'context',
+          agentRole: 'discovery',
+          title: 'Memory-First: No Prior Knowledge Found',
+          detail: 'Local vector memory returned no relevant results for this task.',
+          status: 'running'
+        });
+      }
+    } catch (err) {
+      console.warn('[Ergo Discovery] Memory-first search failed (non-fatal):', err);
+    }
+  }
 
   const threshold = typeof ctx.options.discoveryRelevanceThreshold === 'number'
     ? ctx.options.discoveryRelevanceThreshold
@@ -208,11 +253,12 @@ export async function runDiscovery(ctx: PipelineContext): Promise<DiscoveryResul
     let candidatesFromModel: Array<{ taskId: string | number; probability: number; reason?: string }> = [];
     try {
       const skill = await loadPipelineSkill('discovery-agent');
+      const roleTarget = resolveRoleTarget(aiConfig, 'discovery');
       const result = await runToolLoop({
-        provider: aiConfig.provider,
-        model: resolveModelForRole(aiConfig, 'discovery'),
-        apiKey: aiConfig.apiKey,
-        baseUrl: aiConfig.baseUrl,
+        provider: roleTarget.provider,
+        model: roleTarget.model,
+        apiKey: roleTarget.apiKey,
+        baseUrl: roleTarget.baseUrl,
         stableSystem: skill,
         sharedContext: '',
         tools: [],
@@ -334,11 +380,12 @@ export async function runDiscovery(ctx: PipelineContext): Promise<DiscoveryResul
         ].join('\n');
 
         try {
+          const roleTarget = resolveRoleTarget(aiConfig, 'discovery');
           const subtaskResult = await runToolLoop({
-            provider: aiConfig.provider,
-            model: resolveModelForRole(aiConfig, 'discovery'),
-            apiKey: aiConfig.apiKey,
-            baseUrl: aiConfig.baseUrl,
+            provider: roleTarget.provider,
+            model: roleTarget.model,
+            apiKey: roleTarget.apiKey,
+            baseUrl: roleTarget.baseUrl,
             stableSystem: 'You are a fast relevance evaluator. Return ONLY valid JSON with no markdown fences.',
             sharedContext: '',
             tools: [],
@@ -381,7 +428,7 @@ export async function runDiscovery(ctx: PipelineContext): Promise<DiscoveryResul
   const payload = buildDiscoveryJobPayload(task, relevantTaskIds, project.swimLanes, project.agentContextMarkdown, project.todoMarkdown);
   payload.guidelineDocs = guidelines;
   payload.discoveryNotes = notes || undefined;
-  const baselineMarkdown = buildBaselineMarkdown(ctx, payload, guidelines, notes);
+  const baselineMarkdown = buildBaselineMarkdown(ctx, payload, guidelines, notes, memoryHits);
   payload.baselineMarkdown = baselineMarkdown;
   addUsage(ctx.usage, usage);
 
@@ -403,5 +450,5 @@ export async function runDiscovery(ctx: PipelineContext): Promise<DiscoveryResul
     usage: { ...usage }
   });
 
-  return { payload, baselineMarkdown, usage };
+  return { payload, baselineMarkdown, usage, memoryHits };
 }

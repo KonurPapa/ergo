@@ -121,16 +121,62 @@ export interface McpToolExecutionResult {
 }
 
 
-export type AIProviderId = 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'none' | 'mock';
+export type AIProviderId = 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'cli_subscription' | 'none' | 'mock';
+
+export type AuthMode = 'api_key' | 'cli_subscription';
+
+export interface CliDetectedAgent {
+  id: string;
+  name: string;
+  command: string;
+  detectedPath: string | null;
+  isInstalled: boolean;
+  version: string | null;
+  provider: AIProviderId;
+  subscriptionTier: string;
+  installCommand: string;
+  docsUrl: string;
+  badgeColor: string;
+  supportsHeadless: boolean;
+  supportsInteractive: boolean;
+}
+
+export interface CliExecutionResult {
+  success: boolean;
+  output: string;
+  exitCode: number;
+  durationMs: number;
+  command: string;
+  stderr?: string;
+  error?: string;
+  timedOut?: boolean;
+}
+
+export interface AgentModelConfig {
+  provider?: AIProviderId;
+  model?: string;
+}
 
 export interface AIProviderConfig {
   provider: AIProviderId;
   model: string;
+  authMode?: AuthMode;
+  cliAgentId?: string;
+  cliCustomCommand?: string;
+  cliSubscriptionTier?: string;
+  cliExecutionMode?: 'headless' | 'interactive';
   discoveryModel?: string;
   summaryModel?: string;
   generalModel?: string;
   /** Optional cheaper/faster model used for fan-out worker sub-agents (defaults to generalModel). */
   workerModel?: string;
+  cleanerModel?: string;
+  hardenerModel?: string;
+  loggerModel?: string;
+  /** Per-role routing overrides: customize which provider and model runs each execution agent */
+  roleConfigs?: Partial<Record<AgentRole, AgentModelConfig>>;
+  /** Provider-specific credentials dictionary for multi-provider profiles */
+  providerKeys?: Partial<Record<AIProviderId, { apiKey?: string; baseUrl?: string }>>;
   apiKey?: string;
   baseUrl?: string;
   isCustomKey?: boolean;
@@ -140,11 +186,21 @@ export interface AIProviderConfig {
 export interface ProviderCredentials {
   apiKey?: string;
   baseUrl?: string;
+  authMode?: AuthMode;
+  cliAgentId?: string;
+  cliCustomCommand?: string;
+  cliSubscriptionTier?: string;
+  cliExecutionMode?: 'headless' | 'interactive';
   model?: string;
   discoveryModel?: string;
   summaryModel?: string;
   generalModel?: string;
   workerModel?: string;
+  cleanerModel?: string;
+  hardenerModel?: string;
+  loggerModel?: string;
+  roleConfigs?: Partial<Record<AgentRole, AgentModelConfig>>;
+  providerKeys?: Partial<Record<AIProviderId, { apiKey?: string; baseUrl?: string }>>;
   isConnected?: boolean;
 }
 
@@ -155,12 +211,24 @@ export interface UserApiKey {
   name: string;
   provider: AIProviderId;
   apiKey: string;
+  authMode?: AuthMode;
+  cliAgentId?: string;
+  cliCustomCommand?: string;
+  cliSubscriptionTier?: string;
+  cliExecutionMode?: 'headless' | 'interactive';
   baseUrl?: string;
   model?: string;
   discoveryModel?: string;
   summaryModel?: string;
   generalModel?: string;
   workerModel?: string;
+  cleanerModel?: string;
+  hardenerModel?: string;
+  loggerModel?: string;
+  /** Per-role routing overrides: customize which provider and model runs each execution agent */
+  roleConfigs?: Partial<Record<AgentRole, AgentModelConfig>>;
+  /** Provider-specific credentials dictionary for multi-provider profiles */
+  providerKeys?: Partial<Record<AIProviderId, { apiKey?: string; baseUrl?: string }>>;
   isConnected?: boolean;
   createdAt?: string;
 }
@@ -397,6 +465,7 @@ export interface AppSettings {
   theme?: 'light' | 'dark';
   storageDirectory?: string; // default: "~/.ergo"
   lastOpenedAt?: string;
+  hasCompletedOnboarding?: boolean;
   /** Agent execution pipeline tuning (concurrency, QA retries, tool rounds). */
   agentPipeline?: Partial<AgentPipelineOptions>;
 }

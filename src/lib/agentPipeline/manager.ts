@@ -15,6 +15,7 @@
  */
 import { type PuzzlePiece, type PuzzlePieceKind, type TokenUsage } from '../../types';
 import { parseJsonLoose } from '../llmClient';
+import { callMcpTool } from '../mcpClient';
 import {
   PIECE_SUMMARY_CHAR_CAP,
   type PipelineContext,
@@ -23,7 +24,7 @@ import {
   emptyUsage,
   formatUsage,
   isAbortError,
-  resolveModelForRole,
+  resolveRoleTarget,
   throwIfAborted
 } from './contracts';
 import { type BibleStore, type FileLockRegistry, normalizePath } from './bible';
@@ -58,6 +59,98 @@ const WORKER_RULES = `EXECUTION RULES (harness-enforced)
 - Tools requiring approval (write_file, edit_file, run_command, git_commit) may pause for the user; a rejection is final for that call.
 - Tool results are truncated when large; use read_file offset/limit and search_files contentPattern to narrow.
 - End with the condensed summary and the exact final line "STATUS: DONE" or "STATUS: FAILED — <reason>".`;
+
+/** Byte-stable prompt for Direct (Solo) Mode — clean, builder-focused, no decomposition JSON contracts. */
+export const MANAGER_DIRECT_STABLE = `You are the Direct Implementation Agent (Solo Execution) in Ergo's Agent Execution Pipeline.
+You are executing a straightforward, standalone deliverable task directly without spawning sub-agents.
+
+YOUR MISSION:
+1. Review the TASK_CONTEXT bible (Gherkin acceptance criteria, goals, and output destination).
+2. Call the write_file tool to write the complete, high-quality, fully functioning deliverable to the exact target destination.
+3. If the task is an HTML game, script, or page, include all HTML, CSS, and JavaScript in that file so it executes cleanly and independently in a browser.
+4. Verify your work with read_file, get_file_info, or run_command if relevant.
+5. Reply with a condensed summary of what you built and verified, followed by the final line:
+STATUS: DONE
+or if genuinely blocked:
+STATUS: FAILED — <reason>
+
+CRITICAL HARNESS RULES:
+- You MUST call write_file to save your deliverable to disk. Do NOT merely describe the code in your response; write the complete file via write_file.
+- Only paths inside the bible's Allowed Boundaries are writable.
+- Write ONLY the requested deliverable. Do not create redundant duplicate files or edit workspace markdown documents.`;
+
+export function isStraightforwardTask(bible: BibleStore): boolean {
+  const { metadata, subtasks, outputAs } = bible.sections;
+  const taskKind = metadata.taskKind;
+
+  // Non-coding tasks with small subtask count
+  if (taskKind && taskKind !== 'coding' && subtasks.length <= 3) {
+    return true;
+  }
+
+  // Summary explicitly flagged task as small/generic needing no hardener
+  if (metadata.requiresHardener === false) {
+    return true;
+  }
+
+  // Standalone single-file deliverable patterns in outputAs or title
+  const outputText = (outputAs || '').toLowerCase();
+  const titleText = (bible.sections.title || '').toLowerCase();
+  const isSingleFileDeliverable =
+    /\.(html|htm|jsx|tsx|vue|svelte|py|sh|ts|js|md|json|css|sql)\b/i.test(outputText) ||
+    /build an? (?:html|browser|standalone|simple) (?:game|page|script|app|tool)/i.test(titleText) ||
+    /create an? (?:html|browser|standalone|simple) (?:game|page|script|app|tool)/i.test(titleText);
+
+  if (isSingleFileDeliverable && subtasks.length <= 3) {
+    return true;
+  }
+
+  // Tasks with 0 or 1 subtasks
+  if (subtasks.length <= 1) {
+    return true;
+  }
+
+  return false;
+}
+
+export function extractTargetFilePaths(text: string): string[] {
+  if (!text) return [];
+  const matches = text.match(/(?:projects\/[^\s`"'\\]+\.[a-z0-9]+|[^\s`"'\\]+\.(html|htm|jsx|tsx|vue|svelte|py|sh|ts|js|md|json|css|sql))/gi);
+  if (!matches) return [];
+  const unique = Array.from(new Set(matches.map(normalizePath)));
+  return unique.filter((p) => !p.endsWith('TODO.md') && !p.endsWith('AGENT_CONTEXT.md') && !p.endsWith('TASK_CONTEXT.md') && !p.endsWith('FILE_LOCKS.md'));
+}
+
+export function extractCodeBlocks(text: string): Array<{ lang: string; code: string }> {
+  const blocks: Array<{ lang: string; code: string }> = [];
+  const regex = /```([a-zA-Z0-9_-]*)\s*\n([\s\S]*?)```/g;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(text)) !== null) {
+    const lang = (m[1] || '').trim().toLowerCase();
+    const code = m[2] || '';
+    if (code.trim().length > 0 && !['json', 'gherkin'].includes(lang)) {
+      blocks.push({ lang, code: code.trim() });
+    } else if (lang === 'json' && code.trim().length > 0) {
+      try {
+        const parsed = JSON.parse(code.trim());
+        const innerContent = parsed.content || parsed.arguments?.content || parsed.args?.content;
+        if (typeof innerContent === 'string' && innerContent.trim().length > 0) {
+          blocks.push({ lang: '', code: innerContent.trim() });
+        }
+      } catch {}
+    }
+  }
+
+  // Also extract raw HTML document if no code block was matched
+  if (blocks.length === 0 && text) {
+    const htmlMatch = text.match(/(<!DOCTYPE\s+html[\s\S]*?<\/html>|<html[\s\S]*?<\/html>)/i);
+    if (htmlMatch) {
+      blocks.push({ lang: 'html', code: htmlMatch[1].trim() });
+    }
+  }
+
+  return blocks;
+}
 
 // ─── Gherkin helpers ────────────────────────────────────────────────────────
 
@@ -260,11 +353,192 @@ export async function runManager(
   // The SAME tool list is offered to every role/phase (tools render at position 0 of the prompt, so any
   // difference would forfeit cache sharing between manager, workers and hardener). What each phase may
   // actually do is enforced by the executor scope (read-only / write paths), not by pruning definitions.
-  const managerModel = resolveModelForRole(aiConfig, 'manager');
-  const workerModel = resolveModelForRole(aiConfig, 'worker');
+  const managerTarget = resolveRoleTarget(aiConfig, 'manager');
+  const workerTarget = resolveRoleTarget(aiConfig, 'worker');
+  const managerModel = managerTarget.model;
+  const workerModel = workerTarget.model;
   const maxRounds = Math.max(5, ctx.options.maxToolRoundsPerAgent);
 
-  const providerBase = { provider: aiConfig.provider, apiKey: aiConfig.apiKey, baseUrl: aiConfig.baseUrl, signal: ctx.signal } as const;
+  const managerProviderBase = { provider: managerTarget.provider, apiKey: managerTarget.apiKey, baseUrl: managerTarget.baseUrl, signal: ctx.signal } as const;
+  const workerProviderBase = { provider: workerTarget.provider, apiKey: workerTarget.apiKey, baseUrl: workerTarget.baseUrl, signal: ctx.signal } as const;
+
+  // ── DIRECT EXECUTION (Solo Mode for straightforward / single deliverables) ──
+  if (isStraightforwardTask(bible)) {
+    const directStepId = `step-mgr-direct-a${attempt}`;
+    ctx.emit({
+      id: directStepId,
+      stage: 'subagent',
+      agentRole: 'manager',
+      title: attempt > 1 ? `Manager AI: Direct Remediation (Attempt ${attempt})` : 'Manager AI: Direct Execution (Solo Mode)',
+      detail: 'Executing straightforward deliverable directly without worker fan-out for token efficiency…',
+      status: 'running'
+    });
+
+    const directMessage =
+      `Execute this task directly per the bible above.\n` +
+      `- Task kind: ${bible.sections.metadata.taskKind}\n` +
+      `- Output destination: ${bible.sections.outputAs}\n` +
+      `- Scenarios to cover (${scenarioTitles.length}): ${scenarioTitles.map((t) => `"${t}"`).join(', ') || '(cover the whole brief)'}\n` +
+      (attempt > 1 && priorFailureDiagnostics
+        ? `\n## Prior attempt failed QA — fix exactly these:\n${priorFailureDiagnostics}\n\n${bible.renderEventLog({ last: 15 })}\n`
+        : '') +
+      `\nProduce the required deliverable cleanly, verify your work with commands/evidence, and reply with a condensed summary ending with "STATUS: DONE".`;
+
+    const CORE_DIRECT_TOOL_NAMES = new Set(['write_file', 'edit_file', 'read_file', 'list_directory', 'get_file_info', 'run_command', 'ask_human']);
+    const directTools = managerTarget.provider === 'ollama'
+      ? tools.filter((t) => CORE_DIRECT_TOOL_NAMES.has(t.name))
+      : tools;
+
+    const executor = createToolExecutor({
+      ctx,
+      tools: directTools,
+      scope: { actorLabel: 'manager', readOnly: false },
+      agentRole: 'manager',
+      onFileWritten: (p) => createdFiles.add(p),
+      stepIdPrefix: `step-tool-mgr-direct-a${attempt}`
+    });
+
+    const result = await runToolLoop({
+      ...managerProviderBase,
+      model: managerModel,
+      stableSystem: MANAGER_DIRECT_STABLE,
+      sharedContext: managerContext,
+      tools: directTools,
+      initialUserMessage: directMessage,
+      maxRounds: Math.min(8, Math.max(5, ctx.options.maxToolRoundsPerAgent)),
+      maxTokens: 8000,
+      onToolCalls: executor
+    });
+
+    addUsage(usage, result.usage);
+    addUsage(ctx.usage, result.usage);
+    if (result.stopReason === 'no_tool_support') usedToolCalling = false;
+
+    const parsedStatus = parseWorkerStatus(result.text);
+    const targetFilePaths = extractTargetFilePaths(bible.sections.outputAs);
+
+    // Fallback: If no files were recorded as written, but target files were requested
+    // and the model emitted code blocks in text, automatically save the deliverable.
+    if (createdFiles.size === 0 && targetFilePaths.length > 0) {
+      let blocks = extractCodeBlocks(result.text);
+      if (blocks.length === 0) {
+        // Recovery nudge: if the model produced text without calling write_file or code blocks,
+        // perform one targeted recovery call specifically requesting the deliverable code.
+        const recoveryRes = await runToolLoop({
+          ...managerProviderBase,
+          model: managerModel,
+          stableSystem: MANAGER_DIRECT_STABLE,
+          sharedContext: managerContext,
+          tools: directTools,
+          initialUserMessage: `The target deliverable ${targetFilePaths[0]} was NOT written to disk. Output the complete, functional source code for ${targetFilePaths[0]} now in a code block or by calling write_file.`,
+          maxRounds: 2,
+          maxTokens: 8000,
+          onToolCalls: executor
+        });
+        addUsage(usage, recoveryRes.usage);
+        addUsage(ctx.usage, recoveryRes.usage);
+        blocks = extractCodeBlocks(recoveryRes.text);
+      }
+      if (blocks.length > 0) {
+        const targetPath = targetFilePaths[0];
+        const ext = targetPath.split('.').pop()?.toLowerCase() || '';
+        const bestBlock = blocks.find((b) => b.lang === ext || (ext === 'html' && (b.lang === 'html' || b.lang === 'htm' || b.code.includes('<html') || b.code.includes('<!DOCTYPE')))) || blocks[0];
+        if (bestBlock && bestBlock.code) {
+          const writeRes = await callMcpTool('mcp-filesystem', 'write_file', {
+            path: targetPath,
+            content: bestBlock.code
+          });
+          if (writeRes.success) {
+            createdFiles.add(normalizePath(targetPath));
+            bible.appendEvent({
+              actor: 'manager',
+              kind: 'info',
+              text: `Auto-extracted deliverable code block from text and saved to ${targetPath}.`
+            });
+          }
+        }
+      }
+    }
+
+    // Empirical verification: Check that target deliverables actually exist on disk
+    let diskVerified = true;
+    const missingTargetFiles: string[] = [];
+    if (targetFilePaths.length > 0) {
+      for (const tf of targetFilePaths) {
+        const infoRes = await callMcpTool('mcp-filesystem', 'get_file_info', { path: tf });
+        const exists = infoRes.success && infoRes.data?.isFile;
+        if (exists) {
+          createdFiles.add(normalizePath(tf));
+        } else {
+          diskVerified = false;
+          missingTargetFiles.push(tf);
+        }
+      }
+    }
+
+    const hasFiles = createdFiles.size > 0;
+    const isExplicitlyFailed = parsedStatus.status === 'FAILED';
+    const isExplicitlyDone = parsedStatus.status === 'DONE';
+    const textIndicatesSuccess = !isExplicitlyFailed && (
+      /status:\s*done\b/i.test(result.text) ||
+      /\b(completed|successfully (created|built|written|generated)|finished)\b/i.test(result.text)
+    );
+    const directOk = !isExplicitlyFailed && diskVerified && (
+      (isExplicitlyDone && (hasFiles || targetFilePaths.length === 0)) ||
+      (hasFiles && !result.error && (isExplicitlyDone || textIndicatesSuccess))
+    );
+    let summary = condense(
+      result.text.replace(/^\s*STATUS:.*$/im, '').trim() ||
+      (directOk ? 'Deliverable produced and self-verified.' : 'Direct execution finished without explicit DONE.')
+    );
+    if (!diskVerified && missingTargetFiles.length > 0) {
+      summary = `Deliverable file(s) missing on disk: ${missingTargetFiles.join(', ')}. Code was not written to target destination.`;
+    }
+
+    const directPiece = makePiece({
+      id: 'P1',
+      kind: 'when',
+      title: bible.sections.title,
+      instructions: 'Direct execution by Manager',
+      scenarioRefs: scenarioTitles,
+      files: Array.from(createdFiles),
+      dependsOn: []
+    });
+    directPiece.status = directOk ? 'done' : 'failed';
+    directPiece.summary = summary;
+    directPiece.attempts = 1;
+    const directPieces = [directPiece];
+
+    bible.setPieces(directPieces);
+    bible.appendEvent({
+      actor: 'manager',
+      kind: directOk ? 'piece_done' : 'piece_failed',
+      text: `Direct execution: ${summary}`
+    });
+    await bible.persist();
+
+    ctx.emit({
+      id: directStepId,
+      stage: 'subagent',
+      agentRole: 'manager',
+      title: directOk ? 'Manager AI: Direct Execution Complete' : 'Manager AI: Direct Execution Failed',
+      detail: summary,
+      status: directOk ? 'success' : 'warning',
+      usage: { ...result.usage }
+    });
+
+    console.log('%c[Ergo Agent Pipeline] ── Step 3: Manager direct complete ──', 'color: #10b981; font-weight: bold;');
+    console.log(`Direct execution: ok=${directOk} | files=${createdFiles.size} | usage: ${formatUsage(usage)}`);
+
+    return {
+      pieces: directPieces,
+      createdFiles: Array.from(createdFiles),
+      allScenariosPass: directOk,
+      verificationSummary: summary,
+      usage,
+      usedToolCalling
+    };
+  }
 
   // ── STEP A: Decompose ────────────────────────────────────────────────────
   const decomposeStepId = `step-decompose-a${attempt}`;
@@ -300,7 +574,7 @@ export async function runManager(
       stepIdPrefix: `step-tool-mgr-a${attempt}`
     });
     const result = await runToolLoop({
-      ...providerBase,
+      ...managerProviderBase,
       model: managerModel,
       stableSystem: managerStable,
       sharedContext: managerContext,
@@ -385,19 +659,48 @@ export async function runManager(
       onFileWritten: (p) => createdFiles.add(p),
       stepIdPrefix: `step-tool-${piece.id}-a${attempt}-t${piece.attempts}`
     });
+    const isSinglePiece = pieces.length === 1;
+    const effectiveWorkerMaxRounds = isSinglePiece ? Math.min(5, maxRounds) : Math.min(8, maxRounds);
+    const effectiveWorkerBible = isSinglePiece ? managerContext : workerSharedBible;
     const result = await runToolLoop({
-      ...providerBase,
+      ...workerProviderBase,
       model: workerModel,
       stableSystem: workerStable,
-      sharedContext: workerSharedBible,
+      sharedContext: effectiveWorkerBible,
       tools,
       initialUserMessage: buildPieceContract(piece),
-      maxRounds,
+      maxRounds: effectiveWorkerMaxRounds,
       onToolCalls: executor,
       onFirstResponse
     });
     addUsage(workerUsage, result.usage);
     if (result.stopReason === 'no_tool_support') usedToolCalling = false;
+
+    // Fallback: If worker owns files but none were written via tools, extract code blocks from text
+    if (piece.files.length > 0 && !piece.files.some((f) => createdFiles.has(normalizePath(f)))) {
+      const blocks = extractCodeBlocks(result.text);
+      if (blocks.length > 0) {
+        const targetPath = piece.files[0];
+        const ext = targetPath.split('.').pop()?.toLowerCase() || '';
+        const bestBlock = blocks.find((b) => b.lang === ext) || blocks[0];
+        if (bestBlock && bestBlock.code) {
+          const writeRes = await callMcpTool('mcp-filesystem', 'write_file', {
+            path: targetPath,
+            content: bestBlock.code
+          });
+          if (writeRes.success) {
+            createdFiles.add(normalizePath(targetPath));
+            bible.appendEvent({
+              actor: `worker:${piece.id}`,
+              kind: 'info',
+              text: `Auto-extracted code block and saved to ${targetPath}.`,
+              pieceId: piece.id
+            });
+          }
+        }
+      }
+    }
+
     const status = parseWorkerStatus(result.text);
     const summary = condense(result.text.replace(/^\s*STATUS:.*$/im, '').trim() || '(worker produced no summary)');
     if (result.stopReason === 'error') return { ok: false, summary, error: `Worker call failed: ${result.error}` };
@@ -597,14 +900,14 @@ export async function runManager(
       `${bible.renderPieces()}\n${bible.renderEventLog({ last: 40 })}` +
       (createdFiles.size > 0 ? `\n### Files written this run\n${Array.from(createdFiles).map((f) => `- ${f}`).join('\n')}\n` : '');
     const result = await runToolLoop({
-      ...providerBase,
+      ...managerProviderBase,
       model: managerModel,
       stableSystem: managerStable,
       sharedContext: managerContext,
       tools,
       initialUserMessage: verifyMessage,
-      // Cap verification rounds strictly: 4 rounds max
-      maxRounds: Math.min(4, maxRounds),
+      // Cap verification rounds strictly: 2 rounds if single piece passed, 4 rounds max otherwise
+      maxRounds: pieces.length === 1 && pieces[0].status === 'done' ? Math.min(2, maxRounds) : Math.min(4, maxRounds),
       maxTokens: 8000,
       responseFormat: 'json',
       onToolCalls: executor

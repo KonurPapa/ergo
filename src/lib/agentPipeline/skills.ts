@@ -25,12 +25,12 @@ const BUNDLED: Record<PipelineSkillName, string> = {
 
 /** A heading that only exists in the current generation of each skill doc; stale copies are ignored. */
 const FRESHNESS_MARKER: Record<PipelineSkillName, string> = {
-  'discovery-agent': 'Pointers Over Payloads',
-  'summary-agent': 'taskKind',
-  'manager-agent': 'Context Engineering Rules',
-  'worker-agent': 'Completion Protocol',
+  'discovery-agent': 'Early-Exit Subtask Inspection',
+  'summary-agent': 'requiresHardener',
+  'manager-agent': 'Simple / Standalone Deliverables',
+  'worker-agent': 'Target Deliverables Only',
   'cleaner-agent': 'Completion Protocol',
-  'hardener-agent': 'verdict'
+  'hardener-agent': 'headless browser'
 };
 
 export async function loadPipelineSkill(name: PipelineSkillName): Promise<string> {

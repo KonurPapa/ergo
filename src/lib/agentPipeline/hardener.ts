@@ -4,7 +4,7 @@
  */
 import { type TaskKind, type TokenUsage } from '../../types';
 import { parseJsonLoose } from '../llmClient';
-import { type PipelineContext, type ToolDefinition, addUsage, emptyUsage, resolveModelForRole } from './contracts';
+import { type PipelineContext, type ToolDefinition, addUsage, emptyUsage, resolveRoleTarget } from './contracts';
 import { type BibleStore } from './bible';
 import { runToolLoop } from './providerLoop';
 import { createToolExecutor } from './toolExecutor';
@@ -43,6 +43,7 @@ export async function runHardener(
     status: 'running'
   });
 
+  const hardenerTarget = resolveRoleTarget(ctx.aiConfig, 'hardener');
   const skill = await loadPipelineSkill('hardener-agent');
   // Full tool list (byte-stable prefix shared with the manager/workers); the scope blocks file writes.
   const executor = createToolExecutor({
@@ -58,11 +59,11 @@ export async function runHardener(
     `${bible.renderPieces()}\n${bible.renderEventLog({ last: 40 })}`;
 
   const result = await runToolLoop({
-    provider: ctx.aiConfig.provider,
-    apiKey: ctx.aiConfig.apiKey,
-    baseUrl: ctx.aiConfig.baseUrl,
+    provider: hardenerTarget.provider,
+    apiKey: hardenerTarget.apiKey,
+    baseUrl: hardenerTarget.baseUrl,
     signal: ctx.signal,
-    model: resolveModelForRole(ctx.aiConfig, 'hardener'),
+    model: hardenerTarget.model,
     stableSystem: `${skill}\n\n${HARDENER_RULES}`,
     sharedContext: bible.renderStable(),
     // Persona selection lives in the uncached tail so both cached blocks stay byte-identical across task kinds.

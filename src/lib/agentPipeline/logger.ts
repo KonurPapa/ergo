@@ -4,7 +4,8 @@
  */
 import { type AgentContextItem, type Subtask, type TaskItem } from '../../types';
 import { parseJsonLoose } from '../llmClient';
-import { type PipelineContext, addUsage, emptyUsage, formatUsage, resolveModelForRole } from './contracts';
+import { runSessionRetrospective, type RetrospectiveInput } from '../memory';
+import { type PipelineContext, addUsage, emptyUsage, formatUsage, resolveRoleTarget } from './contracts';
 import { type BibleStore } from './bible';
 import { type HardenerResult } from './hardener';
 import { runToolLoop } from './providerLoop';
@@ -84,13 +85,15 @@ export async function runLogger(
   let humanReviewSteps: string[] = [];
   let loggedCreatedFiles: string[] = [];
 
+  const loggerTarget = resolveRoleTarget(aiConfig, 'logger');
+
   try {
     const result = await runToolLoop({
-      provider: aiConfig.provider,
-      apiKey: aiConfig.apiKey,
-      baseUrl: aiConfig.baseUrl,
+      provider: loggerTarget.provider,
+      apiKey: loggerTarget.apiKey,
+      baseUrl: loggerTarget.baseUrl,
       signal: ctx.signal,
-      model: resolveModelForRole(aiConfig, 'logger'),
+      model: loggerTarget.model,
       stableSystem: LOGGER_SYSTEM,
       sharedContext: '',
       tools: [],
@@ -223,6 +226,35 @@ export async function runLogger(
     totalUsage: { ...ctx.usage },
     subtasks: allSubtasks.length > 0 ? allSubtasks : task.subtasks.map((s) => ({ ...s, isDone: true }))
   };
+
+  // ── Session Retrospective: distill durable learnings into vector memory ──
+  try {
+    const retroInput: RetrospectiveInput = {
+      taskId: task.id,
+      taskTitle: task.title,
+      projectId: ctx.project.id,
+      overview: overviewContent,
+      buildLog: buildAndVerificationContent,
+      completion: completionContent,
+      createdFiles: allCreatedFiles,
+      allScenariosPass: args.allScenariosPass,
+      qaVerdict: args.hardener?.verdict,
+      eventLog: bible.renderEventLog({ last: 20 }),
+    };
+    const storedCount = await runSessionRetrospective(retroInput);
+    if (storedCount > 0) {
+      ctx.emit({
+        id: 'step-retrospective',
+        stage: 'built_record',
+        agentRole: 'logger',
+        title: `Session Retrospective: ${storedCount} Learning(s) Stored`,
+        detail: `Distilled ${storedCount} durable lesson(s) from this task execution into local vector memory (0 API tokens).`,
+        status: 'success'
+      });
+    }
+  } catch (err) {
+    console.warn('[Ergo Logger] Session retrospective failed (non-fatal):', err);
+  }
 
   return { updatedBrief, updatedTask };
 }

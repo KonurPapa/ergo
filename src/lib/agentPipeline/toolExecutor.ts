@@ -19,7 +19,7 @@ import {
   type ToolDefinition,
   type ToolScope
 } from './contracts';
-import { FILE_MUTATING_TOOL_NAMES, MUTATING_TOOL_NAMES, extractTargetPath } from './toolSchemas';
+import { FILE_MUTATING_TOOL_NAMES, FILE_WRITING_TOOL_NAMES, MUTATING_TOOL_NAMES, extractTargetPath } from './toolSchemas';
 import { type FileLockRegistry, normalizePath, pathWithin, pathsRefer } from './bible';
 
 export interface ToolExecutorOptions {
@@ -226,7 +226,7 @@ export function createToolExecutor(opts: ToolExecutorOptions): (calls: ToolCallR
     }
 
     content = truncateResult(content);
-    if (!isError && FILE_MUTATING_TOOL_NAMES.has(call.name)) {
+    if (!isError && FILE_WRITING_TOOL_NAMES.has(call.name)) {
       const target = extractTargetPath(call.name, args);
       if (target && onFileWritten) onFileWritten(normalizePath(target));
     }

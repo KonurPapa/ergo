@@ -9,7 +9,7 @@
 import { type OverviewDocument, type TaskKind, type TokenUsage, type BibleSections } from '../../types';
 import { buildVerboseOverviewAndRequiredMcps } from '../ai';
 import { parseJsonLoose } from '../llmClient';
-import { type PipelineContext, addUsage, emptyUsage, isAbortError, resolveModelForRole, throwIfAborted } from './contracts';
+import { type PipelineContext, addUsage, emptyUsage, isAbortError, resolveRoleTarget, throwIfAborted } from './contracts';
 import { buildBibleSections } from './bible';
 import { type DiscoveryResult } from './discovery';
 import { runToolLoop } from './providerLoop';
@@ -29,7 +29,7 @@ const TASK_KINDS: TaskKind[] = ['coding', 'writing', 'research', 'ops', 'data', 
 
 const OUTPUT_CONTRACT =
   'OUTPUT CONTRACT: return ONLY valid JSON (no markdown fences) with exactly these keys: ' +
-  '"brief" (Gherkin scenarios as a single string), "goals" (numbered checklist string), "output_as" (string), ' +
+  '"brief" (Gherkin scenarios as a single string), "goals" (numbered checklist string), "output_as" (string: exact destination paths and MCP tool used — do NOT instruct agents to edit AGENT_CONTEXT.md or TODO.md), ' +
   '"requiredMcps" (array of connected MCP server names/ids actually needed — 0 to 2 typical), ' +
   '"taskKind" (one of coding | writing | research | ops | data | other), ' +
   '"requiresHardener" (boolean: true for large coding/architectural tasks requiring independent QA proof; false for small/generic tasks or single-action MCP calls), ' +
@@ -69,11 +69,12 @@ export async function runSummary(ctx: PipelineContext, discovery: DiscoveryResul
   let parsed: any = undefined;
   try {
     const skill = await loadPipelineSkill('summary-agent');
+    const roleTarget = resolveRoleTarget(aiConfig, 'summary');
     const result = await runToolLoop({
-      provider: aiConfig.provider,
-      model: resolveModelForRole(aiConfig, 'summary'),
-      apiKey: aiConfig.apiKey,
-      baseUrl: aiConfig.baseUrl,
+      provider: roleTarget.provider,
+      model: roleTarget.model,
+      apiKey: roleTarget.apiKey,
+      baseUrl: roleTarget.baseUrl,
       stableSystem: `${skill}\n\n${OUTPUT_CONTRACT}`,
       sharedContext: '',
       tools: [],
@@ -101,9 +102,22 @@ export async function runSummary(ctx: PipelineContext, discovery: DiscoveryResul
     : inferTaskKind(`${task.category} ${task.title} ${task.subtasks.map((s) => s.text).join(' ')} ${overviewDoc.output_as}`);
   overviewDoc.taskKind = taskKind;
 
+  const outputText = (overviewDoc.output_as || '').toLowerCase();
+  const titleText = (task.title || '').toLowerCase();
+  const isStandaloneSingleDeliverable =
+    /\.(html|htm|jsx|tsx|vue|svelte|py|sh|ts|js|md|json|css|sql)\b/i.test(outputText) ||
+    /build an? (?:html|browser|standalone|simple) (?:game|page|script|app|tool)/i.test(titleText) ||
+    /create an? (?:html|browser|standalone|simple) (?:game|page|script|app|tool)/i.test(titleText);
+  const isSmallScope = task.subtasks.length <= 3;
+
   let requiresHardener: boolean;
   let hardenerReason: string | undefined;
-  if (typeof parsed?.requiresHardener === 'boolean') {
+
+  if (isStandaloneSingleDeliverable && isSmallScope) {
+    // Single deliverable / standalone tasks (e.g. single HTML game, standalone script) MUST skip Hardener to conserve tokens
+    requiresHardener = false;
+    hardenerReason = 'Standalone single deliverable; skipping Hardener to conserve tokens per workflow rules.';
+  } else if (typeof parsed?.requiresHardener === 'boolean') {
     requiresHardener = parsed.requiresHardener;
     hardenerReason = typeof parsed.hardenerReason === 'string' && parsed.hardenerReason.trim()
       ? parsed.hardenerReason.trim()

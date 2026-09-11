@@ -156,7 +156,7 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
   const [showBreakdown, setShowBreakdown] = useState(true);
 
   const { totalTokens, totalUsage, byRole, hasUsage } = summary;
-  const { inputTokens, outputTokens, cachedInputTokens, calls } = totalUsage;
+  const { inputTokens, outputTokens, cachedInputTokens, cacheWriteTokens, calls } = totalUsage;
 
   // Identify roles that actually consumed tokens
   const activeRoles = (Object.entries(byRole) as [AgentRole, { usage: TokenUsage; total: number }][]).filter(
@@ -333,8 +333,13 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
             <span style={{ color: 'var(--text-dim)', marginRight: '0.25rem' }}>In:</span>
             <strong style={{ color: '#fff' }}>{inputTokens.toLocaleString()}</strong>
             {cachedInputTokens > 0 && (
-              <span style={{ color: 'var(--accent-emerald)', marginLeft: '0.25rem' }}>
+              <span style={{ color: 'var(--accent-emerald)', marginLeft: '0.25rem' }} title="Input tokens read from prompt cache">
                 ({cachedInputTokens.toLocaleString()} cached)
+              </span>
+            )}
+            {cacheWriteTokens > 0 && (
+              <span style={{ color: '#38bdf8', marginLeft: '0.25rem' }} title="Input tokens written to prompt cache">
+                ({cacheWriteTokens.toLocaleString()} written)
               </span>
             )}
           </span>
@@ -429,7 +434,7 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
             return (
               <span
                 key={role}
-                title={`${cfg.label}: ${data.total.toLocaleString()} tokens (${data.usage.calls} call${data.usage.calls === 1 ? '' : 's'})`}
+                title={`${cfg.label}: ${data.total.toLocaleString()} tokens (${data.usage.calls} call${data.usage.calls === 1 ? '' : 's'}${data.usage.cachedInputTokens > 0 ? `, ${data.usage.cachedInputTokens.toLocaleString()} cached` : ''}${data.usage.cacheWriteTokens > 0 ? `, ${data.usage.cacheWriteTokens.toLocaleString()} written` : ''})`}
                 style={{
                   fontSize: '0.66rem',
                   fontFamily: 'var(--font-mono)',

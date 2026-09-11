@@ -3,7 +3,7 @@
  * changing behaviour. One isolated agent, write scope = exactly the created files.
  */
 import { type TokenUsage } from '../../types';
-import { type PipelineContext, type ToolDefinition, addUsage, emptyUsage, resolveModelForRole } from './contracts';
+import { type PipelineContext, type ToolDefinition, addUsage, emptyUsage, resolveRoleTarget } from './contracts';
 import { type BibleStore } from './bible';
 import { parseWorkerStatus } from './manager';
 import { runToolLoop } from './providerLoop';
@@ -33,6 +33,7 @@ export async function runCleaner(
     status: 'running'
   });
 
+  const cleanerTarget = resolveRoleTarget(ctx.aiConfig, 'cleaner');
   const skill = await loadPipelineSkill('cleaner-agent');
   const executor = createToolExecutor({
     ctx,
@@ -48,11 +49,11 @@ export async function runCleaner(
     'Finish with a ≤150-word summary and the STATUS line.';
 
   const result = await runToolLoop({
-    provider: ctx.aiConfig.provider,
-    apiKey: ctx.aiConfig.apiKey,
-    baseUrl: ctx.aiConfig.baseUrl,
+    provider: cleanerTarget.provider,
+    apiKey: cleanerTarget.apiKey,
+    baseUrl: cleanerTarget.baseUrl,
     signal: ctx.signal,
-    model: resolveModelForRole(ctx.aiConfig, 'cleaner'),
+    model: cleanerTarget.model,
     stableSystem: `${skill}\n\n${CLEANER_RULES}`,
     sharedContext: bible.renderStable(),
     tools,

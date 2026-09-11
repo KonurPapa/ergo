@@ -30,6 +30,7 @@ import {
 } from './lib/parser';
 import { readFilesFromDisk, createProjectOnDisk } from './lib/fileSystem';
 import { storageManager } from './lib/storageManager';
+import { preWarmEmbeddings } from './lib/memory';
 import { useAutosave } from './hooks/useAutosave';
 import { SUPPORTED_AI_PROVIDERS } from './lib/aiProviders';
 import { Navbar } from './components/Navbar';
@@ -41,6 +42,7 @@ import { CreateProjectModal } from './components/CreateProjectModal';
 import { AiCredentialsModal } from './components/AiCredentialsModal';
 import { SettingsModal } from './components/SettingsModal';
 import { FolderPickerModal } from './components/FolderPickerModal';
+import { OnboardingModal } from './components/OnboardingModal';
 import { ToastContainer, type ToastMessage } from './components/Toast';
 import { executeTaskWithAi, syncTaskOverviewWithAi } from './lib/ai';
 import { DEFAULT_AGENT_PIPELINE_OPTIONS } from './lib/agentPipeline/contracts';
@@ -217,6 +219,9 @@ export function App() {
     } catch {}
   }, [theme]);
 
+  // Track onboarding completion state
+  const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState<boolean>(false);
+
   // Initialize Storage Layer on mount (IndexedDB handle & config loading)
   useEffect(() => {
     async function initStorage() {
@@ -224,8 +229,9 @@ export function App() {
         const res = await storageManager.init();
         setFolderMetadata(res.metadata);
 
-        if (res.secrets && Array.isArray(res.secrets.userApiKeys) && res.secrets.userApiKeys.length > 0) {
-          setUserApiKeys(res.secrets.userApiKeys);
+        const loadedKeys = res.secrets && Array.isArray(res.secrets.userApiKeys) ? res.secrets.userApiKeys : [];
+        if (loadedKeys.length > 0) {
+          setUserApiKeys(loadedKeys);
         }
         if (res.secrets?.cliAgent) {
           setCliAgentConfig(res.secrets.cliAgent);
@@ -241,12 +247,20 @@ export function App() {
           setProjects(res.projects);
         }
 
+        let effectiveActiveKeyId: string | null = null;
+        let onboarded = false;
+
         if (res.settings) {
           if (res.settings.activeProjectId) {
             setActiveProjectId(res.settings.activeProjectId);
           }
           if (res.settings.activeKeyId) {
             setActiveKeyId(res.settings.activeKeyId);
+            effectiveActiveKeyId = res.settings.activeKeyId;
+          }
+          if (typeof res.settings.hasCompletedOnboarding === 'boolean') {
+            onboarded = res.settings.hasCompletedOnboarding;
+            setHasCompletedOnboarding(res.settings.hasCompletedOnboarding);
           }
           if (typeof res.settings.autosaveDelaySec === 'number') {
             autosave.setDelaySec(res.settings.autosaveDelaySec);
@@ -262,11 +276,23 @@ export function App() {
             setAgentPipelineOptions((prev) => mergeAgentPipelineOptions(prev, persisted));
           }
         }
+
+        // Onboarding Check on Startup:
+        // If there is no active key, no API keys in secrets, and onboarding has not yet been completed,
+        // display the Welcome & AI Account Onboarding screen
+        const hasValidUserOrKey = loadedKeys.length > 0 || (effectiveActiveKeyId !== null && effectiveActiveKeyId !== undefined);
+        if (!hasValidUserOrKey && !onboarded) {
+          setIsOnboardingOpen(true);
+        }
       } catch (err) {
         console.warn('[App] Error initializing storage layer:', err);
       }
     }
     initStorage();
+
+    // Pre-warm the embedding model in the background (non-blocking, 0 API tokens).
+    // The WASM model (~25MB) downloads and caches on first use; subsequent loads are instant.
+    preWarmEmbeddings();
   }, []);
 
   // Sync settings (config/settings.json)
@@ -279,11 +305,12 @@ export function App() {
         autosaveDelaySec: autosave.delaySec,
         autosaveEnabled: autosave.isEnabled,
         theme,
+        hasCompletedOnboarding,
         agentPipeline: agentPipelineOptions,
         lastOpenedAt: new Date().toISOString()
       });
     }
-  }, [activeProjectId, activeKeyId, autosave.delaySec, autosave.isEnabled, theme, agentPipelineOptions]);
+  }, [activeProjectId, activeKeyId, autosave.delaySec, autosave.isEnabled, theme, hasCompletedOnboarding, agentPipelineOptions]);
 
   // Sync secrets (config/secrets.json)
   useEffect(() => {
@@ -334,6 +361,11 @@ export function App() {
         summaryModel: activeKey.summaryModel || pMeta?.defaultSummaryModel || activeKey.generalModel || activeKey.model || 'gpt-4o',
         generalModel: activeKey.generalModel || activeKey.model || pMeta?.defaultGeneralModel || pMeta?.defaultModel || 'gpt-4o',
         workerModel: activeKey.workerModel || undefined,
+        cleanerModel: activeKey.cleanerModel || undefined,
+        hardenerModel: activeKey.hardenerModel || undefined,
+        loggerModel: activeKey.loggerModel || undefined,
+        roleConfigs: activeKey.roleConfigs || undefined,
+        providerKeys: activeKey.providerKeys || undefined,
         apiKey: activeKey.apiKey,
         baseUrl: activeKey.baseUrl,
         isConnected: true
@@ -374,6 +406,7 @@ export function App() {
   const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
   const [isAiScreenOpen, setIsAiScreenOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
   const [executingTaskId, setExecutingTaskId] = useState<string | number | null>(null);
   const [taskExecutionSteps, setTaskExecutionSteps] = useState<Record<string | number, ExecutionStep[]>>({});
   const [pendingPermissions, setPendingPermissions] = useState<Record<string | number, { prompt: McpToolPermissionPrompt; resolve: (approved: boolean) => void }>>({});
@@ -412,6 +445,43 @@ export function App() {
       }
     }
   }, []);
+
+  // Onboarding completion handler: persists active account & settings locally into ~/.ergo
+  const handleCompleteOnboarding = async (newKey?: UserApiKey) => {
+    setIsOnboardingOpen(false);
+    setHasCompletedOnboarding(true);
+
+    let nextActiveKeyId = activeKeyId;
+    if (newKey) {
+      setUserApiKeys((prev) => {
+        const next = [...prev.filter((k) => k.id !== newKey.id), newKey];
+        return next;
+      });
+      setActiveKeyId(newKey.id);
+      nextActiveKeyId = newKey.id;
+      showToast({
+        type: 'success',
+        title: 'Account Connected',
+        message: `Successfully connected ${newKey.name}. Welcome to Ergo!`,
+        duration: 4500
+      });
+    }
+
+    try {
+      await storageManager.saveSettings({
+        version: 1,
+        activeProjectId: activeProjectId || 'default-workspace',
+        activeKeyId: nextActiveKeyId,
+        autosaveDelaySec: autosave.delaySec || 5,
+        autosaveEnabled: autosave.isEnabled,
+        theme,
+        hasCompletedOnboarding: true,
+        lastOpenedAt: new Date().toISOString()
+      });
+    } catch (err) {
+      console.warn('[App] Failed to persist onboarding completion to .ergo:', err);
+    }
+  };
 
   const handleSelectRootFolder = useCallback(async () => {
     const res = await storageManager.pickRootDirectory();
@@ -2258,6 +2328,14 @@ export function App() {
         onSelectFolder={handleSelectRootFolder}
         onRequestPermission={handleRequestHandlePermission}
         onUseServerFallback={handleUseServerFallback}
+      />
+
+      {/* Modal 9: Welcome & AI Account Onboarding Modal */}
+      <OnboardingModal
+        isOpen={isOnboardingOpen}
+        onClose={() => setIsOnboardingOpen(false)}
+        onSaveUserKey={handleSaveUserKey}
+        onCompleteOnboarding={handleCompleteOnboarding}
       />
 
       {/* Global Toast Notifications */}

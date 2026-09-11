@@ -11,7 +11,19 @@ let activeStoragePath = '~/.ergo';
 
 function resolveStoragePath(inputPath: string = activeStoragePath): string {
   if (inputPath.startsWith('~/') || inputPath === '~') {
-    return path.join(os.homedir(), inputPath.slice(1));
+    const homeTarget = path.join(os.homedir(), inputPath.slice(1));
+    try {
+      if (!fsSync.existsSync(homeTarget)) {
+        try {
+          fsSync.mkdirSync(homeTarget, { recursive: true });
+        } catch {
+          return path.resolve(process.cwd(), '.ergo');
+        }
+      }
+      return homeTarget;
+    } catch {
+      return path.resolve(process.cwd(), '.ergo');
+    }
   }
   return path.isAbsolute(inputPath) ? inputPath : path.resolve(process.cwd(), inputPath);
 }
@@ -22,7 +34,19 @@ function getActiveStorageDir(): string {
 
 async function ensureStorageInitialized(storageDir: string) {
   try {
-    await fs.mkdir(storageDir, { recursive: true });
+    try {
+      await fs.mkdir(storageDir, { recursive: true });
+    } catch (mkdirErr) {
+      const fallbackDir = path.resolve(process.cwd(), '.ergo');
+      if (storageDir !== fallbackDir) {
+        console.warn(`[Ergo Storage] Storage directory ${storageDir} could not be initialized, falling back to ${fallbackDir}`);
+        storageDir = fallbackDir;
+        activeStoragePath = '.ergo';
+        await fs.mkdir(storageDir, { recursive: true });
+      } else {
+        throw mkdirErr;
+      }
+    }
     const configDir = path.join(storageDir, 'config');
     await fs.mkdir(configDir, { recursive: true });
 
@@ -219,6 +243,142 @@ async function runShellCommand(command: string, cwd: string, timeoutMs: number):
         durationMs: Date.now() - started
       });
     });
+  });
+}
+
+/**
+ * Runs a local CLI coding agent process (e.g. claude -p, codex, agy, aider) headlessly.
+ * Pipes the prompt to stdin and CLI arguments, and captures standard output.
+ */
+async function runCliProcess(options: {
+  cli: string;
+  prompt: string;
+  systemPrompt?: string;
+  cwd: string;
+  customArgs?: string[];
+  timeoutMs?: number;
+}): Promise<{ exitCode: number; stdout: string; stderr: string; timedOut: boolean; durationMs: number }> {
+  const { spawn } = await import('node:child_process');
+  const started = Date.now();
+  const timeoutMs = options.timeoutMs || 180_000;
+
+  const rawCli = (options.cli || 'claude').trim();
+  const cliBase = path.basename(rawCli).toLowerCase();
+  let args: string[] = Array.isArray(options.customArgs) && options.customArgs.length > 0 ? [...options.customArgs] : [];
+
+  const combinedPrompt = options.systemPrompt
+    ? `${options.systemPrompt.trim()}\n\nTask:\n${options.prompt.trim()}`
+    : options.prompt.trim();
+
+  if (cliBase.includes('claude')) {
+    if (!args.includes('-p') && !args.includes('--print')) {
+      args.unshift('-p');
+    }
+    if (!args.includes('--dangerously-skip-permissions')) {
+      args.push('--dangerously-skip-permissions');
+    }
+    // For Claude Code CLI, pass the prompt directly as argument when under 8000 chars for reliable single-command dispatch
+    if (combinedPrompt.length < 8000 && !args.includes(combinedPrompt)) {
+      args.push(combinedPrompt);
+    }
+  } else if (cliBase.includes('aider')) {
+    if (!args.includes('--message') && !args.includes('-m')) {
+      args.push('--message', combinedPrompt);
+    }
+    if (!args.includes('--no-git')) {
+      args.push('--no-git');
+    }
+    if (!args.includes('--yes')) {
+      args.push('--yes');
+    }
+  } else if (cliBase.includes('codex')) {
+    if (!args.includes('exec')) {
+      args.unshift('exec');
+    }
+    if (combinedPrompt.length < 8000) {
+      args.push(combinedPrompt);
+    }
+  } else if (cliBase.includes('agy')) {
+    if (!args.includes('-p') && !args.includes('--print') && !args.includes('run')) {
+      args.unshift('-p');
+    }
+    if (combinedPrompt.length < 8000) {
+      args.push(combinedPrompt);
+    }
+  }
+
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let proc: any = null;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (proc) {
+        try { proc.kill('SIGTERM'); } catch {}
+      }
+    }, timeoutMs);
+
+    try {
+      proc = spawn(rawCli, args, {
+        cwd: options.cwd,
+        env: {
+          ...process.env,
+          CI: '1',
+          NON_INTERACTIVE: '1',
+          FORCE_COLOR: '0'
+        },
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+
+      proc.stdout?.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString('utf-8');
+      });
+
+      proc.stderr?.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString('utf-8');
+      });
+
+      proc.on('error', (err: any) => {
+        clearTimeout(timer);
+        resolve({
+          exitCode: 1,
+          stdout,
+          stderr: (stderr ? stderr + '\n' : '') + err.message,
+          timedOut: false,
+          durationMs: Date.now() - started
+        });
+      });
+
+      proc.on('close', (code: number | null) => {
+        clearTimeout(timer);
+        resolve({
+          exitCode: code ?? (timedOut ? 124 : 0),
+          stdout,
+          stderr: stderr + (timedOut ? `\n[CLI process timed out after ${timeoutMs}ms]` : ''),
+          timedOut,
+          durationMs: Date.now() - started
+        });
+      });
+
+      // Write prompt to stdin as well for CLIs reading piped input
+      try {
+        if (proc.stdin && !proc.stdin.destroyed) {
+          proc.stdin.write(combinedPrompt);
+          proc.stdin.end();
+        }
+      } catch {}
+    } catch (err: any) {
+      clearTimeout(timer);
+      resolve({
+        exitCode: 1,
+        stdout,
+        stderr: err.message,
+        timedOut: false,
+        durationMs: Date.now() - started
+      });
+    }
   });
 }
 
@@ -1227,6 +1387,416 @@ function ergoFileSystemPlugin(): Plugin {
         } catch (err: any) {
           console.error('[Ergo MCP API] Tool call error:', err);
           return sendJson(res, 500, { error: err.message });
+        }
+      }
+
+      // ─────────────────────────────────────────────────────────────
+      // CLI Coding Agent Bridge Endpoints
+      // ─────────────────────────────────────────────────────────────
+
+      if (url === '/api/cli/detect' && req.method === 'GET') {
+        try {
+          const cliPresets = [
+            {
+              id: 'claude-code',
+              name: 'Claude Code',
+              command: 'claude',
+              provider: 'anthropic',
+              subscriptionTier: 'Claude Pro / Team / Enterprise',
+              installCommand: 'npm install -g @anthropic-ai/claude-code',
+              docsUrl: 'https://docs.anthropic.com/claude/docs/claude-code',
+              badgeColor: '#d97706',
+              supportsHeadless: true,
+              supportsInteractive: true
+            },
+            {
+              id: 'codex',
+              name: 'OpenAI Codex CLI',
+              command: 'codex',
+              provider: 'openai',
+              subscriptionTier: 'ChatGPT Plus / Team / Pro',
+              installCommand: 'npm install -g @openai/codex',
+              docsUrl: 'https://github.com/openai/codex',
+              badgeColor: '#7c3aed',
+              supportsHeadless: true,
+              supportsInteractive: true
+            },
+            {
+              id: 'gemini',
+              name: 'Google Gemini CLI',
+              command: 'gemini',
+              provider: 'gemini',
+              subscriptionTier: 'Google One AI / Gemini Advanced',
+              installCommand: 'npm install -g @google/gemini-cli',
+              docsUrl: 'https://geminicli.com',
+              badgeColor: '#2563eb',
+              supportsHeadless: true,
+              supportsInteractive: true
+            },
+            {
+              id: 'antigravity',
+              name: 'Antigravity (agy)',
+              command: 'agy',
+              provider: 'gemini',
+              subscriptionTier: 'Google Antigravity Subscription',
+              installCommand: 'Available via Antigravity IDE',
+              docsUrl: 'https://antigravity.dev',
+              badgeColor: '#2563eb',
+              supportsHeadless: true,
+              supportsInteractive: true
+            },
+            {
+              id: 'aider',
+              name: 'Aider',
+              command: 'aider',
+              provider: 'openai',
+              subscriptionTier: 'BYOK / Subscription Proxy',
+              installCommand: 'pip install aider-chat',
+              docsUrl: 'https://aider.chat',
+              badgeColor: '#059669',
+              supportsHeadless: true,
+              supportsInteractive: true
+            }
+          ];
+
+          const fullUrl = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+          const customCmd = fullUrl.searchParams.get('customCommand')?.trim();
+
+          const results = [];
+          for (const preset of cliPresets) {
+            const whichRes = await runShellCommand(`which ${preset.command}`, storageDir, 3000);
+            const isInstalled = whichRes.exitCode === 0 && Boolean(whichRes.stdout.trim());
+            const detectedPath = isInstalled ? whichRes.stdout.trim() : null;
+            let version: string | null = null;
+            if (isInstalled) {
+              const verRes = await runShellCommand(`${preset.command} --version`, storageDir, 3000);
+              if (verRes.exitCode === 0 && verRes.stdout.trim()) {
+                version = verRes.stdout.trim().split('\n')[0].slice(0, 50);
+              }
+            }
+            results.push({
+              ...preset,
+              isInstalled,
+              detectedPath,
+              version
+            });
+          }
+
+          let customResult = null;
+          if (customCmd) {
+            const whichRes = await runShellCommand(`which ${customCmd}`, storageDir, 3000);
+            const isInstalled = whichRes.exitCode === 0 && Boolean(whichRes.stdout.trim());
+            const detectedPath = isInstalled ? whichRes.stdout.trim() : null;
+            let version: string | null = null;
+            if (isInstalled) {
+              const verRes = await runShellCommand(`${customCmd} --version`, storageDir, 3000);
+              if (verRes.exitCode === 0 && verRes.stdout.trim()) {
+                version = verRes.stdout.trim().split('\n')[0].slice(0, 50);
+              }
+            }
+            customResult = {
+              id: 'custom',
+              name: 'Custom CLI',
+              command: customCmd,
+              provider: 'anthropic',
+              subscriptionTier: 'Custom Subscription',
+              installCommand: '',
+              docsUrl: '',
+              badgeColor: '#6366f1',
+              supportsHeadless: true,
+              supportsInteractive: true,
+              isInstalled,
+              detectedPath,
+              version
+            };
+          }
+
+          return sendJson(res, 200, {
+            success: true,
+            agents: results,
+            custom: customResult
+          });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
+      if (url === '/api/cli/execute' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const { cli = 'claude', prompt, systemPrompt, cwd, args, timeoutMs } = body;
+
+          if (!prompt || typeof prompt !== 'string') {
+            return sendJson(res, 400, { error: 'prompt is required and must be a string' });
+          }
+
+          // Boundary check for cwd
+          const rawCwd = cwd || storageDir;
+          const cwdCheck = await resolveInsideAllowedRoots(rawCwd, storageDir);
+          const executionCwd = cwdCheck.ok ? cwdCheck.fullPath : storageDir;
+
+          const result = await runCliProcess({
+            cli,
+            prompt,
+            systemPrompt,
+            cwd: executionCwd,
+            customArgs: args,
+            timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : 180_000
+          });
+
+          return sendJson(res, 200, {
+            success: result.exitCode === 0,
+            output: result.stdout.trim(),
+            stderr: result.stderr.trim(),
+            exitCode: result.exitCode,
+            timedOut: result.timedOut,
+            durationMs: result.durationMs,
+            command: cli
+          });
+        } catch (err: any) {
+          console.error('[Ergo CLI API] Execute error:', err);
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
+      if (url === '/api/cli/auth-status' && req.method === 'GET') {
+        try {
+          const fullUrl = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+          let cli = fullUrl.searchParams.get('cli')?.trim() || 'claude';
+          if (cli === 'antigravity') cli = 'gemini';
+
+          // 1. Check if CLI binary is in PATH (with fallback for gemini <-> agy)
+          let resolvedCmd = cli;
+          let whichRes = await runShellCommand(`which ${cli}`, storageDir, 3000);
+          if (whichRes.exitCode !== 0 && cli === 'gemini') {
+            const agyRes = await runShellCommand('which agy', storageDir, 3000);
+            if (agyRes.exitCode === 0) {
+              resolvedCmd = 'agy';
+              whichRes = agyRes;
+            }
+          }
+
+          const isInstalled = whichRes.exitCode === 0 && Boolean(whichRes.stdout.trim());
+          if (!isInstalled) {
+            const humanName = cli === 'gemini' ? 'Google Gemini CLI (gemini)' : cli === 'claude' ? 'Claude Code (claude)' : cli;
+            return sendJson(res, 200, {
+              cli,
+              isInstalled: false,
+              isAuthenticated: false,
+              message: `${humanName} is not installed in system PATH.`
+            });
+          }
+
+          // 2. Check auth status for claude, gemini, codex
+          let isAuthenticated = false;
+          let userEmail: string | null = null;
+          let message = 'Not authenticated';
+
+          if (cli === 'claude' || cli.includes('claude')) {
+            const claudeConfigPath = path.join(os.homedir(), '.claude.json');
+            try {
+              const configText = await fs.readFile(claudeConfigPath, 'utf-8');
+              const parsed = JSON.parse(configText);
+              if (parsed?.oauthAccount || parsed?.sessionKey || parsed?.userID || parsed?.primaryApiKey) {
+                isAuthenticated = true;
+                userEmail = parsed?.oauthAccount?.email || parsed?.email || null;
+                message = userEmail ? `Authenticated as ${userEmail}` : 'Authenticated with Claude Pro/Team';
+              }
+            } catch {}
+
+            if (!isAuthenticated) {
+              const pingRes = await runShellCommand('claude -p "ping" --dangerously-skip-permissions', storageDir, 8000);
+              const combined = (pingRes.stdout + ' ' + pingRes.stderr).toLowerCase();
+              if (pingRes.exitCode === 0 && !combined.includes('login') && !combined.includes('unauthorized') && !combined.includes('authenticate')) {
+                isAuthenticated = true;
+                message = 'Authenticated with Claude';
+              } else if (combined.includes('login') || combined.includes('auth')) {
+                isAuthenticated = false;
+                message = 'Login required via "claude login"';
+              }
+            }
+          } else if (cli === 'gemini' || cli.includes('gemini') || resolvedCmd === 'agy') {
+            const geminiConfigDir = path.join(os.homedir(), '.gemini');
+            const userConfigDir = path.join(os.homedir(), '.config', 'gemini');
+            const hasGeminiDir = fsSync.existsSync(geminiConfigDir) || fsSync.existsSync(userConfigDir);
+            if (hasGeminiDir) {
+              isAuthenticated = true;
+              message = `${resolvedCmd} is installed and configured.`;
+            } else {
+              const pingRes = await runShellCommand(`${resolvedCmd} --version`, storageDir, 5000);
+              if (pingRes.exitCode === 0) {
+                isAuthenticated = true;
+                message = `${resolvedCmd} ready (${pingRes.stdout.trim().split('\n')[0]})`;
+              } else {
+                isAuthenticated = false;
+                message = `Login required for ${resolvedCmd}`;
+              }
+            }
+          } else if (cli === 'codex') {
+            const codexConfig = path.join(os.homedir(), '.codex');
+            if (fsSync.existsSync(codexConfig)) {
+              isAuthenticated = true;
+              message = 'Codex authenticated';
+            } else {
+              const pingRes = await runShellCommand('codex --version', storageDir, 5000);
+              if (pingRes.exitCode === 0) {
+                isAuthenticated = true;
+                message = 'Codex installed and ready';
+              } else {
+                isAuthenticated = false;
+                message = 'Login required via "codex login"';
+              }
+            }
+          } else {
+            isAuthenticated = isInstalled;
+            message = `${cli} installed.`;
+          }
+
+          return sendJson(res, 200, {
+            cli: resolvedCmd,
+            isInstalled: true,
+            isAuthenticated,
+            userEmail,
+            message
+          });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
+      if (url === '/api/cli/install' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          let { cli = 'claude' } = body;
+          if (cli === 'antigravity') cli = 'gemini';
+
+          let installCmd = 'npm install -g @anthropic-ai/claude-code';
+          if (cli === 'codex') {
+            installCmd = 'npm install -g @openai/codex';
+          } else if (cli === 'gemini' || cli === 'google') {
+            installCmd = 'npm install -g @google/gemini-cli';
+          } else if (cli === 'aider') {
+            installCmd = 'pip install aider-chat';
+          }
+
+          const result = await runShellCommand(installCmd, storageDir, 180_000);
+          const errorMsg = result.exitCode !== 0
+            ? (result.stderr.trim() || result.stdout.trim() || `Installation command '${installCmd}' failed with exit code ${result.exitCode}`)
+            : undefined;
+
+          return sendJson(res, 200, {
+            success: result.exitCode === 0,
+            output: result.stdout.trim(),
+            error: errorMsg
+          });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
+      if (url === '/api/cli/login' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          let { cli = 'claude' } = body;
+          if (cli === 'antigravity') cli = 'gemini';
+
+          let resolvedCmd = cli;
+          let whichRes = await runShellCommand(`which ${cli}`, storageDir, 3000);
+          if (whichRes.exitCode !== 0 && cli === 'gemini') {
+            const agyRes = await runShellCommand('which agy', storageDir, 3000);
+            if (agyRes.exitCode === 0) {
+              resolvedCmd = 'agy';
+              whichRes = agyRes;
+            }
+          }
+
+          if (whichRes.exitCode !== 0) {
+            const toolName = cli === 'gemini' ? 'Google Gemini CLI (@google/gemini-cli)' : cli === 'claude' ? 'Claude Code (@anthropic-ai/claude-code)' : cli;
+            return sendJson(res, 200, {
+              success: false,
+              authUrl: null,
+              output: '',
+              error: `${toolName} is not installed on your system. Please click 'Install & Sign In (1-Click)' above, or connect directly with a Google AI Studio key below.`
+            });
+          }
+
+          const { spawn } = await import('node:child_process');
+
+          let loginArgs = ['login'];
+          if (resolvedCmd === 'gemini') {
+            loginArgs = ['--login'];
+          }
+
+          let spawnError: Error | null = null;
+          let proc: any;
+          try {
+            proc = spawn(resolvedCmd, loginArgs, {
+              cwd: storageDir,
+              env: { ...process.env },
+              stdio: ['pipe', 'pipe', 'pipe']
+            });
+          } catch (err: any) {
+            return sendJson(res, 200, {
+              success: false,
+              authUrl: null,
+              output: '',
+              error: `Failed to launch ${resolvedCmd}: ${err.message}`
+            });
+          }
+
+          proc.on('error', (err: any) => {
+            spawnError = err;
+          });
+
+          let stdout = '';
+          let stderr = '';
+          let capturedUrl: string | null = null;
+
+          const urlRegex = /(https:\/\/(?:auth\.anthropic\.com|claude\.ai|openai\.com|accounts\.google\.com|google\.com\/device|oauth2\.googleapis\.com)[^\s"'<>]+)/i;
+
+          proc.stdout?.on('data', (chunk: Buffer) => {
+            const str = chunk.toString('utf-8');
+            stdout += str;
+            const match = str.match(urlRegex);
+            if (match && !capturedUrl) {
+              capturedUrl = match[1];
+            }
+          });
+
+          proc.stderr?.on('data', (chunk: Buffer) => {
+            const str = chunk.toString('utf-8');
+            stderr += str;
+            const match = str.match(urlRegex);
+            if (match && !capturedUrl) {
+              capturedUrl = match[1];
+            }
+          });
+
+          // Wait up to 3.5 seconds to see if an OAuth URL or prompt is generated immediately
+          await new Promise((resolve) => setTimeout(resolve, 3500));
+
+          if (spawnError) {
+            return sendJson(res, 200, {
+              success: false,
+              authUrl: null,
+              output: (stdout + '\n' + stderr).trim(),
+              error: (spawnError as any).message || `Failed to spawn ${resolvedCmd}`
+            });
+          }
+
+          return sendJson(res, 200, {
+            success: true,
+            authUrl: capturedUrl,
+            output: (stdout + '\n' + stderr).trim(),
+            pid: proc.pid
+          });
+        } catch (err: any) {
+          return sendJson(res, 200, {
+            success: false,
+            authUrl: null,
+            output: '',
+            error: err.message || 'Server error during login initialization'
+          });
         }
       }
 

@@ -103,7 +103,12 @@ export async function callAiEngine(
         { role: 'system', content: systemPrompt },
         { role: 'user', content: prompt }
       ],
-      stream: false
+      stream: false,
+      options: {
+        num_ctx: 16384,
+        num_predict: 4096,
+        temperature: 0.2
+      }
     };
     if (responseFormat === 'json') {
       reqBody.format = 'json';
@@ -120,6 +125,41 @@ export async function callAiEngine(
     }
     const data = await res.json();
     return data.message?.content || '';
+  }
+
+  if (provider === 'cli_subscription' || config.authMode === 'cli_subscription') {
+    const cliCommand = config.cliCustomCommand || config.model || 'claude';
+    // Map preset IDs like 'claude-code' to binary 'claude'
+    const binary = cliCommand === 'claude-code'
+      ? 'claude'
+      : cliCommand === 'antigravity'
+        ? 'agy'
+        : cliCommand;
+
+    const res = await fetch('/api/cli/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cli: binary,
+        prompt,
+        systemPrompt,
+        responseFormat,
+        timeoutMs: 180_000
+      }),
+      signal
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `CLI bridge returned HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    if (!data.success && !data.output) {
+      throw new Error(data.stderr || data.error || `CLI execution failed with exit code ${data.exitCode}`);
+    }
+
+    return data.output || data.stderr || '';
   }
 
   throw new Error('Simulated engine active.');

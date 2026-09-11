@@ -306,20 +306,20 @@ export const Navbar: React.FC<NavbarProps> = ({
           {isAiDropdownOpen && (
             <div className="custom-dropdown-menu" style={{ width: '340px' }}>
               <div className="custom-dropdown-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>AI Keys</span>
+                <span>AI Profiles</span>
                 <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                  {userApiKeys.length > 0 ? `${userApiKeys.length} Key${userApiKeys.length > 1 ? 's' : ''} Configured` : 'No Keys Specified'}
+                  {userApiKeys.length > 0 ? `${userApiKeys.length} Profile${userApiKeys.length > 1 ? 's' : ''} Configured` : 'No Profiles Specified'}
                 </span>
               </div>
 
-              {/* If User Has Not Specified Any API Keys Yet */}
+              {/* If User Has Not Specified Any AI Profiles Yet */}
               {userApiKeys.length === 0 ? (
                 <div style={{ padding: '1rem', textAlign: 'center' }}>
                   <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '0.5rem', color: 'var(--accent-amber)' }}>
                     <Key size={24} />
                   </div>
                   <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '0.85rem', lineHeight: 1.4 }}>
-                    You haven't added any API keys yet.
+                    You haven't added any AI profiles yet.
                   </p>
                   <button
                     type="button"
@@ -331,7 +331,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     }}
                   >
                     <Plus size={15} />
-                    <span>Add Key</span>
+                    <span>Add Profile</span>
                   </button>
                 </div>
               ) : (
@@ -394,7 +394,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     }}
                   >
                     <Settings size={15} />
-                    <span>Manage AI Keys...</span>
+                    <span>Manage AI Profiles...</span>
                   </button>
                 </div>
               )}
