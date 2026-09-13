@@ -9,7 +9,6 @@ import { INITIAL_PROJECTS } from './demoData';
 import { callMcpTool } from './mcpClient';
 import summaryAgentSkillRaw from '../../docs/skills/summary-agent/SKILL.md?raw';
 import managerAgentSkillRaw from '../../docs/skills/manager-agent/SKILL.md?raw';
-import discoveryAgentSkillRaw from '../../docs/skills/discovery-agent/SKILL.md?raw';
 import workerAgentSkillRaw from '../../docs/skills/worker-agent/SKILL.md?raw';
 import cleanerAgentSkillRaw from '../../docs/skills/cleaner-agent/SKILL.md?raw';
 import hardenerAgentSkillRaw from '../../docs/skills/hardener-agent/SKILL.md?raw';
@@ -206,7 +205,6 @@ Your sole responsibility is to take the **updated \`TODO.md\`** produced by AI 2
 // on-disk fallback can never drift from the documented prompt.
 export const DEFAULT_SUMMARY_AGENT_SKILL = summaryAgentSkillRaw;
 export const DEFAULT_MANAGER_AGENT_SKILL = managerAgentSkillRaw;
-export const DEFAULT_DISCOVERY_AGENT_SKILL = discoveryAgentSkillRaw;
 export const DEFAULT_WORKER_AGENT_SKILL = workerAgentSkillRaw;
 export const DEFAULT_CLEANER_AGENT_SKILL = cleanerAgentSkillRaw;
 export const DEFAULT_HARDENER_AGENT_SKILL = hardenerAgentSkillRaw;
@@ -418,7 +416,6 @@ export async function initializeFolderStructure(
     const defaultWorkspaceDir = await getOrCreateSubdir(projectsDir, 'default-workspace');
     const defaultProj = INITIAL_PROJECTS[0];
     await writeFileTextToDir(defaultWorkspaceDir, 'TODO.md', defaultProj.todoMarkdown);
-    await writeFileTextToDir(defaultWorkspaceDir, 'AGENT_CONTEXT.md', defaultProj.agentContextMarkdown);
   }
 
   return { settings, secrets };
@@ -932,8 +929,6 @@ export class StorageManager {
       fallbackContent = DEFAULT_SUMMARY_AGENT_SKILL;
     } else if (skillName === 'manager-agent') {
       fallbackContent = DEFAULT_MANAGER_AGENT_SKILL;
-    } else if (skillName === 'discovery-agent') {
-      fallbackContent = DEFAULT_DISCOVERY_AGENT_SKILL;
     } else if (skillName === 'worker-agent') {
       fallbackContent = DEFAULT_WORKER_AGENT_SKILL;
     } else if (skillName === 'cleaner-agent') {
@@ -1142,10 +1137,6 @@ export class StorageManager {
         path: `${folderPath}/TODO.md`,
         content: todoContent
       });
-      await callMcpTool('mcp-filesystem', 'write_file', {
-        path: `${folderPath}/AGENT_CONTEXT.md`,
-        content: agentContextContent
-      });
       return { success: true };
     } catch {}
 
@@ -1157,7 +1148,6 @@ export class StorageManager {
           currentDir = await getOrCreateSubdir(currentDir, part);
         }
         await writeFileTextToDir(currentDir, 'TODO.md', todoContent);
-        await writeFileTextToDir(currentDir, 'AGENT_CONTEXT.md', agentContextContent);
         return { success: true };
       } catch (err: any) {
         console.warn('[StorageManager] Error creating project directory via FSA:', err);

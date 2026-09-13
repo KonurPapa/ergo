@@ -11,7 +11,7 @@ import { buildVerboseOverviewAndRequiredMcps } from '../ai';
 import { parseJsonLoose } from '../llmClient';
 import { type PipelineContext, addUsage, emptyUsage, isAbortError, resolveRoleTarget, throwIfAborted } from './contracts';
 import { buildBibleSections } from './bible';
-import { type DiscoveryResult } from './discovery';
+import { type BaselineContext } from './context';
 import { runToolLoop } from './providerLoop';
 import { loadPipelineSkill } from './skills';
 
@@ -23,6 +23,26 @@ export interface SummaryResult {
   hardenerReason?: string;
   sections: BibleSections;
   usage: TokenUsage;
+}
+
+/** Formats structured OverviewDocument into clean Markdown with goals and output destination (Gherkin optional). */
+export function formatOverviewDocToMarkdown(
+  doc?: OverviewDocument | null,
+  options: { includeGherkin?: boolean } = { includeGherkin: false }
+): string {
+  if (!doc) return '';
+  if (doc.raw && doc.raw.trim().length > 0) return doc.raw.trim();
+  const parts: string[] = [];
+  if (options.includeGherkin && doc.brief) {
+    parts.push(`## Acceptance Brief (Gherkin)\n\n\`\`\`gherkin\n${doc.brief.trim()}\n\`\`\``);
+  }
+  if (doc.goals) {
+    parts.push(`## Goals & Success Criteria\n\n${doc.goals.trim()}`);
+  }
+  if (doc.output_as) {
+    parts.push(`## Output Destination\n\n${doc.output_as.trim()}`);
+  }
+  return parts.join('\n\n');
 }
 
 const TASK_KINDS: TaskKind[] = ['coding', 'writing', 'research', 'ops', 'data', 'other'];
@@ -45,7 +65,7 @@ export function inferTaskKind(text: string): TaskKind {
   return 'other';
 }
 
-export async function runSummary(ctx: PipelineContext, discovery: DiscoveryResult): Promise<SummaryResult> {
+export async function runSummary(ctx: PipelineContext, baseline: BaselineContext): Promise<SummaryResult> {
   const { task, brief, aiConfig, connectedMcps } = ctx;
   const usage = emptyUsage();
 
@@ -63,7 +83,7 @@ export async function runSummary(ctx: PipelineContext, discovery: DiscoveryResul
     .map((m) => `- ${m.name} (id: ${m.id}) — tools: ${m.tools.map((t) => t.name).join(', ')}`);
 
   const userMessage =
-    `${discovery.baselineMarkdown}\n\n## Connected MCP Servers (choose only what this task needs)\n${serverLines.length > 0 ? serverLines.join('\n') : '- (none connected)'}\n\n` +
+    `${baseline.baselineMarkdown}\n\n## Connected MCP Servers (choose only what this task needs)\n${serverLines.length > 0 ? serverLines.join('\n') : '- (none connected)'}\n\n` +
     'Produce the Overview & Execution Brief JSON now.';
 
   let parsed: any = undefined;
@@ -95,7 +115,36 @@ export async function runSummary(ctx: PipelineContext, discovery: DiscoveryResul
   }
   throwIfAborted(ctx.signal);
 
-  const { overviewDoc, requiredMcps } = buildVerboseOverviewAndRequiredMcps(task, brief, discovery.payload, connectedMcps, parsed);
+  const { overviewDoc, requiredMcps } = buildVerboseOverviewAndRequiredMcps(
+    task,
+    brief,
+    undefined,
+    connectedMcps,
+    parsed,
+    baseline.memoryHits
+  );
+
+  // Completeness Guard: Ensure all explicit task subtasks are preserved in overviewDoc.goals
+  if (task.subtasks.length > 0) {
+    const goalsLower = (overviewDoc.goals || '').toLowerCase();
+    const missingSubtasks = task.subtasks.filter((s) => {
+      const cleanText = s.text.replace(/^[0-9]+[.)-]\s*/, '').trim().toLowerCase();
+      const significantWords = cleanText.split(/\s+/).filter((w) => w.length >= 4);
+      if (significantWords.length === 0) return !goalsLower.includes(cleanText);
+      const matchCount = significantWords.filter((w) => goalsLower.includes(w)).length;
+      return matchCount < Math.min(2, significantWords.length);
+    });
+
+    if (missingSubtasks.length > 0) {
+      const currentGoals = (overviewDoc.goals || '').trim();
+      const existingNumberedCount = (currentGoals.match(/^\d+\./gm) || []).length;
+      const appendedGoals = missingSubtasks
+        .map((s, idx) => `${existingNumberedCount + idx + 1}. Complete subtask: ${s.text}${s.isDone ? ' [Completed]' : ''}`)
+        .join('\n');
+      overviewDoc.goals = currentGoals ? `${currentGoals}\n${appendedGoals}` : appendedGoals;
+    }
+  }
+
   const rawKind = typeof parsed?.taskKind === 'string' ? parsed.taskKind.trim().toLowerCase() : '';
   const taskKind: TaskKind = (TASK_KINDS as string[]).includes(rawKind)
     ? (rawKind as TaskKind)
@@ -150,13 +199,11 @@ export async function runSummary(ctx: PipelineContext, discovery: DiscoveryResul
     requiresHardener,
     hardenerReason,
     allowedRoots: ctx.allowedRoots,
-    discoveryPayload: discovery.payload,
+    guidelines: baseline.guidelines,
+    memoryHits: baseline.memoryHits,
     runId: ctx.runId
   });
 
-  // Backward-compatible mirror for UI consumers of the discovery payload.
-  discovery.payload.overview = overviewDoc;
-  discovery.payload.requiredMcps = requiredMcps;
   addUsage(ctx.usage, usage);
 
   console.log('%c[Ergo Agent Pipeline] ── Step 2: Summary → Overview & Execution Brief ──', 'color: #f59e0b; font-weight: bold; font-size: 13px;');
@@ -170,7 +217,6 @@ export async function runSummary(ctx: PipelineContext, discovery: DiscoveryResul
     detail: `Gherkin brief ready — kind: ${taskKind}${requiredMcps.length > 0 ? ` · MCPs: ${requiredMcps.join(', ')}` : ' · no external MCPs'} · hardener: ${requiresHardener ? 'required' : 'skipped'} · output: ${overviewDoc.output_as.slice(0, 90)}`,
     status: 'success',
     overviewDocument: overviewDoc,
-    discoveryPayload: discovery.payload,
     usage: { ...usage }
   });
 

@@ -11,6 +11,7 @@
 import {
   addChunks,
   hasChunk,
+  removeChunksByTaskId,
   searchMemory,
   type ChunkMetadata,
   type MemoryNamespace,
@@ -79,7 +80,7 @@ function extractLessons(input: RetrospectiveInput): Learning[] {
   const lines = combined.split('\n').filter((l) => l.trim().length > 0);
 
   const makeLearning = (lesson: string, category: LearningCategory): Learning => ({
-    id: `learning_${input.taskId}_${lessons.length}_${Date.now().toString(36)}`,
+    id: `learning_${input.projectId || 'default'}_${input.taskId}_${category}_${lessons.length}`,
     lesson: lesson.trim(),
     category,
     taskId: input.taskId,
@@ -151,7 +152,7 @@ function extractLessons(input: RetrospectiveInput): Learning[] {
     }
   }
 
-  // Always create a task completion summary as a 'tasks' namespace chunk
+  // Always create a task completion summary as a 'tasks' namespace chunk keyed on the internal taskId
   if (input.createdFiles.length > 0 || input.allScenariosPass) {
     const summaryParts = [
       `Task: "${input.taskTitle}"`,
@@ -163,7 +164,7 @@ function extractLessons(input: RetrospectiveInput): Learning[] {
     ].filter(Boolean);
 
     lessons.push({
-      id: `task_summary_${input.taskId}_${Date.now().toString(36)}`,
+      id: `task_summary_${input.projectId || 'default'}_${input.taskId}`,
       lesson: summaryParts.join(' | '),
       category: 'general',
       taskId: input.taskId,
@@ -180,17 +181,22 @@ function extractLessons(input: RetrospectiveInput): Learning[] {
  * Deduplicate candidate lessons against existing memory.
  *
  * Uses semantic similarity to detect near-duplicates: if a candidate lesson
- * is >0.85 similar to an existing chunk, it is considered redundant and dropped.
+ * is >0.85 similar to an existing chunk in the same project, it is considered redundant and dropped.
  */
-async function deduplicateLessons(lessons: Learning[]): Promise<Learning[]> {
+async function deduplicateLessons(lessons: Learning[], projectId?: string): Promise<Learning[]> {
   const unique: Learning[] = [];
 
   for (const lesson of lessons) {
     // Skip if exact ID already exists
     if (await hasChunk(lesson.id)) continue;
 
-    // Check semantic similarity against existing learnings
-    const similar = await searchMemory(lesson.lesson, 'learnings', 1, 0.85);
+    // Check semantic similarity against existing learnings within the same project
+    const similar = await searchMemory(lesson.lesson, {
+      namespace: 'learnings',
+      topK: 1,
+      minSimilarity: 0.85,
+      projectId: lesson.projectId || projectId,
+    });
     if (similar.length > 0) {
       // Near-duplicate found — skip
       continue;
@@ -210,10 +216,23 @@ async function deduplicateLessons(lessons: Learning[]): Promise<Learning[]> {
  * Extracts high-signal lessons from the execution output, deduplicates them
  * against existing memory, and stores the survivors in the vector store.
  *
+ * Automatically purges any prior runs' chunks for this task before storing new ones,
+ * ensuring task reruns cleanly update memory instead of accumulating duplicates.
+ *
  * @returns The number of new learnings stored
  */
 export async function runSessionRetrospective(input: RetrospectiveInput): Promise<number> {
   console.log(`[SessionRetrospective] Distilling learnings from task #${input.taskId}: "${input.taskTitle}"`);
+
+  // Step 0: Purge prior chunks for this task in this project so reruns cleanly overwrite
+  try {
+    const purged = await removeChunksByTaskId(input.taskId, input.projectId);
+    if (purged > 0) {
+      console.log(`[SessionRetrospective] Purged ${purged} existing chunk(s) for task #${input.taskId} prior to distillation`);
+    }
+  } catch (purgeErr) {
+    console.warn('[SessionRetrospective] Failed to purge prior task chunks (non-fatal):', purgeErr);
+  }
 
   // Step 1: Extract candidate lessons (0 tokens — pure heuristic)
   const candidates = extractLessons(input);
@@ -223,8 +242,8 @@ export async function runSessionRetrospective(input: RetrospectiveInput): Promis
   }
   console.log(`[SessionRetrospective] Extracted ${candidates.length} candidate lesson(s)`);
 
-  // Step 2: Deduplicate against existing memory
-  const unique = await deduplicateLessons(candidates);
+  // Step 2: Deduplicate against existing memory within the same project
+  const unique = await deduplicateLessons(candidates, input.projectId);
   if (unique.length === 0) {
     console.log('[SessionRetrospective] All candidates were duplicates of existing knowledge');
     return 0;
@@ -273,8 +292,8 @@ export async function runSessionRetrospective(input: RetrospectiveInput): Promis
 /**
  * Migrate existing AGENT_CONTEXT.md items into the vector store.
  *
- * Called once during the transition period to seed the vector memory with
- * historical task data. Idempotent — skips items that already exist.
+ * Called during the transition period to seed the vector memory with
+ * historical task data. Keyed deterministically on internal task ID and project ID.
  */
 export async function migrateAgentContextToMemory(
   items: Array<{
@@ -292,6 +311,8 @@ export async function migrateAgentContextToMemory(
   const chunks = items
     .filter((item) => item.overview && item.overview.trim().length > 20)
     .map((item) => {
+      const normTaskId = String(item.id).replace(/^brief_/, '');
+      const projId = item.projectId || 'default';
       // Combine overview + completion into a single searchable chunk
       const text = [
         `Task: ${item.title}`,
@@ -302,11 +323,11 @@ export async function migrateAgentContextToMemory(
         .join('\n');
 
       return {
-        id: `migrated_${item.id}`,
+        id: `migrated_${projId}_${normTaskId}`,
         namespace: 'tasks' as MemoryNamespace,
         text,
         metadata: {
-          taskId: item.id,
+          taskId: normTaskId,
           taskTitle: item.title,
           projectId: item.projectId,
           source: 'migration',

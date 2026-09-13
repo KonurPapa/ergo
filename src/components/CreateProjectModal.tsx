@@ -3,7 +3,6 @@ import {
   FolderPlus,
   X,
   Folder,
-  FileText,
   CheckSquare,
   AlertCircle,
   CheckCircle2,
@@ -60,7 +59,6 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
 
   const displayFolderPath = currentSlug;
   const todoPath = `${displayFolderPath}/TODO.md`;
-  const agentPath = `${displayFolderPath}/AGENT_CONTEXT.md`;
 
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
@@ -133,12 +131,9 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
       }
     }
 
-    if (!todoFile || !agentFile) {
-      const missing = [];
-      if (!todoFile) missing.push('TODO.md');
-      if (!agentFile) missing.push('AGENT_CONTEXT.md');
+    if (!todoFile) {
       setDuplicateError(
-        `Selection rejected: Selected folder is missing ${missing.join(' and ')}. Both exact files ('TODO.md' and 'AGENT_CONTEXT.md') must exist to duplicate.`
+        "Selection rejected: Selected folder is missing 'TODO.md'. A 'TODO.md' file must exist to duplicate."
       );
       setDuplicatedSource(null);
       e.target.value = '';
@@ -146,7 +141,8 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
     }
 
     try {
-      const [todoText, agentText] = await Promise.all([todoFile.text(), agentFile.text()]);
+      const todoText = await todoFile.text();
+      const agentText = agentFile ? await agentFile.text() : '';
 
       const sourceTitle = folderBaseName
         ? folderBaseName.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
@@ -193,7 +189,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
               todoText = await todoFile.text();
             } catch {
               setDuplicateError(
-                `Selection rejected: Selected folder "${handle.name}" is missing TODO.md. Both 'TODO.md' and 'AGENT_CONTEXT.md' must exist to duplicate.`
+                `Selection rejected: Selected folder "${handle.name}" is missing TODO.md. A 'TODO.md' file must exist to duplicate.`
               );
               setDuplicatedSource(null);
               return;
@@ -204,11 +200,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
               const agentFile = await agentHandle.getFile();
               agentText = await agentFile.text();
             } catch {
-              setDuplicateError(
-                `Selection rejected: Selected folder "${handle.name}" is missing AGENT_CONTEXT.md. Both 'TODO.md' and 'AGENT_CONTEXT.md' must exist to duplicate.`
-              );
-              setDuplicatedSource(null);
-              return;
+              // AGENT_CONTEXT.md is optional / legacy
             }
 
             const formattedName = handle.name
@@ -418,7 +410,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
               </div>
 
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.65rem', lineHeight: '1.4' }}>
-                Select an existing project to copy its exact <code style={{ color: 'var(--accent-cyan)' }}>TODO.md</code> and <code style={{ color: 'var(--accent-violet)' }}>AGENT_CONTEXT.md</code> files into the new project.
+                Select an existing project to copy its exact <code style={{ color: 'var(--accent-cyan)' }}>TODO.md</code> task file into the new project.
               </p>
 
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
@@ -469,7 +461,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
                 {...({ webkitdirectory: '', directory: '', multiple: true } as any)}
               />
 
-              {/* Error Notice if missing TODO.md or AGENT_CONTEXT.md */}
+              {/* Error Notice if missing TODO.md */}
               {duplicateError && (
                 <div
                   style={{
@@ -512,7 +504,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
                       Duplicating from: {duplicatedSource.name}
                     </span>
                     <span style={{ color: 'var(--text-muted)', marginLeft: '0.4rem', fontSize: '0.72rem' }}>
-                      (Both TODO.md & AGENT_CONTEXT.md verified)
+                      (TODO.md verified)
                     </span>
                   </div>
                 </div>
@@ -542,13 +534,6 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
                   <span>{todoPath}</span>
                   <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
                     {duplicatedSource ? '(Copied from source)' : '(Human Tasks List)'}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-violet)', paddingLeft: '1.2rem' }}>
-                  <FileText size={13} color="var(--accent-violet)" />
-                  <span>{agentPath}</span>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                    {duplicatedSource ? '(Copied from source)' : '(Agent Technical Briefs)'}
                   </span>
                 </div>
               </div>

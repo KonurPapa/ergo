@@ -59,7 +59,6 @@ interface RoleFormState {
 }
 
 const ROLE_ICONS: Record<AgentRole, React.ReactNode> = {
-  discovery: <Zap size={14} color="var(--accent-amber)" />,
   summary: <Sparkles size={14} color="var(--accent-violet)" />,
   manager: <Brain size={14} color="var(--accent-cyan)" />,
   worker: <Cpu size={14} color="var(--accent-primary)" />,
@@ -226,8 +225,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
       } else {
         // Fallback to legacy fields
         let legacyModel = '';
-        if (role === 'discovery') legacyModel = k.discoveryModel || '';
-        else if (role === 'summary') legacyModel = k.summaryModel || '';
+        if (role === 'summary') legacyModel = k.summaryModel || '';
         else if (role === 'manager') legacyModel = k.generalModel || k.model || '';
         else if (role === 'worker') legacyModel = k.workerModel || k.generalModel || k.model || '';
         else if (role === 'cleaner') legacyModel = k.cleanerModel || '';
@@ -495,7 +493,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     const res = await testAiConnection(providerId, {
       apiKey: apiKey.trim(),
       baseUrl: baseUrl.trim(),
-      model: roleConfigs.manager?.model || roleConfigs.discovery?.model
+      model: roleConfigs.manager?.model || roleConfigs.summary?.model
     });
     setTestResult(res);
 
@@ -546,7 +544,6 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
       cliAgentId: selectedCliId,
       cliCustomCommand: customCliCommand.trim() || undefined,
       cliExecutionMode: cliExecutionMode,
-      discoveryModel: finalRoleConfigs.discovery?.model,
       summaryModel: finalRoleConfigs.summary?.model,
       generalModel: finalRoleConfigs.manager?.model,
       workerModel: finalRoleConfigs.worker?.model,
@@ -1834,10 +1831,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                           const config = k.roleConfigs?.[role];
                           const modelVal =
                             config?.model ||
-                            (role === 'discovery'
-                              ? k.discoveryModel
-                              : role === 'summary'
-                                ? k.summaryModel
+                            (role === 'summary'
+                              ? k.summaryModel
                                 : role === 'cleaner'
                                   ? k.cleanerModel
                                   : role === 'hardener'

@@ -237,10 +237,7 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
                 └── 📁 <span style={{ color: 'var(--accent-violet)' }}>default-workspace/</span>
               </div>
               <div style={{ paddingLeft: '3.6rem', color: 'var(--text-cyan)' }}>
-                ├── 📝 TODO.md <span style={{ opacity: 0.6 }}>(Human task list)</span>
-              </div>
-              <div style={{ paddingLeft: '3.6rem', color: 'var(--text-violet)' }}>
-                └── 📝 AGENT_CONTEXT.md <span style={{ opacity: 0.6 }}>(AI implementation briefs)</span>
+                └── 📝 TODO.md <span style={{ opacity: 0.6 }}>(Human task list)</span>
               </div>
             </div>
           </div>

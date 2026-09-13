@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Code2, X, Save, FileText, CheckSquare, Download } from 'lucide-react';
+import { Code2, X, Save, CheckSquare, Download } from 'lucide-react';
 import { handleMarkdownAutoWrap } from '../lib/markdownEditorUtils';
 import { type SwimLaneDoc } from '../types';
 
@@ -7,7 +7,7 @@ interface RawMarkdownModalProps {
   isOpen: boolean;
   onClose: () => void;
   todoMarkdown: string;
-  agentContextMarkdown: string;
+  agentContextMarkdown?: string;
   folderPath?: string;
   todoFilePath?: string;
   agentContextFilePath?: string;
@@ -20,10 +20,9 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
   isOpen,
   onClose,
   todoMarkdown,
-  agentContextMarkdown,
+  agentContextMarkdown = '',
   folderPath,
   todoFilePath,
-  agentContextFilePath,
   swimLanes,
   onSaveMarkdown,
   onExportProject
@@ -40,7 +39,6 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
 
   const [activeTab, setActiveTab] = useState<string>(effectiveLanes[0]?.id || 'todo');
   const [laneValues, setLaneValues] = useState<Record<string, string>>({});
-  const [agentVal, setAgentVal] = useState(agentContextMarkdown);
 
   useEffect(() => {
     const vals: Record<string, string> = {};
@@ -48,11 +46,10 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
       vals[lane.id] = lane.markdown;
     }
     setLaneValues(vals);
-    setAgentVal(agentContextMarkdown);
-    if (!vals[activeTab] && activeTab !== 'agent') {
+    if (!vals[activeTab]) {
       setActiveTab(effectiveLanes[0]?.id || 'todo');
     }
-  }, [effectiveLanes, agentContextMarkdown]);
+  }, [effectiveLanes]);
 
   if (!isOpen) return null;
 
@@ -65,7 +62,7 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
       ? laneValues[effectiveLanes[0].id]
       : todoMarkdown;
 
-    onSaveMarkdown(primaryTodoMd, agentVal, updatedLanes);
+    onSaveMarkdown(primaryTodoMd, agentContextMarkdown, updatedLanes);
     onClose();
   };
 
@@ -98,7 +95,7 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
           </button>
         </div>
 
-        {/* Tab Headers for all swim lanes + AGENT_CONTEXT.md */}
+        {/* Tab Headers for all swim lanes */}
         <div style={{ display: 'flex', overflowX: 'auto', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-darkest)', padding: '0 1rem' }}>
           {effectiveLanes.map((lane) => {
             const fileName = lane.filePath ? lane.filePath.split('/').pop() || lane.title : lane.title;
@@ -127,57 +124,26 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
               </button>
             );
           })}
-
-          <button
-            style={{
-              padding: '0.65rem 1.1rem',
-              background: activeTab === 'agent' ? 'var(--bg-card)' : 'transparent',
-              color: activeTab === 'agent' ? '#fff' : 'var(--text-muted)',
-              border: 'none',
-              borderBottom: activeTab === 'agent' ? '2px solid var(--accent-violet)' : '2px solid transparent',
-              fontWeight: 600,
-              fontSize: '0.85rem',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.45rem',
-              whiteSpace: 'nowrap'
-            }}
-            onClick={() => setActiveTab('agent')}
-          >
-            <FileText size={15} color="var(--accent-violet)" />
-            <span>{agentContextFilePath ? agentContextFilePath.split('/').pop() : 'AGENT_CONTEXT.md'}</span>
-          </button>
         </div>
 
         {/* Modal Textarea Body */}
         <div className="modal-body" style={{ padding: 0, display: 'flex', flex: 1 }}>
-          {activeTab === 'agent' ? (
-            <textarea
-              className="textarea-text"
-              style={{ flex: 1, border: 'none', borderRadius: 0, padding: '1.25rem', fontFamily: 'var(--font-mono)', fontSize: '0.88rem', lineHeight: '1.6', background: 'var(--bg-darkest)' }}
-              value={agentVal}
-              onChange={(e) => setAgentVal(e.target.value)}
-              onKeyDown={(e) => handleMarkdownAutoWrap(e, setAgentVal)}
-            />
-          ) : (
-            <textarea
-              className="textarea-text"
-              style={{ flex: 1, border: 'none', borderRadius: 0, padding: '1.25rem', fontFamily: 'var(--font-mono)', fontSize: '0.88rem', lineHeight: '1.6', background: 'var(--bg-darkest)' }}
-              value={laneValues[activeTab] ?? ''}
-              onChange={(e) => handleLaneChange(activeTab, e.target.value)}
-              onKeyDown={(e) => {
-                const setter = (valOrFn: string | ((prev: string) => string)) => {
-                  if (typeof valOrFn === 'function') {
-                    setLaneValues((prev) => ({ ...prev, [activeTab]: valOrFn(prev[activeTab] ?? '') }));
-                  } else {
-                    setLaneValues((prev) => ({ ...prev, [activeTab]: valOrFn }));
-                  }
-                };
-                handleMarkdownAutoWrap(e, setter);
-              }}
-            />
-          )}
+          <textarea
+            className="textarea-text"
+            style={{ flex: 1, border: 'none', borderRadius: 0, padding: '1.25rem', fontFamily: 'var(--font-mono)', fontSize: '0.88rem', lineHeight: '1.6', background: 'var(--bg-darkest)' }}
+            value={laneValues[activeTab] ?? ''}
+            onChange={(e) => handleLaneChange(activeTab, e.target.value)}
+            onKeyDown={(e) => {
+              const setter = (valOrFn: string | ((prev: string) => string)) => {
+                if (typeof valOrFn === 'function') {
+                  setLaneValues((prev) => ({ ...prev, [activeTab]: valOrFn(prev[activeTab] ?? '') }));
+                } else {
+                  setLaneValues((prev) => ({ ...prev, [activeTab]: valOrFn }));
+                }
+              };
+              handleMarkdownAutoWrap(e, setter);
+            }}
+          />
         </div>
 
         <div className="modal-footer">

@@ -2,13 +2,14 @@
  * Final step — Logger: writes the Build & Verification and Completion records from the CONDENSED
  * bible (pieces table + event log + QA verdict), never from raw transcripts.
  */
-import { type AgentContextItem, type Subtask, type TaskItem } from '../../types';
+import { type AgentContextItem, type Subtask, type TaskItem, type OverviewDocument } from '../../types';
 import { parseJsonLoose } from '../llmClient';
 import { runSessionRetrospective, type RetrospectiveInput } from '../memory';
 import { type PipelineContext, addUsage, emptyUsage, formatUsage, resolveRoleTarget } from './contracts';
 import { type BibleStore } from './bible';
 import { type HardenerResult } from './hardener';
 import { runToolLoop } from './providerLoop';
+import { formatOverviewDocToMarkdown } from './summary';
 
 const LOGGER_SYSTEM =
   `You are the Logger AI in Ergo's task execution pipeline. Write the completion log for a task that was just executed by a manager and its worker sub-agents.\n` +
@@ -36,6 +37,7 @@ export interface LoggerArgs {
   hardener?: HardenerResult;
   qaAttempts: number;
   allScenariosPass: boolean;
+  overviewDoc?: OverviewDocument;
 }
 
 export async function runLogger(
@@ -165,7 +167,11 @@ export async function runLogger(
     completionContent += `\n\n**Human Review Required:**\n` + combinedReviewSteps.map((s) => `- [ ] **human review** - ${s}`).join('\n');
   }
 
-  const overviewContent = brief?.overview || brief?.brief || `Task #${task.id}: ${task.title}`;
+  const overviewContent =
+    (args.overviewDoc ? formatOverviewDocToMarkdown(args.overviewDoc) : '') ||
+    brief?.overview ||
+    brief?.brief ||
+    '';
 
   ctx.emit({
     id: 'step-logger',
@@ -185,7 +191,7 @@ export async function runLogger(
     title: reviewSubtasks.length > 0 ? 'Task Built — Human Review Pending' : 'Task Execution Completed Successfully!',
     detail: (reviewSubtasks.length > 0
       ? `Task #${task.id} changes built. Generated ${reviewSubtasks.length} Human Review step(s) in TODO.md for user verification.`
-      : `Item #${task.id} marked DONE. Agent build record appended to AGENT_CONTEXT.md.`) + ` Total usage: ${formatUsage(ctx.usage)}.`,
+      : `Item #${task.id} marked DONE. Agent build record saved to workspace.`) + ` Total usage: ${formatUsage(ctx.usage)}.`,
     status: 'success',
     usage: { ...ctx.usage },
     totalUsage: { ...ctx.usage },

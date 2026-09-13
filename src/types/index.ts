@@ -165,7 +165,6 @@ export interface AIProviderConfig {
   cliCustomCommand?: string;
   cliSubscriptionTier?: string;
   cliExecutionMode?: 'headless' | 'interactive';
-  discoveryModel?: string;
   summaryModel?: string;
   generalModel?: string;
   /** Optional cheaper/faster model used for fan-out worker sub-agents (defaults to generalModel). */
@@ -192,7 +191,6 @@ export interface ProviderCredentials {
   cliSubscriptionTier?: string;
   cliExecutionMode?: 'headless' | 'interactive';
   model?: string;
-  discoveryModel?: string;
   summaryModel?: string;
   generalModel?: string;
   workerModel?: string;
@@ -218,7 +216,6 @@ export interface UserApiKey {
   cliExecutionMode?: 'headless' | 'interactive';
   baseUrl?: string;
   model?: string;
-  discoveryModel?: string;
   summaryModel?: string;
   generalModel?: string;
   workerModel?: string;
@@ -240,9 +237,9 @@ export interface ProjectData {
   description: string;
   folderPath: string; // e.g. "projects/default-workspace"
   todoFilePath: string; // e.g. "projects/default-workspace/TODO.md"
-  agentContextFilePath: string; // e.g. "projects/default-workspace/AGENT_CONTEXT.md"
+  agentContextFilePath?: string; // (Legacy)
   todoMarkdown: string;
-  agentContextMarkdown: string;
+  agentContextMarkdown?: string; // (Legacy)
   connectedMcps: string[];
   swimLanes?: SwimLaneDoc[];
 }
@@ -400,7 +397,7 @@ export type ExecutionStage =
   | 'done'
   | 'terminating';
 
-export type AgentRole = 'discovery' | 'summary' | 'manager' | 'worker' | 'cleaner' | 'hardener' | 'logger';
+export type AgentRole = 'summary' | 'manager' | 'worker' | 'cleaner' | 'hardener' | 'logger';
 
 /** Token accounting for a single LLM call or an aggregate across calls. */
 export interface TokenUsage {
@@ -442,6 +439,34 @@ export interface ExecutionStep {
   discoveryPayload?: DiscoveryJobPayload;
   // The assembled overview document (set after Summary AI completes)
   overviewDocument?: OverviewDocument;
+  /** Assembled zero-token baseline context (vector memory hits + project guidelines) */
+  baselineContext?: AssembledBaselineContext;
+}
+
+export interface AssembledMemoryHit {
+  id: string;
+  similarity: number;
+  namespace: string;
+  text: string;
+  source?: string;
+  taskTitle?: string;
+  taskId?: string | number;
+  projectId?: string;
+  tags?: string[];
+}
+
+export interface AssembledGuidelineDoc {
+  path: string;
+  excerpt: string;
+}
+
+export interface AssembledBaselineContext {
+  query: string;
+  threshold: number;
+  projectId?: string;
+  memoryHits: AssembledMemoryHit[];
+  guidelines: AssembledGuidelineDoc[];
+  timestamp: string;
 }
 
 export type RootFolderStatus = 'connected' | 'needs_permission' | 'disconnected' | 'server_fallback';
@@ -577,8 +602,6 @@ export interface AgentPipelineOptions {
   enableCleaner: boolean;
   /** Run the Hardener (QA / eval harness) pass. */
   enableHardener: boolean;
-  /** Minimum title match probability percentage (10-90, default 50) for candidate tasks in discovery before reading subtasks. */
-  discoveryRelevanceThreshold: number;
 }
 
 export type PuzzlePieceKind = 'given' | 'when' | 'then' | 'edge';
@@ -655,7 +678,7 @@ export interface BibleSections {
   outputAs: string;
   requiredMcps: string[];
   allowedRoots: string[];
-  discoveredContext: Array<{ taskId: string | number; title: string; category: string; sourceDocument: string; snippet?: string }>;
+  discoveredContext: Array<{ taskId?: string | number; title?: string; category?: string; sourceDocument?: string; snippet?: string; similarity?: number; source?: string; text?: string }>;
   guidelines: Array<{ path: string; excerpt: string }>;
   discoveryNotes?: string;
 }

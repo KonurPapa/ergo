@@ -26,7 +26,7 @@ import { runOfflineExecution } from '../ai';
 import { getAllowedRoots } from '../mcpClient';
 import { DEFAULT_AGENT_PIPELINE_OPTIONS, type PipelineContext, emptyUsage, formatUsage, isAbortError, slugify } from './contracts';
 import { BibleStore, FileLockRegistry } from './bible';
-import { runDiscovery } from './discovery';
+import { assembleTaskContext } from './context';
 import { runSummary } from './summary';
 import { buildToolDefinitions } from './toolSchemas';
 import { runManager, isStraightforwardTask, type ManagerRunResult } from './manager';
@@ -64,17 +64,22 @@ export function evaluateHardenerNecessity(params: {
   }
 
   const fileList = params.createdFiles || [];
-  const isSingleStandaloneFile = params.createdFilesCount === 1;
+  const isSingleStandaloneFile = params.createdFilesCount <= 1;
 
-  // Single standalone / straightforward task with passed manager scenarios: cleanly skip Hardener (even on retry attempts)
-  if ((isSingleStandaloneFile || params.isStraightforward) && params.piecesCount <= 2 && params.allScenariosPass) {
-    return {
-      shouldRun: false,
-      reason: `Straightforward standalone deliverable (${fileList[0] || 'deliverable'}) verified by manager. Skipping Hardener to conserve tokens.`
-    };
+  // Unconditional Hardener skip for straightforward tasks and single-file deliverables:
+  // Solo Manager remediation handles direct fixes; running a 35k-token read-only QA agent on small tasks is wasteful and counterproductive.
+  if (params.isStraightforward || isSingleStandaloneFile || params.summaryRequiresHardener === false) {
+    // Only escalate if scope empirically exploded into a full multi-component project (>= 3 created files AND >= 3 pieces)
+    const exploded = params.createdFilesCount >= 3 && params.piecesCount >= 3;
+    if (!exploded) {
+      return {
+        shouldRun: false,
+        reason: params.summaryReason || `Straightforward/standalone deliverable (${fileList[0] || 'deliverable'}); Hardener strictly skipped to conserve tokens.`
+      };
+    }
   }
 
-  // If this is a retry attempt for non-straightforward tasks, re-run Hardener to verify fixes
+  // If this is a retry attempt for multi-piece / multi-file complex tasks, re-run Hardener to verify fixes
   if (params.attempt > 1) {
     return {
       shouldRun: true,
@@ -82,20 +87,8 @@ export function evaluateHardenerNecessity(params: {
     };
   }
 
-  // Tier 1: Summary Agent's upfront classification
-  if (params.summaryRequiresHardener === false) {
-    // If summary explicitly said skip, only run if scope empirically exploded
-    const exploded = params.createdFilesCount >= 3 || params.piecesCount >= 3;
-    if (!exploded) {
-      return {
-        shouldRun: false,
-        reason: params.summaryReason || `Summary classified task as small/generic (${params.taskKind}, ${params.createdFilesCount} files, ${params.piecesCount} piece(s)). Hardener skipped for token efficiency.`
-      };
-    }
-  }
-
+  // Tier 1: Summary Agent explicitly flagged task as large/complex requiring independent QA proof
   if (params.summaryRequiresHardener === true) {
-    // Quality-control sanity check: if it was a complete no-op (0 files modified, 1 simple piece, scenarios already pass), skip
     if (params.createdFilesCount === 0 && params.piecesCount <= 1 && params.allScenariosPass) {
       return {
         shouldRun: false,
@@ -108,28 +101,18 @@ export function evaluateHardenerNecessity(params: {
     };
   }
 
-  // Tier 2: Post-execution empirical scope safeguard
-  const hasWebDeliverable = fileList.some((f) => /\.(html|htm|jsx|tsx|vue|svelte)$/i.test(f));
+  // Tier 2: Post-execution empirical scope safeguard for complex multi-piece tasks
   const isEmpiricallyLarge =
-    params.createdFilesCount >= 2 ||
-    params.piecesCount >= 3 ||
-    !params.allScenariosPass;
+    params.createdFilesCount >= 3 ||
+    params.piecesCount >= 3;
 
   if (isEmpiricallyLarge) {
     return {
       shouldRun: true,
-      reason: `Escalated to Hardener post-execution: task execution exceeded small scope (${params.createdFilesCount} files created/modified, ${params.piecesCount} puzzle pieces, all scenarios pass: ${params.allScenariosPass}).`
+      reason: `Escalated to Hardener post-execution: task execution exceeded small scope (${params.createdFilesCount} files created/modified, ${params.piecesCount} puzzle pieces).`
     };
   }
 
-  if (hasWebDeliverable && params.createdFilesCount > 1) {
-    return {
-      shouldRun: true,
-      reason: `Multi-file web deliverable detected (${fileList.filter((f) => /\.(html|htm|jsx|tsx|vue|svelte)$/i.test(f)).join(', ')}); running Hardener to verify via browser/UI testing.`
-    };
-  }
-
-  // Otherwise, small/generic task: cleanly skip Hardener to save tokens
   return {
     shouldRun: false,
     reason: params.summaryReason || `Task classified as small/generic (${params.taskKind}, ${params.createdFilesCount} files, ${params.piecesCount} piece(s)). Hardener skipped for token efficiency.`
@@ -200,9 +183,10 @@ export async function executeTaskWithAi(
     console.log('%c[Ergo Agent Pipeline] ── Run started ──', 'color: #38bdf8; font-weight: bold; font-size: 13px;');
     console.log(`Task #${task.id} "${task.title}" · run ${runId} · dir ${runDir} · options`, resolvedOptions);
 
-    // Step 1 + 2
-    const discovery = await runDiscovery(ctx);
-    const summary = await runSummary(ctx, discovery);
+    // Step 1: Zero-token vector memory & guidelines context assembly
+    const baseline = await assembleTaskContext(ctx);
+    // Step 2: Summary AI
+    const summary = await runSummary(ctx, baseline);
 
     // Bible + tools (fixed for the whole run — task-boundary decisions)
     bible = new BibleStore(summary.sections, runDir);
@@ -228,18 +212,27 @@ export async function executeTaskWithAi(
       mgr = await runManager(ctx, bible, tools, locks, attempt, diagnostics);
       for (const f of mgr.createdFiles) createdFiles.add(f);
 
-      // Run Cleaner only for coding tasks that produced code, skipping standalone static files (e.g. single .html)
+      // Step 4: Cleaner - strictly skipped for straightforward or single-file deliverables to avoid token waste & markup corruption
       const filesArray = Array.from(createdFiles);
       const isStraightforward = isStraightforwardTask(bible);
-      const isAllStatic = filesArray.length > 0 && filesArray.every((f) => /\.(html|htm|md|txt|css|svg)$/i.test(f));
-      const isStandaloneStatic = (filesArray.length === 1 && /\.(html|htm|md|txt)$/i.test(filesArray[0])) || (isStraightforward && isAllStatic);
-      if (summary.taskKind === 'coding' && resolvedOptions.enableCleaner && filesArray.length > 0 && !isStandaloneStatic) {
+      const isSingleStandaloneFile = filesArray.length <= 1;
+      const shouldRunCleaner =
+        resolvedOptions.enableCleaner &&
+        summary.taskKind === 'coding' &&
+        filesArray.length > 1 &&
+        !isStraightforward;
+
+      if (shouldRunCleaner) {
         await runCleaner(ctx, bible, tools, filesArray, attempt);
-      } else if (isStandaloneStatic) {
-        bible.appendEvent({ actor: 'pipeline', kind: 'info', text: `Step 4 Cleaner skipped: standalone static deliverable (${filesArray.join(', ') || 'file'}) needs no package lint/format pass.` });
-        await bible.persist();
-      } else if (filesArray.length === 0) {
-        bible.appendEvent({ actor: 'pipeline', kind: 'info', text: 'Step 4 Cleaner skipped: no created files recorded.' });
+      } else {
+        const skipReason = !resolvedOptions.enableCleaner
+          ? 'Cleaner is disabled in pipeline options.'
+          : summary.taskKind !== 'coding'
+          ? `Non-coding task (${summary.taskKind}) needs no code cleaning.`
+          : isStraightforward || isSingleStandaloneFile
+          ? `Straightforward / single-file deliverable (${filesArray.join(', ') || 'deliverable'}); Cleaner strictly skipped for token efficiency.`
+          : 'No created files recorded.';
+        bible.appendEvent({ actor: 'pipeline', kind: 'info', text: `Step 4 Cleaner skipped: ${skipReason}` });
         await bible.persist();
       }
 
@@ -318,7 +311,8 @@ export async function executeTaskWithAi(
       usedToolCalling: mgr.usedToolCalling,
       hardener,
       qaAttempts: attempt,
-      allScenariosPass: mgr.allScenariosPass
+      allScenariosPass: mgr.allScenariosPass,
+      overviewDoc: summary.overviewDoc
     });
     bible.sections.metadata.status = result.updatedTask.status;
     bible.sections.subtasks = result.updatedTask.subtasks.map((s) => ({

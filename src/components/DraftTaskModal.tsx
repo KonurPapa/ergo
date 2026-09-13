@@ -132,7 +132,7 @@ export const DraftTaskModal: React.FC<DraftTaskModalProps> = ({
 
         <div className="modal-body">
           <p style={{ fontSize: '0.88rem', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
-            Enter your high-level goal, feature request, or raw specification. The AI will inspect connected MCP harnesses (<strong style={{ color: '#fff' }}>tools/list</strong>), suggest relevant tools, and generate scannable task entries for <strong style={{ color: '#fff' }}>TODO.md</strong> with verbose briefs for <strong style={{ color: '#fff' }}>AGENT_CONTEXT.md</strong>.
+            Enter your high-level goal, feature request, or raw specification. The AI will inspect connected MCP harnesses (<strong style={{ color: '#fff' }}>tools/list</strong>), suggest relevant tools, and generate scannable task entries for <strong style={{ color: '#fff' }}>TODO.md</strong> with technical briefs.
           </p>
 
           <div className="input-group">

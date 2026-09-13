@@ -7,21 +7,19 @@ export async function callAiEngine(
   prompt: string,
   systemPrompt: string,
   config: AIProviderConfig,
-  taskType: 'discovery' | 'summary' | 'general' = 'general',
-  responseFormat: 'text' | 'json' = (taskType === 'discovery' || taskType === 'summary') ? 'json' : 'text',
+  taskType: 'summary' | 'general' = 'general',
+  responseFormat: 'text' | 'json' = taskType === 'summary' ? 'json' : 'text',
   signal?: AbortSignal
 ): Promise<string> {
   const { provider, apiKey, baseUrl } = config;
-  const targetModel = taskType === 'discovery'
-    ? (config.discoveryModel || config.generalModel || config.model)
-    : taskType === 'summary'
-      ? (config.summaryModel || config.generalModel || config.model)
-      : (config.generalModel || config.model);
+  const targetModel = taskType === 'summary'
+    ? (config.summaryModel || config.generalModel || config.model)
+    : (config.generalModel || config.model);
 
   if (provider === 'openai') {
     if (!apiKey) throw new Error('OpenAI API key missing.');
     const reqBody: any = {
-      model: targetModel || (taskType === 'discovery' ? 'gpt-4o-mini' : taskType === 'summary' ? 'gpt-4o' : 'gpt-5.4'),
+      model: targetModel || (taskType === 'summary' ? 'gpt-4o' : 'gpt-5.4'),
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: prompt }
@@ -58,7 +56,7 @@ export async function callAiEngine(
         'anthropic-dangerous-direct-browser-access': 'true'
       },
       body: JSON.stringify({
-        model: targetModel || (taskType === 'discovery' ? 'claude-3-5-haiku-20241022' : taskType === 'summary' ? 'claude-3-7-sonnet-20250219' : 'claude-opus-5'),
+        model: targetModel || (taskType === 'summary' ? 'claude-3-7-sonnet-20250219' : 'claude-opus-5'),
         max_tokens: 4000,
         system: systemPrompt,
         messages: [{ role: 'user', content: prompt }]
@@ -75,7 +73,7 @@ export async function callAiEngine(
 
   if (provider === 'gemini') {
     if (!apiKey) throw new Error('Google Gemini API key missing.');
-    const geminiModel = targetModel || (taskType === 'discovery' ? 'gemini-2.0-flash' : taskType === 'summary' ? 'gemini-3.7-flash' : 'gemini-3.7-pro');
+    const geminiModel = targetModel || (taskType === 'summary' ? 'gemini-3.7-flash' : 'gemini-3.7-pro');
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`,
       {
@@ -98,7 +96,7 @@ export async function callAiEngine(
   if (provider === 'ollama') {
     const host = (baseUrl || 'http://localhost:11434').replace(/\/+$/, '');
     const reqBody: any = {
-      model: targetModel || (taskType === 'discovery' ? 'llama3.2' : taskType === 'summary' ? 'llama3.2' : 'qwen2.5-coder'),
+      model: targetModel || (taskType === 'summary' ? 'llama3.2' : 'qwen2.5-coder'),
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: prompt }

@@ -56,10 +56,18 @@ interface StoredChunk {
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const DB_NAME = 'ergo-vector-memory';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = 'chunks';
 const MODEL_ID = 'Xenova/all-MiniLM-L6-v2';
-const EMBEDDING_DIM = 384;
+export const EMBEDDING_DIM = 384;
+
+export interface SearchMemoryOptions {
+  namespace?: MemoryNamespace;
+  topK?: number;
+  minSimilarity?: number;
+  projectId?: string;
+  excludeTaskId?: string | number;
+}
 
 // ─── Embedding Pipeline (lazy singleton) ────────────────────────────────────
 
@@ -79,7 +87,9 @@ async function getEmbeddingPipeline(): Promise<any> {
       const { pipeline, env } = await import('@huggingface/transformers');
 
       // Use WASM backend (no WebGPU required, works everywhere)
-      env.backends.onnx.wasm.numThreads = 1;
+      if (env.backends?.onnx?.wasm) {
+        (env.backends.onnx.wasm as any).numThreads = 1;
+      }
 
       const pipe = await pipeline('feature-extraction', MODEL_ID, {
         dtype: 'fp32',
@@ -166,11 +176,15 @@ function openDb(): Promise<IDBDatabase> {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
+      let store: IDBObjectStore;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
-        const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-        store.createIndex('namespace', 'namespace', { unique: false });
-        store.createIndex('taskId', 'metadata.taskId', { unique: false });
+        store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+      } else {
+        store = (event.target as any).transaction.objectStore(STORE_NAME);
       }
+      if (!store.indexNames.contains('namespace')) store.createIndex('namespace', 'namespace', { unique: false });
+      if (!store.indexNames.contains('taskId')) store.createIndex('taskId', 'metadata.taskId', { unique: false });
+      if (!store.indexNames.contains('projectId')) store.createIndex('projectId', 'metadata.projectId', { unique: false });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -298,36 +312,73 @@ export async function addChunks(
 /**
  * Semantic search across the vector memory store.
  *
+ * Supports both positional arguments and an options object:
+ *   searchMemory(query, { namespace, topK, minSimilarity, projectId, excludeTaskId })
+ *   searchMemory(query, namespace, topK, minSimilarity, projectId, excludeTaskId)
+ *
  * @param query - Natural language search query
- * @param namespace - Optional namespace filter (e.g. 'learnings', 'tasks')
+ * @param namespaceOrOptions - Optional namespace filter (e.g. 'learnings', 'tasks') or SearchMemoryOptions
  * @param topK - Maximum number of results to return (default: 5)
  * @param minSimilarity - Minimum cosine similarity threshold (default: 0.3)
+ * @param projectId - Optional project ID filter (strictly isolates memory to the active project)
+ * @param excludeTaskId - Optional task ID to exclude (prevents a task from matching its own prior runs)
  * @returns Sorted array of search results with similarity scores
  */
 export async function searchMemory(
   query: string,
-  namespace?: MemoryNamespace,
+  namespaceOrOptions?: MemoryNamespace | SearchMemoryOptions,
   topK = 5,
-  minSimilarity = 0.3
+  minSimilarity = 0.3,
+  projectId?: string,
+  excludeTaskId?: string | number
 ): Promise<SearchResult[]> {
+  let namespace: MemoryNamespace | undefined;
+  let effectiveTopK = topK;
+  let effectiveMinSim = minSimilarity;
+  let effectiveProjectId = projectId;
+  let effectiveExcludeTaskId = excludeTaskId;
+
+  if (typeof namespaceOrOptions === 'object' && namespaceOrOptions !== null) {
+    namespace = namespaceOrOptions.namespace;
+    effectiveTopK = namespaceOrOptions.topK ?? 5;
+    effectiveMinSim = namespaceOrOptions.minSimilarity ?? 0.3;
+    effectiveProjectId = namespaceOrOptions.projectId;
+    effectiveExcludeTaskId = namespaceOrOptions.excludeTaskId;
+  } else {
+    namespace = namespaceOrOptions;
+  }
+
   const cache = await ensureCacheLoaded();
   if (cache.length === 0) return [];
 
   const queryEmb = await embed(query);
   if (!queryEmb) return [];
 
-  const candidates = namespace ? cache.filter((c) => c.namespace === namespace) : cache;
+  let candidates = namespace ? cache.filter((c) => c.namespace === namespace) : cache;
+
+  // Strict project isolation: only return memory chunks created within the specified project
+  if (effectiveProjectId) {
+    candidates = candidates.filter((c) => c.metadata.projectId === effectiveProjectId);
+  }
+
+  // Self-exclusion: omit chunks belonging to the currently running task
+  if (effectiveExcludeTaskId != null) {
+    const strExclude = String(effectiveExcludeTaskId);
+    candidates = candidates.filter(
+      (c) => c.metadata.taskId == null || String(c.metadata.taskId) !== strExclude
+    );
+  }
 
   const scored: SearchResult[] = [];
   for (const chunk of candidates) {
     const sim = cosineSimilarity(queryEmb, chunk.embedding);
-    if (sim >= minSimilarity) {
+    if (sim >= effectiveMinSim) {
       scored.push({ chunk, similarity: sim });
     }
   }
 
   scored.sort((a, b) => b.similarity - a.similarity);
-  return scored.slice(0, topK);
+  return scored.slice(0, effectiveTopK);
 }
 
 /**
@@ -365,14 +416,54 @@ export async function removeChunksById(ids: string[]): Promise<number> {
 }
 
 /**
- * Remove all chunks associated with a specific task ID.
+ * Remove all chunks associated with a specific task ID, optionally scoped to a project.
  */
-export async function removeChunksByTaskId(taskId: string | number): Promise<number> {
+export async function removeChunksByTaskId(
+  taskId: string | number,
+  projectId?: string
+): Promise<number> {
   const cache = await ensureCacheLoaded();
+  const strTaskId = String(taskId);
   const matchingIds = cache
-    .filter((c) => c.metadata.taskId != null && String(c.metadata.taskId) === String(taskId))
+    .filter((c) => {
+      if (c.metadata.taskId == null) return false;
+      const matchesTask = String(c.metadata.taskId) === strTaskId;
+      if (!matchesTask) return false;
+      if (projectId && c.metadata.projectId && c.metadata.projectId !== projectId) {
+        return false;
+      }
+      return true;
+    })
     .map((c) => c.id);
   return removeChunksById(matchingIds);
+}
+
+/**
+ * Remove all chunks associated with a specific project ID.
+ */
+export async function removeChunksByProjectId(projectId: string): Promise<number> {
+  if (!projectId) return 0;
+  const cache = await ensureCacheLoaded();
+  const matchingIds = cache
+    .filter((c) => c.metadata.projectId != null && String(c.metadata.projectId) === String(projectId))
+    .map((c) => c.id);
+  return removeChunksById(matchingIds);
+}
+
+/**
+ * Clear all chunks belonging to a project (convenience alias).
+ */
+export async function clearProjectMemory(projectId: string): Promise<number> {
+  return removeChunksByProjectId(projectId);
+}
+
+/**
+ * Remove all chunks in vector memory across all namespaces and projects (full database reset).
+ */
+export async function clearAllMemory(): Promise<number> {
+  const cache = await ensureCacheLoaded();
+  const allIds = cache.map((c) => c.id);
+  return removeChunksById(allIds);
 }
 
 /**
@@ -387,17 +478,24 @@ export async function clearNamespace(namespace: MemoryNamespace): Promise<number
 /**
  * Get all chunks in a namespace (for display/inspection without search).
  */
-export async function getChunksByNamespace(namespace: MemoryNamespace): Promise<MemoryChunk[]> {
+export async function getChunksByNamespace(namespace: MemoryNamespace, projectId?: string): Promise<MemoryChunk[]> {
   const cache = await ensureCacheLoaded();
-  return cache.filter((c) => c.namespace === namespace);
+  let filtered = cache.filter((c) => c.namespace === namespace);
+  if (projectId) {
+    filtered = filtered.filter((c) => c.metadata.projectId === projectId);
+  }
+  return filtered;
 }
 
 /**
- * Get total chunk count, optionally filtered by namespace.
+ * Get total chunk count, optionally filtered by namespace and project.
  */
-export async function getChunkCount(namespace?: MemoryNamespace): Promise<number> {
+export async function getChunkCount(namespace?: MemoryNamespace, projectId?: string): Promise<number> {
   const cache = await ensureCacheLoaded();
-  return namespace ? cache.filter((c) => c.namespace === namespace).length : cache.length;
+  let filtered = cache;
+  if (namespace) filtered = filtered.filter((c) => c.namespace === namespace);
+  if (projectId) filtered = filtered.filter((c) => c.metadata.projectId === projectId);
+  return filtered.length;
 }
 
 /**

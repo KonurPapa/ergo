@@ -76,7 +76,24 @@
             - each agent should approach its plan in a different way from the previous plans, so there are varied approaches and ideas
                 - how do we do this without bloating a new agent's context with every other previous plan?
             - "best" is determined by which one adheres most strictly to the outcome/goal already determined by the initial context assembly AI
-        - research this more and/or have AI put together a plan on what it thinks this should look likeg
+        - research this more and/or have AI put together a plan on what it thinks this should look like
+
+
+
+**Why Software Factories Fail video notes**:
+This video, by Dex Horthy of HumanLayer, addresses the failure of "lights-off" software factories—agentic systems where code is generated and merged without human review. Horthy argues that while these systems can increase raw output, they fail to maintain long-term codebase health because current models are trained primarily to pass tests rather than ensure architectural maintainability. He posits that maintainability is a model training problem that cannot be solved through more tokens or complex harness engineering alone.
+Highlights for your application:
+
+    Planning as a First-Class Citizen (15:00-16:45): Horthy advocates for "turning the lights back on" by integrating human-led planning stages before agent execution. This includes:
+        Product Review: Defining requirements and mockups.
+        System Architecture: Mapping component contracts and data models.
+        Program Design (Underemphasized): Designing types, method signatures, and call graphs specifically for the agent to follow.
+        Vertical Slices: Implementing and verifying features in cohesive, testable units.
+    Transparency through Alignment (16:45-17:30): Horthy notes that 30 minutes of upfront alignment can save hours of review. If you are building a collaborative workspace, prioritize tools that allow humans to verify the design of the code before it is written, rather than just reviewing the final PR.
+    The "Bad PR" Bottleneck (17:05-17:30): If teams feel overwhelmed by PR volume, it is often due to "bad PRs"—code that requires significant rework. A collaborative workspace should aim to reduce rework by making the agent's intent and design explicit upfront.
+    Future of Verifiers (13:18-14:31): He emphasizes that better benchmarks and verifiers are needed to measure maintainability, suggesting that the industry is still moving toward models that can truly understand "good code".
+
+For your collaborative workspace, focus on model-assisted planning, where the AI helps create the structural design (types, call graphs) before it writes the implementation. This increases transparency, ensures the human retains ownership, and prevents the "code slop" typical of purely agentic loops.
 
 
 
@@ -108,3 +125,4 @@
     - ability to create a code-formatting doc
         - is this just part of global rules?
     - microphone access to add/edit tasks
+    - we need a screen for reading what the AI has saved in vector storage, and modifying as the user wants

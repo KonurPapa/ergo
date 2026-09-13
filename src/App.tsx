@@ -30,7 +30,13 @@ import {
 } from './lib/parser';
 import { readFilesFromDisk, createProjectOnDisk } from './lib/fileSystem';
 import { storageManager } from './lib/storageManager';
-import { preWarmEmbeddings } from './lib/memory';
+import {
+  preWarmEmbeddings,
+  migrateAgentContextToMemory,
+  removeChunksByTaskId,
+  clearProjectMemory,
+  clearAllMemory
+} from './lib/memory';
 import { useAutosave } from './hooks/useAutosave';
 import { SUPPORTED_AI_PROVIDERS } from './lib/aiProviders';
 import { Navbar } from './components/Navbar';
@@ -46,6 +52,7 @@ import { OnboardingModal } from './components/OnboardingModal';
 import { ToastContainer, type ToastMessage } from './components/Toast';
 import { executeTaskWithAi, syncTaskOverviewWithAi } from './lib/ai';
 import { DEFAULT_AGENT_PIPELINE_OPTIONS } from './lib/agentPipeline/contracts';
+import { formatOverviewDocToMarkdown } from './lib/agentPipeline/summary';
 
 /** Merge persisted (possibly partial / stale) pipeline settings over the defaults, ignoring undefined values. */
 function mergeAgentPipelineOptions(
@@ -59,7 +66,6 @@ function mergeAgentPipelineOptions(
   if (typeof patch.maxToolRoundsPerAgent === 'number' && Number.isFinite(patch.maxToolRoundsPerAgent)) next.maxToolRoundsPerAgent = patch.maxToolRoundsPerAgent;
   if (typeof patch.enableCleaner === 'boolean') next.enableCleaner = patch.enableCleaner;
   if (typeof patch.enableHardener === 'boolean') next.enableHardener = patch.enableHardener;
-  if (typeof patch.discoveryRelevanceThreshold === 'number' && Number.isFinite(patch.discoveryRelevanceThreshold)) next.discoveryRelevanceThreshold = patch.discoveryRelevanceThreshold;
   return next;
 }
 
@@ -333,7 +339,6 @@ export function App() {
       return {
         provider: activeKey.provider,
         model: activeKey.generalModel || activeKey.model || pMeta?.defaultGeneralModel || 'gpt-4o',
-        discoveryModel: activeKey.discoveryModel || pMeta?.defaultDiscoveryModel || 'gpt-4o-mini',
         summaryModel: activeKey.summaryModel || pMeta?.defaultSummaryModel || activeKey.generalModel || activeKey.model || 'gpt-4o',
         generalModel: activeKey.generalModel || activeKey.model || pMeta?.defaultGeneralModel || 'gpt-4o',
         workerModel: activeKey.workerModel || undefined,
@@ -357,7 +362,6 @@ export function App() {
       setAiConfig({
         provider: activeKey.provider,
         model: activeKey.generalModel || activeKey.model || pMeta?.defaultGeneralModel || pMeta?.defaultModel || 'gpt-4o',
-        discoveryModel: activeKey.discoveryModel || pMeta?.defaultDiscoveryModel || 'gpt-4o-mini',
         summaryModel: activeKey.summaryModel || pMeta?.defaultSummaryModel || activeKey.generalModel || activeKey.model || 'gpt-4o',
         generalModel: activeKey.generalModel || activeKey.model || pMeta?.defaultGeneralModel || pMeta?.defaultModel || 'gpt-4o',
         workerModel: activeKey.workerModel || undefined,
@@ -730,7 +734,7 @@ export function App() {
         }
       }
 
-      const parsedBriefsWithArchive = parseAgentContextWithArchive(effectiveAgentMd);
+      const parsedBriefsWithArchive = parseAgentContextWithArchive(effectiveAgentMd || '');
 
       setTasks(allActiveTasks);
       setArchivedTasks(allArchivedTasks);
@@ -739,6 +743,18 @@ export function App() {
       setArchivedBriefs(parsedBriefsWithArchive.archivedItems);
 
       if (parsedBriefsWithArchive.items.length > 0) {
+        migrateAgentContextToMemory(
+          parsedBriefsWithArchive.items.map((b) => ({
+            id: String(b.sourceTaskId || b.id || b.itemNumber || '').replace(/^brief_/, ''),
+            title: b.title || '',
+            overview: b.overview || b.brief || '',
+            completion: b.completion || '',
+            projectId: activeProjectId,
+          }))
+        ).catch((err) => {
+          console.warn('[Ergo] Background migration of briefs to memory failed:', err);
+        });
+
         const firstBrief = parsedBriefsWithArchive.items[0];
         const defaultId = firstBrief.sourceTaskId || firstBrief.id || firstBrief.itemNumber || null;
         setSelectedTaskId((prev) =>
@@ -932,11 +948,7 @@ export function App() {
       )
     );
 
-    const agentPath = activeProject?.agentContextFilePath || `${activeProject?.folderPath}/AGENT_CONTEXT.md`;
-    const filesToSave = [
-      ...effectiveLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
-      { filePath: agentPath, content: updatedBriefsMd }
-    ];
+    const filesToSave = effectiveLanes.map((l) => ({ filePath: l.filePath, content: l.markdown }));
 
     if (immediateDiskSave) {
       autosave.saveImmediately(filesToSave);
@@ -959,7 +971,7 @@ export function App() {
     showToast({
       type: 'info',
       title: 'AI Changes Undone',
-      message: 'Reverted previous AI assistant changes to TODO.md and AGENT_CONTEXT.md.'
+      message: 'Reverted previous AI assistant changes to TODO.md.'
     });
   }, [aiUndoSnapshot, showToast]);
 
@@ -1206,8 +1218,32 @@ export function App() {
               } else {
                 next = [...existing, stepUpdate];
               }
+              if (stepUpdate.status === 'error' || stepUpdate.status === 'cancelled') {
+                next = next.map((s) =>
+                  s.id !== stepUpdate.id && s.status === 'running'
+                    ? { ...s, status: stepUpdate.status === 'cancelled' ? 'cancelled' : 'error' }
+                    : s
+                );
+              }
               return { ...prev, [task.id]: next };
             });
+
+            // If Summary AI finished with an overview document, populate the live brief immediately
+            if (stepUpdate.stage === 'overview' && stepUpdate.status === 'success' && stepUpdate.overviewDocument) {
+              const generatedMarkdown = formatOverviewDocToMarkdown(stepUpdate.overviewDocument);
+              const gherkinText = stepUpdate.overviewDocument.brief || '';
+              if (generatedMarkdown || gherkinText) {
+                setBriefs((prevBriefs) =>
+                  prevBriefs.map((b) =>
+                    (b.sourceTaskId != null && b.sourceTaskId === task.id) ||
+                    b.title.trim().toLowerCase() === task.title.trim().toLowerCase() ||
+                    b.itemNumber === task.id
+                      ? { ...b, overview: generatedMarkdown || b.overview, brief: gherkinText || b.brief }
+                      : b
+                  )
+                );
+              }
+            }
           },
           (permissionPrompt) => {
             return new Promise<boolean>((resolve) => {
@@ -1538,6 +1574,8 @@ export function App() {
     const taskToDelete = archivedTasks.find((t) => t.id === taskId);
     if (!taskToDelete) return;
 
+    void removeChunksByTaskId(taskToDelete.id, activeProjectId);
+
     const normalTitle = taskToDelete.title.trim().toLowerCase();
     const nextArchivedTasks = archivedTasks.filter((t) => t.id !== taskToDelete.id);
     const nextArchivedBriefs = archivedBriefs.filter(
@@ -1587,11 +1625,9 @@ export function App() {
     );
 
     const todoPath = activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`;
-    const agentPath = activeProject?.agentContextFilePath || `${activeProject?.folderPath}/AGENT_CONTEXT.md`;
 
     autosave.queueSave([
-      { filePath: todoPath, content: currentTodoMd },
-      { filePath: agentPath, content: updatedBriefsMd }
+      { filePath: todoPath, content: currentTodoMd }
     ]);
   };
 
@@ -1837,9 +1873,6 @@ export function App() {
       )
     );
 
-    const agentPath = activeProject.agentContextFilePath || `${activeProject.folderPath}/AGENT_CONTEXT.md`;
-    const updatedBriefsMd = serializeAgentContextMarkdown(briefs, archivedBriefs);
-
     if (oldFilePath !== newFilePath) {
       // Call rename API to move old file to new file on disk
       fetch('/api/files/rename', {
@@ -1855,10 +1888,9 @@ export function App() {
       });
     }
 
-    autosave.saveImmediately([
-      ...nextLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
-      { filePath: agentPath, content: updatedBriefsMd }
-    ]);
+    autosave.saveImmediately(
+      nextLanes.map((l) => ({ filePath: l.filePath, content: l.markdown }))
+    );
 
     showToast({
       type: 'info',
@@ -1890,6 +1922,12 @@ export function App() {
     }
 
     const removedLane = currentLanes.find((l) => l.id === laneId);
+    if (removedLane) {
+      const removedParsed = parseSwimLaneMarkdown(removedLane, 0);
+      for (const t of [...removedParsed.items, ...removedParsed.archivedItems]) {
+        void removeChunksByTaskId(t.id, activeProjectId);
+      }
+    }
     const nextLanes = currentLanes.filter((l) => l.id !== laneId);
 
     // Re-parse remaining tasks
@@ -1992,12 +2030,9 @@ export function App() {
       )
     );
 
-    const agentPath = activeProject?.agentContextFilePath || `${activeProject?.folderPath}/AGENT_CONTEXT.md`;
-
-    autosave.saveImmediately([
-      ...currentLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
-      { filePath: agentPath, content: newAgentContextMd }
-    ]);
+    autosave.saveImmediately(
+      currentLanes.map((l) => ({ filePath: l.filePath, content: l.markdown }))
+    );
   };
 
   // Export Project Files uniquely named by folder path
@@ -2025,13 +2060,7 @@ export function App() {
       }, idx * 250);
     });
 
-    setTimeout(() => {
-      const briefBlob = new Blob([serializeAgentContextMarkdown(briefs, archivedBriefs)], { type: 'text/markdown' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(briefBlob);
-      a.download = `${folderSlug}_AGENT_CONTEXT.md`;
-      a.click();
-    }, currentLanes.length * 250 + 100);
+
   };
 
   // Create New Linked Project in Main Directory Structure & Write to Disk
@@ -2066,13 +2095,31 @@ export function App() {
           markdown: activeProject?.todoMarkdown || ''
         }];
 
-    const agentPath = activeProject?.agentContextFilePath || `${activeProject?.folderPath}/AGENT_CONTEXT.md`;
-    const agentMd = serializeAgentContextMarkdown(briefs);
+    autosave.saveImmediately(
+      currentLanes.map((l) => ({ filePath: l.filePath, content: l.markdown }))
+    );
+  };
 
-    autosave.saveImmediately([
-      ...currentLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
-      { filePath: agentPath, content: agentMd }
-    ]);
+  // Clear Vector Memory for Active Project
+  const handleClearActiveProjectMemory = async (): Promise<number> => {
+    const removed = await clearProjectMemory(activeProjectId);
+    showToast({
+      type: 'success',
+      title: 'Project Memory Cleared',
+      message: `Cleared ${removed} vector memory chunk(s) for "${activeProject?.name || activeProjectId}".`
+    });
+    return removed;
+  };
+
+  // Clear All Vector Memory Across All Projects
+  const handleClearAllMemory = async (): Promise<number> => {
+    const removed = await clearAllMemory();
+    showToast({
+      type: 'success',
+      title: 'Vector Memory Reset',
+      message: `Cleared all ${removed} chunk(s) from local vector memory across all projects.`
+    });
+    return removed;
   };
 
   const runningTaskIds = useMemo(() => {
@@ -2318,6 +2365,8 @@ export function App() {
         onThemeChange={setTheme}
         agentPipelineOptions={agentPipelineOptions}
         onSetAgentPipelineOptions={setAgentPipelineOptions}
+        onClearProjectMemory={handleClearActiveProjectMemory}
+        onClearAllMemory={handleClearAllMemory}
       />
 
       {/* Modal 8: Local Root Directory Picker */}

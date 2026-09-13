@@ -31,6 +31,7 @@ import { type BibleStore, type FileLockRegistry, normalizePath } from './bible';
 import { runToolLoop } from './providerLoop';
 import { createToolExecutor } from './toolExecutor';
 import { loadPipelineSkill } from './skills';
+import { verifyDeliverableHealth } from './verifier';
 
 export interface ManagerRunResult {
   pieces: PuzzlePiece[];
@@ -67,9 +68,17 @@ You are executing a straightforward, standalone deliverable task directly withou
 YOUR MISSION:
 1. Review the TASK_CONTEXT bible (Gherkin acceptance criteria, goals, and output destination).
 2. Call the write_file tool to write the complete, high-quality, fully functioning deliverable to the exact target destination.
-3. If the task is an HTML game, script, or page, include all HTML, CSS, and JavaScript in that file so it executes cleanly and independently in a browser.
-4. Verify your work with read_file, get_file_info, or run_command if relevant.
-5. Reply with a condensed summary of what you built and verified, followed by the final line:
+3. MANDATORY COMPLETENESS RULE:
+   - Skeletons, placeholder bodies, empty canvases, or partial outlines are STRICTLY PROHIBITED.
+   - All checklist goals and acceptance scenarios MUST be fully implemented and working in the deliverable.
+   - If the task is a game or interactive application, you must implement the full game loop, player rendering, keyboard input listeners (WASD/arrows), collision detection, scoring, and win states.
+   - If the task is writing or research, provide full, finished content rather than placeholders or stubs.
+4. If the task is an HTML game, script, or page, include all HTML, CSS, and JavaScript in that file so it executes cleanly and independently in a browser without external CDN dependencies.
+5. STRICT VARIABLE DECLARATIONS & STARTUP INTEGRITY:
+   - Ensure every variable, constant, and parameter is strictly declared (with let, const, or function args). Never reference undeclared variables (like dx, dy, x, y) that cause runtime ReferenceErrors.
+   - All initialization routines, event listeners, and animation loops (initGame, drawPlayer, gameLoop, etc.) must execute cleanly on initial load with 0 console errors. The pipeline automatically boots and smoke-tests every created page and endpoint in a sandboxed runtime before accepting your work.
+6. Verify your work with read_file, get_file_info, or run_command if relevant.
+7. Reply with a condensed summary of what you built and verified, followed by the final line:
 STATUS: DONE
 or if genuinely blocked:
 STATUS: FAILED — <reason>
@@ -98,8 +107,7 @@ export function isStraightforwardTask(bible: BibleStore): boolean {
   const titleText = (bible.sections.title || '').toLowerCase();
   const isSingleFileDeliverable =
     /\.(html|htm|jsx|tsx|vue|svelte|py|sh|ts|js|md|json|css|sql)\b/i.test(outputText) ||
-    /build an? (?:html|browser|standalone|simple) (?:game|page|script|app|tool)/i.test(titleText) ||
-    /create an? (?:html|browser|standalone|simple) (?:game|page|script|app|tool)/i.test(titleText);
+    /(?:build|create|make)\s+an?\s+(?:html|browser|standalone|simple|2d)?\s*(?:game|page|script|app|tool|website)/i.test(titleText);
 
   if (isSingleFileDeliverable && subtasks.length <= 3) {
     return true;
@@ -379,10 +387,11 @@ export async function runManager(
       `- Task kind: ${bible.sections.metadata.taskKind}\n` +
       `- Output destination: ${bible.sections.outputAs}\n` +
       `- Scenarios to cover (${scenarioTitles.length}): ${scenarioTitles.map((t) => `"${t}"`).join(', ') || '(cover the whole brief)'}\n` +
+      `- Deliverable Goals checklist:\n${bible.sections.goals || '(complete all task requirements)'}\n` +
       (attempt > 1 && priorFailureDiagnostics
         ? `\n## Prior attempt failed QA — fix exactly these:\n${priorFailureDiagnostics}\n\n${bible.renderEventLog({ last: 15 })}\n`
         : '') +
-      `\nProduce the required deliverable cleanly, verify your work with commands/evidence, and reply with a condensed summary ending with "STATUS: DONE".`;
+      `\nProduce the complete, fully functioning deliverable per all goals and scenarios (no placeholder skeletons/stubs), verify your work with commands/evidence, and reply with a condensed summary ending with "STATUS: DONE".`;
 
     const CORE_DIRECT_TOOL_NAMES = new Set(['write_file', 'edit_file', 'read_file', 'list_directory', 'get_file_info', 'run_command', 'ask_human']);
     const directTools = managerTarget.provider === 'ollama'
@@ -405,7 +414,7 @@ export async function runManager(
       sharedContext: managerContext,
       tools: directTools,
       initialUserMessage: directMessage,
-      maxRounds: Math.min(8, Math.max(5, ctx.options.maxToolRoundsPerAgent)),
+      maxRounds: Math.min(3, Math.max(2, ctx.options.maxToolRoundsPerAgent)),
       maxTokens: 8000,
       onToolCalls: executor
     });
@@ -476,6 +485,85 @@ export async function runManager(
       }
     }
 
+    // 2. Automated Startup Smoke Test across ALL created files & endpoints
+    let healthReport = await verifyDeliverableHealth(Array.from(createdFiles));
+    if (!healthReport.ok) {
+      bible.appendEvent({
+        actor: 'pipeline',
+        kind: 'verify',
+        text: `Deliverable startup smoke test caught errors:\n${healthReport.summaryText}`
+      });
+      await bible.persist();
+
+      ctx.emit({
+        id: `${directStepId}-smoke-test`,
+        stage: 'verify',
+        agentRole: 'manager',
+        title: 'Startup Verification: Runtime Errors Detected',
+        detail: healthReport.summaryText.slice(0, 400),
+        status: 'warning'
+      });
+
+      // Targeted single-round remediation prompt
+      const remediationMsg =
+        `CRITICAL STARTUP VERIFICATION ERROR:\n` +
+        `The deliverable you wrote failed automated startup smoke testing with the following runtime/syntax errors:\n\n` +
+        `${healthReport.summaryText}\n\n` +
+        `DIAGNOSE & FIX:\n` +
+        `- Review the error messages and line numbers above.\n` +
+        `- Check for undeclared variables (ensure all variables are declared with let/const or passed as parameters).\n` +
+        `- Ensure all syntax is valid and all startup functions/game loops run without uncaught exceptions.\n` +
+        `- You MUST call write_file now to rewrite the complete, corrected file, or output the complete file in a code block.\n` +
+        `Reply with STATUS: DONE once fixed.`;
+
+      const remediationRes = await runToolLoop({
+        ...managerProviderBase,
+        model: managerModel,
+        stableSystem: MANAGER_DIRECT_STABLE,
+        sharedContext: managerContext,
+        tools: directTools,
+        initialUserMessage: remediationMsg,
+        maxRounds: 2,
+        maxTokens: 4000,
+        onToolCalls: executor
+      });
+      addUsage(usage, remediationRes.usage);
+      addUsage(ctx.usage, remediationRes.usage);
+
+      // Fallback: If the model emitted code blocks in text instead of calling write_file, save them!
+      const remBlocks = extractCodeBlocks(remediationRes.text);
+      if (remBlocks.length > 0 && targetFilePaths.length > 0) {
+        const targetPath = targetFilePaths[0];
+        const ext = targetPath.split('.').pop()?.toLowerCase() || '';
+        const bestBlock = remBlocks.find((b) => b.lang === ext || (ext === 'html' && (b.lang === 'html' || b.lang === 'htm' || b.code.includes('<html') || b.code.includes('<!DOCTYPE')))) || remBlocks[0];
+        if (bestBlock && bestBlock.code) {
+          const writeRes = await callMcpTool('mcp-filesystem', 'write_file', {
+            path: targetPath,
+            content: bestBlock.code
+          });
+          if (writeRes.success) {
+            createdFiles.add(normalizePath(targetPath));
+            bible.appendEvent({
+              actor: 'manager',
+              kind: 'info',
+              text: `Auto-extracted corrected deliverable code block from remediation text and saved to ${targetPath}.`
+            });
+          }
+        }
+      }
+
+      // Re-verify after remediation
+      healthReport = await verifyDeliverableHealth(Array.from(createdFiles));
+      if (healthReport.ok) {
+        bible.appendEvent({
+          actor: 'pipeline',
+          kind: 'info',
+          text: `Automated startup smoke test passed after remediation: ${healthReport.summaryText}`
+        });
+        await bible.persist();
+      }
+    }
+
     const hasFiles = createdFiles.size > 0;
     const isExplicitlyFailed = parsedStatus.status === 'FAILED';
     const isExplicitlyDone = parsedStatus.status === 'DONE';
@@ -483,13 +571,14 @@ export async function runManager(
       /status:\s*done\b/i.test(result.text) ||
       /\b(completed|successfully (created|built|written|generated)|finished)\b/i.test(result.text)
     );
-    const directOk = !isExplicitlyFailed && diskVerified && (
+    const directOk = !isExplicitlyFailed && diskVerified && healthReport.ok && (
       (isExplicitlyDone && (hasFiles || targetFilePaths.length === 0)) ||
       (hasFiles && !result.error && (isExplicitlyDone || textIndicatesSuccess))
     );
     let summary = condense(
+      (!healthReport.ok ? `Deliverable failed startup smoke test:\n${healthReport.summaryText}` : '') ||
       result.text.replace(/^\s*STATUS:.*$/im, '').trim() ||
-      (directOk ? 'Deliverable produced and self-verified.' : 'Direct execution finished without explicit DONE.')
+      (directOk ? 'Deliverable produced and startup-verified with 0 errors.' : 'Direct execution finished without explicit DONE.')
     );
     if (!diskVerified && missingTargetFiles.length > 0) {
       summary = `Deliverable file(s) missing on disk: ${missingTargetFiles.join(', ')}. Code was not written to target destination.`;
@@ -921,8 +1010,13 @@ export async function runManager(
       ? parsed.scenarioResults.map((r: any) => ({ scenario: String(r?.scenario ?? ''), pass: Boolean(r?.pass), evidence: String(r?.evidence ?? '') }))
       : [];
     allPass = Boolean(parsed?.allPass) && failedPieces.length === 0 && scenarioResults.every((r) => r.pass);
+    const healthReport = await verifyDeliverableHealth(Array.from(createdFiles));
+    if (!healthReport.ok) {
+      allPass = false;
+    }
     const failing = scenarioResults.filter((r) => !r.pass);
     verificationSummary =
+      (!healthReport.ok ? `[STARTUP SMOKE TEST FAILED] ${healthReport.summaryText} | ` : '') +
       (parsed
         ? `${allPass ? 'All scenarios pass.' : `${failing.length} failing scenario(s).`} ` +
           scenarioResults.map((r) => `${r.pass ? '✓' : '✗'} ${r.scenario}${r.evidence ? ` — ${condense(r.evidence, 240)}` : ''}`).join(' | ')

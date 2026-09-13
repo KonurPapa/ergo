@@ -10,7 +10,7 @@ import {
   type HumanInputPrompt
 } from '../types';
 import { executeTaskWithAi } from '../lib/ai';
-import { StepStatusIcon, StepUsageBadge, PieceChip, BiblePreview } from './ExecutionStepExtras';
+import { StepStatusIcon, StepUsageBadge, PieceChip, BiblePreview, BaselineContextPreview } from './ExecutionStepExtras';
 import { Play, X, CheckCircle2, Send, Layers, Code, ShieldAlert, ShieldCheck, HelpCircle } from 'lucide-react';
 
 interface ExecutionModalProps {
@@ -164,7 +164,7 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
             </div>
             <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-bright)' }}>{task.title}</h3>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
-              {brief?.brief?.slice(0, 140) || 'Executing task subtasks & logging build records to AGENT_CONTEXT.md.'}
+              {brief?.brief?.slice(0, 140) || 'Executing task subtasks & logging build records.'}
             </p>
           </div>
 
@@ -287,6 +287,7 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
                 </div>
 
                 <div className="step-detail" style={{ whiteSpace: 'pre-wrap' }}>{step.detail}</div>
+                {step.baselineContext && <BaselineContextPreview baselineContext={step.baselineContext} defaultOpen={true} />}
                 <BiblePreview markdown={step.bibleMarkdown} filePath={step.bibleMarkdown ? step.bibleFilePath : undefined} />
 
                 {/* Overview document preview if available */}

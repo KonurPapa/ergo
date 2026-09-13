@@ -305,7 +305,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         authMode: 'api_key',
         model: 'gemini-3.7-flash',
         generalModel: 'gemini-3.7-pro',
-        discoveryModel: 'gemini-2.0-flash',
         summaryModel: 'gemini-3.7-flash',
         isConnected: true,
         createdAt: new Date().toISOString()

@@ -33,8 +33,7 @@ export const DEFAULT_AGENT_PIPELINE_OPTIONS: AgentPipelineOptions = {
   maxQaRetries: 2,
   maxToolRoundsPerAgent: 10,
   enableCleaner: true,
-  enableHardener: true,
-  discoveryRelevanceThreshold: 50
+  enableHardener: true
 };
 
 /** Max characters of any single tool result fed back into a model (per-turn payload trimming). */
@@ -206,8 +205,6 @@ export function resolveModelForRole(config: AIProviderConfig, role: AgentRole): 
   }
   const general = config.generalModel || config.model || '';
   switch (role) {
-    case 'discovery':
-      return config.discoveryModel || general;
     case 'summary':
       return config.summaryModel || general;
     case 'logger':

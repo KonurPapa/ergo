@@ -9,6 +9,9 @@ export {
   addChunks,
   removeChunksById,
   removeChunksByTaskId,
+  removeChunksByProjectId,
+  clearProjectMemory,
+  clearAllMemory,
   clearNamespace,
   getChunksByNamespace,
   getChunkCount,
@@ -22,6 +25,7 @@ export {
   type MemoryChunk,
   type ChunkMetadata,
   type SearchResult,
+  type SearchMemoryOptions,
 } from './vectorEngine';
 
 export {

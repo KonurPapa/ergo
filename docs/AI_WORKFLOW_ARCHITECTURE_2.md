@@ -16,16 +16,14 @@ This document details the step-by-step logic, data flow, context boundaries, and
 
 ### Flow of logic:
 
-1. discovery agent
-    - fast, read-only reconnaissance using a lightweight/fast model (e.g. `gpt-4o-mini`, `gemini-2.5-flash`, `claude-3-5-haiku`, `llama3.2`) to acquire context quickly and cheaply
-    - scans task given by user and skims task headers **strictly across human swim lane documents** (e.g. `TODO.md` and user swim lanes) — does NOT read or index verbose `AGENT_CONTEXT.md` to prevent prompt bloat
-    - checks for project-level guideline files (e.g. `AGENTS.md` or `CLAUDE.md`) to establish baseline context
-    - detects dependencies, shared schemas, architectural precedents, and connected MCP tools
-    - assembles a clean, structured baseline **Markdown context document** (the start of the "Master Bible"), separating the byte-stable prefix (system prompt, static schemas, prompt caching anchors) from volatile per-task data
-    - once candidate tasks are confirmed as relevant, imports the full task context (including `AGENT_CONTEXT.md` details) only for those specific relevant tasks into the summary payload
-    - adheres to "pass pointers over payloads": passes concise summaries, task references, and file paths rather than dumping raw file blobs
+1. vector memory context assembly (zero tokens)
+    - deterministic, zero-token reconnaissance using the local vector database (`ergo-vector-memory`) and local guideline file reader
+    - queries local semantic memory for prior knowledge, architectural decisions, and completed task learnings matching the target task
+    - checks for project-level guideline files (`AGENTS.md` or `CLAUDE.md`) to establish baseline context
+    - detects connected MCP tools and target task subtasks
+    - assembles a clean, structured baseline **Markdown context document** (the start of the "Master Bible") handed directly to the Summary Agent at 0 token cost
 2. summary agent
-    - ingests the baseline Markdown context from discovery alongside active MCP tools
+    - ingests the baseline Markdown context from vector memory & guidelines alongside active MCP tools
     - synthesizes the authoritative **Overview & Execution Brief** directly into the structured Markdown context document:
         - **Gherkin scenarios (Given-When-Then structure)**:
             - use this as the basis for the 'brief' section in the output: https://www.geeksforgeeks.org/software-testing/writing-scenarios-with-gherkin-syntax/

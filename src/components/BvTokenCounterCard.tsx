@@ -7,7 +7,7 @@ import {
   type AgentRole
 } from '../types';
 import { emptyUsage, addUsage } from '../lib/agentPipeline/contracts';
-import { Zap, CheckCircle2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Zap, ChevronDown, ChevronRight } from 'lucide-react';
 
 export interface TaskTokenSummary {
   totalUsage: TokenUsage;
@@ -26,7 +26,6 @@ export function extractTaskTokenSummary(
   executionSteps?: ExecutionStep[]
 ): TaskTokenSummary {
   const roleMap: Record<AgentRole, TokenUsage> = {
-    discovery: emptyUsage(),
     summary: emptyUsage(),
     manager: emptyUsage(),
     worker: emptyUsage(),
@@ -111,12 +110,11 @@ export function extractTaskTokenSummary(
           };
           found = true;
         }
-      } catch {}
+      } catch { }
     }
   }
 
   const byRole: Record<AgentRole, { usage: TokenUsage; total: number }> = {
-    discovery: { usage: roleMap.discovery, total: roleMap.discovery.inputTokens + roleMap.discovery.outputTokens },
     summary: { usage: roleMap.summary, total: roleMap.summary.inputTokens + roleMap.summary.outputTokens },
     manager: { usage: roleMap.manager, total: roleMap.manager.inputTokens + roleMap.manager.outputTokens },
     worker: { usage: roleMap.worker, total: roleMap.worker.inputTokens + roleMap.worker.outputTokens },
@@ -139,21 +137,25 @@ interface BvTokenCounterCardProps {
   brief?: AgentContextItem;
   executionSteps?: ExecutionStep[];
   isExecuting?: boolean;
+  isTaskStarted?: boolean;
+  defaultBreakdownOpen?: boolean;
 }
 
 /**
- * Small card anchored to the top of the Build & Verification (BV) section.
- * Displays the complete, accurate running tally of all tokens used during the task
+ * Compact token usage card displaying the running tally of all tokens used
  * across all phases (Discovery, Summary, Manager, Workers, QA, etc.).
+ * Styled according to ShadCN design guidelines.
  */
 export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
   task,
   brief,
   executionSteps,
-  isExecuting = false
+  isExecuting = false,
+  isTaskStarted = false,
+  defaultBreakdownOpen = false
 }) => {
   const summary = extractTaskTokenSummary(task, brief, executionSteps);
-  const [showBreakdown, setShowBreakdown] = useState(true);
+  const [showBreakdown, setShowBreakdown] = useState(defaultBreakdownOpen);
 
   const { totalTokens, totalUsage, byRole, hasUsage } = summary;
   const { inputTokens, outputTokens, cachedInputTokens, cacheWriteTokens, calls } = totalUsage;
@@ -164,7 +166,6 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
   );
 
   const roleConfig: Record<AgentRole, { label: string; color: string; bg: string; border: string }> = {
-    discovery: { label: 'Discovery', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.08)', border: 'rgba(56, 189, 248, 0.2)' },
     summary: { label: 'Summary', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.08)', border: 'rgba(245, 158, 11, 0.2)' },
     manager: { label: 'Manager', color: '#818cf8', bg: 'rgba(129, 140, 248, 0.08)', border: 'rgba(129, 140, 248, 0.2)' },
     worker: { label: 'Workers', color: '#34d399', bg: 'rgba(52, 211, 153, 0.08)', border: 'rgba(52, 211, 153, 0.2)' },
@@ -173,27 +174,95 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
     logger: { label: 'Logger', color: '#94a3b8', bg: 'rgba(148, 163, 184, 0.08)', border: 'rgba(148, 163, 184, 0.2)' }
   };
 
+  // If task is not started and has no usage yet, display blank card with hint
+  if (!isTaskStarted && !hasUsage && !isExecuting) {
+    return (
+      <div
+        className="bv-token-counter-card is-unstarted"
+        style={{
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: '6px',
+          padding: '0.45rem 0.65rem',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.35rem',
+          transition: 'all 0.15s ease'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+            <div
+              style={{
+                width: '20px',
+                height: '20px',
+                borderRadius: '4px',
+                background: 'var(--btn-secondary-bg)',
+                border: '1px solid var(--border-subtle)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--text-muted)'
+              }}
+            >
+              <Zap size={11} color="var(--text-muted)" />
+            </div>
+            <span
+              style={{
+                fontSize: '0.72rem',
+                fontWeight: 600,
+                letterSpacing: '0.04em',
+                textTransform: 'uppercase',
+                color: 'var(--text-main)'
+              }}
+            >
+              Token Usage
+            </span>
+            <span
+              className="task-status-pill"
+              style={{
+                fontSize: '0.66rem',
+                fontWeight: 500,
+                padding: '0.06rem 0.4rem',
+                borderRadius: '9999px',
+                background: 'var(--btn-secondary-bg)',
+                color: 'var(--text-muted)',
+                border: '1px solid var(--border-subtle)'
+              }}
+            >
+              0 tokens
+            </span>
+          </div>
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
+            Not started
+          </span>
+        </div>
+        <div
+          className="ai-card-hint"
+          style={{
+            fontSize: '0.72rem',
+            color: 'var(--text-muted)',
+            fontStyle: 'italic',
+            padding: '0.2rem 0.1rem 0.1rem'
+          }}
+        >
+          Start the task to track token consumption across AI phases (Summary, Manager, Workers, QA, and Logger).
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className="bv-token-counter-card"
       style={{
-        position: 'sticky',
-        top: 0,
-        zIndex: 15,
-        backdropFilter: 'blur(12px)',
-        WebkitBackdropFilter: 'blur(12px)',
-        background: 'rgba(26, 28, 31, 0.94)',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-        borderLeft: '1px solid rgba(255, 255, 255, 0.07)',
-        borderRight: '1px solid rgba(255, 255, 255, 0.07)',
-        borderTop: '1px solid rgba(255, 255, 255, 0.07)',
-        borderRadius: '8px',
-        margin: '0.65rem 0.85rem 0.5rem 0.85rem',
-        padding: '0.6rem 0.85rem',
-        boxShadow: '0 4px 14px rgba(0, 0, 0, 0.22)',
+        background: 'var(--bg-card)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: '6px',
+        padding: '0.45rem 0.65rem',
         display: 'flex',
         flexDirection: 'column',
-        gap: '0.45rem',
+        gap: '0.4rem',
         transition: 'all 0.15s ease'
       }}
     >
@@ -205,15 +274,15 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
               width: '22px',
               height: '22px',
               borderRadius: '5px',
-              background: isExecuting ? 'rgba(6, 182, 212, 0.15)' : 'rgba(255, 255, 255, 0.05)',
-              border: `1px solid ${isExecuting ? 'rgba(6, 182, 212, 0.35)' : 'rgba(255, 255, 255, 0.1)'}`,
+              background: isExecuting ? 'rgba(6, 182, 212, 0.15)' : 'var(--btn-secondary-bg)',
+              border: `1px solid ${isExecuting ? 'rgba(6, 182, 212, 0.35)' : 'var(--border-subtle)'}`,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               color: isExecuting ? 'var(--accent-cyan)' : 'var(--text-muted)'
             }}
           >
-            <Zap size={12} color={isExecuting ? '#06b6d4' : '#a1a1aa'} />
+            <Zap size={12} color={isExecuting ? '#06b6d4' : 'var(--text-muted)'} />
           </div>
           <span
             style={{
@@ -228,7 +297,7 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
           </span>
 
           {/* Running vs Done vs Standby status pill */}
-          {isExecuting ? (
+          {isExecuting && (
             <span
               className="task-status-pill"
               style={{
@@ -245,41 +314,7 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
               }}
             >
               <span className="live-pulse-dot" style={{ width: '6px', height: '6px' }} />
-              <span>Tallying Live</span>
-            </span>
-          ) : hasUsage ? (
-            <span
-              className="task-status-pill"
-              style={{
-                fontSize: '0.68rem',
-                fontWeight: 600,
-                padding: '0.08rem 0.45rem',
-                borderRadius: '9999px',
-                background: 'rgba(16, 185, 129, 0.12)',
-                color: '#10b981',
-                border: '1px solid rgba(16, 185, 129, 0.25)',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '0.25rem'
-              }}
-            >
-              <CheckCircle2 size={10} />
-              <span>Final Tally</span>
-            </span>
-          ) : (
-            <span
-              className="task-status-pill"
-              style={{
-                fontSize: '0.68rem',
-                fontWeight: 500,
-                padding: '0.08rem 0.45rem',
-                borderRadius: '9999px',
-                background: 'rgba(255, 255, 255, 0.04)',
-                color: 'var(--text-muted)',
-                border: '1px solid rgba(255, 255, 255, 0.1)'
-              }}
-            >
-              Ready
+              <span>Calculating...</span>
             </span>
           )}
         </div>
@@ -291,7 +326,7 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
               fontFamily: 'var(--font-mono)',
               fontSize: '1.15rem',
               fontWeight: 700,
-              color: '#ffffff',
+              color: 'var(--text-bright)',
               letterSpacing: '-0.02em',
               textShadow: isExecuting ? '0 0 12px rgba(6, 182, 212, 0.3)' : 'none'
             }}
@@ -324,14 +359,14 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
               fontSize: '0.72rem',
               padding: '0.1rem 0.42rem',
               borderRadius: '4px',
-              background: 'rgba(255, 255, 255, 0.04)',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
+              background: 'var(--btn-secondary-bg)',
+              border: '1px solid var(--border-subtle)',
               whiteSpace: 'nowrap'
             }}
             title="Total input/prompt tokens sent across all LLM calls"
           >
             <span style={{ color: 'var(--text-dim)', marginRight: '0.25rem' }}>In:</span>
-            <strong style={{ color: '#fff' }}>{inputTokens.toLocaleString()}</strong>
+            <strong style={{ color: 'var(--text-bright)' }}>{inputTokens.toLocaleString()}</strong>
             {cachedInputTokens > 0 && (
               <span style={{ color: 'var(--accent-emerald)', marginLeft: '0.25rem' }} title="Input tokens read from prompt cache">
                 ({cachedInputTokens.toLocaleString()} cached)
@@ -351,8 +386,8 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
               fontSize: '0.72rem',
               padding: '0.1rem 0.42rem',
               borderRadius: '4px',
-              background: 'rgba(255, 255, 255, 0.04)',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
+              background: 'var(--btn-secondary-bg)',
+              border: '1px solid var(--border-subtle)',
               whiteSpace: 'nowrap'
             }}
             title="Total output/generation tokens received across all LLM calls"
@@ -368,14 +403,14 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
               fontSize: '0.72rem',
               padding: '0.1rem 0.42rem',
               borderRadius: '4px',
-              background: 'rgba(255, 255, 255, 0.04)',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
+              background: 'var(--btn-secondary-bg)',
+              border: '1px solid var(--border-subtle)',
               whiteSpace: 'nowrap'
             }}
-            title="Total LLM round trips across Discovery, Summary, Manager, Workers, QA, and Logger"
+            title="Total LLM round trips across Summary, Manager, Workers, QA, and Logger"
           >
             <span style={{ color: 'var(--text-dim)', marginRight: '0.25rem' }}>Calls:</span>
-            <strong style={{ color: '#fff' }}>{calls}</strong>
+            <strong style={{ color: 'var(--text-bright)' }}>{calls}</strong>
           </span>
         </div>
 
@@ -405,7 +440,7 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
         )}
       </div>
 
-      {/* Bottom Stage Breakdown Row: Discovery, Summary, Manager, Workers, QA, Logger */}
+      {/* Bottom Stage Breakdown Row: Summary, Manager, Workers, QA, Logger */}
       {showBreakdown && activeRoles.length > 0 && (
         <div
           style={{
@@ -478,9 +513,9 @@ export const BvHeaderTokenBadge: React.FC<BvTokenCounterCardProps> = ({
         fontSize: '0.72rem',
         fontFamily: 'var(--font-mono)',
         fontWeight: 600,
-        color: isExecuting ? 'var(--accent-cyan)' : 'rgba(255, 255, 255, 0.85)',
-        background: isExecuting ? 'rgba(6, 182, 212, 0.08)' : 'rgba(255, 255, 255, 0.04)',
-        border: `1px solid ${isExecuting ? 'rgba(6, 182, 212, 0.28)' : 'rgba(255, 255, 255, 0.1)'}`,
+        color: isExecuting ? 'var(--accent-cyan)' : 'var(--text-main)',
+        background: isExecuting ? 'rgba(6, 182, 212, 0.08)' : 'var(--btn-secondary-bg)',
+        border: `1px solid ${isExecuting ? 'rgba(6, 182, 212, 0.28)' : 'var(--border-subtle)'}`,
         padding: '0.15rem 0.45rem',
         borderRadius: '4px'
       }}

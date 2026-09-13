@@ -16,9 +16,7 @@ import {
   CheckCheck,
   AlertCircle,
   Clock,
-  Settings,
-  PanelRightClose,
-  PanelRightOpen
+  Settings
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -68,9 +66,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   autosaveStatus,
   autosaveDelaySec,
   isAutosaveEnabled,
-  isAiPanelOpen = true,
-  onToggleAiPanel,
-  runningAiTaskCount = 0
+  isAiPanelOpen: _isAiPanelOpen = true,
+  onToggleAiPanel: _onToggleAiPanel,
+  runningAiTaskCount: _runningAiTaskCount = 0
 }) => {
   const connectedCount = mcpServers.filter((s) => s.status === 'connected').length;
 
@@ -440,7 +438,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </button>
 
         {/* Download & Preview Markdown Files Button */}
-        <button className="btn btn-secondary btn-icon-only" onClick={onOpenRawMarkdownModal} title="Preview and Download TODO.md & AGENT_CONTEXT.md">
+        <button className="btn btn-secondary btn-icon-only" onClick={onOpenRawMarkdownModal} title="Preview and Download Workspace Markdown Files">
           <Download size={16} color="var(--accent-cyan)" />
           {/* <span>Download</span> */}
         </button>
@@ -452,7 +450,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </button>
 
         {/* Toggle Popout AI Workspace Panel */}
-        {onToggleAiPanel && (
+        {/* {onToggleAiPanel && (
           <button
             type="button"
             className={`btn btn-secondary btn-ai-panel-toggle ${isAiPanelOpen ? 'is-active' : ''}`}
@@ -470,7 +468,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               <span className="live-pulse-dot" title={`${runningAiTaskCount} task${runningAiTaskCount > 1 ? 's' : ''} running`} style={{ width: '7px', height: '7px' }} />
             )}
           </button>
-        )}
+        )} */}
       </div>
     </header>
   );

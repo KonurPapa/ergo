@@ -62,6 +62,8 @@ function truncate(text: string | undefined, max: number): string {
   return clean.length > max ? clean.slice(0, max - 1) + '…' : clean;
 }
 
+import { type SearchResult } from '../memory';
+
 export function buildBibleSections(args: {
   task: TaskItem;
   project: ProjectData;
@@ -71,10 +73,56 @@ export function buildBibleSections(args: {
   requiresHardener?: boolean;
   hardenerReason?: string;
   allowedRoots: McpRootBoundary[];
-  discoveryPayload: DiscoveryJobPayload;
+  guidelines?: Array<{ path: string; excerpt: string }>;
+  memoryHits?: SearchResult[];
+  discoveryPayload?: DiscoveryJobPayload;
   runId: string;
 }): BibleSections {
-  const { task, project, overviewDoc, requiredMcps, taskKind, requiresHardener, hardenerReason, allowedRoots, discoveryPayload, runId } = args;
+  const {
+    task,
+    project,
+    overviewDoc,
+    requiredMcps,
+    taskKind,
+    requiresHardener,
+    hardenerReason,
+    allowedRoots,
+    guidelines,
+    memoryHits,
+    discoveryPayload,
+    runId
+  } = args;
+
+  let discoveredContext: Array<{
+    taskId?: string | number;
+    title?: string;
+    category?: string;
+    sourceDocument?: string;
+    snippet?: string;
+    similarity?: number;
+    source?: string;
+  }> = [];
+
+  if (memoryHits && memoryHits.length > 0) {
+    discoveredContext = memoryHits.map((hit) => ({
+      similarity: hit.similarity,
+      source: hit.chunk.metadata.source || hit.chunk.namespace,
+      snippet: truncate(hit.chunk.text, 350)
+    }));
+  } else if (discoveryPayload?.additionalContext?.length) {
+    discoveredContext = discoveryPayload.additionalContext.map((c) => ({
+      taskId: c.taskId,
+      title: c.title,
+      category: c.category,
+      sourceDocument: c.sourceDocument,
+      snippet: truncate(c.overview || c.buildAndVerification || c.completion, 250) || undefined
+    }));
+  }
+
+  const effectiveGuidelines =
+    guidelines ||
+    (discoveryPayload?.guidelineDocs || []).map((g) => ({ path: g.path, excerpt: g.excerpt }));
+
   return {
     title: task.title,
     metadata: {
@@ -95,15 +143,9 @@ export function buildBibleSections(args: {
     outputAs: (overviewDoc.output_as || '').trim(),
     requiredMcps: [...requiredMcps],
     allowedRoots: allowedRoots.map((r) => r.path),
-    discoveredContext: discoveryPayload.additionalContext.map((c) => ({
-      taskId: c.taskId,
-      title: c.title,
-      category: c.category,
-      sourceDocument: c.sourceDocument,
-      snippet: truncate(c.overview || c.buildAndVerification || c.completion, 250) || undefined
-    })),
-    guidelines: (discoveryPayload.guidelineDocs || []).map((g) => ({ path: g.path, excerpt: g.excerpt })),
-    discoveryNotes: discoveryPayload.discoveryNotes?.trim() || undefined
+    discoveredContext,
+    guidelines: effectiveGuidelines,
+    discoveryNotes: discoveryPayload?.discoveryNotes?.trim() || undefined
   };
 }
 
@@ -179,9 +221,15 @@ export class BibleStore {
     out.push(`- **Allowed Boundaries**: ${s.allowedRoots.length > 0 ? s.allowedRoots.join(', ') : s.metadata.projectPath}`, '');
 
     if (s.discoveredContext.length > 0) {
-      out.push('## Discovered Context References');
+      out.push('## Prior Knowledge & Context (Vector Memory)');
       for (const c of s.discoveredContext) {
-        out.push(`- **Task #${c.taskId} (${c.title})** [from \`${c.sourceDocument}\` / ${c.category}]: ${c.snippet || 'Referenced for context.'}`);
+        if (c.similarity !== undefined) {
+          const sim = ` [${(c.similarity * 100).toFixed(0)}% match]`;
+          const src = c.source ? ` (${c.source})` : '';
+          out.push(`- **Prior Knowledge${sim}${src}**: ${c.snippet || 'Referenced for context.'}`);
+        } else {
+          out.push(`- **Task #${c.taskId} (${c.title || ''})** [from \`${c.sourceDocument || 'context'}\` / ${c.category || 'General'}]: ${c.snippet || 'Referenced for context.'}`);
+        }
       }
       out.push('');
     }
@@ -238,7 +286,7 @@ export class BibleStore {
     out.push(s.goals || '1. Complete the task as described.', '');
 
     out.push('## Output Destination & Method');
-    out.push(`- **Destination**: ${s.outputAs || 'Record results in AGENT_CONTEXT.md.'}`);
+    out.push(`- **Destination**: ${s.outputAs || 'Record results in build log.'}`);
     out.push(`- **Required MCPs**: ${s.requiredMcps.length > 0 ? s.requiredMcps.join(', ') : '(none — pure reasoning/text)'}`);
     out.push(`- **Allowed Boundaries**: ${s.allowedRoots.length > 0 ? s.allowedRoots.join(', ') : s.metadata.projectPath}`, '');
 

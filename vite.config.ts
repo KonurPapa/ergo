@@ -134,16 +134,8 @@ async function ensureStorageInitialized(storageDir: string) {
     try {
       await fs.access(todoFile);
     } catch {
-      const defaultTodo = `# General TODOs:\n\n1. **Initial Task Setup:**\n   - Define project scope and task list\n   - Verify bi-directional link with AGENT_CONTEXT.md\n`;
+      const defaultTodo = `# General TODOs:\n\n1. **Initial Task Setup:**\n   - Define project scope and task list\n`;
       await fs.writeFile(todoFile, defaultTodo, 'utf-8');
-    }
-
-    const agentFile = path.join(defaultWorkspaceDir, 'AGENT_CONTEXT.md');
-    try {
-      await fs.access(agentFile);
-    } catch {
-      const defaultAgent = `# TODO context — the verbose half of \`TODO.md\`\n\n\`TODO.md\` is the **human** view: the ask in Konur's words, scannable in seconds, with at most a one-line \`DONE:\` per finished item. This file is the **agent** view: the full brief for an item before it's built, and the full record of what was built after.\n\n### 1. Initial Task Setup\n\n**Status:** not_started\n\n**Brief**\n\nInitial task setup and shared context synchronization.\n\n---`;
-      await fs.writeFile(agentFile, defaultAgent, 'utf-8');
     }
   } catch (err) {
     console.warn('[Ergo Storage] Failed to initialize storage dir:', err);
@@ -678,7 +670,7 @@ function ergoFileSystemPlugin(): Plugin {
       if (url === '/api/projects/create' && req.method === 'POST') {
         try {
           const body = await parseJsonBody(req);
-          const { folderPath, todoContent, agentContextContent } = body;
+          const { folderPath, todoContent } = body;
 
           if (!folderPath) {
             return sendJson(res, 400, { error: 'folderPath is required' });
@@ -687,16 +679,12 @@ function ergoFileSystemPlugin(): Plugin {
           const targetDir = path.resolve(storageDir, folderPath);
           await fs.mkdir(targetDir, { recursive: true });
           const todoPath = path.join(targetDir, 'TODO.md');
-          const agentPath = path.join(targetDir, 'AGENT_CONTEXT.md');
-
           await fs.writeFile(todoPath, todoContent || '', 'utf-8');
-          await fs.writeFile(agentPath, agentContextContent || '', 'utf-8');
 
           return sendJson(res, 200, {
             success: true,
             folderPath,
             todoPath: path.relative(storageDir, todoPath),
-            agentPath: path.relative(storageDir, agentPath),
             createdAt: new Date().toISOString()
           });
         } catch (err: any) {
@@ -864,7 +852,7 @@ function ergoFileSystemPlugin(): Plugin {
             name: string;
             folderPath: string;
             todoFilePath: string;
-            agentContextFilePath: string;
+            agentContextFilePath?: string;
             todoMarkdown: string;
             agentContextMarkdown: string;
             swimLanes?: Array<{ id: string; title: string; filePath: string; markdown: string }>;
@@ -920,7 +908,7 @@ function ergoFileSystemPlugin(): Plugin {
                 }
               }
 
-              // If TODO.md or AGENT_CONTEXT.md didn't exist, create defaults
+              // If TODO.md didn't exist, create default
               if (!todoContent) {
                 const todoPath = path.join(projectDir, 'TODO.md');
                 todoContent = `# ${entry.name} Tasks:\n\n1. Initial Task Setup:\n    - Define project scope`;
@@ -933,20 +921,13 @@ function ergoFileSystemPlugin(): Plugin {
                 });
               }
 
-              if (!agentContent) {
-                const agentPath = path.join(projectDir, 'AGENT_CONTEXT.md');
-                agentContent = `# ${entry.name} Context\n\n### 1. Initial Task Setup\n\n**Status:** not started\n\n**Brief**\nInitial brief.`;
-                await fs.writeFile(agentPath, agentContent, 'utf-8');
-              }
-
               projectList.push({
                 id: entry.name,
                 name: entry.name.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
                 folderPath: `projects/${entry.name}`,
                 todoFilePath: `projects/${entry.name}/TODO.md`,
-                agentContextFilePath: `projects/${entry.name}/AGENT_CONTEXT.md`,
                 todoMarkdown: todoContent,
-                agentContextMarkdown: agentContent,
+                agentContextMarkdown: agentContent || '',
                 swimLanes
               });
             }

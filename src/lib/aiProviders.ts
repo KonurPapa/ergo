@@ -18,7 +18,6 @@ export interface AgentRoleMeta {
 }
 
 export const AGENT_ROLES: AgentRole[] = [
-  'discovery',
   'summary',
   'manager',
   'worker',
@@ -28,21 +27,6 @@ export const AGENT_ROLES: AgentRole[] = [
 ];
 
 export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
-  discovery: {
-    role: 'discovery',
-    name: 'Discovery Agent',
-    score: 3.0,
-    scoreLabel: '3.0 / 10 (Light)',
-    tier: 'light',
-    description: 'Scans repository structure, parses context, detects relevant files and tech stack. Needs low token latency and fast JSON generation; high reasoning is unnecessary.',
-    defaultModels: {
-      openai: 'gpt-5-mini',
-      anthropic: 'claude-3-5-haiku-20241022',
-      gemini: 'gemini-2.5-flash',
-      ollama: 'llama3.2',
-      cli_subscription: 'claude-code'
-    }
-  },
   summary: {
     role: 'summary',
     name: 'Summary Agent',

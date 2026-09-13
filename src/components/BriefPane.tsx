@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   type TaskItem,
   type TaskStatus,
@@ -9,16 +9,14 @@ import {
   type HumanInputPrompt
 } from '../types';
 import { AgentTerminal } from './AgentTerminal';
-import { StepStatusIcon, StepUsageBadge, PieceChip, BiblePreview } from './ExecutionStepExtras';
-import { BvTokenCounterCard, BvHeaderTokenBadge } from './BvTokenCounterCard';
+import { StepStatusIcon, StepUsageBadge, PieceChip, BiblePreview, BaselineContextPreview } from './ExecutionStepExtras';
+import { BvTokenCounterCard } from './BvTokenCounterCard';
 import {
   FileCode,
   Edit3,
   Save,
   Play,
   CheckCircle2,
-  Clock,
-  CircleDot,
   Terminal,
   RotateCcw,
   Square,
@@ -28,7 +26,6 @@ import {
   Layers,
   Send,
   Loader2,
-  XCircle,
   X,
   FileText,
   ChevronDown,
@@ -39,11 +36,9 @@ import {
   Flag,
   Archive,
   HelpCircle,
-  Eye,
-  ExternalLink,
-  Check,
   MoreHorizontal,
   Trash2,
+  Database,
   PanelRightClose,
   PanelRightOpen
 } from 'lucide-react';
@@ -52,7 +47,6 @@ import { RichTextToolbar } from './RichTextToolbar';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ArchivedTasksModal } from './ArchivedTasksModal';
 import { handleMarkdownAutoWrap } from '../lib/markdownEditorUtils';
-import { openFileInIdeOrSystem } from '../lib/mcpClient';
 
 interface HumanInputCardProps {
   prompt: HumanInputPrompt;
@@ -233,6 +227,33 @@ interface AiTaskCardProps {
   onRemoveAiTask?: (targetId: string | number) => void;
 }
 
+type CardStatus = 'not_started' | 'working' | 'done';
+
+const CardStatusChip: React.FC<{ status: CardStatus }> = ({ status }) => {
+  if (status === 'working') {
+    return (
+      <span className="card-status-chip is-working">
+        <Loader2 size={11} className="spin-animate" />
+        <span>Working...</span>
+      </span>
+    );
+  }
+  if (status === 'done') {
+    return (
+      <span className="card-status-chip is-done">
+        <CheckCircle2 size={11} />
+        <span>Done</span>
+      </span>
+    );
+  }
+  return (
+    <span className="card-status-chip is-not-started">
+      <span className="status-dot-grey" />
+      <span>Not started</span>
+    </span>
+  );
+};
+
 const AiTaskCard: React.FC<AiTaskCardProps> = ({
   task,
   brief,
@@ -247,8 +268,8 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   onSaveBrief,
   onLiveBriefChange,
   onExecuteTask,
-  onUpdateBriefWithAi,
-  onSyncOverviewWithTask,
+  onUpdateBriefWithAi: _onUpdateBriefWithAi,
+  onSyncOverviewWithTask: _onSyncOverviewWithTask,
   onPermissionChoice,
   onHumanInputChoice,
   onSessionExit,
@@ -260,13 +281,12 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 }) => {
   const [isTaskCollapsed, setIsTaskCollapsed] = useState(!isSelected);
   const [isEditing, setIsEditing] = useState(false);
-  const [isSyncingOverview, setIsSyncingOverview] = useState(false);
   const [overviewText, setOverviewText] = useState('');
   const [buildVerificationText, setBuildVerificationText] = useState('');
   const [completionText, setCompletionText] = useState('');
-  const [viewModeSection2, setViewModeSection2] = useState<'auto' | 'notes' | 'terminal' | 'steps'>('auto');
-  const [openedFileFeedback, setOpenedFileFeedback] = useState<string | null>(null);
+  const [viewModeSection2, setViewModeSection2] = useState<'notes' | 'terminal' | 'steps'>('notes');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isGherkinOpen, setIsGherkinOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const overviewRef = useRef<HTMLTextAreaElement>(null);
@@ -296,83 +316,80 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   }, [isMenuOpen]);
 
   // Determine if this task has already been started (e.g. Overview section written up / structured / in-progress)
-  const isTaskStarted = React.useMemo(() => {
-    if (isWorking || isExecuting || task.isDone) return true;
-    if (task.status && task.status !== 'not_started') return true;
-    if (brief?.status && brief.status !== 'not_started') return true;
-    if (executionSteps && executionSteps.length > 0) return true;
-    if (terminalSession?.session) return true;
+  const summaryStep = React.useMemo(() => {
+    return executionSteps.find(
+      (s) => s.stage === 'overview' && s.status === 'success' && s.overviewDocument
+    );
+  }, [executionSteps]);
 
-    if (buildVerificationText && buildVerificationText.trim().length > 0) return true;
-    if (completionText && completionText.trim().length > 0) return true;
-    if (brief?.built && brief.built.trim().length > 0) return true;
-    if (brief?.validation && brief.validation.trim().length > 0) return true;
+  const summaryDoc = summaryStep?.overviewDocument || null;
 
-    const currentOverview = (overviewText || brief?.overview || '').trim();
+  const gherkinBrief = React.useMemo(() => {
+    if (summaryDoc?.brief && summaryDoc.brief.trim().length > 0) return summaryDoc.brief.trim();
+    if (brief?.brief && brief.brief.includes('Feature:')) return brief.brief.trim();
+    const match = overviewText.match(/## Acceptance Brief \(Gherkin\)\s*```gherkin([\s\S]*?)```/);
+    if (match) return match[1].trim();
+    if (brief?.brief && brief.brief.trim().length > 0 && brief.brief.trim() !== overviewText.trim()) return brief.brief.trim();
+    return '';
+  }, [summaryDoc?.brief, brief?.brief, overviewText]);
+
+  const overviewDisplayContent = React.useMemo(() => {
+    return overviewText.replace(/## Acceptance Brief \(Gherkin\)\s*```gherkin[\s\S]*?```\s*/g, '').trim();
+  }, [overviewText]);
+
+  // Determine if there is actually a valid overview from the Summary agent (not generic human task list)
+  const isRealOverview = React.useMemo(() => {
+    if (summaryDoc) return true;
+    if (!overviewText || !overviewText.trim()) return false;
+    const trimmed = overviewText.trim();
+    if (trimmed === task.title.trim()) return false;
+    if (trimmed === `Task #${task.id}: ${task.title}`.trim()) return false;
+    if (trimmed.startsWith(`Overview for ${task.title}`)) return false;
+    if (trimmed === `Overview for ${task.title}`.trim()) return false;
     if (
-      currentOverview.includes('Scenario:') ||
-      currentOverview.includes('Given ') ||
-      currentOverview.includes('## Goals') ||
-      currentOverview.includes('## Output As') ||
-      currentOverview.includes('## Brief')
+      trimmed.includes('Scenario:') ||
+      trimmed.includes('Given ') ||
+      trimmed.includes('## Acceptance Brief') ||
+      trimmed.includes('## Brief') ||
+      trimmed.includes('## Goals') ||
+      trimmed.includes('## Output') ||
+      trimmed.includes('Feature:')
     ) {
       return true;
     }
+    if (trimmed.length <= task.title.length + 15) return false;
+    return false;
+  }, [summaryDoc, overviewText, task.title, task.id]);
 
-    const initialText = (brief?.brief || task.title || '').trim();
-    if (currentOverview.length > 0 && currentOverview !== initialText && currentOverview.length > initialText.length + 20) {
-      return true;
-    }
-
+  // Determine if this task has already been started
+  const isTaskStarted = React.useMemo(() => {
+    if (isWorking || isExecuting) return true;
+    if (task.isDone || task.status === 'done' || task.status === 'in_progress') return true;
+    if (brief?.status === 'done' || brief?.status === 'in_progress') return true;
+    if (executionSteps && executionSteps.length > 0) return true;
+    if (terminalSession?.session) return true;
+    if (completionText && completionText.trim().length > 0) return true;
+    if (buildVerificationText && buildVerificationText.trim().length > 0) return true;
+    if (brief?.built && brief.built.trim().length > 0) return true;
+    if (brief?.validation && brief.validation.trim().length > 0) return true;
+    if (isRealOverview) return true;
     return false;
   }, [
     isWorking,
     isExecuting,
     task.isDone,
     task.status,
-    task.title,
     brief?.status,
     brief?.built,
     brief?.validation,
-    brief?.overview,
-    brief?.brief,
     executionSteps,
     terminalSession,
     buildVerificationText,
     completionText,
-    overviewText,
+    isRealOverview,
   ]);
 
-  const createdFilesList = React.useMemo(() => {
-    const list: string[] = [];
-    if (Array.isArray(task.createdFiles)) {
-      for (const f of task.createdFiles) {
-        if (f && !list.includes(f)) list.push(f);
-      }
-    }
-    if (Array.isArray(brief?.createdFiles)) {
-      for (const f of brief.createdFiles) {
-        if (f && !list.includes(f)) list.push(f);
-      }
-    }
-    if (completionText) {
-      const fileRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
-      let match;
-      while ((match = fileRegex.exec(completionText)) !== null) {
-        const target = match[2].trim();
-        const isFile =
-          target.startsWith('projects/') ||
-          target.startsWith('.ergo/') ||
-          target.startsWith('file://') ||
-          target.startsWith('~/') ||
-          /\.(ts|tsx|js|jsx|json|py|rs|go|c|cpp|h|css|html|md|toml|yaml|yml|sh|sql)$/i.test(target);
-        if (isFile && !target.startsWith('http://') && !target.startsWith('https://')) {
-          if (!list.includes(target)) list.push(target);
-        }
-      }
-    }
-    return list;
-  }, [task.createdFiles, brief?.createdFiles, completionText]);
+
 
   // Auto-expand and scroll into view when selected, collapse when another task is selected
   useEffect(() => {
@@ -385,34 +402,35 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     }
   }, [isSelected]);
 
-  // Stage-based default collapsed states for inner 3 cards
-  const getStageCollapsedState = useCallback(() => {
-    const isDone =
-      task.isDone ||
-      task.status === 'done' ||
-      (!!terminalSession && !terminalSession.session.isActive && terminalSession.session.exitCode === 0);
-
-    if (isWorking) {
-      return { overview: true, build: false, completion: true };
-    }
-    if (isDone) {
-      return { overview: true, build: true, completion: false };
-    }
-    return { overview: false, build: true, completion: true };
-  }, [task.isDone, task.status, terminalSession, isWorking]);
-
-  const [collapsedSections, setCollapsedSections] = useState<{
+  // Default collapsed states for inner short cards:
+  // vectorMemory: collapsed by default
+  // steps: collapsed by default
+  const [collapsedCards, setCollapsedCards] = useState<{
     overview: boolean;
-    build: boolean;
+    vectorMemory: boolean;
+    steps: boolean;
     completion: boolean;
-  }>(getStageCollapsedState);
+  }>({
+    overview: false,
+    vectorMemory: true,
+    steps: true,
+    completion: false,
+  });
 
-  const toggleSection = (section: 'overview' | 'build' | 'completion') => {
-    setCollapsedSections((prev) => ({
+  const toggleCard = (card: 'overview' | 'vectorMemory' | 'steps' | 'completion') => {
+    setCollapsedCards((prev) => ({
       ...prev,
-      [section]: !prev[section],
+      [card]: !prev[card],
     }));
   };
+
+  // Automatically expand steps if an interactive clarification or permission prompt is waiting
+  useEffect(() => {
+    if (pendingHumanInput || pendingPermission) {
+      setCollapsedCards((prev) => ({ ...prev, steps: false }));
+      setViewModeSection2('steps');
+    }
+  }, [pendingHumanInput, pendingPermission]);
 
   // Sync state with brief
   useEffect(() => {
@@ -431,12 +449,17 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     }
   }, [task.id, brief]);
 
-  // Reset edit and section states when switching tasks or when task status/done state changes
+  // Reset edit and card states when switching tasks or when task status/done state changes
   useEffect(() => {
     setIsEditing(false);
-    setViewModeSection2('auto');
-    setCollapsedSections(getStageCollapsedState());
-  }, [task.id, task.status, task.isDone, getStageCollapsedState]);
+    setViewModeSection2('notes');
+    setCollapsedCards({
+      overview: false,
+      vectorMemory: true,
+      steps: true,
+      completion: false,
+    });
+  }, [task.id, task.status, task.isDone]);
 
   const prevWorkingRef = useRef(isWorking);
   useEffect(() => {
@@ -444,41 +467,123 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     prevWorkingRef.current = isWorking;
 
     if (wasWorking && !isWorking) {
-      // Build phase finished -> collapse Build & Verification, expand Completion
-      setCollapsedSections({
-        overview: true,
-        build: true,
+      // Build phase finished -> keep completion log visible
+      setCollapsedCards((prev) => ({
+        ...prev,
         completion: false,
-      });
+      }));
     } else if (!wasWorking && isWorking) {
-      // Started working -> expand task card, keep Overview open for context gathering, expand Build & Verification
+      // Started working -> expand task card
       setIsTaskCollapsed(false);
-      setCollapsedSections({
-        overview: false,
-        build: false,
-        completion: true,
-      });
     }
   }, [isWorking]);
 
-  const isDiscoveryRunning =
+  const isContextRunning =
     isExecuting && executionSteps.some((s) => s.stage === 'context' && s.status === 'running');
   const isGatheringContext =
     isExecuting &&
-    (isDiscoveryRunning ||
+    (isContextRunning ||
       executionSteps.length === 0 ||
       !executionSteps.some((s) => s.stage === 'overview' || s.stage === 'execution' || s.stage === 'built_record' || s.stage === 'done'));
   const contextStep = executionSteps.find((s) => s.stage === 'context');
 
-  // Determine what to display in Section 2 (Build & Verification)
-  const showTerminal =
-    (viewModeSection2 === 'terminal' || (viewModeSection2 === 'auto' && !!terminalSession)) &&
-    !isEditing;
+  // ── Card Status Computations (Not started | Working... | Done) ──
+  const isOverviewWorking =
+    isExecuting &&
+    (isGatheringContext || executionSteps.some((s) => s.stage === 'overview' && s.status === 'running'));
 
-  const showExecutionSteps =
-    !showTerminal &&
-    (viewModeSection2 === 'steps' || (viewModeSection2 === 'auto' && (isExecuting || executionSteps.length > 0))) &&
-    !isEditing;
+  const overviewStatus = React.useMemo<'not_started' | 'working' | 'done'>(() => {
+    if (isOverviewWorking) {
+      return 'working';
+    }
+    if (
+      isRealOverview ||
+      Boolean(summaryDoc) ||
+      executionSteps.some((s) => s.stage === 'overview' && s.status === 'success') ||
+      (overviewText.trim().length > 0 && !isExecuting)
+    ) {
+      return 'done';
+    }
+    return 'not_started';
+  }, [isOverviewWorking, isRealOverview, summaryDoc, executionSteps, overviewText, isExecuting]);
+
+  const isRelatedWorking =
+    isExecuting && executionSteps.some((s) => s.stage === 'context' && s.status === 'running');
+
+  const relatedTasksStatus = React.useMemo<'not_started' | 'working' | 'done'>(() => {
+    if (isRelatedWorking) {
+      return 'working';
+    }
+    if (
+      Boolean(contextStep?.baselineContext) ||
+      executionSteps.some((s) => s.stage === 'context' && s.status === 'success') ||
+      (task.isDone && executionSteps.length > 0)
+    ) {
+      return 'done';
+    }
+    return 'not_started';
+  }, [isRelatedWorking, contextStep, executionSteps, task.isDone]);
+
+  const isStepsWorking =
+    Boolean(terminalSession?.session.isActive) ||
+    (isExecuting &&
+      !isGatheringContext &&
+      !isOverviewWorking &&
+      (isWorking ||
+        executionSteps.some(
+          (s) =>
+            s.stage !== 'context' &&
+            s.stage !== 'overview' &&
+            s.stage !== 'built_record' &&
+            s.stage !== 'done' &&
+            s.status === 'running'
+        )));
+
+  const stepsActionsStatus = React.useMemo<'not_started' | 'working' | 'done'>(() => {
+    if (isStepsWorking) {
+      return 'working';
+    }
+    if (
+      (terminalSession?.session && !terminalSession.session.isActive) ||
+      task.isDone ||
+      task.status === 'done' ||
+      (executionSteps.some(
+        (s) =>
+          s.stage === 'execution' ||
+          s.stage === 'subagent' ||
+          s.stage === 'mcp_call' ||
+          s.stage === 'built_record' ||
+          s.stage === 'done'
+      ) &&
+        !isExecuting) ||
+      (!isExecuting && buildVerificationText.trim().length > 0 && executionSteps.length > 0)
+    ) {
+      return 'done';
+    }
+    return 'not_started';
+  }, [isStepsWorking, terminalSession, task.isDone, task.status, executionSteps, isExecuting, buildVerificationText]);
+
+  const isCompletionWorking =
+    isExecuting && executionSteps.some((s) => (s.stage === 'built_record' || s.stage === 'done') && s.status === 'running');
+
+  const completionStatus = React.useMemo<'not_started' | 'working' | 'done'>(() => {
+    if (isCompletionWorking) {
+      return 'working';
+    }
+    if (
+      task.isDone ||
+      task.status === 'done' ||
+      completionText.trim().length > 0 ||
+      executionSteps.some((s) => (s.stage === 'built_record' || s.stage === 'done') && s.status === 'success')
+    ) {
+      return 'done';
+    }
+    return 'not_started';
+  }, [isCompletionWorking, task.isDone, task.status, completionText, executionSteps]);
+
+  // Determine what to display in Section 2 (Build & Verification / Steps & Actions)
+  const showTerminal = viewModeSection2 === 'terminal' && !isEditing;
+  const showExecutionSteps = viewModeSection2 === 'steps' && !isEditing;
 
   const handleFieldChange = (
     field: 'overview' | 'buildAndVerification' | 'completion',
@@ -596,59 +701,38 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     setIsEditing(false);
   };
 
-  const handleSyncWithTask = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (isSyncingOverview) return;
-    setIsSyncingOverview(true);
-    try {
-      if (onSyncOverviewWithTask) {
-        const result = await onSyncOverviewWithTask(task);
-        if (result && typeof result === 'string') {
-          setOverviewText(result);
-        }
-      } else if (onUpdateBriefWithAi) {
-        onUpdateBriefWithAi(task);
-      }
-      setCollapsedSections((prev) => ({ ...prev, overview: false }));
-    } catch (err) {
-      console.error('Failed to sync overview with task:', err);
-    } finally {
-      setIsSyncingOverview(false);
-    }
-  };
-
-  const renderStatusBadge = () => {
-    if (isWorking) {
-      return (
-        <span className="task-status-pill status-working">
-          <Loader2 size={12} className="spin-animate" />
-          <span>Working...</span>
-        </span>
-      );
-    }
-    if (task.isDone || task.status === 'done') {
-      return (
-        <span className="task-status-pill status-done">
-          <CheckCircle2 size={12} />
-          <span>Done</span>
-        </span>
-      );
-    }
-    if (task.status === 'in_progress') {
-      return (
-        <span className="task-status-pill status-in-progress">
-          <Clock size={12} />
-          <span>In Progress</span>
-        </span>
-      );
-    }
-    return (
-      <span className="task-status-pill status-not-started">
-        <CircleDot size={12} />
-        <span>Not Started</span>
-      </span>
-    );
-  };
+  // const renderStatusBadge = () => {
+  //   if (isWorking) {
+  //     return (
+  //       <span className="task-status-pill status-working">
+  //         <Loader2 size={12} className="spin-animate" />
+  //         <span>Working...</span>
+  //       </span>
+  //     );
+  //   }
+  //   if (task.isDone || task.status === 'done') {
+  //     return (
+  //       <span className="task-status-pill status-done">
+  //         <CheckCircle2 size={12} />
+  //         <span>Done</span>
+  //       </span>
+  //     );
+  //   }
+  //   if (task.status === 'in_progress') {
+  //     return (
+  //       <span className="task-status-pill status-in-progress">
+  //         <Clock size={12} />
+  //         <span>In Progress</span>
+  //       </span>
+  //     );
+  //   }
+  //   return (
+  //     <span className="task-status-pill status-not-started">
+  //       <CircleDot size={12} />
+  //       {/* <span>Not Started</span> */}
+  //     </span>
+  //   );
+  // };
 
   const isTaskDone = Boolean(task.isDone || task.status === 'done' || brief?.status === 'done');
 
@@ -693,7 +777,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
           <span className="ai-task-title-text" title={brief?.title || task.title}>
             {brief?.title || task.title}
           </span>
-          {renderStatusBadge()}
+          {/* {renderStatusBadge()} */}
         </div>
 
         <div className="ai-task-header-actions" onClick={(e) => e.stopPropagation()}>
@@ -726,11 +810,6 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   className={`execute-task-btn ${isWorking ? 'is-working' : ''}`}
                   onClick={() => {
                     setIsTaskCollapsed(false);
-                    setCollapsedSections({
-                      overview: true,
-                      build: false,
-                      completion: true,
-                    });
                     onExecuteTask(task);
                   }}
                   title={isWorking ? 'Agent is working on this task...' : 'Start the AI on this task'}
@@ -778,11 +857,6 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                       onClick={() => {
                         setIsMenuOpen(false);
                         setIsTaskCollapsed(false);
-                        setCollapsedSections({
-                          overview: true,
-                          build: false,
-                          completion: true,
-                        });
                         onExecuteTask(task);
                       }}
                     >
@@ -802,6 +876,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                     setIsEditing(true);
                     setViewModeSection2('notes');
                     setIsTaskCollapsed(false);
+                    setCollapsedCards((prev) => ({ ...prev, overview: false }));
                   }}
                 >
                   <Edit3 size={13} />
@@ -854,634 +929,534 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
             </div>
           )}
 
-          <div className="brief-container" style={{ padding: 0 }}>
+          <div className="brief-container" style={{ padding: 0, gap: '0.45rem' }}>
             {/* ═══════════════════════════════════════════════════════════
-                SECTION 1: OVERVIEW
+                CARD 1: TOKEN USAGE (stages breakout collapsed by default)
                ═══════════════════════════════════════════════════════════ */}
-            <div className={`brief-card ${collapsedSections.overview ? 'is-collapsed' : ''}`}>
+            <BvTokenCounterCard
+              task={task}
+              brief={brief}
+              executionSteps={executionSteps}
+              isExecuting={isExecuting}
+              isTaskStarted={isTaskStarted}
+              defaultBreakdownOpen={false}
+            />
+
+            {/* ═══════════════════════════════════════════════════════════
+                CARD 2: OVERVIEW (populated from Summary agent)
+               ═══════════════════════════════════════════════════════════ */}
+            <div className={`ai-sub-card card-overview ${collapsedCards.overview ? 'is-collapsed' : ''}`}>
               <div
-                className="brief-section-header clickable-header"
-                onClick={() => toggleSection('overview')}
+                className="ai-sub-card-header"
+                onClick={() => toggleCard('overview')}
               >
                 <div className="header-left">
                   <button
                     type="button"
-                    className={`card-collapse-btn ${collapsedSections.overview ? 'is-collapsed' : ''}`}
-                    title={collapsedSections.overview ? 'Expand section' : 'Collapse section'}
-                    aria-label={collapsedSections.overview ? 'Expand section' : 'Collapse section'}
+                    className={`card-collapse-btn ${collapsedCards.overview ? 'is-collapsed' : ''}`}
+                    title={collapsedCards.overview ? 'Expand Overview' : 'Collapse Overview'}
+                    aria-label={collapsedCards.overview ? 'Expand Overview' : 'Collapse Overview'}
                     onClick={(e) => {
                       e.stopPropagation();
-                      toggleSection('overview');
+                      toggleCard('overview');
                     }}
                   >
                     <ChevronDown size={12} className="collapse-chevron" />
                   </button>
                   <span className="section-title-text">
-                    <span className="section-icon">
-                      <ClipboardList size={18} color="var(--accent-violet)" />
-                    </span>
+                    <ClipboardList size={14} color="#3b82f6" />
                     <span>Overview</span>
                   </span>
-                  <span className="section-subtitle-tag">Frontend Notes & Task in Context</span>
+                  {/* {isRealOverview && !isGatheringContext && (
+                    <span className="section-subtitle-tag">
+                      Goals & Execution Plan
+                    </span>
+                  )} */}
+                  {isGatheringContext && (
+                    <span className="section-subtitle-tag">
+                      Analyzing...
+                    </span>
+                  )}
                 </div>
 
                 <div
                   className="header-right"
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {isGatheringContext ? (
-                    <span
-                      className="card-item-tag-working"
-                      style={{
-                        color: 'var(--accent-cyan)',
-                        background: 'rgba(56, 189, 248, 0.12)',
-                        borderColor: 'rgba(56, 189, 248, 0.35)',
-                      }}
-                      title="Discovery AI is scanning task headers across all swim lanes & archives"
-                    >
-                      <Loader2 size={11} className="spin-animate" />
-                      <span>Gathering context...</span>
-                    </span>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        className="btn btn-secondary sync-with-task-btn"
-                        style={{
-                          padding: '0.2rem 0.55rem',
-                          fontSize: '0.72rem',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.35rem',
-                        }}
-                        onClick={handleSyncWithTask}
-                        disabled={isSyncingOverview || isExecuting}
-                        title="Sync Overview with task"
-                      >
-                        {isSyncingOverview ? (
-                          <>
-                            <Loader2 size={11} className="spin-animate" />
-                            <span>Syncing...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Sparkles size={11} color="var(--accent-violet)" />
-                            <span>Sync Task</span>
-                          </>
-                        )}
-                      </button>
-                      {overviewText ? (
-                        <span className="card-item-count">{overviewText.split('\n').filter(Boolean).length} lines</span>
-                      ) : (
-                        <span className="card-item-tag-empty">Empty</span>
-                      )}
-                    </>
-                  )}
+                  <CardStatusChip status={overviewStatus} />
                 </div>
               </div>
 
-              <div className="brief-body-wrapper">
-                {isEditing ? (
-                  <textarea
-                    ref={overviewRef}
-                    className="obsidian-card-textarea"
-                    placeholder="Write verbose task overview, frontend notes, done-state goals, seams, and constraints in context of other tasks in Markdown..."
-                    value={overviewText}
-                    onChange={(e) => handleFieldChange('overview', e.target.value)}
-                    onKeyDown={(e) => handleMarkdownAutoWrap(e, (val) => handleFieldChange('overview', val))}
-                    onFocus={() => setActiveFocusedRef(overviewRef)}
-                    rows={4}
-                  />
-                ) : (
-                  <div className="brief-body">
-                    {/* Live Context Gathering Indicator Banner */}
-                    {isGatheringContext && (
-                      <div className="overview-gathering-context-box">
-                        <div className="overview-gathering-context-header">
-                          <Loader2 size={14} className="spin-animate" color="var(--accent-cyan)" />
-                          <span className="overview-gathering-context-title">Gathering context...</span>
+              {!collapsedCards.overview && (
+                <div className="ai-sub-card-body">
+                  {isEditing ? (
+                    <textarea
+                      ref={overviewRef}
+                      className="obsidian-card-textarea"
+                      placeholder="Write AI execution brief, acceptance criteria, and tool plan in Markdown..."
+                      value={overviewText}
+                      onChange={(e) => handleFieldChange('overview', e.target.value)}
+                      onKeyDown={(e) => handleMarkdownAutoWrap(e, (val) => handleFieldChange('overview', val))}
+                      onFocus={() => setActiveFocusedRef(overviewRef)}
+                      rows={5}
+                    />
+                  ) : isGatheringContext ? (
+                    <div className="ai-card-hint" style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--accent-cyan)' }}>
+                      <Loader2 size={12} className="spin-animate" />
+                      <span>Summary agent is synthesizing the execution brief and tool plan…</span>
+                    </div>
+                  ) : isRealOverview ? (
+                    <div className="brief-markdown-render">
+                      {summaryDoc ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                          {/* <div className="goals-brief-title">Goals & Success Criteria</div> */}
+                          <div style={{ fontSize: '0.78rem', whiteSpace: 'pre-wrap', color: 'var(--text-main)', lineHeight: '1.45' }}>
+                            {summaryDoc.goals}
+                          </div>
+                          {/* {summaryDoc.goals && (
+                            <div className="goals-brief-box">
+                              <div className="goals-brief-title">Goals & Success Criteria</div>
+                              <div style={{ fontSize: '0.78rem', whiteSpace: 'pre-wrap', color: 'var(--text-main)', lineHeight: '1.45' }}>
+                                {summaryDoc.goals}
+                              </div>
+                            </div>
+                          )} */}
+                          {summaryDoc.output_as && (
+                            <div className="output-brief-box">
+                              <div className="output-brief-title">Completion Goal</div>
+                              <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                                {summaryDoc.output_as}
+                              </span>
+                            </div>
+                          )}
                         </div>
-                        <p className="overview-gathering-context-detail">
-                          {contextStep?.detail ||
-                            'Discovery AI is scanning task headers in each lane (including archived tasks) to assemble relevant workspace context.'}
-                        </p>
-                      </div>
-                    )}
-
-                    {overviewText ? (
-                      <div className="brief-markdown-render">
-                        <MarkdownRenderer content={overviewText} />
-                      </div>
-                    ) : !isGatheringContext ? (
-                      <div className="brief-empty-markdown">
-                        <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                          No verbose overview defined yet.
-                        </span>
-                      </div>
-                    ) : null}
-                  </div>
-                )}
-              </div>
+                      ) : (
+                        <MarkdownRenderer content={overviewDisplayContent || overviewText} />
+                      )}
+                    </div>
+                  ) : (
+                    <div className="ai-card-hint">
+                      Overview will populate with goals, success criteria, and tool plan once the Summary agent has finished. Click <strong>'Run Task'</strong> to begin.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* ═══════════════════════════════════════════════════════════
-                SECTION 2: BUILD & VERIFICATION
+                CARD 3: VECTOR MEMORY / RELATED TASKS (collapsed by default)
                ═══════════════════════════════════════════════════════════ */}
-            <div className={`brief-card ${collapsedSections.build ? 'is-collapsed' : ''}`}>
+            <div className={`ai-sub-card card-related-tasks ${collapsedCards.vectorMemory ? 'is-collapsed' : ''}`}>
               <div
-                className="brief-section-header clickable-header"
-                onClick={() => toggleSection('build')}
+                className="ai-sub-card-header"
+                onClick={() => toggleCard('vectorMemory')}
               >
                 <div className="header-left">
                   <button
                     type="button"
-                    className={`card-collapse-btn ${collapsedSections.build ? 'is-collapsed' : ''}`}
-                    title={collapsedSections.build ? 'Expand section' : 'Collapse section'}
-                    aria-label={collapsedSections.build ? 'Expand section' : 'Collapse section'}
+                    className={`card-collapse-btn ${collapsedCards.vectorMemory ? 'is-collapsed' : ''}`}
+                    title={collapsedCards.vectorMemory ? 'Expand Related Tasks' : 'Collapse Related Tasks'}
+                    aria-label={collapsedCards.vectorMemory ? 'Expand Related Tasks' : 'Collapse Related Tasks'}
                     onClick={(e) => {
                       e.stopPropagation();
-                      toggleSection('build');
+                      toggleCard('vectorMemory');
                     }}
                   >
                     <ChevronDown size={12} className="collapse-chevron" />
                   </button>
                   <span className="section-title-text">
-                    <span className="section-icon">
-                      <Wrench size={18} color="var(--accent-violet)" />
-                    </span>
-                    <span>Build & Verification</span>
+                    <Database size={14} color="#eab308" />
+                    <span>Related Tasks</span>
                   </span>
-                  <span className="section-subtitle-tag">
-                    {showTerminal
-                      ? `CLI Agent Terminal (${terminalSession?.cmd})`
-                      : showExecutionSteps
-                        ? 'Live Execution Steps & MCP Stream'
-                        : 'Mid-Task Steps, Journey & Rationale'}
+                  {contextStep?.baselineContext && (
+                    <span className="section-subtitle-tag">
+                      {contextStep.baselineContext.memoryHits?.length || 0} hits · {contextStep.baselineContext.guidelines?.length || 0} guidelines
+                    </span>
+                  )}
+                </div>
+
+                <div className="header-right" onClick={(e) => e.stopPropagation()}>
+                  <CardStatusChip status={relatedTasksStatus} />
+                </div>
+              </div>
+
+              {!collapsedCards.vectorMemory && (
+                <div className="ai-sub-card-body">
+                  {contextStep?.baselineContext ? (
+                    <BaselineContextPreview baselineContext={contextStep.baselineContext} defaultOpen={true} plain={true} />
+                  ) : (
+                    <div className="ai-card-hint">
+                      Vector Memory will retrieve project knowledge and guidelines for baseline context when started.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* ═══════════════════════════════════════════════════════════
+                CARD 4: ACTIONS (collapsed by default)
+               ═══════════════════════════════════════════════════════════ */}
+            <div className={`ai-sub-card card-steps-actions ${collapsedCards.steps ? 'is-collapsed' : ''}`}>
+              <div
+                className="ai-sub-card-header"
+                onClick={() => toggleCard('steps')}
+              >
+                <div className="header-left">
+                  <button
+                    type="button"
+                    className={`card-collapse-btn ${collapsedCards.steps ? 'is-collapsed' : ''}`}
+                    title={collapsedCards.steps ? 'Expand Actions' : 'Collapse Actions'}
+                    aria-label={collapsedCards.steps ? 'Expand Actions' : 'Collapse Actions'}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleCard('steps');
+                    }}
+                  >
+                    <ChevronDown size={12} className="collapse-chevron" />
+                  </button>
+                  <span className="section-title-text">
+                    <Wrench size={14} color="#a855f7" />
+                    <span>Actions</span>
                   </span>
                 </div>
 
                 <div
                   className="header-right"
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <BvHeaderTokenBadge
-                    task={task}
-                    brief={brief}
-                    executionSteps={executionSteps}
-                    isExecuting={isExecuting}
-                  />
-
-                  {/* Case 1: Terminal Session Active or Existed */}
-                  {terminalSession ? (
+                  {/* Terminal Session Controls */}
+                  {terminalSession && (
                     <>
-                      {terminalSession.session.isActive ? (
-                        <span className="card-item-tag-working">
-                          <span className="live-pulse-dot" />
-                          <span>Running</span>
-                        </span>
-                      ) : terminalSession.session.exitCode === 0 ? (
-                        <span className="card-item-tag-completed">
-                          <CheckCircle2 size={11} color="var(--accent-emerald)" />
-                          <span>Exited (0)</span>
-                        </span>
-                      ) : (
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.3rem',
-                            fontSize: '0.72rem',
-                            fontWeight: 700,
-                            color: 'var(--accent-rose)',
-                            background: 'rgba(244, 63, 94, 0.12)',
-                            border: '1px solid rgba(244, 63, 94, 0.3)',
-                            padding: '0.15rem 0.5rem',
-                            borderRadius: '9999px',
-                          }}
-                        >
-                          <XCircle size={11} />
-                          <span>Exited ({terminalSession.session.exitCode ?? 1})</span>
-                        </span>
-                      )}
-
-                      {/* Restart Button */}
                       {onRestartSession && (
                         <button
+                          type="button"
                           className="btn btn-secondary"
-                          style={{ padding: '0.2rem 0.45rem', fontSize: '0.72rem' }}
+                          style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem' }}
                           onClick={() => {
-                            setCollapsedSections({
-                              overview: true,
-                              build: false,
-                              completion: true,
-                            });
+                            setCollapsedCards((prev) => ({ ...prev, steps: false }));
                             onRestartSession(task);
                           }}
                           title="Restart CLI agent in terminal"
                         >
-                          <RotateCcw size={11} />
+                          <RotateCcw size={10} />
                         </button>
                       )}
 
-                      {/* Kill Button if running */}
                       {terminalSession.session.isActive && onKillSession && (
                         <button
+                          type="button"
                           className="btn btn-secondary"
-                          style={{ padding: '0.2rem 0.45rem', fontSize: '0.72rem', color: 'var(--accent-rose)' }}
+                          style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem', color: 'var(--accent-rose)' }}
                           onClick={() => onKillSession(task.id)}
                           title="Stop CLI agent process"
                         >
-                          <Square size={11} />
-                        </button>
-                      )}
-
-                      {/* Toggle View Mode between Terminal and Notes */}
-                      {!isEditing && (
-                        <button
-                          className="btn btn-secondary"
-                          style={{ padding: '0.2rem 0.55rem', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
-                          onClick={() => setViewModeSection2(showTerminal ? 'notes' : 'terminal')}
-                          title={showTerminal ? 'Switch to Markdown notes' : 'Switch to live Terminal'}
-                        >
-                          {showTerminal ? <FileText size={11} /> : <Terminal size={11} />}
-                          <span>{showTerminal ? 'Notes' : 'Terminal'}</span>
+                          <Square size={10} />
                         </button>
                       )}
                     </>
-                  ) : isExecuting ? (
-                    /* Case 2: Live AI Execution Running */
-                    <>
-                      <span className="card-item-tag-working">
-                        <Loader2 size={11} className="spin-animate" />
-                        <span>Working...</span>
-                      </span>
-                      {/* Stop Agent button — always visible during execution */}
-                      {onTerminateAgent && (
-                        <button
-                          className="btn btn-secondary"
-                          style={{ padding: '0.2rem 0.55rem', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.3rem', color: 'var(--accent-rose)', borderColor: 'var(--accent-rose)' }}
-                          onClick={() => onTerminateAgent(task.id)}
-                          title="Stop the running agent immediately"
-                        >
-                          <Square size={11} />
-                          <span>Stop Agent</span>
-                        </button>
-                      )}
-                      {!isEditing && (
-                        <button
-                          className="btn btn-secondary"
-                          style={{ padding: '0.2rem 0.55rem', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
-                          onClick={() => setViewModeSection2(showExecutionSteps ? 'notes' : 'steps')}
-                        >
-                          {showExecutionSteps ? <FileText size={11} /> : <Sparkles size={11} />}
-                          <span>{showExecutionSteps ? 'Notes' : 'Live Logs'}</span>
-                        </button>
-                      )}
-                    </>
-                  ) : executionSteps.length > 0 ? (
-                    /* Case 3: Completed Execution Steps */
-                    <>
-                      <span className="card-item-tag-completed">
-                        <CheckCircle2 size={11} color="var(--accent-emerald)" />
-                        <span>{executionSteps.length} steps</span>
-                      </span>
-                      {!isEditing && (
-                        <button
-                          className="btn btn-secondary"
-                          style={{ padding: '0.2rem 0.55rem', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
-                          onClick={() => setViewModeSection2(showExecutionSteps ? 'notes' : 'steps')}
-                        >
-                          {showExecutionSteps ? <FileText size={11} /> : <Sparkles size={11} />}
-                          <span>{showExecutionSteps ? 'Notes' : 'Steps'}</span>
-                        </button>
-                      )}
-                    </>
-                  ) : buildVerificationText ? (
-                    <span className="card-item-count">{buildVerificationText.split('\n').filter(Boolean).length} lines</span>
-                  ) : (
-                    <span className="card-item-tag-empty">Not in progress</span>
                   )}
+
+                  {/* Terminate active running agent */}
+                  {isExecuting && onTerminateAgent && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{
+                        padding: '0.15rem 0.45rem',
+                        fontSize: '0.7rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.25rem',
+                        color: 'var(--accent-rose)',
+                        borderColor: 'var(--accent-rose)',
+                      }}
+                      onClick={() => onTerminateAgent(task.id)}
+                      title="Stop the running agent immediately"
+                    >
+                      <Square size={10} />
+                      <span>Stop</span>
+                    </button>
+                  )}
+
+                  {/* Single Status Chip */}
+                  <CardStatusChip status={stepsActionsStatus} />
                 </div>
               </div>
 
-              <div className="brief-body-wrapper">
-                {/* Small Token Usage Counter Card anchored to the top of the BV section */}
-                <BvTokenCounterCard
-                  task={task}
-                  brief={brief}
-                  executionSteps={executionSteps}
-                  isExecuting={isExecuting}
-                />
-
-                {/* Sub-view 1: Embedded Terminal */}
-                {showTerminal && terminalSession ? (
-                  <div className="embedded-terminal-wrapper">
-                    <div className="embedded-terminal-topbar">
-                      <span>
-                        <span style={{ color: 'var(--accent-cyan)', fontWeight: 600 }}>cmd:</span>{' '}
-                        {terminalSession.cmd} {terminalSession.args.join(' ')}
-                      </span>
-                      <span>
-                        <span style={{ color: 'var(--accent-violet)', fontWeight: 600 }}>cwd:</span>{' '}
-                        {terminalSession.cwd}
-                      </span>
-                    </div>
-                    <div className="embedded-terminal-body">
-                      <AgentTerminal
-                        cmd={terminalSession.cmd}
-                        args={terminalSession.args}
-                        cwd={terminalSession.cwd}
-                        onExit={(code) => onSessionExit?.(code)}
-                      />
-                    </div>
-                  </div>
-                ) : showExecutionSteps ? (
-                  /* Sub-view 2: In-place Execution Steps & Logs */
-                  <div style={{ padding: '1rem', background: '#0a0c10', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-                    {/* Interactive Mid-Build Human Clarification Card if active */}
-                    {pendingHumanInput && onHumanInputChoice && (
-                      <HumanInputCard
-                        prompt={pendingHumanInput.prompt}
-                        onSubmit={onHumanInputChoice}
-                      />
-                    )}
-
-                    {/* Interactive MCP Permission Prompt Card if active */}
-                    {pendingPermission && onPermissionChoice && (
-                      <div
-                        style={{
-                          background: 'rgba(239, 68, 68, 0.08)',
-                          border: '1px solid rgba(239, 68, 68, 0.35)',
-                          borderRadius: 'var(--radius-md)',
-                          padding: '1rem',
-                          animation: 'fadeIn 0.2s ease',
-                        }}
+              {!collapsedCards.steps && (
+                <div className="ai-sub-card-body" style={{ padding: 0 }}>
+                  {/* Internal View Switcher Bar */}
+                  <div className="actions-view-switcher-bar">
+                    <span className="actions-switcher-label">
+                      {showTerminal
+                        ? `Terminal (${terminalSession?.cmd})`
+                        : showExecutionSteps
+                          ? executionSteps.length > 0
+                            ? `${executionSteps.length} action${executionSteps.length === 1 ? '' : 's'}`
+                            : 'Execution Steps'
+                          : 'Notes'}
+                    </span>
+                    <div className="steps-notes-chip">
+                      <button
+                        type="button"
+                        className={`steps-notes-segment ${!showExecutionSteps && !showTerminal ? 'active' : ''}`}
+                        onClick={() => setViewModeSection2('notes')}
+                        title="Switch to Notes view"
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-rose)', fontWeight: 700, fontSize: '0.88rem', marginBottom: '0.4rem' }}>
-                          <ShieldAlert size={17} />
-                          <span>Permission Authorization Required</span>
-                        </div>
-                        <p style={{ fontSize: '0.82rem', color: '#fff', marginBottom: '0.6rem' }}>
-                          The AI agent is requesting to execute: <strong style={{ color: 'var(--accent-cyan)' }}>{pendingPermission.serverName} / {pendingPermission.toolName}()</strong>
-                        </p>
-                        <div style={{ background: 'var(--bg-darkest)', padding: '0.6rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', fontFamily: 'var(--font-mono)', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
-                          {pendingPermission.summary}
-                        </div>
-                        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-                          <button className="btn btn-secondary" style={{ padding: '0.25rem 0.6rem', fontSize: '0.78rem' }} onClick={() => onPermissionChoice(false)}>
-                            Skip / Reject
-                          </button>
-                          <button className="btn btn-emerald" style={{ padding: '0.25rem 0.6rem', fontSize: '0.78rem' }} onClick={() => onPermissionChoice(true)}>
-                            <ShieldCheck size={14} />
-                            <span>Approve Tool Call</span>
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Execution Steps */}
-                    <div className="execution-steps">
-                      {executionSteps.map((step) => (
-                        <div key={step.id} className={`step-card ${step.status} stage-${step.stage}`} style={step.stage === 'mcp_call' && step.pieceId ? { marginLeft: '1.1rem' } : undefined}>
-                          <div className="step-header">
-                            <div className="step-title">
-                              <StepStatusIcon step={step} />
-                              <PieceChip pieceId={step.stage === 'mcp_call' ? step.pieceId : undefined} />
-                              <span style={{ fontSize: '0.88rem', color: step.status === 'cancelled' ? 'var(--text-muted)' : undefined }}>{step.title}</span>
-                            </div>
-                            <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                              <StepUsageBadge usage={step.usage} />
-                              <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-                                {step.time}
-                              </span>
-                            </span>
-                          </div>
-
-                          <div className="step-detail" style={{ fontSize: '0.82rem', whiteSpace: 'pre-wrap' }}>{step.detail}</div>
-                          <BiblePreview markdown={step.bibleMarkdown} filePath={step.bibleMarkdown ? step.bibleFilePath : undefined} />
-
-                          {/* Overview document preview if available */}
-                          {step.stage === 'overview' && step.status === 'success' && step.overviewDocument && (
-                            <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                              {step.overviewDocument.brief && (
-                                <div style={{ padding: '0.6rem 0.75rem', background: 'rgba(56, 189, 248, 0.06)', border: '1px solid rgba(56, 189, 248, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
-                                  <div style={{ fontWeight: 700, color: 'var(--accent-cyan)', marginBottom: '0.35rem', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                                    <span>🥒 Gherkin Execution Brief (Given-When-Then)</span>
-                                  </div>
-                                  <pre style={{ margin: 0, padding: 0, background: 'transparent', color: 'inherit', fontFamily: 'var(--font-mono)', fontSize: '0.74rem', whiteSpace: 'pre-wrap', lineHeight: '1.45' }}>
-                                    {step.overviewDocument.brief}
-                                  </pre>
-                                </div>
-                              )}
-                              <div style={{ padding: '0.5rem 0.75rem', background: 'rgba(245, 158, 11, 0.06)', border: '1px solid rgba(245, 158, 11, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
-                                <div style={{ fontWeight: 700, color: 'var(--accent-amber)', marginBottom: '0.25rem', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Output As</div>
-                                <span>{step.overviewDocument.output_as}</span>
-                              </div>
-                            </div>
-                          )}
-
-                          {step.humanInputPrompt && step.status === 'running' && onHumanInputChoice && !pendingHumanInput && (
-                            <div style={{ marginTop: '0.6rem' }}>
-                              <HumanInputCard
-                                prompt={step.humanInputPrompt}
-                                onSubmit={onHumanInputChoice}
-                              />
-                            </div>
-                          )}
-
-                          {step.widgetType && renderMcpAppWidget(step.widgetType, step.widgetData)}
-                        </div>
-                      ))}
+                        <FileText size={10} />
+                        <span>Notes</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`steps-notes-segment ${showExecutionSteps || showTerminal ? 'active' : ''}`}
+                        onClick={() => setViewModeSection2(terminalSession ? 'terminal' : 'steps')}
+                        title={terminalSession ? 'Switch to Terminal view' : 'Switch to Steps view'}
+                      >
+                        {terminalSession ? <Terminal size={10} /> : <Sparkles size={10} />}
+                        <span>{terminalSession ? 'Terminal' : 'Steps'}</span>
+                      </button>
                     </div>
                   </div>
-                ) : isEditing ? (
-                  /* Sub-view 3: Textarea Editor Mode */
-                  <textarea
-                    ref={buildVerificationRef}
-                    className="obsidian-card-textarea"
-                    placeholder="Record mid-task progress, steps taken on the journey, architectural choices, and why..."
-                    value={buildVerificationText}
-                    onChange={(e) => handleFieldChange('buildAndVerification', e.target.value)}
-                    onKeyDown={(e) => handleMarkdownAutoWrap(e, (val) => handleFieldChange('buildAndVerification', val))}
-                    onFocus={() => setActiveFocusedRef(buildVerificationRef)}
-                    rows={4}
-                  />
-                ) : (
-                  /* Sub-view 4: Rendered Markdown or Empty State */
-                  <div className="brief-body">
-                    {buildVerificationText ? (
-                      <div className="brief-markdown-render">
-                        <MarkdownRenderer content={buildVerificationText} />
-                      </div>
-                    ) : (
-                      <div className="brief-empty-markdown">
-                        <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                          Mid-task build & verification steps will appear here as the agent works. Click <strong>'Run Task'</strong> to begin.
+
+                  {/* Sub-view 1: Embedded Terminal */}
+                  {showTerminal && terminalSession ? (
+                    <div className="embedded-terminal-wrapper">
+                      <div className="embedded-terminal-topbar">
+                        <span>
+                          <span style={{ color: 'var(--accent-cyan)', fontWeight: 600 }}>cmd:</span>{' '}
+                          {terminalSession.cmd} {terminalSession.args.join(' ')}
+                        </span>
+                        <span>
+                          <span style={{ color: 'var(--accent-violet)', fontWeight: 600 }}>cwd:</span>{' '}
+                          {terminalSession.cwd}
                         </span>
                       </div>
-                    )}
-                  </div>
-                )}
-              </div>
+                      <div className="embedded-terminal-body">
+                        <AgentTerminal
+                          cmd={terminalSession.cmd}
+                          args={terminalSession.args}
+                          cwd={terminalSession.cwd}
+                          onExit={(code) => onSessionExit?.(code)}
+                        />
+                      </div>
+                    </div>
+                  ) : showExecutionSteps ? (
+                    /* Sub-view 2: In-place Execution Steps & Logs */
+                    <div className="execution-steps-wrapper" style={{ padding: '0.65rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                      {/* Interactive Mid-Build Human Clarification Card if active */}
+                      {pendingHumanInput && onHumanInputChoice && (
+                        <HumanInputCard
+                          prompt={pendingHumanInput.prompt}
+                          onSubmit={onHumanInputChoice}
+                        />
+                      )}
+
+                      {/* Interactive MCP Permission Prompt Card if active */}
+                      {pendingPermission && onPermissionChoice && (
+                        <div
+                          style={{
+                            background: 'rgba(239, 68, 68, 0.08)',
+                            border: '1px solid rgba(239, 68, 68, 0.35)',
+                            borderRadius: 'var(--radius-md)',
+                            padding: '0.75rem',
+                            animation: 'fadeIn 0.2s ease',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--accent-rose)', fontWeight: 700, fontSize: '0.82rem', marginBottom: '0.35rem' }}>
+                            <ShieldAlert size={15} />
+                            <span>Permission Authorization Required</span>
+                          </div>
+                          <p style={{ fontSize: '0.78rem', color: 'var(--text-main)', marginBottom: '0.5rem' }}>
+                            Request to execute: <strong style={{ color: 'var(--accent-cyan)' }}>{pendingPermission.serverName} / {pendingPermission.toolName}()</strong>
+                          </p>
+                          <div style={{ background: 'var(--bg-darkest)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', fontFamily: 'var(--font-mono)', fontSize: '0.74rem', color: 'var(--text-muted)', marginBottom: '0.6rem' }}>
+                            {pendingPermission.summary}
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.45rem', justifyContent: 'flex-end' }}>
+                            <button className="btn btn-secondary" style={{ padding: '0.2rem 0.55rem', fontSize: '0.74rem' }} onClick={() => onPermissionChoice(false)}>
+                              Skip / Reject
+                            </button>
+                            <button className="btn btn-emerald" style={{ padding: '0.2rem 0.55rem', fontSize: '0.74rem' }} onClick={() => onPermissionChoice(true)}>
+                              <ShieldCheck size={13} />
+                              <span>Approve</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Top Card: Acceptance Brief (Gherkin Scenarios) - Collapsed by default */}
+                      {gherkinBrief && (
+                        <div className={`ai-step-gherkin-card ${isGherkinOpen ? 'is-open' : 'is-collapsed'}`}>
+                          <div
+                            className="ai-step-gherkin-header"
+                            onClick={() => setIsGherkinOpen((v) => !v)}
+                            title={isGherkinOpen ? 'Collapse Acceptance Brief' : 'Expand Acceptance Brief'}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                              <button
+                                type="button"
+                                className={`card-collapse-btn ${!isGherkinOpen ? 'is-collapsed' : ''}`}
+                                aria-label={isGherkinOpen ? 'Collapse Acceptance Brief' : 'Expand Acceptance Brief'}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setIsGherkinOpen((v) => !v);
+                                }}
+                              >
+                                <ChevronDown size={11} className="collapse-chevron" />
+                              </button>
+                              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <span>🥒</span>
+                                <span>Acceptance Brief (Gherkin Scenarios)</span>
+                              </span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <span className="card-item-tag-completed" style={{ fontSize: '0.65rem' }}>
+                                Gherkin Spec
+                              </span>
+                            </div>
+                          </div>
+
+                          {isGherkinOpen && (
+                            <div className="ai-step-gherkin-body">
+                              <pre className="gherkin-brief-pre">
+                                {gherkinBrief}
+                              </pre>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Execution Steps */}
+                      <div className="execution-steps">
+                        {executionSteps.length === 0 ? (
+                          <div className="ai-card-hint" style={{ margin: '0.4rem 0' }}>
+                            No execution steps recorded yet. Agent actions and tool logs will appear here when the task runs.
+                          </div>
+                        ) : (
+                          executionSteps.map((step) => (
+                            <div key={step.id} className={`step-card ${step.status} stage-${step.stage}`} style={step.stage === 'mcp_call' && step.pieceId ? { marginLeft: '0.65rem' } : undefined}>
+                              <div className="step-header">
+                                <div className="step-title">
+                                  <StepStatusIcon step={step} size={13} />
+                                  <PieceChip pieceId={step.stage === 'mcp_call' ? step.pieceId : undefined} />
+                                  <span style={{ fontSize: '0.8rem', color: step.status === 'cancelled' ? 'var(--text-muted)' : undefined }}>{step.title}</span>
+                                </div>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                  <StepUsageBadge usage={step.usage} />
+                                  <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
+                                    {step.time}
+                                  </span>
+                                </span>
+                              </div>
+
+                              <div className="step-detail">{step.detail}</div>
+                              <BiblePreview markdown={step.bibleMarkdown} filePath={step.bibleMarkdown ? step.bibleFilePath : undefined} />
+
+                              {step.humanInputPrompt && step.status === 'running' && onHumanInputChoice && !pendingHumanInput && (
+                                <div style={{ marginTop: '0.4rem' }}>
+                                  <HumanInputCard
+                                    prompt={step.humanInputPrompt}
+                                    onSubmit={onHumanInputChoice}
+                                  />
+                                </div>
+                              )}
+
+                              {step.widgetType && renderMcpAppWidget(step.widgetType, step.widgetData)}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  ) : isEditing ? (
+                    <div style={{ padding: '0.55rem 0.75rem' }}>
+                      <textarea
+                        ref={buildVerificationRef}
+                        className="obsidian-card-textarea"
+                        placeholder="Record mid-task progress, steps taken on the journey, architectural choices, and why..."
+                        value={buildVerificationText}
+                        onChange={(e) => handleFieldChange('buildAndVerification', e.target.value)}
+                        onKeyDown={(e) => handleMarkdownAutoWrap(e, (val) => handleFieldChange('buildAndVerification', val))}
+                        onFocus={() => setActiveFocusedRef(buildVerificationRef)}
+                        rows={4}
+                      />
+                    </div>
+                  ) : (
+                    <div className="brief-body" style={{ padding: '0.55rem 0.75rem' }}>
+                      {buildVerificationText ? (
+                        <div className="brief-markdown-render">
+                          <MarkdownRenderer content={buildVerificationText} />
+                        </div>
+                      ) : (
+                        <div className="ai-card-hint">
+                          Mid-task build & verification steps will appear here as the agent works.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* ═══════════════════════════════════════════════════════════
-                SECTION 3: COMPLETION
+                CARD 5: COMPLETION LOG
                ═══════════════════════════════════════════════════════════ */}
-            <div className={`brief-card ${collapsedSections.completion ? 'is-collapsed' : ''}`}>
+            <div className={`ai-sub-card card-completion ${collapsedCards.completion ? 'is-collapsed' : ''}`}>
               <div
-                className="brief-section-header clickable-header"
-                onClick={() => toggleSection('completion')}
+                className="ai-sub-card-header"
+                onClick={() => toggleCard('completion')}
               >
                 <div className="header-left">
                   <button
                     type="button"
-                    className={`card-collapse-btn ${collapsedSections.completion ? 'is-collapsed' : ''}`}
-                    title={collapsedSections.completion ? 'Expand section' : 'Collapse section'}
-                    aria-label={collapsedSections.completion ? 'Expand section' : 'Collapse section'}
+                    className={`card-collapse-btn ${collapsedCards.completion ? 'is-collapsed' : ''}`}
+                    title={collapsedCards.completion ? 'Expand Completion Log' : 'Collapse Completion Log'}
+                    aria-label={collapsedCards.completion ? 'Expand Completion Log' : 'Collapse Completion Log'}
                     onClick={(e) => {
                       e.stopPropagation();
-                      toggleSection('completion');
+                      toggleCard('completion');
                     }}
                   >
                     <ChevronDown size={12} className="collapse-chevron" />
                   </button>
                   <span className="section-title-text">
-                    <span className="section-icon">
-                      <Flag size={18} color="var(--accent-violet)" />
-                    </span>
+                    <Flag size={14} color="#14b8a6" />
                     <span>Completion</span>
                   </span>
-                  <span className="section-subtitle-tag">What Was Built & Current Status</span>
+                  {/* <span className="section-subtitle-tag">What Got Done</span> */}
                 </div>
 
-                <div className="header-right">
-                  {isWorking && !completionText ? (
-                    <span className="card-item-tag-working">
-                      <Loader2 size={11} className="spin-animate" />
-                      <span>In progress</span>
-                    </span>
-                  ) : completionText ? (
-                    <span className="card-item-count">{completionText.split('\n').filter(Boolean).length} lines</span>
-                  ) : (
-                    <span className="card-item-tag-empty">Pending completion</span>
-                  )}
+                <div className="header-right" onClick={(e) => e.stopPropagation()}>
+                  <CardStatusChip status={completionStatus} />
                 </div>
               </div>
 
-              <div className="brief-body-wrapper">
-                {isEditing ? (
-                  <textarea
-                    ref={completionRef}
-                    className="obsidian-card-textarea"
-                    placeholder="Summarize what was built, where the task stands currently, verification results, and next steps..."
-                    value={completionText}
-                    onChange={(e) => handleFieldChange('completion', e.target.value)}
-                    onKeyDown={(e) => handleMarkdownAutoWrap(e, (val) => handleFieldChange('completion', val))}
-                    onFocus={() => setActiveFocusedRef(completionRef)}
-                    rows={4}
-                  />
-                ) : isWorking && !completionText ? (
-                  <div className="brief-body" style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', padding: '1.25rem', color: 'var(--text-muted)', fontSize: '0.84rem' }}>
-                    <Loader2 size={16} className="spin-animate" color="var(--accent-violet)" />
-                    <span>Task execution in progress. Completion summary and verification records will appear here upon finish.</span>
-                  </div>
-                ) : (
-                  <div className="brief-body">
-                    {/* Dedicated Human Review Verification Checklist Card */}
-                    {task.subtasks?.some((s) => s.isHumanReview) && (
-                      <div className="human-review-verification-card">
-                        <div className="human-review-verification-header">
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                            <Eye size={15} color="var(--accent-violet)" />
-                            <span style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-bright)' }}>Human Review Verification</span>
-                          </div>
-                          <span className="human-review-count-badge">
-                            {task.subtasks.filter((s) => s.isHumanReview && s.isDone).length} / {task.subtasks.filter((s) => s.isHumanReview).length} verified
-                          </span>
-                        </div>
-                        <div className="human-review-verification-list">
-                          {task.subtasks.filter((s) => s.isHumanReview).map((s, idx) => (
-                            <div key={s.id || idx} className={`human-review-step-row ${s.isDone ? 'is-done' : 'is-pending'}`}>
-                              <span className="human-review-step-icon">
-                                {s.isDone ? <CheckCircle2 size={14} color="var(--accent-emerald)" /> : <CircleDot size={14} color="var(--accent-violet)" />}
-                              </span>
-                              <span className="human-review-step-text">{s.text}</span>
-                              <span className={`human-review-step-status ${s.isDone ? 'verified' : 'pending'}`}>
-                                {s.isDone ? 'Verified' : 'Action Required'}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {completionText ? (
+              {!collapsedCards.completion && (
+                <div className="ai-sub-card-body">
+                  {isEditing ? (
+                    <textarea
+                      ref={completionRef}
+                      className="obsidian-card-textarea"
+                      placeholder="Record outcomes, commits, test results, pull requests, follow-ups..."
+                      value={completionText}
+                      onChange={(e) => handleFieldChange('completion', e.target.value)}
+                      onKeyDown={(e) => handleMarkdownAutoWrap(e, (val) => handleFieldChange('completion', val))}
+                      onFocus={() => setActiveFocusedRef(completionRef)}
+                      rows={4}
+                    />
+                  ) : completionText ? (
+                    <div className="brief-body" style={{ padding: '0.55rem 0.75rem' }}>
                       <div className="brief-markdown-render">
                         <MarkdownRenderer content={completionText} />
                       </div>
-                    ) : (
-                      <div className="brief-empty-markdown">
-                        <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                          Completion summary and final verification will be recorded once the agent finishes execution.
-                        </span>
-                      </div>
-                    )}
-
-                    {/* Dedicated Created Files & Artifacts Interactive List */}
-                    {createdFilesList.length > 0 && (
-                      <div className="created-artifacts-card">
-                        <div className="created-artifacts-header">
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                            <FileCode size={15} color="var(--accent-cyan)" />
-                            <span style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-bright)' }}>Completed Work & Created Files</span>
-                          </div>
-                          <span className="created-artifacts-count-badge">
-                            {createdFilesList.length} {createdFilesList.length === 1 ? 'file' : 'files'}
-                          </span>
-                        </div>
-                        <div className="created-artifacts-list">
-                          {createdFilesList.map((filePath, idx) => (
-                            <div key={idx} className="created-artifact-row">
-                              <div className="created-artifact-info">
-                                <FileCode size={14} color="var(--accent-cyan)" />
-                                <span className="created-artifact-path" title={filePath}>{filePath}</span>
-                              </div>
-                              <div className="created-artifact-actions">
-                                <button
-                                  type="button"
-                                  className="created-artifact-btn open-ide-btn"
-                                  title="Open file in IDE (VS Code / Cursor)"
-                                  onClick={async (e) => {
-                                    e.stopPropagation();
-                                    setOpenedFileFeedback(filePath);
-                                    await openFileInIdeOrSystem(filePath);
-                                    setTimeout(() => setOpenedFileFeedback(null), 2500);
-                                  }}
-                                >
-                                  {openedFileFeedback === filePath ? (
-                                    <>
-                                      <Check size={12} color="var(--accent-emerald)" />
-                                      <span style={{ color: 'var(--accent-emerald)' }}>Opened in IDE</span>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <ExternalLink size={12} />
-                                      <span>Open in IDE</span>
-                                    </>
-                                  )}
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+                    </div>
+                  ) : (
+                    <div className="ai-card-hint">
+                      The completion log will be written when the Logger agent finishes execution.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1705,7 +1680,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                 <ListTodo size={48} color="var(--accent-violet)" style={{ opacity: 0.45, marginBottom: '1rem' }} />
                 <h3 style={{ color: 'var(--text-bright)', fontSize: '1.15rem' }}>No AI tasks in workspace</h3>
                 <p style={{ fontSize: '0.85rem', marginTop: '0.5rem', maxWidth: '420px', lineHeight: '1.6' }}>
-                  Tasks in <strong>AGENT_CONTEXT.md</strong> will appear here.
+                  AI implementation briefs and execution plans will appear here.
                 </p>
               </div>
             </div>
@@ -1803,7 +1778,7 @@ function renderMcpAppWidget(type: string, data: any) {
           </span>
         </div>
         <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
-          Executed command: <strong style={{ color: '#fff', fontFamily: 'var(--font-mono)' }}>{data.commandExecuted}</strong> | Range: {data.selectionRange || 'L1-L30'}
+          Executed command: <strong style={{ color: 'var(--text-bright)', fontFamily: 'var(--font-mono)' }}>{data.commandExecuted}</strong> | Range: {data.selectionRange || 'L1-L30'}
         </div>
         <div className="diff-view">
           {data.diffLines?.map((line: string, idx: number) => (
@@ -1871,7 +1846,7 @@ function renderMcpAppWidget(type: string, data: any) {
   // Code diff fallback
   return (
     <div className="widget-box">
-      <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#fff', marginBottom: '0.4rem' }}>
+      <div style={{ fontWeight: 700, fontSize: '0.82rem', color: 'var(--text-bright)', marginBottom: '0.4rem' }}>
         💻 File System MCP Unified Code Diff ({data.filename})
       </div>
       <div className="diff-view">

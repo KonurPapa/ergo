@@ -5,17 +5,15 @@
  */
 import { storageManager } from '../storageManager';
 import { stripSkillFrontmatter } from '../llmClient';
-import discoveryRaw from '../../../docs/skills/discovery-agent/SKILL.md?raw';
 import summaryRaw from '../../../docs/skills/summary-agent/SKILL.md?raw';
 import managerRaw from '../../../docs/skills/manager-agent/SKILL.md?raw';
 import workerRaw from '../../../docs/skills/worker-agent/SKILL.md?raw';
 import cleanerRaw from '../../../docs/skills/cleaner-agent/SKILL.md?raw';
 import hardenerRaw from '../../../docs/skills/hardener-agent/SKILL.md?raw';
 
-export type PipelineSkillName = 'discovery-agent' | 'summary-agent' | 'manager-agent' | 'worker-agent' | 'cleaner-agent' | 'hardener-agent';
+export type PipelineSkillName = 'summary-agent' | 'manager-agent' | 'worker-agent' | 'cleaner-agent' | 'hardener-agent';
 
 const BUNDLED: Record<PipelineSkillName, string> = {
-  'discovery-agent': discoveryRaw,
   'summary-agent': summaryRaw,
   'manager-agent': managerRaw,
   'worker-agent': workerRaw,
@@ -25,8 +23,7 @@ const BUNDLED: Record<PipelineSkillName, string> = {
 
 /** A heading that only exists in the current generation of each skill doc; stale copies are ignored. */
 const FRESHNESS_MARKER: Record<PipelineSkillName, string> = {
-  'discovery-agent': 'Early-Exit Subtask Inspection',
-  'summary-agent': 'requiresHardener',
+  'summary-agent': 'Requirement completeness invariant',
   'manager-agent': 'Simple / Standalone Deliverables',
   'worker-agent': 'Target Deliverables Only',
   'cleaner-agent': 'Completion Protocol',

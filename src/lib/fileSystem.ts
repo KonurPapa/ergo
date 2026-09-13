@@ -78,12 +78,12 @@ export async function readFilesFromDisk(
 }
 
 /**
- * Create a new project directory with its initial TODO.md and AGENT_CONTEXT.md on disk.
+ * Create a new project directory with its initial TODO.md on disk.
  */
 export async function createProjectOnDisk(
   folderPath: string,
   todoContent: string,
-  agentContextContent: string
+  agentContextContent: string = ''
 ): Promise<CreateProjectDiskResult> {
   try {
     const res = await storageManager.createProjectOnDisk(folderPath, todoContent, agentContextContent);
@@ -97,8 +97,7 @@ export async function createProjectOnDisk(
     return {
       success: true,
       folderPath,
-      todoPath: `${folderPath}/TODO.md`,
-      agentPath: `${folderPath}/AGENT_CONTEXT.md`
+      todoPath: `${folderPath}/TODO.md`
     };
   } catch (err: any) {
     console.warn('[Ergo FS] Failed to create project on disk:', err);

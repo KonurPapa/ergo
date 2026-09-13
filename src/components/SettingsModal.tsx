@@ -8,7 +8,6 @@ import {
   Save,
   Check,
   Folder,
-  FileText,
   CheckSquare,
   Clock,
   RotateCw,
@@ -25,8 +24,10 @@ import {
   Repeat,
   Sparkles,
   FlaskConical,
-  Search
+  Database,
+  Trash2
 } from 'lucide-react';
+import { getChunkCount } from '../lib/memory';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -47,14 +48,15 @@ interface SettingsModalProps {
   onThemeChange: (theme: 'light' | 'dark') => void;
   agentPipelineOptions: AgentPipelineOptions;
   onSetAgentPipelineOptions: (next: AgentPipelineOptions) => void;
+  onClearProjectMemory?: () => Promise<number>;
+  onClearAllMemory?: () => Promise<number>;
 }
 
 /** Bounds for the numeric pipeline knobs (kept in sync with the helper text below). */
 const PIPELINE_LIMITS = {
   maxConcurrentAgents: { min: 1, max: 8 },
   maxQaRetries: { min: 0, max: 5 },
-  maxToolRoundsPerAgent: { min: 5, max: 120 },
-  discoveryRelevanceThreshold: { min: 10, max: 90 }
+  maxToolRoundsPerAgent: { min: 5, max: 120 }
 } as const;
 
 function clampInt(value: number, min: number, max: number): number {
@@ -109,7 +111,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   theme,
   onThemeChange,
   agentPipelineOptions,
-  onSetAgentPipelineOptions
+  onSetAgentPipelineOptions,
+  onClearProjectMemory,
+  onClearAllMemory
 }) => {
   const [isScanning, setIsScanning] = useState(false);
   const [storagePathInput, setStoragePathInput] = useState(
@@ -117,16 +121,77 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
   const [isSavingPath, setIsSavingPath] = useState(false);
   const [pathSaveSuccess, setPathSaveSuccess] = useState(false);
+  const [projectChunkCount, setProjectChunkCount] = useState<number | null>(null);
+  const [totalChunkCount, setTotalChunkCount] = useState<number | null>(null);
+  const [isClearingProjectMemory, setIsClearingProjectMemory] = useState(false);
+  const [isClearingAllMemory, setIsClearingAllMemory] = useState(false);
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+    let mounted = true;
+    void getChunkCount(undefined, activeProject.id).then((c) => {
+      if (mounted) setProjectChunkCount(c);
+    });
+    void getChunkCount().then((c) => {
+      if (mounted) setTotalChunkCount(c);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [isOpen, activeProject.id]);
+
+  const handleClearProjectMemoryClick = async () => {
+    if (!onClearProjectMemory) return;
+    if (
+      !window.confirm(
+        `Clear vector memory for "${activeProject.name || activeProject.id}"? All task summaries and learnings for this project will be removed.`
+      )
+    ) {
+      return;
+    }
+    setIsClearingProjectMemory(true);
+    try {
+      await onClearProjectMemory();
+      const nextProjectCount = await getChunkCount(undefined, activeProject.id);
+      const nextTotalCount = await getChunkCount();
+      setProjectChunkCount(nextProjectCount);
+      setTotalChunkCount(nextTotalCount);
+    } catch (err) {
+      console.error('[SettingsModal] Failed to clear project memory:', err);
+    } finally {
+      setIsClearingProjectMemory(false);
+    }
+  };
+
+  const handleClearAllMemoryClick = async () => {
+    if (!onClearAllMemory) return;
+    if (
+      !window.confirm(
+        'Reset ALL vector memory across all projects? This will completely wipe the local vector database.'
+      )
+    ) {
+      return;
+    }
+    setIsClearingAllMemory(true);
+    try {
+      await onClearAllMemory();
+      setProjectChunkCount(0);
+      setTotalChunkCount(0);
+    } catch (err) {
+      console.error('[SettingsModal] Failed to clear all memory:', err);
+    } finally {
+      setIsClearingAllMemory(false);
+    }
+  };
 
   if (!isOpen) return null;
 
   const todoPath = activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`;
-  const agentPath = activeProject?.agentContextFilePath || `${activeProject?.folderPath}/AGENT_CONTEXT.md`;
 
   const setPipelineOption = <K extends keyof AgentPipelineOptions>(key: K, value: AgentPipelineOptions[K]) => {
     onSetAgentPipelineOptions({ ...agentPipelineOptions, [key]: value });
   };
-  const setPipelineNumber = (key: 'maxConcurrentAgents' | 'maxQaRetries' | 'maxToolRoundsPerAgent' | 'discoveryRelevanceThreshold', raw: string) => {
+  const setPipelineNumber = (key: 'maxConcurrentAgents' | 'maxQaRetries' | 'maxToolRoundsPerAgent', raw: string) => {
     const parsed = parseInt(raw, 10);
     if (isNaN(parsed)) return;
     const { min, max } = PIPELINE_LIMITS[key];
@@ -470,7 +535,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </span>
                 </div>
                 <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: '1.45' }}>
-                  Automatically writes markdown changes directly to <code style={{ color: 'var(--accent-cyan)' }}>TODO.md</code> and <code style={{ color: 'var(--accent-violet)' }}>AGENT_CONTEXT.md</code> on disk when you stop typing.
+                  Automatically writes markdown changes directly to <code style={{ color: 'var(--accent-cyan)' }}>TODO.md</code> on disk when you stop typing.
                 </p>
               </div>
 
@@ -558,7 +623,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <span style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--text-bright)' }}>Agent Pipeline</span>
             </div>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.85rem', lineHeight: '1.4' }}>
-              Tuning for the task execution engine (Discovery → Summary → Manager fan-out → Cleaner → Hardener). Every knob trades tokens and latency against thoroughness.
+              Tuning for the task execution engine (Vector Context → Summary → Manager fan-out → Cleaner → Hardener). Every knob trades tokens and latency against thoroughness.
             </p>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.85rem' }}>
@@ -627,28 +692,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
                 <p style={pipelineHelpStyle}>Upper bound on LLM round-trips per agent loop; higher lets long jobs finish but each round re-reads the whole context.</p>
               </div>
-
-              {/* Discovery Relevance Threshold */}
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
-                  <Search size={13} color="var(--accent-emerald)" />
-                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)' }}>Discovery Title Threshold</span>
-                </div>
-                <div style={pipelineInputBoxStyle}>
-                  <input
-                    type="number"
-                    min={PIPELINE_LIMITS.discoveryRelevanceThreshold.min}
-                    max={PIPELINE_LIMITS.discoveryRelevanceThreshold.max}
-                    step="5"
-                    value={agentPipelineOptions.discoveryRelevanceThreshold ?? 50}
-                    onChange={(e) => setPipelineNumber('discoveryRelevanceThreshold', e.target.value)}
-                    style={pipelineNumberInputStyle}
-                    aria-label="Discovery candidate task title match threshold percentage"
-                  />
-                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>% match (10–90%)</span>
-                </div>
-                <p style={pipelineHelpStyle}>Minimum title match probability before Discovery inspects candidate subtasks; halts upon finding the first matching subtask.</p>
-              </div>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginTop: '0.9rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-subtle)' }}>
@@ -716,7 +759,94 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
-          {/* Section 4: Target File Paths & Status */}
+          {/* Section 4: Vector Memory & Knowledge Store */}
+          <div
+            style={{
+              background: 'rgba(6, 182, 212, 0.025)',
+              border: '1px solid rgba(6, 182, 212, 0.2)',
+              borderRadius: '8px',
+              padding: '1rem'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Database size={16} color="var(--accent-cyan)" />
+                <span style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--text-bright)' }}>Vector Memory & Baseline Context</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                <span
+                  style={{
+                    fontSize: '0.68rem',
+                    fontFamily: 'var(--font-mono)',
+                    color: 'var(--accent-cyan)',
+                    background: 'rgba(6, 182, 212, 0.1)',
+                    border: '1px solid rgba(6, 182, 212, 0.25)',
+                    borderRadius: '4px',
+                    padding: '0.1rem 0.4rem'
+                  }}
+                  title="Chunks stored for this active project"
+                >
+                  {projectChunkCount ?? '…'} chunk{projectChunkCount === 1 ? '' : 's'} (active project)
+                </span>
+                <span
+                  style={{
+                    fontSize: '0.68rem',
+                    fontFamily: 'var(--font-mono)',
+                    color: 'var(--text-muted)',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    borderRadius: '4px',
+                    padding: '0.1rem 0.4rem'
+                  }}
+                  title="Total chunks across all projects in local IndexedDB"
+                >
+                  {totalChunkCount ?? '…'} total
+                </span>
+              </div>
+            </div>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.85rem', lineHeight: '1.4' }}>
+              Local browser-side vector store (`all-MiniLM-L6-v2`, 384-dim). Every task item is keyed strictly on its internal ID, isolated by project, and automatically overwrites on rerun.
+            </p>
+
+            <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{
+                  fontSize: '0.8rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  color: 'var(--accent-amber)',
+                  borderColor: 'rgba(245, 158, 11, 0.3)'
+                }}
+                onClick={handleClearProjectMemoryClick}
+                disabled={isClearingProjectMemory || !onClearProjectMemory}
+              >
+                <Trash2 size={13} />
+                <span>{isClearingProjectMemory ? 'Clearing…' : `Clear "${activeProject.name || activeProject.id}" Memory`}</span>
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{
+                  fontSize: '0.8rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  color: 'var(--accent-rose)',
+                  borderColor: 'rgba(244, 63, 94, 0.3)'
+                }}
+                onClick={handleClearAllMemoryClick}
+                disabled={isClearingAllMemory || !onClearAllMemory}
+              >
+                <RotateCw size={13} />
+                <span>{isClearingAllMemory ? 'Resetting…' : 'Reset Entire Vector DB'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Section 5: Target File Paths & Status */}
           <div
             style={{
               background: 'rgba(255, 255, 255, 0.02)',
@@ -770,10 +900,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-cyan)', paddingLeft: '1.2rem' }}>
                 <CheckSquare size={13} color="var(--accent-cyan)" />
                 <span>{todoPath}</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-violet)', paddingLeft: '1.2rem' }}>
-                <FileText size={13} color="var(--accent-violet)" />
-                <span>{agentPath}</span>
               </div>
             </div>
 

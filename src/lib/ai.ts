@@ -20,6 +20,7 @@ import { callMcpTool, formatConnectionsForAiPrompt, getAllowedRoots } from './mc
 import { storageManager } from './storageManager';
 import { parseTodoMarkdown, parseAgentContextMarkdown } from './parser';
 import { callAiEngine, stripSkillFrontmatter, extractStringFromAiValue } from './llmClient';
+import { type SearchResult } from './memory';
 
 // The agent execution pipeline (Discovery → Summary → Manager → Cleaner → Hardener → Logger)
 // lives in ./agentPipeline. Re-exported here so existing imports keep working.
@@ -77,7 +78,7 @@ Respond strictly with valid JSON matching this schema:
     }
   ]
 }`;
-      const responseText = await callAiEngine(userPrompt, systemPrompt, aiConfig, 'discovery');
+      const responseText = await callAiEngine(userPrompt, systemPrompt, aiConfig, 'general');
       const cleanJson = responseText.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
       const parsed = JSON.parse(cleanJson);
       if (parsed.tasks && parsed.briefs && Array.isArray(parsed.tasks)) {
@@ -317,8 +318,8 @@ CURRENT AGENT_CONTEXT.md:
 ${safeAgentContextMarkdown}
 \`\`\``;
 
-      // Step 1: AI 1 uses primary task model ('general'), with discovery model wiring ready if needed
-      const ai1ModelType: 'discovery' | 'general' = 'general';
+      // Step 1: AI 1 uses primary task model ('general')
+      const ai1ModelType = 'general' as const;
       const ai1Response = await callAiEngine(userPrompt, ai1SystemPrompt, aiConfig, ai1ModelType, 'text');
       const ai1Analysis = ai1Response.trim() || 'Standalone request. Create new task(s) matching workspace conventions.';
 
@@ -996,9 +997,10 @@ export function buildDiscoveryJobPayload(
 export function buildVerboseOverviewAndRequiredMcps(
   task: TaskItem,
   brief: AgentContextItem | undefined,
-  _discoveryPayload: DiscoveryJobPayload,
-  connectedMcps: MCPServer[],
-  parsedAiOverview?: Partial<OverviewDocument> & { requiredMcps?: string[] }
+  _discoveryPayload?: DiscoveryJobPayload | { additionalContext?: DiscoveredTaskContextEntry[] } | null,
+  connectedMcps: MCPServer[] = [],
+  parsedAiOverview?: Partial<OverviewDocument> & { requiredMcps?: string[] },
+  memoryHits?: SearchResult[]
 ): { overviewDoc: OverviewDocument; requiredMcps: string[] } {
   const activeMcps = connectedMcps.filter((m) => m.status === 'connected');
 
@@ -1040,9 +1042,16 @@ export function buildVerboseOverviewAndRequiredMcps(
   }
 
   // 2. Build dense, human-verifiable Gherkin done-state acceptance brief & sections
-  const contextNotes = _discoveryPayload.additionalContext.length > 0
-    ? `\n    And relevant context from task #${_discoveryPayload.additionalContext.map((c) => `${c.taskId} ("${c.title}")`).join(', #')} is incorporated`
-    : '';
+  let contextNotes = '';
+  if (_discoveryPayload?.additionalContext && _discoveryPayload.additionalContext.length > 0) {
+    contextNotes = `\n    And relevant context from task #${_discoveryPayload.additionalContext.map((c) => `${c.taskId} ("${c.title}")`).join(', #')} is incorporated`;
+  } else if (memoryHits && memoryHits.length > 0) {
+    const hitsDesc = memoryHits
+      .slice(0, 3)
+      .map((h) => `"${h.chunk.metadata?.taskTitle || h.chunk.id}"`)
+      .join(', ');
+    contextNotes = `\n    And relevant context from memory (${hitsDesc}) is incorporated`;
+  }
 
   const gherkinSteps: string[] = [];
   if (task.subtasks.length > 0) {
@@ -1082,10 +1091,10 @@ ${gherkinSteps.join('\n')}
     : fallbackGoals;
 
   const fallbackOutputAs = resolvedMcps.some((m) => m.toLowerCase().includes('filesystem') || m.toLowerCase().includes('file'))
-    ? `Write and modify source files in workspace via Filesystem MCP, then record completion summary in AGENT_CONTEXT.md.`
+    ? `Write and modify source files in workspace via Filesystem MCP, then record completion summary in build log.`
     : resolvedMcps.some((m) => m.toLowerCase().includes('git'))
       ? `Perform Git repository operations via Git MCP, then output commit logs and status.`
-      : `Return structured completion summary and results in AGENT_CONTEXT.md.`;
+      : `Return structured completion summary and results in build log.`;
 
   const rawAiOutputAs = extractStringFromAiValue(parsedAiOverview?.output_as);
   const output_as = (rawAiOutputAs.length > 5)
