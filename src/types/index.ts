@@ -114,6 +114,16 @@ export interface McpToolPermissionPrompt {
   diffPreview?: string;
 }
 
+export type OllamaFallbackChoice = 'terminate' | 'switch_cloud';
+
+export interface OllamaFallbackPrompt {
+  id: string;
+  taskId: string | number;
+  consecutiveFailures: number;
+  url: string;
+  errorMessage?: string;
+}
+
 export interface McpToolExecutionResult {
   success: boolean;
   data?: any;

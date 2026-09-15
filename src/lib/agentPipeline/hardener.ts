@@ -4,7 +4,7 @@
  */
 import { type TaskKind, type TokenUsage } from '../../types';
 import { parseJsonLoose } from '../llmClient';
-import { type PipelineContext, type ToolDefinition, addUsage, emptyUsage, resolveRoleTarget } from './contracts';
+import { type PipelineContext, type ToolDefinition, addUsage, emptyUsage, buildToolLoopRequest } from './contracts';
 import { type BibleStore } from './bible';
 import { runToolLoop } from './providerLoop';
 import { createToolExecutor } from './toolExecutor';
@@ -43,7 +43,6 @@ export async function runHardener(
     status: 'running'
   });
 
-  const hardenerTarget = resolveRoleTarget(ctx.aiConfig, 'hardener');
   const skill = await loadPipelineSkill('hardener-agent');
   // Full tool list (byte-stable prefix shared with the manager/workers); the scope blocks file writes.
   const executor = createToolExecutor({
@@ -58,29 +57,26 @@ export async function runHardener(
     (createdFiles.length > 0 ? `### Files written this run\n${createdFiles.map((f) => `- ${f}`).join('\n')}\n\n` : '### Files written this run\n- (none recorded)\n\n') +
     `${bible.renderPieces()}\n${bible.renderEventLog({ last: 40 })}`;
 
-  const result = await runToolLoop({
-    provider: hardenerTarget.provider,
-    apiKey: hardenerTarget.apiKey,
-    baseUrl: hardenerTarget.baseUrl,
-    signal: ctx.signal,
-    model: hardenerTarget.model,
-    stableSystem: `${skill}\n\n${HARDENER_RULES}`,
-    sharedContext: bible.renderStable(),
-    // Persona selection lives in the uncached tail so both cached blocks stay byte-identical across task kinds.
-    volatileSystem:
-      taskKind === 'coding'
-        ? createdFiles.some((f) => /\.(html|htm|jsx|tsx|vue|svelte)$/i.test(f))
-          ? 'ACTIVE PERSONA: Coding / Web tasks (human QA engineer operating the system via UI/CLI; use headless browser / Playwright via run_command to verify rendering and interactions if tooling is available).'
-          : 'ACTIVE PERSONA: Coding tasks (human QA engineer operating the system via UI/CLI).'
-        : 'ACTIVE PERSONA: Non-coding tasks (human recipient verifying the deliverable).',
-    tools,
-    initialUserMessage: message,
-    // Cap Hardener rounds strictly: 6 rounds max to prevent endless loops and token burns
-    maxRounds: Math.min(6, Math.max(3, ctx.options.maxToolRoundsPerAgent)),
-    maxTokens: 8000,
-    responseFormat: 'json',
-    onToolCalls: executor
-  });
+  const result = await runToolLoop(
+    buildToolLoopRequest(ctx, 'hardener', {
+      stableSystem: `${skill}\n\n${HARDENER_RULES}`,
+      sharedContext: bible.renderStable(),
+      // Persona selection lives in the uncached tail so both cached blocks stay byte-identical across task kinds.
+      volatileSystem:
+        taskKind === 'coding'
+          ? createdFiles.some((f) => /\.(html|htm|jsx|tsx|vue|svelte)$/i.test(f))
+            ? 'ACTIVE PERSONA: Coding / Web tasks (human QA engineer operating the system via UI/CLI; use headless browser / Playwright via run_command to verify rendering and interactions if tooling is available).'
+            : 'ACTIVE PERSONA: Coding tasks (human QA engineer operating the system via UI/CLI).'
+          : 'ACTIVE PERSONA: Non-coding tasks (human recipient verifying the deliverable).',
+      tools,
+      initialUserMessage: message,
+      // Cap Hardener rounds strictly: 6 rounds max to prevent endless loops and token burns
+      maxRounds: Math.min(6, Math.max(3, ctx.options.maxToolRoundsPerAgent)),
+      maxTokens: 8000,
+      responseFormat: 'json',
+      onToolCalls: executor
+    })
+  );
   addUsage(usage, result.usage);
   addUsage(ctx.usage, usage);
 

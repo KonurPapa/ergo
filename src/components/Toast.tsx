@@ -1,6 +1,13 @@
 import React, { useEffect } from 'react';
 import { Key, AlertCircle, CheckCircle2, Info, X, Undo2 } from 'lucide-react';
 
+export interface ToastAction {
+  label: string;
+  variant?: 'primary' | 'secondary' | 'emerald' | 'danger' | 'amber';
+  onClick: () => void;
+  icon?: React.ReactNode;
+}
+
 export interface ToastMessage {
   id: string;
   type?: 'warning' | 'info' | 'error' | 'success';
@@ -8,6 +15,7 @@ export interface ToastMessage {
   message: string;
   actionLabel?: string;
   onAction?: () => void;
+  actions?: ToastAction[];
   duration?: number;
 }
 
@@ -59,7 +67,7 @@ const ToastItem: React.FC<{ toast: ToastMessage; onDismiss: (id: string) => void
 
   return (
     <div
-      className="toast-card"
+      className={`toast-card ${toast.actions && toast.actions.length > 0 ? 'has-actions' : ''}`}
       style={{
         borderColor: getBorderColor(),
       }}
@@ -68,7 +76,24 @@ const ToastItem: React.FC<{ toast: ToastMessage; onDismiss: (id: string) => void
       <div className="toast-content">
         <div className="toast-title">{toast.title}</div>
         <div className="toast-message">{toast.message}</div>
-        {toast.actionLabel && toast.onAction && (
+        {toast.actions && toast.actions.length > 0 ? (
+          <div className="toast-actions-row">
+            {toast.actions.map((act, idx) => (
+              <button
+                key={idx}
+                type="button"
+                className={`toast-action-btn toast-action-${act.variant || 'primary'}`}
+                onClick={() => {
+                  act.onClick();
+                  onDismiss(toast.id);
+                }}
+              >
+                {act.icon}
+                <span>{act.label}</span>
+              </button>
+            ))}
+          </div>
+        ) : toast.actionLabel && toast.onAction ? (
           <button
             type="button"
             className="toast-action-btn"
@@ -80,7 +105,7 @@ const ToastItem: React.FC<{ toast: ToastMessage; onDismiss: (id: string) => void
             {toast.actionLabel.toLowerCase().includes('undo') ? <Undo2 size={13} /> : <Key size={13} />}
             <span>{toast.actionLabel}</span>
           </button>
-        )}
+        ) : null}
       </div>
       <button
         type="button"

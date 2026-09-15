@@ -9,7 +9,7 @@
 import { type OverviewDocument, type TaskKind, type TokenUsage, type BibleSections } from '../../types';
 import { buildVerboseOverviewAndRequiredMcps } from '../ai';
 import { parseJsonLoose } from '../llmClient';
-import { type PipelineContext, addUsage, emptyUsage, isAbortError, resolveRoleTarget, throwIfAborted } from './contracts';
+import { type PipelineContext, addUsage, emptyUsage, isAbortError, throwIfAborted, buildToolLoopRequest } from './contracts';
 import { buildBibleSections } from './bible';
 import { type BaselineContext } from './context';
 import { runToolLoop } from './providerLoop';
@@ -66,7 +66,7 @@ export function inferTaskKind(text: string): TaskKind {
 }
 
 export async function runSummary(ctx: PipelineContext, baseline: BaselineContext): Promise<SummaryResult> {
-  const { task, brief, aiConfig, connectedMcps } = ctx;
+  const { task, brief, connectedMcps } = ctx;
   const usage = emptyUsage();
 
   ctx.emit({
@@ -89,21 +89,17 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
   let parsed: any = undefined;
   try {
     const skill = await loadPipelineSkill('summary-agent');
-    const roleTarget = resolveRoleTarget(aiConfig, 'summary');
-    const result = await runToolLoop({
-      provider: roleTarget.provider,
-      model: roleTarget.model,
-      apiKey: roleTarget.apiKey,
-      baseUrl: roleTarget.baseUrl,
-      stableSystem: `${skill}\n\n${OUTPUT_CONTRACT}`,
-      sharedContext: '',
-      tools: [],
-      initialUserMessage: userMessage,
-      maxRounds: 1,
-      maxTokens: 6000,
-      responseFormat: 'json',
-      signal: ctx.signal
-    });
+    const result = await runToolLoop(
+      buildToolLoopRequest(ctx, 'summary', {
+        stableSystem: `${skill}\n\n${OUTPUT_CONTRACT}`,
+        sharedContext: '',
+        tools: [],
+        initialUserMessage: userMessage,
+        maxRounds: 1,
+        maxTokens: 6000,
+        responseFormat: 'json'
+      })
+    );
     addUsage(usage, result.usage);
     if (result.stopReason === 'error') {
       console.warn('[Ergo Summary] model call failed, using fallback overview:', result.error);
@@ -154,7 +150,7 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
   const outputText = (overviewDoc.output_as || '').toLowerCase();
   const titleText = (task.title || '').toLowerCase();
   const isStandaloneSingleDeliverable =
-    /\.(html|htm|jsx|tsx|vue|svelte|py|sh|ts|js|md|json|css|sql)\b/i.test(outputText) ||
+    /\.(html|htm|jsx|tsx|vue|svelte|py|sh|ts|js|md|json|css|sql|txt|csv|tsv|yaml|yml)\b/i.test(outputText) ||
     /build an? (?:html|browser|standalone|simple) (?:game|page|script|app|tool)/i.test(titleText) ||
     /create an? (?:html|browser|standalone|simple) (?:game|page|script|app|tool)/i.test(titleText);
   const isSmallScope = task.subtasks.length <= 3;

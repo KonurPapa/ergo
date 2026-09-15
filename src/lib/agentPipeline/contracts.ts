@@ -23,6 +23,8 @@ import {
   type MCPServer,
   type McpRootBoundary,
   type McpToolPermissionPrompt,
+  type OllamaFallbackChoice,
+  type OllamaFallbackPrompt,
   type ProjectData,
   type TaskItem,
   type TokenUsage
@@ -149,6 +151,14 @@ export interface ToolLoopRequest {
   onUsage?: (usage: TokenUsage) => void;
   /** Ask the provider for JSON in the final answer (best effort; still parse loosely). */
   responseFormat?: 'text' | 'json';
+  /** Track consecutive Ollama connection failures across rounds and pipeline steps. */
+  ollamaFailureState?: { count: number };
+  /** Task ID associated with this tool loop invocation (for UI alert prompts). */
+  taskId?: string | number;
+  /** Invoked when 3 consecutive Ollama calls fail so the user can pause and choose a remediation. */
+  onRequestOllamaFallback?: (prompt: OllamaFallbackPrompt) => Promise<OllamaFallbackChoice>;
+  /** Callback fired when the user switches to a cloud profile, returning the new credentials. */
+  onSwitchToCloud?: () => Promise<ResolvedRoleTarget | null>;
 }
 
 export type ToolLoopStopReason = 'end' | 'max_rounds' | 'aborted' | 'no_tool_support' | 'error';
@@ -169,6 +179,7 @@ export interface PipelineCallbacks {
   onStepUpdate: (step: ExecutionStep) => void;
   onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<boolean>;
   onRequestHumanInput?: (prompt: HumanInputPrompt) => Promise<string>;
+  onRequestOllamaFallback?: (prompt: OllamaFallbackPrompt) => Promise<OllamaFallbackChoice>;
 }
 
 export interface PipelineContext extends PipelineCallbacks {
@@ -186,6 +197,8 @@ export interface PipelineContext extends PipelineCallbacks {
   signal?: AbortSignal;
   /** Cumulative usage across the whole run. */
   usage: TokenUsage;
+  /** Shared consecutive failure counter for Ollama calls across all pipeline phases. */
+  ollamaFailureState: { count: number };
   /** Convenience emitter that stamps `time` and `taskId`. */
   emit: (step: Omit<ExecutionStep, 'time' | 'taskId'> & Partial<Pick<ExecutionStep, 'time' | 'taskId'>>) => void;
 }
@@ -259,3 +272,33 @@ export function slugify(input: string, maxLen = 40): string {
     .replace(/^-+|-+$/g, '')
     .slice(0, maxLen) || 'task';
 }
+
+/** Convenience helper to bind pipeline context defaults (circuit breaker, fallback handler, signal, taskId) to a tool loop request. */
+export function buildToolLoopRequest(
+  ctx: PipelineContext,
+  role: AgentRole,
+  params: Omit<ToolLoopRequest, 'provider' | 'model' | 'apiKey' | 'baseUrl' | 'signal' | 'ollamaFailureState' | 'taskId' | 'onRequestOllamaFallback' | 'onSwitchToCloud'> & {
+    provider?: AIProviderId;
+    model?: string;
+    apiKey?: string;
+    baseUrl?: string;
+  }
+): ToolLoopRequest {
+  const target = resolveRoleTarget(ctx.aiConfig, role);
+  return {
+    provider: params.provider ?? target.provider,
+    model: params.model ?? target.model,
+    apiKey: params.apiKey ?? target.apiKey,
+    baseUrl: params.baseUrl ?? target.baseUrl,
+    signal: ctx.signal,
+    ollamaFailureState: ctx.ollamaFailureState,
+    taskId: ctx.task.id,
+    onRequestOllamaFallback: ctx.onRequestOllamaFallback,
+    onSwitchToCloud: async () => {
+      // Re-resolve target after aiConfig has been updated by user
+      return resolveRoleTarget(ctx.aiConfig, role);
+    },
+    ...params
+  };
+}
+

@@ -126,6 +126,26 @@ function buildBaselineMarkdown(
     out.push('## Existing Brief', existingBrief, '');
   }
 
+  const existingBuild = cap(brief?.buildAndVerification || brief?.built, 2000);
+  if (existingBuild) {
+    out.push('## Prior Progress & Build Notes', existingBuild, '');
+  }
+
+  const isResuming = task.status === 'partly_done' || brief?.status === 'partly_done' || Boolean(existingBuild);
+  const knownFiles = Array.from(new Set([...(task.createdFiles || []), ...(brief?.createdFiles || [])]));
+
+  if (isResuming) {
+    out.push(
+      '## Resume Instructions',
+      'This task was stopped partway through and is being RESUMED.',
+      'Pick back up where the task was left off: inspect existing workspace files, preserve all already-completed deliverables, and finish the remaining unfinished requirements.',
+      ''
+    );
+    if (knownFiles.length > 0) {
+      out.push(`- **Deliverable Files Already Created**: ${knownFiles.join(', ')}`, '');
+    }
+  }
+
   // Inject prior knowledge from local vector memory (0 tokens!)
   if (memoryHits.length > 0) {
     out.push('## Prior Knowledge & Architectural Learnings (Local Memory)');

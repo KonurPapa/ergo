@@ -5,7 +5,7 @@
 import { type AgentContextItem, type Subtask, type TaskItem, type OverviewDocument } from '../../types';
 import { parseJsonLoose } from '../llmClient';
 import { runSessionRetrospective, type RetrospectiveInput } from '../memory';
-import { type PipelineContext, addUsage, emptyUsage, formatUsage, resolveRoleTarget } from './contracts';
+import { type PipelineContext, addUsage, emptyUsage, formatUsage, buildToolLoopRequest } from './contracts';
 import { type BibleStore } from './bible';
 import { type HardenerResult } from './hardener';
 import { runToolLoop } from './providerLoop';
@@ -87,23 +87,18 @@ export async function runLogger(
   let humanReviewSteps: string[] = [];
   let loggedCreatedFiles: string[] = [];
 
-  const loggerTarget = resolveRoleTarget(aiConfig, 'logger');
-
   try {
-    const result = await runToolLoop({
-      provider: loggerTarget.provider,
-      apiKey: loggerTarget.apiKey,
-      baseUrl: loggerTarget.baseUrl,
-      signal: ctx.signal,
-      model: loggerTarget.model,
-      stableSystem: LOGGER_SYSTEM,
-      sharedContext: '',
-      tools: [],
-      initialUserMessage: userPrompt,
-      maxRounds: 1,
-      maxTokens: 6000,
-      responseFormat: 'json'
-    });
+    const result = await runToolLoop(
+      buildToolLoopRequest(ctx, 'logger', {
+        stableSystem: LOGGER_SYSTEM,
+        sharedContext: '',
+        tools: [],
+        initialUserMessage: userPrompt,
+        maxRounds: 1,
+        maxTokens: 6000,
+        responseFormat: 'json'
+      })
+    );
     addUsage(usage, result.usage);
     const parsed = parseJsonLoose<any>(result.text);
     if (!parsed) throw new Error(result.error || 'Logger returned no JSON');

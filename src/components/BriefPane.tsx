@@ -6,7 +6,9 @@ import {
   type SpawnedSession,
   type ExecutionStep,
   type McpToolPermissionPrompt,
-  type HumanInputPrompt
+  type HumanInputPrompt,
+  type OllamaFallbackPrompt,
+  type OllamaFallbackChoice
 } from '../types';
 import { AgentTerminal } from './AgentTerminal';
 import { StepStatusIcon, StepUsageBadge, PieceChip, BiblePreview, BaselineContextPreview } from './ExecutionStepExtras';
@@ -23,6 +25,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Code,
+  Cloud,
   Layers,
   Send,
   Loader2,
@@ -40,7 +43,8 @@ import {
   Trash2,
   Database,
   PanelRightClose,
-  PanelRightOpen
+  PanelRightOpen,
+  AlertTriangle
 } from 'lucide-react';
 
 import { RichTextToolbar } from './RichTextToolbar';
@@ -188,8 +192,10 @@ interface BriefPaneProps {
   taskExecutionSteps?: Record<string | number, ExecutionStep[]>;
   pendingPermissions?: Record<string | number, { prompt: McpToolPermissionPrompt; resolve: (approved: boolean) => void }>;
   pendingHumanInputs?: Record<string | number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>;
+  pendingOllamaFallbacks?: Record<string | number, { prompt: OllamaFallbackPrompt; resolve: (choice: OllamaFallbackChoice) => void }>;
   onPermissionChoice?: (taskId: string | number, approved: boolean) => void;
   onHumanInputChoice?: (taskId: string | number, answer: string) => void;
+  onOllamaFallbackChoice?: (taskId: string | number, choice: OllamaFallbackChoice) => void;
   onSessionExit?: (taskId: string | number, code: number) => void;
   onRestartSession?: (task: TaskItem) => void;
   onKillSession?: (taskId: string | number) => void;
@@ -211,6 +217,7 @@ interface AiTaskCardProps {
   executionSteps: ExecutionStep[];
   pendingPermission: McpToolPermissionPrompt | null;
   pendingHumanInput: { prompt: HumanInputPrompt; resolve: (answer: string) => void } | null;
+  pendingOllamaFallback: { prompt: OllamaFallbackPrompt; resolve: (choice: OllamaFallbackChoice) => void } | null;
   onSelect: () => void;
   onSaveBrief: (updatedBrief: AgentContextItem) => void;
   onLiveBriefChange?: (updatedBrief: AgentContextItem) => void;
@@ -219,6 +226,7 @@ interface AiTaskCardProps {
   onSyncOverviewWithTask?: (task: TaskItem) => Promise<string | void>;
   onPermissionChoice?: (approved: boolean) => void;
   onHumanInputChoice?: (answer: string) => void;
+  onOllamaFallbackChoice?: (choice: OllamaFallbackChoice) => void;
   onSessionExit?: (code: number) => void;
   onRestartSession?: (task: TaskItem) => void;
   onKillSession?: (taskId: string | number) => void;
@@ -264,6 +272,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   executionSteps,
   pendingPermission,
   pendingHumanInput,
+  pendingOllamaFallback,
   onSelect,
   onSaveBrief,
   onLiveBriefChange,
@@ -272,6 +281,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   onSyncOverviewWithTask: _onSyncOverviewWithTask,
   onPermissionChoice,
   onHumanInputChoice,
+  onOllamaFallbackChoice,
   onSessionExit,
   onRestartSession,
   onKillSession,
@@ -288,6 +298,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isGherkinOpen, setIsGherkinOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const hasPendingAlert = !!(pendingPermission || pendingOllamaFallback);
 
   const overviewRef = useRef<HTMLTextAreaElement>(null);
   const buildVerificationRef = useRef<HTMLTextAreaElement>(null);
@@ -424,13 +435,13 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     }));
   };
 
-  // Automatically expand steps if an interactive clarification or permission prompt is waiting
+  // Automatically expand steps only if an interactive clarification prompt is waiting
   useEffect(() => {
-    if (pendingHumanInput || pendingPermission) {
+    if (pendingHumanInput) {
       setCollapsedCards((prev) => ({ ...prev, steps: false }));
       setViewModeSection2('steps');
     }
-  }, [pendingHumanInput, pendingPermission]);
+  }, [pendingHumanInput]);
 
   // Sync state with brief
   useEffect(() => {
@@ -736,6 +747,32 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 
   const isTaskDone = Boolean(task.isDone || task.status === 'done' || brief?.status === 'done');
 
+  // Has this task been stopped partway through?
+  const isStoppedPartway = React.useMemo(() => {
+    if (isWorking) return false;
+    if (isTaskDone) return false;
+    // Explicitly cancelled step or terminated
+    if (executionSteps.some((s) => s.status === 'cancelled' || s.id === 'step-terminated')) return true;
+    // Terminal session killed with non-zero exit code
+    if (terminalSession?.session && !terminalSession.session.isActive && terminalSession.session.exitCode !== 0 && terminalSession.session.exitCode !== undefined) return true;
+    // Task or brief status marked partly_done and not yet fully completed
+    const hasCompletedSuccessfully = executionSteps.some((s) => (s.stage === 'built_record' || s.stage === 'done') && s.status === 'success');
+    if ((task.status === 'partly_done' || brief?.status === 'partly_done') && !hasCompletedSuccessfully) return true;
+    // Has partial execution steps without having finished successfully
+    if (executionSteps.length > 0 && !hasCompletedSuccessfully) return true;
+    return false;
+  }, [isWorking, isTaskDone, task.status, brief?.status, executionSteps, terminalSession]);
+
+  // Has this task already been run before (and completed / not stopped partway)?
+  const hasRunBefore = React.useMemo(() => {
+    if (isWorking || isStoppedPartway) return false;
+    if (isTaskDone) return true;
+    if (executionSteps.some((s) => (s.stage === 'built_record' || s.stage === 'done') && s.status === 'success')) return true;
+    if (terminalSession?.session && !terminalSession.session.isActive && terminalSession.session.exitCode === 0) return true;
+    if (Boolean((brief?.completion && brief.completion.trim().length > 0) || (brief?.validation && brief.validation.trim().length > 0))) return true;
+    return false;
+  }, [isWorking, isStoppedPartway, isTaskDone, executionSteps, terminalSession, brief?.completion, brief?.validation]);
+
   return (
     <div
       ref={cardRef}
@@ -804,28 +841,77 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
             </>
           ) : (
             <>
-              {!isTaskDone && (
+              {/* Main Task Action Button: Working... / Resume Task / Rerun Task / Run Task */}
+              <button
+                type="button"
+                className={`execute-task-btn ${
+                  isWorking
+                    ? 'is-working'
+                    : isStoppedPartway
+                    ? 'is-resume'
+                    : hasRunBefore
+                    ? 'is-rerun'
+                    : ''
+                }`}
+                onClick={() => {
+                  setIsTaskCollapsed(false);
+                  onExecuteTask(task);
+                }}
+                title={
+                  isWorking
+                    ? 'Agent is working on this task...'
+                    : isStoppedPartway
+                    ? 'Resume this task where it was left off'
+                    : hasRunBefore
+                    ? 'Rerun this task'
+                    : 'Start the AI on this task'
+                }
+                disabled={isWorking}
+              >
+                {isWorking ? (
+                  <>
+                    <Loader2 size={12} className="spin-animate" />
+                    <span>Working...</span>
+                  </>
+                ) : isStoppedPartway ? (
+                  <>
+                    <Play size={12} />
+                    <span>Resume Task</span>
+                  </>
+                ) : hasRunBefore ? (
+                  <>
+                    <RotateCcw size={12} />
+                    <span>Rerun Task</span>
+                  </>
+                ) : (
+                  <>
+                    <Play size={12} />
+                    <span>Run Task</span>
+                  </>
+                )}
+              </button>
+
+              {/* Stop active running agent or active terminal session */}
+              {isExecuting && onTerminateAgent && (
                 <button
                   type="button"
-                  className={`execute-task-btn ${isWorking ? 'is-working' : ''}`}
-                  onClick={() => {
-                    setIsTaskCollapsed(false);
-                    onExecuteTask(task);
-                  }}
-                  title={isWorking ? 'Agent is working on this task...' : 'Start the AI on this task'}
-                  disabled={isWorking}
+                  className="stop-task-btn"
+                  onClick={() => onTerminateAgent(task.id)}
+                  title="Stop the running agent immediately"
                 >
-                  {isWorking ? (
-                    <>
-                      <Loader2 size={12} className="spin-animate" />
-                      <span>Working...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Play size={12} />
-                      <span>Run Task</span>
-                    </>
-                  )}
+                  <Square size={11} />
+                  <span>Stop</span>
+                </button>
+              )}
+              {!isExecuting && terminalSession?.session.isActive && onKillSession && (
+                <button
+                  type="button"
+                  className="stop-task-btn"
+                  onClick={() => onKillSession(task.id)}
+                  title="Stop CLI agent process"
+                >
+                  <Square size={11} />
+                  <span>Stop</span>
                 </button>
               )}
             </>
@@ -849,7 +935,26 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 
             {isMenuOpen && (
               <div className="swimlane-dropdown-menu" style={{ right: 0, minWidth: '185px' }} onClick={(e) => e.stopPropagation()}>
-                {isTaskDone && (
+                {isStoppedPartway && (
+                  <>
+                    <button
+                      type="button"
+                      className="swimlane-dropdown-item"
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        setIsTaskCollapsed(false);
+                        onExecuteTask(task);
+                      }}
+                    >
+                      <Play size={13} style={{ color: 'var(--accent-amber, #f59e0b)' }} />
+                      <span>Resume Task</span>
+                    </button>
+
+                    <div className="swimlane-dropdown-divider" />
+                  </>
+                )}
+
+                {hasRunBefore && (
                   <>
                     <button
                       type="button"
@@ -1096,194 +1201,243 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
             {/* ═══════════════════════════════════════════════════════════
                 CARD 4: ACTIONS (collapsed by default)
                ═══════════════════════════════════════════════════════════ */}
-            <div className={`ai-sub-card card-steps-actions ${collapsedCards.steps ? 'is-collapsed' : ''}`}>
-              <div
-                className="ai-sub-card-header"
-                onClick={() => toggleCard('steps')}
-              >
-                <div className="header-left">
-                  <button
-                    type="button"
-                    className={`card-collapse-btn ${collapsedCards.steps ? 'is-collapsed' : ''}`}
-                    title={collapsedCards.steps ? 'Expand Actions' : 'Collapse Actions'}
-                    aria-label={collapsedCards.steps ? 'Expand Actions' : 'Collapse Actions'}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleCard('steps');
-                    }}
+            <div className={`ai-sub-card card-steps-actions ${collapsedCards.steps ? 'is-collapsed' : ''} ${hasPendingAlert ? 'has-pending-alert' : ''}`}>
+                  <div
+                    className="ai-sub-card-header"
+                    onClick={() => toggleCard('steps')}
                   >
-                    <ChevronDown size={12} className="collapse-chevron" />
-                  </button>
-                  <span className="section-title-text">
-                    <Wrench size={14} color="#a855f7" />
-                    <span>Actions</span>
-                  </span>
-                </div>
-
-                <div
-                  className="header-right"
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {/* Terminal Session Controls */}
-                  {terminalSession && (
-                    <>
-                      {onRestartSession && (
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem' }}
-                          onClick={() => {
-                            setCollapsedCards((prev) => ({ ...prev, steps: false }));
-                            onRestartSession(task);
-                          }}
-                          title="Restart CLI agent in terminal"
-                        >
-                          <RotateCcw size={10} />
-                        </button>
+                    <div className="header-left">
+                      <button
+                        type="button"
+                        className={`card-collapse-btn ${collapsedCards.steps ? 'is-collapsed' : ''}`}
+                        title={collapsedCards.steps ? 'Expand Actions' : 'Collapse Actions'}
+                        aria-label={collapsedCards.steps ? 'Expand Actions' : 'Collapse Actions'}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleCard('steps');
+                        }}
+                      >
+                        <ChevronDown size={12} className="collapse-chevron" />
+                      </button>
+                      <span className="section-title-text">
+                        <Wrench size={14} color="#a855f7" />
+                        <span>Actions</span>
+                      </span>
+                      {hasPendingAlert && (
+                        <span className="actions-attention-badge" title="Attention required: Agent action waiting for user confirmation">
+                          <AlertTriangle size={11} />
+                          <span>Action Required</span>
+                        </span>
                       )}
+                    </div>
 
-                      {terminalSession.session.isActive && onKillSession && (
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem', color: 'var(--accent-rose)' }}
-                          onClick={() => onKillSession(task.id)}
-                          title="Stop CLI agent process"
-                        >
-                          <Square size={10} />
-                        </button>
-                      )}
-                    </>
-                  )}
-
-                  {/* Terminate active running agent */}
-                  {isExecuting && onTerminateAgent && (
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      style={{
-                        padding: '0.15rem 0.45rem',
-                        fontSize: '0.7rem',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.25rem',
-                        color: 'var(--accent-rose)',
-                        borderColor: 'var(--accent-rose)',
-                      }}
-                      onClick={() => onTerminateAgent(task.id)}
-                      title="Stop the running agent immediately"
+                    <div
+                      className="header-right"
+                      style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      <Square size={10} />
-                      <span>Stop</span>
-                    </button>
-                  )}
+                      {/* Terminal Session Controls */}
+                      {terminalSession && (
+                        <>
+                          {onRestartSession && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem' }}
+                              onClick={() => {
+                                setCollapsedCards((prev) => ({ ...prev, steps: false }));
+                                onRestartSession(task);
+                              }}
+                              title="Restart CLI agent in terminal"
+                            >
+                              <RotateCcw size={10} />
+                            </button>
+                          )}
 
-                  {/* Single Status Chip */}
-                  <CardStatusChip status={stepsActionsStatus} />
-                </div>
-              </div>
+                          {terminalSession.session.isActive && onKillSession && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem', color: 'var(--accent-rose)' }}
+                              onClick={() => onKillSession(task.id)}
+                              title="Stop CLI agent process"
+                            >
+                              <Square size={10} />
+                            </button>
+                          )}
+                        </>
+                      )}
 
-              {!collapsedCards.steps && (
-                <div className="ai-sub-card-body" style={{ padding: 0 }}>
-                  {/* Internal View Switcher Bar */}
-                  <div className="actions-view-switcher-bar">
-                    <span className="actions-switcher-label">
-                      {showTerminal
-                        ? `Terminal (${terminalSession?.cmd})`
-                        : showExecutionSteps
-                          ? executionSteps.length > 0
-                            ? `${executionSteps.length} action${executionSteps.length === 1 ? '' : 's'}`
-                            : 'Execution Steps'
-                          : 'Notes'}
-                    </span>
-                    <div className="steps-notes-chip">
-                      <button
-                        type="button"
-                        className={`steps-notes-segment ${!showExecutionSteps && !showTerminal ? 'active' : ''}`}
-                        onClick={() => setViewModeSection2('notes')}
-                        title="Switch to Notes view"
-                      >
-                        <FileText size={10} />
-                        <span>Notes</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={`steps-notes-segment ${showExecutionSteps || showTerminal ? 'active' : ''}`}
-                        onClick={() => setViewModeSection2(terminalSession ? 'terminal' : 'steps')}
-                        title={terminalSession ? 'Switch to Terminal view' : 'Switch to Steps view'}
-                      >
-                        {terminalSession ? <Terminal size={10} /> : <Sparkles size={10} />}
-                        <span>{terminalSession ? 'Terminal' : 'Steps'}</span>
-                      </button>
+                      {/* Single Status Chip */}
+                      <CardStatusChip status={stepsActionsStatus} />
                     </div>
                   </div>
 
-                  {/* Sub-view 1: Embedded Terminal */}
-                  {showTerminal && terminalSession ? (
-                    <div className="embedded-terminal-wrapper">
-                      <div className="embedded-terminal-topbar">
-                        <span>
-                          <span style={{ color: 'var(--accent-cyan)', fontWeight: 600 }}>cmd:</span>{' '}
-                          {terminalSession.cmd} {terminalSession.args.join(' ')}
-                        </span>
-                        <span>
-                          <span style={{ color: 'var(--accent-violet)', fontWeight: 600 }}>cwd:</span>{' '}
-                          {terminalSession.cwd}
-                        </span>
-                      </div>
-                      <div className="embedded-terminal-body">
-                        <AgentTerminal
-                          cmd={terminalSession.cmd}
-                          args={terminalSession.args}
-                          cwd={terminalSession.cwd}
-                          onExit={(code) => onSessionExit?.(code)}
-                        />
-                      </div>
-                    </div>
-                  ) : showExecutionSteps ? (
-                    /* Sub-view 2: In-place Execution Steps & Logs */
-                    <div className="execution-steps-wrapper" style={{ padding: '0.65rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                      {/* Interactive Mid-Build Human Clarification Card if active */}
-                      {pendingHumanInput && onHumanInputChoice && (
-                        <HumanInputCard
-                          prompt={pendingHumanInput.prompt}
-                          onSubmit={onHumanInputChoice}
-                        />
-                      )}
+                  {!collapsedCards.steps && (
+                    <div className="ai-sub-card-body" style={{ padding: 0 }}>
+                      {/* High-priority pending action prompts (Permission or Ollama Offline) */}
+                      {hasPendingAlert && (
+                        <div style={{ padding: '0.65rem 0.65rem 0.25rem 0.65rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {pendingPermission && onPermissionChoice && (
+                            <div
+                              style={{
+                                background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.14) 0%, rgba(20, 22, 28, 0.95) 100%)',
+                                border: '1.5px solid rgba(239, 68, 68, 0.55)',
+                                borderRadius: 'var(--radius-md)',
+                                padding: '0.85rem 1rem',
+                                boxShadow: '0 4px 20px rgba(239, 68, 68, 0.18), 0 0 0 1px rgba(239, 68, 68, 0.1)',
+                                animation: 'fadeIn 0.2s ease',
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.45rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#f43f5e', fontWeight: 700, fontSize: '0.84rem' }}>
+                                  <ShieldAlert size={16} />
+                                  <span>Permission Authorization Required</span>
+                                </div>
+                                <span style={{ fontSize: '0.68rem', fontWeight: 600, color: 'var(--text-muted)', background: 'rgba(255,255,255,0.06)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
+                                  Awaiting Approval
+                                </span>
+                              </div>
+                              <p style={{ fontSize: '0.8rem', color: 'var(--text-main)', marginBottom: '0.5rem', lineHeight: 1.4 }}>
+                                The agent is requesting permission to execute tool: <strong style={{ color: 'var(--accent-cyan)' }}>{pendingPermission.serverName} / {pendingPermission.toolName}()</strong>
+                              </p>
+                              <div style={{ background: 'rgba(0, 0, 0, 0.4)', padding: '0.55rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(255, 255, 255, 0.08)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.65rem' }}>
+                                {pendingPermission.summary}
+                              </div>
+                              <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                                <button
+                                  className="btn btn-secondary"
+                                  style={{ padding: '0.3rem 0.75rem', fontSize: '0.76rem', fontWeight: 600 }}
+                                  onClick={() => onPermissionChoice(false)}
+                                >
+                                  Skip / Reject
+                                </button>
+                                <button
+                                  className="btn btn-emerald"
+                                  style={{ padding: '0.3rem 0.85rem', fontSize: '0.76rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                                  onClick={() => onPermissionChoice(true)}
+                                >
+                                  <ShieldCheck size={14} />
+                                  <span>Approve</span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
 
-                      {/* Interactive MCP Permission Prompt Card if active */}
-                      {pendingPermission && onPermissionChoice && (
-                        <div
-                          style={{
-                            background: 'rgba(239, 68, 68, 0.08)',
-                            border: '1px solid rgba(239, 68, 68, 0.35)',
-                            borderRadius: 'var(--radius-md)',
-                            padding: '0.75rem',
-                            animation: 'fadeIn 0.2s ease',
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--accent-rose)', fontWeight: 700, fontSize: '0.82rem', marginBottom: '0.35rem' }}>
-                            <ShieldAlert size={15} />
-                            <span>Permission Authorization Required</span>
-                          </div>
-                          <p style={{ fontSize: '0.78rem', color: 'var(--text-main)', marginBottom: '0.5rem' }}>
-                            Request to execute: <strong style={{ color: 'var(--accent-cyan)' }}>{pendingPermission.serverName} / {pendingPermission.toolName}()</strong>
-                          </p>
-                          <div style={{ background: 'var(--bg-darkest)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', fontFamily: 'var(--font-mono)', fontSize: '0.74rem', color: 'var(--text-muted)', marginBottom: '0.6rem' }}>
-                            {pendingPermission.summary}
-                          </div>
-                          <div style={{ display: 'flex', gap: '0.45rem', justifyContent: 'flex-end' }}>
-                            <button className="btn btn-secondary" style={{ padding: '0.2rem 0.55rem', fontSize: '0.74rem' }} onClick={() => onPermissionChoice(false)}>
-                              Skip / Reject
-                            </button>
-                            <button className="btn btn-emerald" style={{ padding: '0.2rem 0.55rem', fontSize: '0.74rem' }} onClick={() => onPermissionChoice(true)}>
-                              <ShieldCheck size={13} />
-                              <span>Approve</span>
-                            </button>
-                          </div>
+                          {pendingOllamaFallback && onOllamaFallbackChoice && (
+                            <div
+                              style={{
+                                background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.14) 0%, rgba(20, 22, 28, 0.95) 100%)',
+                                border: '1.5px solid rgba(239, 68, 68, 0.55)',
+                                borderRadius: 'var(--radius-md)',
+                                padding: '0.85rem 1rem',
+                                boxShadow: '0 4px 20px rgba(239, 68, 68, 0.18), 0 0 0 1px rgba(239, 68, 68, 0.1)',
+                                animation: 'fadeIn 0.2s ease',
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.45rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#f43f5e', fontWeight: 700, fontSize: '0.84rem' }}>
+                                  <ShieldAlert size={16} />
+                                  <span>Local Ollama Connection Failed</span>
+                                </div>
+                                <span style={{ fontSize: '0.68rem', fontWeight: 600, color: 'var(--accent-rose)', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
+                                  Offline
+                                </span>
+                              </div>
+                              <p style={{ fontSize: '0.8rem', color: 'var(--text-main)', marginBottom: '0.5rem', lineHeight: 1.45 }}>
+                                Ergo was unable to reach your local Ollama instance at <strong style={{ color: 'var(--accent-cyan)' }}>{pendingOllamaFallback.prompt.url}</strong> after {pendingOllamaFallback.prompt.consecutiveFailures} consecutive attempts. You don't seem to be connected locally.
+                              </p>
+                              <div style={{ background: 'rgba(0, 0, 0, 0.4)', padding: '0.55rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(255, 255, 255, 0.08)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.65rem' }}>
+                                {pendingOllamaFallback.prompt.errorMessage || 'NetworkError: Failed to connect to local Ollama daemon'}
+                              </div>
+                              <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                                <button
+                                  className="btn btn-secondary"
+                                  style={{ padding: '0.3rem 0.75rem', fontSize: '0.76rem', fontWeight: 600, borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--accent-rose)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                                  onClick={() => onOllamaFallbackChoice('terminate')}
+                                >
+                                  <Square size={12} />
+                                  <span>Terminate Task</span>
+                                </button>
+                                <button
+                                  className="btn btn-emerald"
+                                  style={{ padding: '0.3rem 0.85rem', fontSize: '0.76rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                                  onClick={() => onOllamaFallbackChoice('switch_cloud')}
+                                >
+                                  <Cloud size={14} />
+                                  <span>Switch to Cloud Profile</span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
+
+                      {/* Internal View Switcher Bar */}
+                      <div className="actions-view-switcher-bar">
+                        <span className="actions-switcher-label">
+                          {showTerminal
+                            ? `Terminal (${terminalSession?.cmd})`
+                            : showExecutionSteps
+                              ? executionSteps.length > 0
+                                ? `${executionSteps.length} action${executionSteps.length === 1 ? '' : 's'}`
+                                : 'Execution Steps'
+                              : 'Notes'}
+                        </span>
+                        <div className="steps-notes-chip">
+                          <button
+                            type="button"
+                            className={`steps-notes-segment ${!showExecutionSteps && !showTerminal ? 'active' : ''}`}
+                            onClick={() => setViewModeSection2('notes')}
+                            title="Switch to Notes view"
+                          >
+                            <FileText size={10} />
+                            <span>Notes</span>
+                          </button>
+                          <button
+                            type="button"
+                            className={`steps-notes-segment ${showExecutionSteps || showTerminal ? 'active' : ''}`}
+                            onClick={() => setViewModeSection2(terminalSession ? 'terminal' : 'steps')}
+                            title={terminalSession ? 'Switch to Terminal view' : 'Switch to Steps view'}
+                          >
+                            {terminalSession ? <Terminal size={10} /> : <Sparkles size={10} />}
+                            <span>{terminalSession ? 'Terminal' : 'Steps'}</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Sub-view 1: Embedded Terminal */}
+                      {showTerminal && terminalSession ? (
+                        <div className="embedded-terminal-wrapper">
+                          <div className="embedded-terminal-topbar">
+                            <span>
+                              <span style={{ color: 'var(--accent-cyan)', fontWeight: 600 }}>cmd:</span>{' '}
+                              {terminalSession.cmd} {terminalSession.args.join(' ')}
+                            </span>
+                            <span>
+                              <span style={{ color: 'var(--accent-violet)', fontWeight: 600 }}>cwd:</span>{' '}
+                              {terminalSession.cwd}
+                            </span>
+                          </div>
+                          <div className="embedded-terminal-body">
+                            <AgentTerminal
+                              cmd={terminalSession.cmd}
+                              args={terminalSession.args}
+                              cwd={terminalSession.cwd}
+                              onExit={(code) => onSessionExit?.(code)}
+                            />
+                          </div>
+                        </div>
+                      ) : showExecutionSteps ? (
+                        /* Sub-view 2: In-place Execution Steps & Logs */
+                        <div className="execution-steps-wrapper" style={{ padding: '0.65rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                          {/* Interactive Mid-Build Human Clarification Card if active */}
+                          {pendingHumanInput && onHumanInputChoice && (
+                            <HumanInputCard
+                              prompt={pendingHumanInput.prompt}
+                              onSubmit={onHumanInputChoice}
+                            />
+                          )}
 
                       {/* Top Card: Acceptance Brief (Gherkin Scenarios) - Collapsed by default */}
                       {gherkinBrief && (
@@ -1487,8 +1641,10 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   taskExecutionSteps = {},
   pendingPermissions = {},
   pendingHumanInputs = {},
+  pendingOllamaFallbacks = {},
   onPermissionChoice,
   onHumanInputChoice,
+  onOllamaFallbackChoice,
   onSessionExit,
   onRestartSession,
   onKillSession,
@@ -1688,7 +1844,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
             <div className="ai-tasks-list-container">
               {briefs.map((brief, index) => {
                 const matchingTask =
-                  (brief.sourceTaskId ? tasks.find((t) => t.id === brief.sourceTaskId) : null) ||
+                  (brief.sourceTaskId ? tasks.find((t) => String(t.id) === String(brief.sourceTaskId)) : null) ||
                   tasks.find((t) => t.title.trim().toLowerCase() === brief.title.trim().toLowerCase());
 
                 const effectiveTask: TaskItem = matchingTask || {
@@ -1704,7 +1860,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
 
                 const terminalSession = terminalSessions.find((s) => s.session.taskId === effectiveTask.id) ?? null;
                 const isTerminalRunning = !!terminalSession?.session.isActive;
-                const isExecuting = executingTaskId === effectiveTask.id;
+                const isExecuting = executingTaskId !== null && String(executingTaskId) === String(effectiveTask.id);
                 const isWorking = isTerminalRunning || isExecuting;
                 const isSelected =
                   selectedTaskId != null &&
@@ -1722,9 +1878,10 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                     isWorking={isWorking}
                     terminalSession={terminalSession}
                     isExecuting={isExecuting}
-                    executionSteps={taskExecutionSteps[effectiveTask.id] || []}
-                    pendingPermission={pendingPermissions[effectiveTask.id]?.prompt ?? null}
-                    pendingHumanInput={pendingHumanInputs[effectiveTask.id] ?? null}
+                    executionSteps={taskExecutionSteps[effectiveTask.id] || taskExecutionSteps[String(effectiveTask.id)] || []}
+                    pendingPermission={pendingPermissions[effectiveTask.id]?.prompt ?? Object.entries(pendingPermissions || {}).find(([k]) => String(k) === String(effectiveTask.id))?.[1]?.prompt ?? null}
+                    pendingHumanInput={pendingHumanInputs[effectiveTask.id] ?? Object.entries(pendingHumanInputs || {}).find(([k]) => String(k) === String(effectiveTask.id))?.[1] ?? null}
+                    pendingOllamaFallback={pendingOllamaFallbacks?.[effectiveTask.id] ?? Object.entries(pendingOllamaFallbacks || {}).find(([k]) => String(k) === String(effectiveTask.id))?.[1] ?? null}
                     onSelect={() => onSelectTask?.(brief.sourceTaskId || brief.id || effectiveTask.id)}
                     onSaveBrief={onSaveBrief}
                     onLiveBriefChange={onLiveBriefChange}
@@ -1733,6 +1890,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                     onSyncOverviewWithTask={onSyncOverviewWithTask}
                     onPermissionChoice={(approved) => onPermissionChoice?.(effectiveTask.id, approved)}
                     onHumanInputChoice={(answer) => onHumanInputChoice?.(effectiveTask.id, answer)}
+                    onOllamaFallbackChoice={(choice) => onOllamaFallbackChoice?.(effectiveTask.id, choice)}
                     onSessionExit={(code) => onSessionExit?.(effectiveTask.id, code)}
                     onRestartSession={onRestartSession}
                     onKillSession={onKillSession}

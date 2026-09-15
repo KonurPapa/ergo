@@ -3,7 +3,7 @@
  * changing behaviour. One isolated agent, write scope = exactly the created files.
  */
 import { type TokenUsage } from '../../types';
-import { type PipelineContext, type ToolDefinition, addUsage, emptyUsage, resolveRoleTarget } from './contracts';
+import { type PipelineContext, type ToolDefinition, addUsage, emptyUsage, buildToolLoopRequest } from './contracts';
 import { type BibleStore } from './bible';
 import { parseWorkerStatus } from './manager';
 import { runToolLoop } from './providerLoop';
@@ -23,18 +23,17 @@ export async function runCleaner(
   attempt: number
 ): Promise<{ summary: string; usage: TokenUsage }> {
   const usage = emptyUsage();
+  const skill = await loadPipelineSkill('cleaner-agent');
   const stepId = `step-cleaner-a${attempt}`;
   ctx.emit({
     id: stepId,
     stage: 'cleaner',
     agentRole: 'cleaner',
-    title: 'Cleaner: Lint, Format & Tidy New Code',
-    detail: `Tidying ${createdFiles.length} file(s) and running the project's lint/format scripts if present…`,
+    title: `Cleaner AI: Code Quality & Formatting (Attempt ${attempt})`,
+    detail: `Tidying and validating ${createdFiles.length} file(s) created this run…`,
     status: 'running'
   });
 
-  const cleanerTarget = resolveRoleTarget(ctx.aiConfig, 'cleaner');
-  const skill = await loadPipelineSkill('cleaner-agent');
   const executor = createToolExecutor({
     ctx,
     tools,
@@ -48,20 +47,17 @@ export async function runCleaner(
     `${bible.renderEventLog({ last: 15 })}\n` +
     'Finish with a ≤150-word summary and the STATUS line.';
 
-  const result = await runToolLoop({
-    provider: cleanerTarget.provider,
-    apiKey: cleanerTarget.apiKey,
-    baseUrl: cleanerTarget.baseUrl,
-    signal: ctx.signal,
-    model: cleanerTarget.model,
-    stableSystem: `${skill}\n\n${CLEANER_RULES}`,
-    sharedContext: bible.renderStable(),
-    tools,
-    initialUserMessage: message,
-    // Cap Cleaner rounds strictly: 4 rounds max for lint/formatting fixes
-    maxRounds: Math.min(4, Math.max(2, ctx.options.maxToolRoundsPerAgent)),
-    onToolCalls: executor
-  });
+  const result = await runToolLoop(
+    buildToolLoopRequest(ctx, 'cleaner', {
+      stableSystem: `${skill}\n\n${CLEANER_RULES}`,
+      sharedContext: bible.renderStable(),
+      tools,
+      initialUserMessage: message,
+      // Cap Cleaner rounds strictly: 4 rounds max for lint/formatting fixes
+      maxRounds: Math.min(4, Math.max(2, ctx.options.maxToolRoundsPerAgent)),
+      onToolCalls: executor
+    })
+  );
   addUsage(usage, result.usage);
   addUsage(ctx.usage, usage);
 

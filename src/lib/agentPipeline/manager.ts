@@ -106,7 +106,7 @@ export function isStraightforwardTask(bible: BibleStore): boolean {
   const outputText = (outputAs || '').toLowerCase();
   const titleText = (bible.sections.title || '').toLowerCase();
   const isSingleFileDeliverable =
-    /\.(html|htm|jsx|tsx|vue|svelte|py|sh|ts|js|md|json|css|sql)\b/i.test(outputText) ||
+    /\.(html|htm|jsx|tsx|vue|svelte|py|sh|ts|js|md|json|css|sql|txt|csv|tsv|yaml|yml)\b/i.test(outputText) ||
     /(?:build|create|make)\s+an?\s+(?:html|browser|standalone|simple|2d)?\s*(?:game|page|script|app|tool|website)/i.test(titleText);
 
   if (isSingleFileDeliverable && subtasks.length <= 3) {
@@ -123,7 +123,7 @@ export function isStraightforwardTask(bible: BibleStore): boolean {
 
 export function extractTargetFilePaths(text: string): string[] {
   if (!text) return [];
-  const matches = text.match(/(?:projects\/[^\s`"'\\]+\.[a-z0-9]+|[^\s`"'\\]+\.(html|htm|jsx|tsx|vue|svelte|py|sh|ts|js|md|json|css|sql))/gi);
+  const matches = text.match(/(?:projects\/[^\s`"'\\]+\.[a-z0-9]+|[^\s`"'\\]+\.(html|htm|jsx|tsx|vue|svelte|py|sh|ts|js|md|json|css|sql|txt|csv|tsv|yaml|yml))/gi);
   if (!matches) return [];
   const unique = Array.from(new Set(matches.map(normalizePath)));
   return unique.filter((p) => !p.endsWith('TODO.md') && !p.endsWith('AGENT_CONTEXT.md') && !p.endsWith('TASK_CONTEXT.md') && !p.endsWith('FILE_LOCKS.md'));
@@ -345,7 +345,10 @@ export async function runManager(
   priorFailureDiagnostics?: string
 ): Promise<ManagerRunResult> {
   const usage = emptyUsage();
-  const createdFiles = new Set<string>();
+  const createdFiles = new Set<string>([
+    ...(ctx.task.createdFiles || []),
+    ...(ctx.brief?.createdFiles || [])
+  ]);
   let usedToolCalling = true;
   const { aiConfig } = ctx;
 
@@ -367,8 +370,37 @@ export async function runManager(
   const workerModel = workerTarget.model;
   const maxRounds = Math.max(5, ctx.options.maxToolRoundsPerAgent);
 
-  const managerProviderBase = { provider: managerTarget.provider, apiKey: managerTarget.apiKey, baseUrl: managerTarget.baseUrl, signal: ctx.signal } as const;
-  const workerProviderBase = { provider: workerTarget.provider, apiKey: workerTarget.apiKey, baseUrl: workerTarget.baseUrl, signal: ctx.signal } as const;
+  const managerProviderBase = {
+    provider: managerTarget.provider,
+    apiKey: managerTarget.apiKey,
+    baseUrl: managerTarget.baseUrl,
+    signal: ctx.signal,
+    ollamaFailureState: ctx.ollamaFailureState,
+    taskId: ctx.task.id,
+    onRequestOllamaFallback: ctx.onRequestOllamaFallback,
+    onSwitchToCloud: async () => resolveRoleTarget(ctx.aiConfig, 'manager')
+  } as const;
+  const workerProviderBase = {
+    provider: workerTarget.provider,
+    apiKey: workerTarget.apiKey,
+    baseUrl: workerTarget.baseUrl,
+    signal: ctx.signal,
+    ollamaFailureState: ctx.ollamaFailureState,
+    taskId: ctx.task.id,
+    onRequestOllamaFallback: ctx.onRequestOllamaFallback,
+    onSwitchToCloud: async () => resolveRoleTarget(ctx.aiConfig, 'worker')
+  } as const;
+
+  const isResuming = ctx.task.status === 'partly_done' ||
+    Boolean(ctx.brief?.buildAndVerification && ctx.brief.buildAndVerification.trim().length > 0);
+
+  const resumeNotice = isResuming
+    ? `\n## RESUMING TASK PROGRESS:\n` +
+      `This task was stopped partway through and is being RESUMED.\n` +
+      `- Inspect existing workspace files and check existing deliverable files (${Array.from(createdFiles).join(', ') || 'in workspace'}).\n` +
+      `- Preserve and build upon any completed, working code and deliverables. Do not destroy or rewrite working parts.\n` +
+      `- Focus on completing the remaining unfinished goals and acceptance criteria.\n`
+    : '';
 
   // ── DIRECT EXECUTION (Solo Mode for straightforward / single deliverables) ──
   if (isStraightforwardTask(bible)) {
@@ -388,6 +420,7 @@ export async function runManager(
       `- Output destination: ${bible.sections.outputAs}\n` +
       `- Scenarios to cover (${scenarioTitles.length}): ${scenarioTitles.map((t) => `"${t}"`).join(', ') || '(cover the whole brief)'}\n` +
       `- Deliverable Goals checklist:\n${bible.sections.goals || '(complete all task requirements)'}\n` +
+      resumeNotice +
       (attempt > 1 && priorFailureDiagnostics
         ? `\n## Prior attempt failed QA — fix exactly these:\n${priorFailureDiagnostics}\n\n${bible.renderEventLog({ last: 15 })}\n`
         : '') +
@@ -647,6 +680,7 @@ export async function runManager(
     `- Scenarios to cover (${scenarioTitles.length}): ${scenarioTitles.map((t) => `"${t}"`).join(', ') || '(none parsed — cover the whole brief)'}\n` +
     `- Concurrency limit: ${ctx.options.maxConcurrentAgents} worker(s).\n` +
     `- CRITICAL EFFICIENCY RULE: If this task builds a standalone deliverable, single file (e.g. an HTML game, standalone script, single component), or simple deliverable, plan EXACTLY 1 piece of kind "when" covering all scenarios ("Implement and self-verify deliverable"). Do NOT split it into multiple workers or a separate "then" worker. A single worker will implement and verify it directly.\n` +
+    resumeNotice +
     (attempt > 1 && priorFailureDiagnostics
       ? `\n## Prior attempt failed QA — fix exactly these (fresh workers will be spawned)\n${priorFailureDiagnostics}\n\n${bible.renderPieces()}\n${bible.renderEventLog({ last: 25 })}\n`
       : '') +

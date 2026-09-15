@@ -19,6 +19,8 @@ import {
   type ExecutionStep,
   type McpToolPermissionPrompt,
   type HumanInputPrompt,
+  type OllamaFallbackChoice,
+  type OllamaFallbackPrompt,
   type AgentPipelineOptions,
   type TaskKind
 } from '../../types';
@@ -133,7 +135,8 @@ export async function executeTaskWithAi(
   onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<boolean>,
   onRequestHumanInput?: (prompt: HumanInputPrompt) => Promise<string>,
   signal?: AbortSignal,
-  options?: Partial<AgentPipelineOptions>
+  options?: Partial<AgentPipelineOptions>,
+  onRequestOllamaFallback?: (prompt: OllamaFallbackPrompt) => Promise<OllamaFallbackChoice>
 ): Promise<{ updatedBrief: AgentContextItem; updatedTask: TaskItem }> {
   const isLiveAi =
     aiConfig.provider !== 'none' &&
@@ -152,6 +155,10 @@ export async function executeTaskWithAi(
     resolvedOptions.maxConcurrentAgents = 1;
   }
   let bible: BibleStore | null = null;
+  const createdFiles = new Set<string>([
+    ...(task.createdFiles || []),
+    ...(brief?.createdFiles || [])
+  ]);
 
   const ctx: PipelineContext = {
     task,
@@ -165,9 +172,11 @@ export async function executeTaskWithAi(
     runDir,
     signal,
     usage: emptyUsage(),
+    ollamaFailureState: { count: 0 },
     onStepUpdate,
     onRequestPermission,
     onRequestHumanInput,
+    onRequestOllamaFallback,
     emit: (step) =>
       onStepUpdate({
         time: new Date().toLocaleTimeString(),
@@ -191,7 +200,14 @@ export async function executeTaskWithAi(
     // Bible + tools (fixed for the whole run — task-boundary decisions)
     bible = new BibleStore(summary.sections, runDir);
     const locks = new FileLockRegistry(runDir);
-    bible.appendEvent({ actor: 'pipeline', kind: 'info', text: `Run ${runId} initialized (attempt policy: ${resolvedOptions.maxQaRetries} QA retr${resolvedOptions.maxQaRetries === 1 ? 'y' : 'ies'}, ${resolvedOptions.maxConcurrentAgents} concurrent worker(s)).` });
+    const isResumed = task.status === 'partly_done' || brief?.status === 'partly_done' || Boolean(brief?.buildAndVerification && brief.buildAndVerification.trim().length > 0);
+    bible.appendEvent({
+      actor: 'pipeline',
+      kind: 'info',
+      text: isResumed
+        ? `Run ${runId} resumed from prior progress (attempt policy: ${resolvedOptions.maxQaRetries} QA retr${resolvedOptions.maxQaRetries === 1 ? 'y' : 'ies'}, ${resolvedOptions.maxConcurrentAgents} concurrent worker(s)).`
+        : `Run ${runId} initialized (attempt policy: ${resolvedOptions.maxQaRetries} QA retr${resolvedOptions.maxQaRetries === 1 ? 'y' : 'ies'}, ${resolvedOptions.maxConcurrentAgents} concurrent worker(s)).`
+    });
     await bible.persist();
     // The filesystem harness is always available because deliverables land in files; everything else is filtered to what Summary required.
     const requiredSet = Array.from(new Set([...summary.requiredMcps, 'mcp-filesystem']));
@@ -202,7 +218,6 @@ export async function executeTaskWithAi(
     console.log('Tools (byte-stable for this run):', tools.map((t) => t.name).join(', '));
 
     // Step 3 → 4 → 5 with bounded QA retry loop
-    const createdFiles = new Set<string>();
     let mgr: ManagerRunResult | null = null;
     let hardener: HardenerResult | undefined;
     let diagnostics: string | undefined;
@@ -345,19 +360,19 @@ export async function executeTaskWithAi(
         sourceLaneId: task.swimLaneId || brief?.sourceLaneId,
         itemNumber: brief?.itemNumber,
         title: task.title,
-        status: 'not_started',
+        status: 'partly_done',
         overview: brief?.overview || brief?.brief || `Task (${task.title})`,
-        buildAndVerification: brief?.buildAndVerification || '',
-        completion: '',
-        createdFiles: [],
+        buildAndVerification: brief?.buildAndVerification || brief?.built || '',
+        completion: brief?.completion || brief?.validation || '',
+        createdFiles: Array.from(createdFiles),
         totalUsage: { ...ctx.usage },
         brief: brief?.overview || brief?.brief || `Task (${task.title})`,
-        built: brief?.buildAndVerification || '',
-        validation: '',
+        built: brief?.buildAndVerification || brief?.built || '',
+        validation: brief?.validation || '',
         humanReview: '',
         followUps: ''
       };
-      return { updatedBrief: partialBrief, updatedTask: { ...task, status: 'not_started', isDone: false, totalUsage: { ...ctx.usage } } };
+      return { updatedBrief: partialBrief, updatedTask: { ...task, status: 'partly_done', isDone: false, createdFiles: Array.from(createdFiles), totalUsage: { ...ctx.usage } } };
     }
 
     const message = err?.message || String(err);

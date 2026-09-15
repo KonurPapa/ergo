@@ -188,20 +188,83 @@ export async function runToolLoop(req: ToolLoopRequest): Promise<ToolLoopResult>
   if (req.provider === 'none' || req.provider === 'mock') {
     return makeResult('', 0, 0, usage, 'error', 'No live AI provider configured.');
   }
-  const tools = req.tools || [];
-  switch (req.provider) {
-    case 'anthropic':
-      return runAnthropic(req, tools, usage);
-    case 'openai':
-      return runOpenAiCompatible(req, tools, usage, 'openai');
-    case 'ollama':
-      return runOpenAiCompatible(req, tools, usage, 'ollama');
-    case 'gemini':
-      return runGemini(req, tools, usage);
-    case 'cli_subscription':
-      return runCliSubscription(req, tools, usage);
-    default:
-      return makeResult('', 0, 0, usage, 'error', `Unsupported provider: ${req.provider}`);
+
+  const executeProvider = async (activeReq: ToolLoopRequest): Promise<ToolLoopResult> => {
+    const tools = activeReq.tools || [];
+    switch (activeReq.provider) {
+      case 'anthropic':
+        return runAnthropic(activeReq, tools, usage);
+      case 'openai':
+        return runOpenAiCompatible(activeReq, tools, usage, 'openai');
+      case 'ollama':
+        return runOpenAiCompatible(activeReq, tools, usage, 'ollama');
+      case 'gemini':
+        return runGemini(activeReq, tools, usage);
+      case 'cli_subscription':
+        return runCliSubscription(activeReq, tools, usage);
+      default:
+        return makeResult('', 0, 0, usage, 'error', `Unsupported provider: ${activeReq.provider}`);
+    }
+  };
+
+  let currentReq = req;
+  while (true) {
+    throwIfAborted(currentReq.signal);
+    const result = await executeProvider(currentReq);
+
+    // Track consecutive Ollama network / connectivity failures
+    if (currentReq.provider === 'ollama') {
+      const isConnectionError =
+        result.stopReason === 'error' &&
+        /network error|failed to fetch|connection refused|connect econnrefused|failed to connect/i.test(result.error || '');
+
+      if (isConnectionError) {
+        if (currentReq.ollamaFailureState) {
+          currentReq.ollamaFailureState.count = (currentReq.ollamaFailureState.count || 0) + 1;
+        }
+
+        const consecutiveFailures = currentReq.ollamaFailureState?.count || 1;
+        if (consecutiveFailures >= 3 && currentReq.onRequestOllamaFallback) {
+          const host = (currentReq.baseUrl || 'http://localhost:11434').replace(/\/+$/, '');
+          const choice = await currentReq.onRequestOllamaFallback({
+            id: `ollama-fallback-${Date.now()}`,
+            taskId: currentReq.taskId ?? 'current-task',
+            consecutiveFailures,
+            url: host,
+            errorMessage: result.error
+          });
+
+          if (choice === 'terminate') {
+            throw new DOMException('Task terminated by user due to unreachable local Ollama instance.', 'AbortError');
+          }
+
+          if (choice === 'switch_cloud' && currentReq.onSwitchToCloud) {
+            const cloudTarget = await currentReq.onSwitchToCloud();
+            if (cloudTarget && cloudTarget.provider !== 'ollama' && cloudTarget.provider !== 'none') {
+              if (currentReq.ollamaFailureState) {
+                currentReq.ollamaFailureState.count = 0;
+              }
+              // Switch current request to the cloud provider and retry
+              currentReq = {
+                ...currentReq,
+                provider: cloudTarget.provider,
+                model: cloudTarget.model,
+                apiKey: cloudTarget.apiKey,
+                baseUrl: cloudTarget.baseUrl
+              };
+              continue;
+            }
+          }
+        }
+      } else if (result.stopReason !== 'error') {
+        // Successful call: reset consecutive Ollama failure count
+        if (currentReq.ollamaFailureState) {
+          currentReq.ollamaFailureState.count = 0;
+        }
+      }
+    }
+
+    return result;
   }
 }
 

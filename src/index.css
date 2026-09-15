@@ -1760,10 +1760,61 @@ body {
   box-shadow: none;
 }
 
+.execute-task-btn.is-resume {
+  background: #d97706;
+  border-color: rgba(245, 158, 11, 0.5);
+  color: #ffffff;
+}
+
+.execute-task-btn.is-resume:hover:not(:disabled) {
+  background: #b45309;
+  border-color: rgba(245, 158, 11, 0.7);
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.35);
+  color: #ffffff;
+}
+
+.execute-task-btn.is-rerun {
+  background: rgba(99, 102, 241, 0.16);
+  border-color: rgba(99, 102, 241, 0.38);
+  color: #a5b4fc;
+}
+
+.execute-task-btn.is-rerun:hover:not(:disabled) {
+  background: var(--accent-primary, #6366f1);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
+}
+
 .execute-task-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
   box-shadow: none;
+}
+
+.stop-task-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0;
+  height: 26px;
+  padding: 0 0.6rem;
+  background: rgba(244, 63, 94, 0.12);
+  border: 1px solid rgba(244, 63, 94, 0.35);
+  border-radius: 6px;
+  color: var(--accent-rose);
+  font-size: 0.76rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.stop-task-btn:hover {
+  background: rgba(244, 63, 94, 0.22);
+  border-color: rgba(244, 63, 94, 0.6);
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(244, 63, 94, 0.25);
 }
 
 /* ShadCN-style compact button for AI task header */
@@ -2506,6 +2557,15 @@ body {
 }
 .ai-sub-card.card-steps-actions .ai-sub-card-header:hover {
   background: rgba(168, 85, 247, 0.11);
+}
+.ai-sub-card.card-steps-actions.has-pending-alert {
+  border-color: rgba(239, 68, 68, 0.55);
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.2);
+  background: rgba(239, 68, 68, 0.04);
+}
+.ai-sub-card.card-steps-actions.has-pending-alert .ai-sub-card-header {
+  background: rgba(239, 68, 68, 0.09);
+  border-bottom-color: rgba(239, 68, 68, 0.2);
 }
 
 /* 4. Completion: Cyan/Green */
@@ -4468,9 +4528,21 @@ body {
   flex-direction: column;
   gap: 0.75rem;
   z-index: 9999;
-  max-width: 400px;
+  max-width: 420px;
   width: calc(100vw - 3rem);
+  max-height: calc(100vh - 3rem);
+  overflow-y: auto;
   pointer-events: none;
+  padding-right: 4px;
+}
+
+.toast-viewport::-webkit-scrollbar {
+  width: 4px;
+}
+
+.toast-viewport::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
 }
 
 .toast-card {
@@ -4479,7 +4551,7 @@ body {
   align-items: flex-start;
   gap: 0.75rem;
   padding: 0.9rem 1rem;
-  background: rgba(13, 18, 31, 0.92);
+  background: rgba(13, 18, 31, 0.94);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -4488,6 +4560,12 @@ body {
   animation: slideInToast 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   color: var(--text-main);
   position: relative;
+  flex-shrink: 0;
+}
+
+.toast-card.has-actions {
+  border-width: 1.5px;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.6), 0 0 24px rgba(0, 0, 0, 0.4);
 }
 
 @keyframes slideInToast {
@@ -4531,14 +4609,22 @@ body {
   line-height: 1.45;
 }
 
+.toast-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+  flex-wrap: wrap;
+}
+
 .toast-action-btn {
-  margin-top: 0.45rem;
+  margin-top: 0.2rem;
   align-self: flex-start;
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
   padding: 0.3rem 0.65rem;
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   font-weight: 600;
   color: #ffffff;
   background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-violet) 100%);
@@ -4551,6 +4637,75 @@ body {
 .toast-action-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+}
+
+.toast-action-btn.toast-action-primary {
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-violet) 100%);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.toast-action-btn.toast-action-emerald {
+  color: #ffffff;
+  background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+  border-color: rgba(16, 185, 129, 0.35);
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.25);
+}
+
+.toast-action-btn.toast-action-emerald:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.45);
+}
+
+.toast-action-btn.toast-action-secondary {
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.toast-action-btn.toast-action-secondary:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.toast-action-btn.toast-action-danger {
+  color: #ffffff;
+  background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%);
+  border-color: rgba(239, 68, 68, 0.35);
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.25);
+}
+
+.toast-action-btn.toast-action-danger:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(239, 68, 68, 0.45);
+}
+
+.actions-attention-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 9999px;
+  animation: pulseAlertBadge 2s ease-in-out infinite;
+}
+
+@keyframes pulseAlertBadge {
+  0%, 100% {
+    opacity: 1;
+    border-color: rgba(239, 68, 68, 0.45);
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.3);
+  }
+  50% {
+    opacity: 0.85;
+    border-color: rgba(239, 68, 68, 0.75);
+    box-shadow: 0 0 8px 1px rgba(239, 68, 68, 0.25);
+  }
 }
 
 .toast-close-btn {

@@ -15,8 +15,11 @@ import {
   type ExecutionStep,
   type McpToolPermissionPrompt,
   type HumanInputPrompt,
+  type OllamaFallbackChoice,
+  type OllamaFallbackPrompt,
   type SwimLaneDoc,
-  type AgentPipelineOptions
+  type AgentPipelineOptions,
+  type TaskStatus
 } from './types';
 
 import { INITIAL_PROJECTS, createNewProjectData, INITIAL_MCP_SERVERS } from './lib/demoData';
@@ -188,9 +191,15 @@ export function App() {
   // Toast Notifications State
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
-  const showToast = useCallback((toast: Omit<ToastMessage, 'id'>) => {
-    const id = `toast-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    setToasts((prev) => [...prev, { ...toast, id }]);
+  const showToast = useCallback((toast: Omit<ToastMessage, 'id'> & { id?: string }) => {
+    const id = toast.id || `toast-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    setToasts((prev) => {
+      const existingIdx = prev.findIndex((t) => t.id === id);
+      if (existingIdx !== -1) {
+        return prev.map((t, idx) => (idx === existingIdx ? { ...toast, id } : t));
+      }
+      return [...prev, { ...toast, id }];
+    });
   }, []);
 
   const handleDismissToast = useCallback((id: string) => {
@@ -415,19 +424,17 @@ export function App() {
   const [taskExecutionSteps, setTaskExecutionSteps] = useState<Record<string | number, ExecutionStep[]>>({});
   const [pendingPermissions, setPendingPermissions] = useState<Record<string | number, { prompt: McpToolPermissionPrompt; resolve: (approved: boolean) => void }>>({});
   const [pendingHumanInputs, setPendingHumanInputs] = useState<Record<string | number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>>({});
+  const [pendingOllamaFallbacks, setPendingOllamaFallbacks] = useState<Record<string | number, { prompt: OllamaFallbackPrompt; resolve: (choice: OllamaFallbackChoice) => void }>>({});
+
+  // Synchronous refs to prevent React state closure races when toasts or buttons fire
+  const pendingPermissionsRef = useRef<Record<string | number, { prompt: McpToolPermissionPrompt; resolve: (approved: boolean) => void }>>({});
+  const pendingHumanInputsRef = useRef<Record<string | number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>>({});
+  const pendingOllamaFallbacksRef = useRef<Record<string | number, { prompt: OllamaFallbackPrompt; resolve: (choice: OllamaFallbackChoice) => void }>>({});
 
   // AbortController map — one controller per active execution (keyed by taskId)
   const abortControllersRef = useRef<Map<string | number, AbortController>>(new Map());
 
-  // Terminate a running agent execution for a given task ID
-  const handleTerminateAgent = useCallback((taskId: string | number) => {
-    const controller = abortControllersRef.current.get(taskId);
-    if (controller) {
-      controller.abort();
-      abortControllersRef.current.delete(taskId);
-    }
-    setExecutingTaskId(null);
-  }, []);
+
 
 
   // Folder management handlers
@@ -1110,6 +1117,182 @@ export function App() {
     });
   };
 
+  // Terminate a running agent execution for a given task ID
+  const handleTerminateAgent = useCallback((taskId: string | number) => {
+    // 1. Abort controller (exact match or stringified match)
+    let foundController: AbortController | undefined;
+    for (const [key, ctrl] of abortControllersRef.current.entries()) {
+      if (String(key) === String(taskId)) {
+        foundController = ctrl;
+        abortControllersRef.current.delete(key);
+        break;
+      }
+    }
+    if (foundController) {
+      foundController.abort();
+    }
+
+    // 2. If there is any pending Ollama fallback waiting, resolve it to terminate immediately
+    for (const [key, pending] of Object.entries(pendingOllamaFallbacksRef.current)) {
+      if (String(key) === String(taskId)) {
+        try {
+          pending.resolve('terminate');
+        } catch {}
+        delete pendingOllamaFallbacksRef.current[key];
+      }
+    }
+
+    // 3. Clear executing task id
+    setExecutingTaskId((cur) => (cur !== null && String(cur) === String(taskId) ? null : cur));
+
+    // 4. Update task status from in_progress back to partly_done
+    setTasks((prevTasks) => {
+      const updated = prevTasks.map((t) =>
+        String(t.id) === String(taskId)
+          ? { ...t, status: 'partly_done' as TaskStatus, isDone: false }
+          : t
+      );
+      const updatedBriefs = briefs.map((b) =>
+        (b.sourceTaskId != null && String(b.sourceTaskId) === String(taskId)) ||
+        (b.id != null && String(b.id) === String(taskId))
+          ? { ...b, status: 'partly_done' as TaskStatus }
+          : b
+      );
+      syncAndSaveProject(updated, updatedBriefs, true);
+      setBriefs(updatedBriefs);
+      return updated;
+    });
+
+    // 5. Clean up pending UI prompts and toasts
+    handleDismissToast(`perm-toast-${taskId}`);
+    handleDismissToast(`ollama-toast-${taskId}`);
+    setPendingOllamaFallbacks((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(next)) {
+        if (String(k) === String(taskId)) delete next[k];
+      }
+      return next;
+    });
+    setPendingPermissions((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(next)) {
+        if (String(k) === String(taskId)) delete next[k];
+      }
+      return next;
+    });
+  }, [briefs, handleDismissToast, syncAndSaveProject]);
+
+  const handlePermissionChoice = (taskId: string | number, approved: boolean) => {
+    handleDismissToast(`perm-toast-${taskId}`);
+
+    let pending: { prompt: McpToolPermissionPrompt; resolve: (approved: boolean) => void } | undefined;
+    for (const [key, val] of Object.entries(pendingPermissionsRef.current)) {
+      if (String(key) === String(taskId)) {
+        pending = val;
+        delete pendingPermissionsRef.current[key];
+        break;
+      }
+    }
+    if (!pending) {
+      for (const [key, val] of Object.entries(pendingPermissions)) {
+        if (String(key) === String(taskId)) {
+          pending = val;
+          break;
+        }
+      }
+    }
+
+    if (pending) {
+      pending.resolve(approved);
+    }
+
+    setPendingPermissions((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(next)) {
+        if (String(k) === String(taskId)) delete next[k];
+      }
+      return next;
+    });
+  };
+
+  const handleHumanInputChoice = (taskId: string | number, answer: string) => {
+    let pending: { prompt: HumanInputPrompt; resolve: (answer: string) => void } | undefined;
+    for (const [key, val] of Object.entries(pendingHumanInputsRef.current)) {
+      if (String(key) === String(taskId)) {
+        pending = val;
+        delete pendingHumanInputsRef.current[key];
+        break;
+      }
+    }
+    if (!pending) {
+      for (const [key, val] of Object.entries(pendingHumanInputs)) {
+        if (String(key) === String(taskId)) {
+          pending = val;
+          break;
+        }
+      }
+    }
+
+    if (pending) {
+      pending.resolve(answer);
+    }
+
+    setPendingHumanInputs((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(next)) {
+        if (String(k) === String(taskId)) delete next[k];
+      }
+      return next;
+    });
+  };
+
+  const handleOllamaFallbackChoice = (taskId: string | number, choice: OllamaFallbackChoice) => {
+    handleDismissToast(`ollama-toast-${taskId}`);
+
+    // If terminate, abort agent execution immediately
+    if (choice === 'terminate') {
+      handleTerminateAgent(taskId);
+      return;
+    }
+
+    let pending: { prompt: OllamaFallbackPrompt; resolve: (choice: OllamaFallbackChoice) => void } | undefined;
+    for (const [key, val] of Object.entries(pendingOllamaFallbacksRef.current)) {
+      if (String(key) === String(taskId)) {
+        pending = val;
+        delete pendingOllamaFallbacksRef.current[key];
+        break;
+      }
+    }
+    if (!pending) {
+      for (const [key, val] of Object.entries(pendingOllamaFallbacks)) {
+        if (String(key) === String(taskId)) {
+          pending = val;
+          break;
+        }
+      }
+    }
+
+    if (pending) {
+      // Find existing cloud key if available
+      const cloudKey = userApiKeys.find((k) => k.provider !== 'ollama' && k.provider !== 'none' && k.provider !== 'mock');
+      if (cloudKey) {
+        handleSelectUserKey(cloudKey.id);
+      } else {
+        // Open credentials modal so user can configure / connect cloud provider
+        setIsAiScreenOpen(true);
+      }
+      pending.resolve('switch_cloud');
+    }
+
+    setPendingOllamaFallbacks((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(next)) {
+        if (String(k) === String(taskId)) delete next[k];
+      }
+      return next;
+    });
+  };
+
   // Trigger In-Place Task Execution
   // If a CLI agent is configured, spawn a terminal session inside the Build & Verification card.
   // Otherwise, run executeTaskWithAi in place and stream logs directly into Build & Verification and Completion.
@@ -1182,23 +1365,49 @@ export function App() {
     } else {
       // In-Place AI Task Execution
       setExecutingTaskId(task.id);
-      setTaskExecutionSteps((prev) => ({ ...prev, [task.id]: [] }));
 
-      const currentTask = tasks.find((t) => t.id === task.id) || task;
+      const currentTask = tasks.find((t) => String(t.id) === String(task.id)) || task;
       const currentBrief = briefs.find(
         (b) =>
-          (b.sourceTaskId != null && b.sourceTaskId === task.id) ||
+          (b.sourceTaskId != null && String(b.sourceTaskId) === String(task.id)) ||
           b.title.trim().toLowerCase() === task.title.trim().toLowerCase() ||
-          b.itemNumber === task.id
+          String(b.itemNumber) === String(task.id)
       );
 
+      const isResuming = currentTask.status === 'partly_done' ||
+        (currentBrief && (currentBrief.status === 'partly_done' || Boolean(currentBrief.buildAndVerification && currentBrief.buildAndVerification.trim().length > 0)));
+
+      setTaskExecutionSteps((prev) => {
+        const existing = prev[task.id] || prev[String(task.id)] || [];
+        if (isResuming && existing.length > 0) {
+          const priorCleaned = existing.map((s) => (s.status === 'running' ? { ...s, status: 'cancelled' as const } : s));
+          return {
+            ...prev,
+            [task.id]: [
+              ...priorCleaned,
+              {
+                id: `step-resume-${Date.now()}`,
+                stage: 'context' as const,
+                title: 'Resuming Task Execution',
+                detail: 'Picking back up with the task where it was left off…',
+                status: 'running' as const,
+                time: new Date().toLocaleTimeString(),
+                taskId: task.id,
+              } as ExecutionStep
+            ]
+          };
+        }
+        return { ...prev, [task.id]: [] };
+      });
+
       // Set task status to in_progress
-      const inProgressTasks = tasks.map((t) => (t.id === task.id ? { ...t, status: 'in_progress' as const } : t));
+      const inProgressTasks = tasks.map((t) => (String(t.id) === String(task.id) ? { ...t, status: 'in_progress' as const } : t));
       setTasks(inProgressTasks);
 
+      let controller: AbortController | null = null;
       try {
         // Create a new AbortController for this execution so the user can terminate it
-        const controller = new AbortController();
+        controller = new AbortController();
         abortControllersRef.current.set(task.id, controller);
 
         const res = await executeTaskWithAi(
@@ -1209,7 +1418,7 @@ export function App() {
           mcpServers,
           (stepUpdate) => {
             setTaskExecutionSteps((prev) => {
-              const existing = prev[task.id] || [];
+              const existing = prev[task.id] || prev[String(task.id)] || [];
               const idx = existing.findIndex((s) => s.id === stepUpdate.id);
               let next: ExecutionStep[];
               if (idx !== -1) {
@@ -1217,6 +1426,14 @@ export function App() {
                 next[idx] = stepUpdate;
               } else {
                 next = [...existing, stepUpdate];
+              }
+              // If a resume step was running and this new step started, mark the resume step as success
+              if (!stepUpdate.id.startsWith('step-resume-')) {
+                next = next.map((s) =>
+                  s.id.startsWith('step-resume-') && s.status === 'running'
+                    ? { ...s, status: 'success' as const }
+                    : s
+                );
               }
               if (stepUpdate.status === 'error' || stepUpdate.status === 'cancelled') {
                 next = next.map((s) =>
@@ -1246,31 +1463,100 @@ export function App() {
             }
           },
           (permissionPrompt) => {
+            const toastId = `perm-toast-${task.id}`;
             return new Promise<boolean>((resolve) => {
+              const wrappedResolve = (approved: boolean) => {
+                handleDismissToast(toastId);
+                delete pendingPermissionsRef.current[task.id];
+                resolve(approved);
+              };
+
+              pendingPermissionsRef.current[task.id] = { prompt: permissionPrompt, resolve: wrappedResolve };
               setPendingPermissions((prev) => ({
                 ...prev,
-                [task.id]: { prompt: permissionPrompt, resolve },
+                [task.id]: { prompt: permissionPrompt, resolve: wrappedResolve },
               }));
+
+              showToast({
+                id: toastId,
+                type: 'warning',
+                title: 'Permission Required',
+                message: `Task "${task.title}": Agent requests permission to execute ${permissionPrompt.serverName} / ${permissionPrompt.toolName}()`,
+                duration: 0,
+                actions: [
+                  {
+                    label: 'Skip / Reject',
+                    variant: 'secondary',
+                    onClick: () => handlePermissionChoice(task.id, false),
+                  },
+                  {
+                    label: 'Approve',
+                    variant: 'emerald',
+                    onClick: () => handlePermissionChoice(task.id, true),
+                  },
+                ],
+              });
             });
           },
           (humanInputPrompt) => {
             return new Promise<string>((resolve) => {
+              const wrappedResolve = (answer: string) => {
+                delete pendingHumanInputsRef.current[task.id];
+                resolve(answer);
+              };
+              pendingHumanInputsRef.current[task.id] = { prompt: humanInputPrompt, resolve: wrappedResolve };
               setPendingHumanInputs((prev) => ({
                 ...prev,
-                [task.id]: { prompt: humanInputPrompt, resolve },
+                [task.id]: { prompt: humanInputPrompt, resolve: wrappedResolve },
               }));
             });
           },
           controller.signal,
-          agentPipelineOptions
+          agentPipelineOptions,
+          (ollamaFallbackPrompt) => {
+            const toastId = `ollama-toast-${task.id}`;
+            return new Promise<OllamaFallbackChoice>((resolve) => {
+              const wrappedResolve = (choice: OllamaFallbackChoice) => {
+                handleDismissToast(toastId);
+                delete pendingOllamaFallbacksRef.current[task.id];
+                resolve(choice);
+              };
+
+              pendingOllamaFallbacksRef.current[task.id] = { prompt: ollamaFallbackPrompt, resolve: wrappedResolve };
+              setPendingOllamaFallbacks((prev) => ({
+                ...prev,
+                [task.id]: { prompt: ollamaFallbackPrompt, resolve: wrappedResolve }
+              }));
+
+              showToast({
+                id: toastId,
+                type: 'error',
+                title: 'Local Ollama Connection Failed',
+                message: `Task "${task.title}": Ollama connection failed after ${ollamaFallbackPrompt.consecutiveFailures} attempts. You don't seem to be connected locally.`,
+                duration: 0,
+                actions: [
+                  {
+                    label: 'Terminate Task',
+                    variant: 'danger',
+                    onClick: () => handleOllamaFallbackChoice(task.id, 'terminate'),
+                  },
+                  {
+                    label: 'Switch to Cloud Profile',
+                    variant: 'emerald',
+                    onClick: () => handleOllamaFallbackChoice(task.id, 'switch_cloud'),
+                  },
+                ],
+              });
+            });
+          }
         );
 
         // Completed execution: apply results & persist to TODO.md and AGENT_CONTEXT.md
-        const nextTasks = tasks.map((t) => (t.id === res.updatedTask.id ? res.updatedTask : t));
+        const nextTasks = tasks.map((t) => (String(t.id) === String(res.updatedTask.id) ? res.updatedTask : t));
         const existingBriefIdx = briefs.findIndex(
           (b) =>
             (b.id && b.id === res.updatedBrief.id) ||
-            (b.sourceTaskId && res.updatedBrief.sourceTaskId && b.sourceTaskId === res.updatedBrief.sourceTaskId) ||
+            (b.sourceTaskId && res.updatedBrief.sourceTaskId && String(b.sourceTaskId) === String(res.updatedBrief.sourceTaskId)) ||
             b.title.trim().toLowerCase() === res.updatedBrief.title.trim().toLowerCase()
         );
         let nextBriefs: AgentContextItem[];
@@ -1282,39 +1568,58 @@ export function App() {
         syncAndSaveProject(nextTasks, nextBriefs, true);
       } catch (err) {
         console.error('Task execution error:', err);
+        const isAborted = (err as any)?.name === 'AbortError' || !!controller?.signal?.aborted;
+        if (isAborted) {
+          setTasks((prevTasks) => {
+            const nextTasks = prevTasks.map((t) =>
+              String(t.id) === String(task.id)
+                ? { ...t, status: 'partly_done' as TaskStatus, isDone: false }
+                : t
+            );
+            const nextBriefs = briefs.map((b) =>
+              (b.sourceTaskId != null && String(b.sourceTaskId) === String(task.id)) ||
+              (b.id != null && String(b.id) === String(task.id))
+                ? { ...b, status: 'partly_done' as TaskStatus }
+                : b
+            );
+            syncAndSaveProject(nextTasks, nextBriefs, true);
+            setBriefs(nextBriefs);
+            return nextTasks;
+          });
+          setTaskExecutionSteps((prev) => {
+            const steps = prev[task.id] || [];
+            const nextSteps = steps.map((s) =>
+              s.status === 'running'
+                ? { ...s, status: 'cancelled' as const, detail: 'Task execution terminated by user.' }
+                : s
+            );
+            return { ...prev, [task.id]: nextSteps };
+          });
+        }
       } finally {
+        handleDismissToast(`perm-toast-${task.id}`);
+        handleDismissToast(`ollama-toast-${task.id}`);
         abortControllersRef.current.delete(task.id);
-        setExecutingTaskId((cur) => (cur === task.id ? null : cur));
+        delete pendingPermissionsRef.current[task.id];
+        delete pendingHumanInputsRef.current[task.id];
+        delete pendingOllamaFallbacksRef.current[task.id];
+        setExecutingTaskId((cur) => (cur !== null && String(cur) === String(task.id) ? null : cur));
         setPendingHumanInputs((prev) => {
           const next = { ...prev };
           delete next[task.id];
           return next;
         });
+        setPendingOllamaFallbacks((prev) => {
+          const next = { ...prev };
+          delete next[task.id];
+          return next;
+        });
+        setPendingPermissions((prev) => {
+          const next = { ...prev };
+          delete next[task.id];
+          return next;
+        });
       }
-    }
-  };
-
-  const handlePermissionChoice = (taskId: string | number, approved: boolean) => {
-    const pending = pendingPermissions[taskId];
-    if (pending) {
-      pending.resolve(approved);
-      setPendingPermissions((prev) => {
-        const next = { ...prev };
-        delete next[taskId];
-        return next;
-      });
-    }
-  };
-
-  const handleHumanInputChoice = (taskId: string | number, answer: string) => {
-    const pending = pendingHumanInputs[taskId];
-    if (pending) {
-      pending.resolve(answer);
-      setPendingHumanInputs((prev) => {
-        const next = { ...prev };
-        delete next[taskId];
-        return next;
-      });
     }
   };
 
@@ -1389,11 +1694,27 @@ export function App() {
   const handleKillSession = (taskId: string | number) => {
     setTerminalSessions((prev) =>
       prev.map((s) =>
-        s.session.taskId === taskId
+        String(s.session.taskId) === String(taskId)
           ? { ...s, session: { ...s.session, isActive: false, exitCode: -1 } }
           : s
       )
     );
+    setTasks((prevTasks) => {
+      const updated = prevTasks.map((t) =>
+        String(t.id) === String(taskId)
+          ? { ...t, status: 'partly_done' as TaskStatus, isDone: false }
+          : t
+      );
+      const updatedBriefs = briefs.map((b) =>
+        (b.sourceTaskId != null && String(b.sourceTaskId) === String(taskId)) ||
+        (b.id != null && String(b.id) === String(taskId))
+          ? { ...b, status: 'partly_done' as TaskStatus }
+          : b
+      );
+      syncAndSaveProject(updated, updatedBriefs, true);
+      setBriefs(updatedBriefs);
+      return updated;
+    });
   };
 
   // Immediate Save Brief Edits
@@ -2257,8 +2578,10 @@ export function App() {
             taskExecutionSteps={taskExecutionSteps}
             pendingPermissions={pendingPermissions}
             pendingHumanInputs={pendingHumanInputs}
+            pendingOllamaFallbacks={pendingOllamaFallbacks}
             onPermissionChoice={handlePermissionChoice}
             onHumanInputChoice={handleHumanInputChoice}
+            onOllamaFallbackChoice={handleOllamaFallbackChoice}
             onSessionExit={handleSessionExit}
             onRestartSession={handleExecuteTask}
             onKillSession={handleKillSession}

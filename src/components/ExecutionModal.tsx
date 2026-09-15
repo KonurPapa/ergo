@@ -7,11 +7,13 @@ import {
   type MCPServer,
   type ExecutionStep,
   type McpToolPermissionPrompt,
-  type HumanInputPrompt
+  type HumanInputPrompt,
+  type OllamaFallbackPrompt,
+  type OllamaFallbackChoice
 } from '../types';
 import { executeTaskWithAi } from '../lib/ai';
 import { StepStatusIcon, StepUsageBadge, PieceChip, BiblePreview, BaselineContextPreview } from './ExecutionStepExtras';
-import { Play, X, CheckCircle2, Send, Layers, Code, ShieldAlert, ShieldCheck, HelpCircle } from 'lucide-react';
+import { Play, X, CheckCircle2, Send, Layers, Code, ShieldAlert, ShieldCheck, HelpCircle, Cloud, Square } from 'lucide-react';
 
 interface ExecutionModalProps {
   isOpen: boolean;
@@ -46,6 +48,10 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
     prompt: HumanInputPrompt;
     resolve: (answer: string) => void;
   } | null>(null);
+  const [pendingOllamaFallback, setPendingOllamaFallback] = useState<{
+    prompt: OllamaFallbackPrompt;
+    resolve: (choice: OllamaFallbackChoice) => void;
+  } | null>(null);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const [customAnswer, setCustomAnswer] = useState('');
 
@@ -64,6 +70,7 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
     setResultPayload(null);
     setPendingPermission(null);
     setPendingHumanInput(null);
+    setPendingOllamaFallback(null);
     setSelectedOption(null);
     setCustomAnswer('');
 
@@ -94,6 +101,13 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
           return new Promise<string>((resolve) => {
             setPendingHumanInput({ prompt: humanInputPrompt, resolve });
           });
+        },
+        undefined,
+        undefined,
+        (ollamaPrompt) => {
+          return new Promise<OllamaFallbackChoice>((resolve) => {
+            setPendingOllamaFallback({ prompt: ollamaPrompt, resolve });
+          });
         }
       );
 
@@ -110,6 +124,13 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
     if (pendingPermission) {
       pendingPermission.resolve(approved);
       setPendingPermission(null);
+    }
+  };
+
+  const handleOllamaFallbackChoice = (choice: OllamaFallbackChoice) => {
+    if (pendingOllamaFallback) {
+      pendingOllamaFallback.resolve(choice);
+      setPendingOllamaFallback(null);
     }
   };
 
@@ -263,6 +284,48 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
                 <button className="btn btn-emerald" onClick={() => handlePermissionChoice(true)}>
                   <ShieldCheck size={16} />
                   <span>Approve Tool Call</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Interactive Ollama Connection Failed Prompt Card */}
+          {pendingOllamaFallback && (
+            <div
+              style={{
+                background: 'rgba(239, 68, 68, 0.08)',
+                border: '1px solid rgba(239, 68, 68, 0.35)',
+                borderRadius: 'var(--radius-md)',
+                padding: '1.25rem',
+                marginBottom: '1.25rem',
+                animation: 'fadeIn 0.2s ease'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', color: 'var(--accent-rose)', fontWeight: 700, fontSize: '0.95rem', marginBottom: '0.5rem' }}>
+                <ShieldAlert size={20} />
+                <span>Local Ollama Connection Failed</span>
+              </div>
+              <p style={{ fontSize: '0.85rem', color: '#fff', marginBottom: '0.75rem', lineHeight: 1.45 }}>
+                Ergo was unable to reach your local Ollama instance at <strong style={{ color: 'var(--accent-cyan)' }}>{pendingOllamaFallback.prompt.url}</strong> after {pendingOllamaFallback.prompt.consecutiveFailures} consecutive attempts. You don't seem to be connected locally.
+              </p>
+              <div style={{ background: 'var(--bg-darkest)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+                {pendingOllamaFallback.prompt.errorMessage || 'NetworkError: Failed to connect to local Ollama daemon'}
+              </div>
+              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <button
+                  className="btn btn-secondary"
+                  style={{ borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--accent-rose)' }}
+                  onClick={() => handleOllamaFallbackChoice('terminate')}
+                >
+                  <Square size={14} />
+                  <span>Terminate Task</span>
+                </button>
+                <button
+                  className="btn btn-emerald"
+                  onClick={() => handleOllamaFallbackChoice('switch_cloud')}
+                >
+                  <Cloud size={16} />
+                  <span>Switch to Cloud Profile</span>
                 </button>
               </div>
             </div>
