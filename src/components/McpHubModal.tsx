@@ -260,7 +260,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="modal-content" style={{ maxWidth: '920px', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
+      <div className="modal-content" style={{ maxWidth: '920px', height: '85vh', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
         {/* Modal Header */}
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -394,7 +394,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
 
         <div className="modal-body" style={{ overflowY: 'auto', flex: 1, padding: '1.25rem 1.5rem' }}>
           {/* Header Action Bar */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             {/* <h4
               style={{
                 fontSize: '0.85rem',
@@ -427,7 +427,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               </button> */}
 
               {activeTab === 'external' && (
-                <button className="btn btn-primary" style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }} onClick={() => setShowAddForm(!showAddForm)}>
+                <button className="btn btn-primary" style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem', marginTop: '-0.5rem', marginBottom: '0.75rem' }} onClick={() => setShowAddForm(!showAddForm)}>
                   <Plus size={14} />
                   <span>Connect Other</span>
                 </button>
@@ -438,9 +438,9 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
           {/* TAB 1: BUNDLED AGENT HARNESSES */}
           {activeTab === 'harnesses' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '0.85rem 1rem', fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+              {/* <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '0.85rem 1rem', fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
                 <strong style={{ color: '#fff' }}>Open-Source Agent Harnesses:</strong> Ergo bundles standard Node.js MCP servers (<span style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>server-filesystem</span>, <span style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>server-fetch</span>, and <span style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>mcp-server-git</span>) communicating via synchronous Local Stdio IPC. These operate browser-agnostically with zero database required.
-              </div>
+              </div> */}
 
               <div className="mcp-grid">
                 {bundledHarnesses.map((server) => {
@@ -460,20 +460,20 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
 
                       <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>{server.description}</p>
 
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-dim)', paddingTop: '0.4rem', borderTop: '1px solid var(--border-subtle)' }}>
+                      {/* <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-dim)', paddingTop: '0.4rem', borderTop: '1px solid var(--border-subtle)' }}>
                         <span>Transport: <strong style={{ color: 'var(--accent-emerald)' }}>{server.transport}</strong></span>
                         <span style={{ fontFamily: 'var(--font-mono)' }}>{server.tools.length} tools registered</span>
-                      </div>
+                      </div> */}
 
                       {/* Discovered Tools List */}
                       {isConnected && server.tools.length > 0 && (
                         <div style={{ background: 'var(--code-bg)', border: '1px solid var(--code-border)', padding: '0.75rem 0.85rem', borderRadius: 'var(--radius-sm)', marginTop: '0.35rem', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)' }}>
                           <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                             <Shield size={13} />
-                            <span>Tools & Security Auto-Approval Policies</span>
+                            <span>Auto-Approval</span>
                           </div>
                           <p style={{ fontSize: '0.72rem', color: 'var(--text-dim)', margin: '0 0 0.5rem 0', lineHeight: 1.4 }}>
-                            Control AI action permissions globally. Write operations require manual approval by default for safety. Toggle Auto-Approve to relax permissions for worker subagents.
+                            Control AI action permissions globally. Toggle Auto-Approve to allow agents to run commands automatically.
                           </p>
 
                           {server.tools.map((tool) => (
@@ -510,13 +510,14 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
           {activeTab === 'roots' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
               <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '0.85rem 1rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
-                  <Lock size={15} color="var(--accent-cyan)" />
-                  <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff' }}>Filesystem MCP Boundary Sandboxing (Roots)</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.35rem' }}>
+                  <Lock size={25} color="var(--accent-cyan)" />
+                  {/* <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff' }}>Allowed Filesystem Directories</span> */}
+                  <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.5 }}>
+                    To protect your data, the filesystem connection (<span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)' }}>server-filesystem</span>) is strictly constrained to the folders you approve. AI agents cannot read or write outside these approved boundaries.
+                  </p>
                 </div>
-                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.5 }}>
-                  To protect your hard drive, the Filesystem MCP server (<span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)' }}>server-filesystem</span>) is strictly constrained to the directory paths configured below. AI agents cannot read or write outside these approved boundaries.
-                </p>
+
               </div>
 
               {/* Add Root Form */}
@@ -532,7 +533,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                       margin: 0
                     }}
                   >
-                    Add Allowed Directory Root
+                    Add Allowed Folder
                   </h4>
                 </div>
                 <form onSubmit={handleAddRootSubmit} style={{ display: 'flex', gap: '0.75rem' }}>
@@ -554,7 +555,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                   />
                   <button type="submit" className="btn btn-primary" disabled={!newRootPath.trim()} style={{ whiteSpace: 'nowrap' }}>
                     <FolderPlus size={14} />
-                    <span>Add Allowed Root</span>
+                    <span>Add Folder</span>
                   </button>
                 </form>
               </div>
@@ -572,7 +573,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                       margin: 0
                     }}
                   >
-                    Configured Directory Roots ({roots.length})
+                    Configured Folders ({roots.length})
                   </h4>
                 </div>
 
@@ -720,15 +721,15 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
           {activeTab === 'cli' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
               {/* Explainer */}
-              <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '0.85rem 1rem' }}>
+              {/* <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '0.85rem 1rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
                   <Terminal size={15} color="var(--accent-emerald)" />
-                  <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff' }}>Native Agent Execution</span>
+                  <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff' }}>Coding Agent Execution</span>
                 </div>
                 <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: '1.5' }}>
-                  When you click <strong style={{ color: '#fff' }}>Execute Task</strong>, Ergo spawns your active coding agent in a real PTY terminal inside the AI Workspace — identical to running it in your IDE's integrated terminal. You can save multiple agent presets and switch between them anytime.
+                  When you execute a coding task, a coding agent runs in its own embedded terminal.
                 </p>
-              </div>
+              </div> */}
 
               {/* Form Card: Add / Edit CLI Agent Setup */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '-0.5rem' }}>
@@ -779,9 +780,6 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               >
                 {/* Preset cards selection */}
                 <div>
-                  <label className="input-label" style={{ marginBottom: '0.5rem', color: 'var(--text-bright)', fontWeight: 700 }}>
-                    Choose a Preset or Custom
-                  </label>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '0.75rem' }}>
                     {CLI_AGENT_PRESETS.map((preset) => {
                       const isSelected = selectedPresetId === preset.id;
@@ -948,7 +946,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                     onClick={() => {
                       const finalName = cliAgentName.trim() || (selectedPresetId ? (CLI_AGENT_PRESETS.find((p) => p.id === selectedPresetId)?.label || 'Custom Agent') : 'Custom Agent');
                       const resolvedPresetId = selectedPresetId ? (selectedPresetId === 'custom' ? undefined : selectedPresetId) : undefined;
-                      
+
                       // Save to saved list if onSaveCliAgentSetup is provided
                       if (onSaveCliAgentSetup) {
                         onSaveCliAgentSetup({

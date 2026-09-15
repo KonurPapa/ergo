@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { type ProjectData, type MCPServer, type AIProviderConfig, type UserApiKey, type FolderMetadata } from '../types';
 import { SUPPORTED_AI_PROVIDERS } from '../lib/aiProviders';
 import { type AutosaveStatus } from '../hooks/useAutosave';
+import ergoIcon from '../assets/ergo_icon_2.png';
 import {
   Unplug,
   Download,
@@ -105,8 +106,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   return (
     <header className="app-header">
       {/* Brand */}
-      <div className="brand-logo">
-        <div className="brand-badge">Ergo</div>
+      <div className="brand-logo" title="Ergo">
+        <img src={ergoIcon} alt="Ergo Logo" className="brand-icon" />
+        <span className="brand-title">Ergo</span>
       </div>
 
       <div className="header-center">

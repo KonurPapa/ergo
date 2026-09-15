@@ -840,10 +840,9 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                   }
 
                   // 4. Add Top-Right Card Actions Widget (+ Subtask, Archive)
-                  if (!isCollapsed) {
-                    const cardActionsWidget = Decoration.widget(
-                      pos + 1,
-                      (view) => {
+                  const cardActionsWidget = Decoration.widget(
+                    pos + 1,
+                    (view) => {
                         const container = document.createElement('div');
                         container.className = 'card-actions-wrapper';
                         container.setAttribute('contenteditable', 'false');
@@ -992,7 +991,6 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                       { side: 1, stopEvent: () => true }
                     );
                     decorations.push(cardActionsWidget);
-                  }
 
                 } else {
                   // Subtask list item
