@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { type AIProviderId, type AgentRole, type UserApiKey, type CliDetectedAgent } from '../types';
+import { type AIProviderId, type AgentRole, type UserApiKey, type CliDetectedAgent, type AuthMode } from '../types';
 import {
   SUPPORTED_AI_PROVIDERS,
   AGENT_ROLES,
@@ -10,6 +10,7 @@ import {
   fetchDetectedCliAgents,
   type ProviderModel
 } from '../lib/aiProviders';
+import { AgentTerminal } from './AgentTerminal';
 import {
   Key,
   Globe,
@@ -38,7 +39,8 @@ import {
   Wrench,
   Layers,
   Cpu,
-  Terminal
+  Terminal,
+  RefreshCw
 } from 'lucide-react';
 
 interface AiCredentialsModalProps {
@@ -137,13 +139,28 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
   // Active Tooltip Info State
   const [activeTooltipRole, setActiveTooltipRole] = useState<AgentRole | null>(null);
 
+  // Auth Mode State (default for cloud providers is Subscription)
+  const [authMode, setAuthMode] = useState<AuthMode>('cli_subscription');
+
   // Subscription / CLI State
   const [detectedCliAgents, setDetectedCliAgents] = useState<CliDetectedAgent[]>([]);
   const [isDetectingCli, setIsDetectingCli] = useState(false);
-  const [selectedCliId, setSelectedCliId] = useState<string>('claude-code');
+  const [selectedCliId, setSelectedCliId] = useState<string>('antigravity');
   const [customCliCommand, setCustomCliCommand] = useState<string>('');
   const [cliExecutionMode, setCliExecutionMode] = useState<'interactive' | 'headless'>('interactive');
-  const [copiedInstallCmd, setCopiedInstallCmd] = useState<string | null>(null);
+  const [cliTerminalState, setCliTerminalState] = useState<{
+    isOpen: boolean;
+    title: string;
+    cmd: string;
+    args: string[];
+    status: 'idle' | 'running' | 'completed' | 'error';
+  }>({
+    isOpen: false,
+    title: '',
+    cmd: 'bash',
+    args: [],
+    status: 'idle'
+  });
 
   // Primary Provider Test State
   const [isTesting, setIsTesting] = useState(false);
@@ -181,6 +198,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     setKeyName('');
     setApiKey('');
     setProviderId(pId);
+    setAuthMode(pId === 'ollama' ? 'api_key' : 'cli_subscription');
     setBaseUrl(p.defaultBaseUrl || '');
     setRoleConfigs(initRoleConfigsForProvider(pId));
     setProviderKeys({
@@ -195,20 +213,34 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     setOllamaModels([]);
     setIsOllamaConnected(false);
     setActiveTooltipRole(null);
-    setSelectedCliId('claude-code');
+    const defaultCli = pId === 'openai' ? 'codex' : pId === 'gemini' ? 'antigravity' : 'claude-code';
+    setSelectedCliId(defaultCli);
     setCustomCliCommand('');
     setCliExecutionMode('interactive');
   };
 
   const loadKeyForEditing = async (k: UserApiKey) => {
-    const p = SUPPORTED_AI_PROVIDERS.find((item) => item.id === k.provider) || SUPPORTED_AI_PROVIDERS[0];
+    // Map legacy cli_subscription provider to specific AI provider if needed
+    let resolvedProvider: AIProviderId = k.provider;
+    if (k.provider === 'cli_subscription') {
+      if (k.cliAgentId === 'codex') resolvedProvider = 'openai';
+      else if (k.cliAgentId === 'gemini' || k.cliAgentId === 'antigravity') resolvedProvider = 'gemini';
+      else resolvedProvider = 'anthropic';
+    }
+
+    const p = SUPPORTED_AI_PROVIDERS.find((item) => item.id === resolvedProvider) || SUPPORTED_AI_PROVIDERS[0];
     setEditingId(k.id);
     setKeyName(k.name);
-    setApiKey(k.apiKey || '');
-    setSelectedCliId(k.cliAgentId || 'claude-code');
+    setApiKey(k.apiKey && k.apiKey !== 'cli_subscription_active' ? k.apiKey : '');
+
+    const resolvedAuthMode: AuthMode = k.authMode || (k.provider === 'cli_subscription' || k.apiKey === 'cli_subscription_active' ? 'cli_subscription' : 'api_key');
+    setAuthMode(resolvedProvider === 'ollama' ? 'api_key' : resolvedAuthMode);
+
+    const defaultCli = resolvedProvider === 'openai' ? 'codex' : resolvedProvider === 'gemini' ? 'antigravity' : 'claude-code';
+    setSelectedCliId(k.cliAgentId || defaultCli);
     setCustomCliCommand(k.cliCustomCommand || '');
     setCliExecutionMode(k.cliExecutionMode || 'interactive');
-    setProviderId(k.provider);
+    setProviderId(resolvedProvider);
     const resolvedBaseUrl = k.baseUrl || p.defaultBaseUrl || '';
     setBaseUrl(resolvedBaseUrl);
 
@@ -363,6 +395,23 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     if (!keyName || keyName.endsWith('Profile') || keyName.endsWith('Key') || keyName.endsWith('Ollama')) {
       setKeyName(pId === 'ollama' ? 'Local Ollama Profile' : `${pMeta?.shortName || pId} Profile`);
     }
+
+    // Default to Subscription for cloud providers, api_key for Ollama
+    if (pId !== 'ollama') {
+      setAuthMode('cli_subscription');
+      const defaultCli = pId === 'openai' ? 'codex' : pId === 'gemini' ? 'antigravity' : 'claude-code';
+      setSelectedCliId(defaultCli);
+      setIsDetectingCli(true);
+      fetchDetectedCliAgents(customCliCommand)
+        .then((res) => {
+          setDetectedCliAgents(res.agents);
+          setIsDetectingCli(false);
+        })
+        .catch(() => setIsDetectingCli(false));
+    } else {
+      setAuthMode('api_key');
+    }
+
     // Pull primary key/url from providerKeys if already entered
     const existing = providerKeys[pId];
     if (existing?.apiKey) setApiKey(existing.apiKey);
@@ -371,19 +420,6 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
 
     // Auto-update all agent roles to defaults of this provider
     setRoleConfigs(initRoleConfigsForProvider(pId));
-
-    if (pId === 'cli_subscription') {
-      if (!keyName || keyName.endsWith('Profile') || keyName.endsWith('Key')) {
-        setKeyName('Subscription Profile');
-      }
-      setIsDetectingCli(true);
-      fetchDetectedCliAgents(customCliCommand)
-        .then((res) => {
-          setDetectedCliAgents(res.agents);
-          setIsDetectingCli(false);
-        })
-        .catch(() => setIsDetectingCli(false));
-    }
 
     if (pId === 'ollama') {
       const checkUrl = existing?.baseUrl || baseUrl || pMeta?.defaultBaseUrl || 'http://localhost:11434';
@@ -491,8 +527,11 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     setIsTesting(true);
     setTestResult(null);
     const res = await testAiConnection(providerId, {
-      apiKey: apiKey.trim(),
+      apiKey: authMode === 'cli_subscription' ? 'cli_subscription_active' : apiKey.trim(),
       baseUrl: baseUrl.trim(),
+      authMode: authMode,
+      cliAgentId: selectedCliId,
+      cliCustomCommand: customCliCommand,
       model: roleConfigs.manager?.model || roleConfigs.summary?.model
     });
     setTestResult(res);
@@ -513,7 +552,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
   };
 
   const handleSave = () => {
-    const finalName = keyName.trim() || `${providerMeta.name} Profile`;
+    const finalName = keyName.trim() || `${providerMeta.name} ${authMode === 'cli_subscription' ? 'Subscription' : 'API'} Profile`;
 
     // Extract cleanly resolved role configs
     const finalRoleConfigs: Partial<Record<AgentRole, { provider: AIProviderId; model: string }>> = {};
@@ -538,12 +577,12 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
       id: editingId || undefined,
       name: finalName,
       provider: providerId,
-      apiKey: providerId === 'cli_subscription' ? 'cli_subscription_active' : apiKey.trim(),
+      apiKey: authMode === 'cli_subscription' ? 'cli_subscription_active' : apiKey.trim(),
       baseUrl: baseUrl.trim(),
-      authMode: providerId === 'cli_subscription' ? 'cli_subscription' : 'api_key',
-      cliAgentId: selectedCliId,
-      cliCustomCommand: customCliCommand.trim() || undefined,
-      cliExecutionMode: cliExecutionMode,
+      authMode: authMode,
+      cliAgentId: authMode === 'cli_subscription' ? selectedCliId : undefined,
+      cliCustomCommand: authMode === 'cli_subscription' ? customCliCommand.trim() || undefined : undefined,
+      cliExecutionMode: authMode === 'cli_subscription' ? cliExecutionMode : undefined,
       summaryModel: finalRoleConfigs.summary?.model,
       generalModel: finalRoleConfigs.manager?.model,
       workerModel: finalRoleConfigs.worker?.model,
@@ -552,7 +591,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
       loggerModel: finalRoleConfigs.logger?.model,
       roleConfigs: finalRoleConfigs,
       providerKeys: finalProviderKeys,
-      model: providerId === 'cli_subscription' ? selectedCliId : finalRoleConfigs.manager?.model,
+      model: authMode === 'cli_subscription' ? selectedCliId : finalRoleConfigs.manager?.model,
       isConnected: true
     });
     resetForm();
@@ -563,8 +602,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
   const isMultiProvider = providersUsedInProfile.length > 1;
 
   const isConfigValid = () => {
-    // CLI Subscription mode requires no API key or endpoint
-    if (providerId === 'cli_subscription') return true;
+    // If Subscription mode is active on cloud provider, no API key is required
+    if (providerId !== 'ollama' && authMode === 'cli_subscription') return true;
     // Check primary provider requirement
     if (providerMeta.requiresKey && !apiKey.trim() && !providerKeys[providerId]?.apiKey?.trim()) return false;
     if (providerMeta.requiresBaseUrl && !baseUrl.trim() && !providerKeys[providerId]?.baseUrl?.trim()) return false;
@@ -674,7 +713,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 </span>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(115px, 1fr))', gap: '0.5rem' }}>
-                {SUPPORTED_AI_PROVIDERS.filter((p) => p.id !== 'mock').map((p) => {
+                {SUPPORTED_AI_PROVIDERS.filter((p) => p.id !== 'mock' && p.id !== 'cli_subscription').map((p) => {
                   const isSelected = p.id === providerId;
                   return (
                     <button
@@ -736,8 +775,85 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
               />
             </div>
 
-            {/* Primary API Key / Endpoint */}
-            {providerMeta.requiresKey && (
+            {/* Authentication Mode Segmented Toggle (For Cloud Providers Only) */}
+            {providerId !== 'ollama' && (
+              <div style={{ marginBottom: '0.85rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                  <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
+                    <Sliders size={13} color="var(--accent-primary)" />
+                    <span style={{ fontWeight: 700, color: 'var(--text-bright)' }}>Authentication Method</span>
+                  </label>
+                  <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                    Default is Subscription (uses existing paid CLI tool)
+                  </span>
+                </div>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: '0.35rem',
+                    background: 'rgba(0, 0, 0, 0.25)',
+                    padding: '0.25rem',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border-subtle)'
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMode('cli_subscription');
+                      const defaultCli = providerId === 'openai' ? 'codex' : providerId === 'gemini' ? 'antigravity' : 'claude-code';
+                      setSelectedCliId(defaultCli);
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '0.4rem',
+                      padding: '0.5rem 0.75rem',
+                      borderRadius: 'calc(var(--radius-sm) - 2px)',
+                      border: authMode === 'cli_subscription' ? '1.5px solid var(--accent-emerald)' : '1px solid transparent',
+                      background: authMode === 'cli_subscription' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+                      color: authMode === 'cli_subscription' ? 'var(--accent-emerald)' : 'var(--text-muted)',
+                      cursor: 'pointer',
+                      fontWeight: authMode === 'cli_subscription' ? 700 : 500,
+                      fontSize: '0.78rem',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <Zap size={14} />
+                    <span>Subscription (Zero API Fees)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAuthMode('api_key')}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '0.4rem',
+                      padding: '0.5rem 0.75rem',
+                      borderRadius: 'calc(var(--radius-sm) - 2px)',
+                      border: authMode === 'api_key' ? '1.5px solid var(--accent-amber)' : '1px solid transparent',
+                      background: authMode === 'api_key' ? 'rgba(245, 158, 11, 0.15)' : 'transparent',
+                      color: authMode === 'api_key' ? 'var(--accent-amber)' : 'var(--text-muted)',
+                      cursor: 'pointer',
+                      fontWeight: authMode === 'api_key' ? 700 : 500,
+                      fontSize: '0.78rem',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <Key size={14} />
+                    <span>API Key</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Primary API Key (when authMode is api_key or Ollama) */}
+            {providerMeta.requiresKey && authMode === 'api_key' && (
               <div className="input-group" style={{ marginBottom: '0.85rem' }}>
                 <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
                   <Key size={13} color="var(--accent-amber)" />
@@ -779,6 +895,11 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
                   <Globe size={13} color="var(--accent-violet)" />
                   <span style={{ fontWeight: 700, color: 'var(--text-bright)' }}>Ollama Host Endpoint</span>
+                  {isOllamaConnected && (
+                    <span className="badge badge-done" style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', marginLeft: 'auto' }}>
+                      Online ({ollamaModels.length} models)
+                    </span>
+                  )}
                 </label>
                 <input
                   type="text"
@@ -794,8 +915,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
               </div>
             )}
 
-            {/* Subscription Bridge / CLI Management Card */}
-            {providerId === 'cli_subscription' && (
+            {/* Subscription Bridge / CLI Management Card (Active when authMode is cli_subscription) */}
+            {providerId !== 'ollama' && authMode === 'cli_subscription' && (
               <div
                 style={{
                   background: 'rgba(16, 185, 129, 0.04)',
@@ -907,36 +1028,25 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         supportsInteractive: true
                       },
                       {
-                        id: 'gemini',
-                        name: 'Google Gemini CLI',
-                        command: 'gemini',
-                        detectedPath: null,
-                        isInstalled: false,
-                        version: null,
-                        provider: 'gemini' as AIProviderId,
-                        subscriptionTier: 'Google One AI / Gemini Advanced',
-                        installCommand: 'npm install -g @google/gemini-cli',
-                        docsUrl: 'https://geminicli.com',
-                        badgeColor: '#2563eb',
-                        supportsHeadless: true,
-                        supportsInteractive: true
-                      },
-                      {
                         id: 'antigravity',
-                        name: 'Antigravity (agy)',
+                        name: 'Antigravity CLI (agy)',
                         command: 'agy',
                         detectedPath: null,
                         isInstalled: false,
                         version: null,
                         provider: 'gemini' as AIProviderId,
-                        subscriptionTier: 'Google Antigravity Subscription',
-                        installCommand: 'Available via Antigravity IDE',
-                        docsUrl: 'https://antigravity.dev',
+                        subscriptionTier: 'Google Antigravity / Gemini Code Assist',
+                        installCommand: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
+                        loginCommand: 'agy',
+                        loginArgs: [],
+                        docsUrl: 'https://antigravity.google',
                         badgeColor: '#2563eb',
                         supportsHeadless: true,
                         supportsInteractive: true
                       }
-                    ]).map((agent) => {
+                    ])
+                      .filter((agent) => agent.provider === providerId)
+                      .map((agent) => {
                       const isSelected = selectedCliId === agent.id;
                       return (
                         <div
@@ -1072,65 +1182,306 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                   </div>
                 </div>
 
-                {/* Installation / Setup Guide when selected agent isn't installed */}
+                {/* In-App Interactive Setup & Terminal Actions for Selected Agent */}
                 {(() => {
-                  const currentAgent = detectedCliAgents.find((a) => a.id === selectedCliId);
-                  if (currentAgent && !currentAgent.isInstalled && currentAgent.installCommand) {
-                    const isCopied = copiedInstallCmd === currentAgent.installCommand;
-                    return (
-                      <div
-                        style={{
-                          background: 'rgba(0, 0, 0, 0.25)',
-                          border: '1px solid rgba(245, 158, 11, 0.25)',
-                          borderRadius: 'var(--radius-sm)',
-                          padding: '0.65rem 0.85rem',
-                          marginBottom: '0.85rem'
-                        }}
-                      >
-                        <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent-amber)', marginBottom: '0.3rem' }}>
-                          Setup Required to use {currentAgent.name}:
+                  const currentAgent = detectedCliAgents.find((a) => a.id === selectedCliId) || (
+                    selectedCliId === 'antigravity'
+                      ? {
+                          id: 'antigravity',
+                          name: 'Antigravity CLI (agy)',
+                          command: 'agy',
+                          detectedPath: null,
+                          isInstalled: false,
+                          version: null,
+                          provider: 'gemini' as AIProviderId,
+                          subscriptionTier: 'Google Antigravity / Gemini Code Assist',
+                          installCommand: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
+                          loginCommand: 'agy',
+                          loginArgs: [],
+                          docsUrl: 'https://antigravity.google',
+                          badgeColor: '#2563eb',
+                          supportsHeadless: true,
+                          supportsInteractive: true
+                        }
+                      : null
+                  );
+
+                  if (!currentAgent && selectedCliId !== 'custom') return null;
+
+                  const isInstalled = Boolean(currentAgent?.isInstalled);
+
+                  return (
+                    <div
+                      style={{
+                        background: isInstalled ? 'rgba(16, 185, 129, 0.05)' : 'rgba(245, 158, 11, 0.05)',
+                        border: `1px solid ${isInstalled ? 'rgba(16, 185, 129, 0.22)' : 'rgba(245, 158, 11, 0.25)'}`,
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '0.75rem 0.85rem',
+                        marginBottom: '0.85rem'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div>
+                          <div style={{ fontSize: '0.76rem', fontWeight: 700, color: isInstalled ? 'var(--accent-emerald)' : 'var(--accent-amber)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            {isInstalled ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
+                            <span>{currentAgent?.name || 'Custom CLI'}: {isInstalled ? 'Installed & Configured' : 'Setup Required'}</span>
+                          </div>
+                          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                            {isInstalled
+                              ? `Detected at ${currentAgent?.detectedPath || currentAgent?.command} ${currentAgent?.version ? `(${currentAgent?.version})` : ''}`
+                              : 'Install and authenticate directly using the built-in interactive terminal below.'}
+                          </div>
                         </div>
-                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
-                          Run this command in your terminal to install and log in with your subscription:
-                        </div>
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            background: 'rgba(0, 0, 0, 0.4)',
-                            borderRadius: '4px',
-                            padding: '0.35rem 0.55rem',
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '0.72rem',
-                            color: 'var(--accent-cyan)'
-                          }}
-                        >
-                          <code>{currentAgent.installCommand} && {currentAgent.command} login</code>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              navigator.clipboard.writeText(`${currentAgent.installCommand} && ${currentAgent.command} login`);
-                              setCopiedInstallCmd(currentAgent.installCommand);
-                              setTimeout(() => setCopiedInstallCmd(null), 2000);
-                            }}
-                            style={{
-                              background: 'none',
-                              border: 'none',
-                              color: isCopied ? 'var(--accent-emerald)' : 'var(--text-muted)',
-                              cursor: 'pointer',
-                              fontSize: '0.68rem',
-                              fontWeight: 600,
-                              marginLeft: '0.5rem'
-                            }}
-                          >
-                            {isCopied ? 'Copied!' : 'Copy'}
-                          </button>
+
+                        {/* Action Buttons: 100% In-App Terminal, Zero External Copy/Paste */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                          {!isInstalled && currentAgent && currentAgent.installCommand && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCliTerminalState({
+                                  isOpen: true,
+                                  title: `Install ${currentAgent.name}`,
+                                  cmd: 'bash',
+                                  args: ['-c', currentAgent.installCommand],
+                                  status: 'running'
+                                });
+                              }}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                padding: '0.35rem 0.75rem',
+                                background: 'var(--accent-primary)',
+                                color: '#ffffff',
+                                border: '1px solid rgba(255, 255, 255, 0.15)',
+                                borderRadius: '6px',
+                                fontSize: '0.75rem',
+                                fontWeight: 600,
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <Terminal size={12} />
+                              <span>Install {currentAgent.name} (In-App Terminal)</span>
+                            </button>
+                          )}
+
+                          {isInstalled && currentAgent && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const isAgy = currentAgent.command === 'agy' || currentAgent.id === 'antigravity';
+                                  const cmd = isAgy ? (currentAgent.detectedPath || 'agy') : currentAgent.command;
+                                  const args = isAgy ? [] : (currentAgent.loginArgs || ['login']);
+                                  setCliTerminalState({
+                                    isOpen: true,
+                                    title: `Sign In: ${currentAgent.name}`,
+                                    cmd,
+                                    args,
+                                    status: 'running'
+                                  });
+                                }}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.35rem',
+                                  padding: '0.35rem 0.75rem',
+                                  background: 'rgba(16, 185, 129, 0.15)',
+                                  color: 'var(--accent-emerald)',
+                                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                                  borderRadius: '6px',
+                                  fontSize: '0.75rem',
+                                  fontWeight: 600,
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                <Key size={12} />
+                                <span>Authenticate / Sign In</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const isAgy = currentAgent.command === 'agy' || currentAgent.id === 'antigravity';
+                                  const cmd = isAgy ? (currentAgent.detectedPath || 'agy') : currentAgent.command;
+                                  setCliTerminalState({
+                                    isOpen: true,
+                                    title: `CLI Shell: ${currentAgent.name}`,
+                                    cmd,
+                                    args: [],
+                                    status: 'running'
+                                  });
+                                }}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.35rem',
+                                  padding: '0.35rem 0.65rem',
+                                  background: 'rgba(255, 255, 255, 0.05)',
+                                  color: 'var(--text-main)',
+                                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                                  borderRadius: '6px',
+                                  fontSize: '0.75rem',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                <Terminal size={12} color="var(--accent-cyan)" />
+                                <span>Launch Terminal</span>
+                              </button>
+                            </>
+                          )}
+
+                          {cliTerminalState.isOpen && (
+                            <button
+                              type="button"
+                              onClick={() => setCliTerminalState({ isOpen: false, title: '', cmd: 'bash', args: [], status: 'idle' })}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.3rem',
+                                padding: '0.35rem 0.55rem',
+                                background: 'rgba(244, 63, 94, 0.1)',
+                                color: 'var(--accent-rose)',
+                                border: '1px solid rgba(244, 63, 94, 0.25)',
+                                borderRadius: '6px',
+                                fontSize: '0.72rem',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <X size={12} />
+                              <span>Close Terminal</span>
+                            </button>
+                          )}
                         </div>
                       </div>
-                    );
-                  }
-                  return null;
+
+                      {/* Embedded Interactive Terminal Drawer */}
+                      {cliTerminalState.isOpen && (
+                        <div
+                          style={{
+                            marginTop: '0.65rem',
+                            background: '#0d0f14',
+                            border: '1px solid rgba(255, 255, 255, 0.12)',
+                            borderRadius: '6px',
+                            overflow: 'hidden',
+                            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)'
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '0.35rem 0.65rem',
+                              background: 'rgba(255, 255, 255, 0.03)',
+                              borderBottom: '1px solid rgba(255, 255, 255, 0.08)'
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                              <Terminal size={12} color="var(--accent-cyan)" />
+                              <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-bright)' }}>
+                                {cliTerminalState.title}
+                              </span>
+                              <span
+                                style={{
+                                  fontSize: '0.62rem',
+                                  padding: '0.08rem 0.35rem',
+                                  borderRadius: '4px',
+                                  background:
+                                    cliTerminalState.status === 'running'
+                                      ? 'rgba(6, 182, 212, 0.15)'
+                                      : cliTerminalState.status === 'completed'
+                                      ? 'rgba(16, 185, 129, 0.15)'
+                                      : 'rgba(244, 63, 94, 0.15)',
+                                  color:
+                                    cliTerminalState.status === 'running'
+                                      ? 'var(--accent-cyan)'
+                                      : cliTerminalState.status === 'completed'
+                                      ? 'var(--accent-emerald)'
+                                      : 'var(--accent-rose)',
+                                  fontWeight: 600
+                                }}
+                              >
+                                {cliTerminalState.status === 'running' ? 'Active' : cliTerminalState.status === 'completed' ? 'Finished' : 'Exited'}
+                              </span>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const currentCmd = cliTerminalState.cmd;
+                                  const currentArgs = cliTerminalState.args;
+                                  const currentTitle = cliTerminalState.title;
+                                  setCliTerminalState({ isOpen: false, title: '', cmd: 'bash', args: [], status: 'idle' });
+                                  setTimeout(() => {
+                                    setCliTerminalState({
+                                      isOpen: true,
+                                      title: currentTitle,
+                                      cmd: currentCmd,
+                                      args: currentArgs,
+                                      status: 'running'
+                                    });
+                                  }, 100);
+                                }}
+                                title="Restart Session"
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: 'var(--text-muted)',
+                                  cursor: 'pointer',
+                                  padding: '2px 4px',
+                                  borderRadius: '4px',
+                                  display: 'flex',
+                                  alignItems: 'center'
+                                }}
+                              >
+                                <RefreshCw size={11} />
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCliTerminalState({ isOpen: false, title: '', cmd: 'bash', args: [], status: 'idle' });
+                                }}
+                                title="Close Terminal"
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: 'var(--text-muted)',
+                                  cursor: 'pointer',
+                                  padding: '2px 4px',
+                                  borderRadius: '4px',
+                                  display: 'flex',
+                                  alignItems: 'center'
+                                }}
+                              >
+                                <X size={12} />
+                              </button>
+                            </div>
+                          </div>
+
+                          <div style={{ height: '210px', width: '100%' }}>
+                            <AgentTerminal
+                              cmd={cliTerminalState.cmd}
+                              args={cliTerminalState.args}
+                              cwd="~"
+                              onExit={(code) => {
+                                setCliTerminalState((prev) => ({
+                                  ...prev,
+                                  status: code === 0 ? 'completed' : 'error'
+                                }));
+                                fetchDetectedCliAgents(customCliCommand).then((res) => {
+                                  setDetectedCliAgents(res.agents);
+                                });
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
                 })()}
 
                 {/* Code Tasks Execution Mode Selector */}
@@ -1388,7 +1739,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                   onChange={(e) => handleRoleProviderChange(role, e.target.value as AIProviderId)}
                                   style={{ cursor: 'pointer', fontSize: '0.78rem', padding: '0.35rem 0.5rem' }}
                                 >
-                                  {SUPPORTED_AI_PROVIDERS.filter((p) => p.id !== 'mock').map((p) => (
+                                  {SUPPORTED_AI_PROVIDERS.filter((p) => p.id !== 'mock' && p.id !== 'cli_subscription').map((p) => (
                                     <option key={`${role}-prov-${p.id}`} value={p.id}>
                                       {p.shortName}
                                     </option>
@@ -1408,45 +1759,41 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                     style={{ fontSize: '0.78rem', fontFamily: 'var(--font-mono)', padding: '0.35rem 0.5rem' }}
                                   />
                                 ) : roleState.provider === 'ollama' ? (
-                                  <select
-                                    className="input-text"
-                                    value={roleState.model}
-                                    onChange={(e) => handleRoleModelChange(role, e.target.value)}
-                                    disabled={!isOllamaConnected || ollamaModels.length === 0}
-                                    style={{
-                                      cursor: (!isOllamaConnected || ollamaModels.length === 0) ? 'not-allowed' : 'pointer',
-                                      fontSize: '0.78rem',
-                                      padding: '0.35rem 0.5rem'
-                                    }}
-                                  >
-                                    {!isOllamaConnected ? (
-                                      <option value="">Ollama not connected — test endpoint below</option>
-                                    ) : ollamaModels.length === 0 ? (
-                                      <option value="">No local models installed in Ollama</option>
-                                    ) : (
-                                      ollamaModels.map((m) => (
-                                        <option key={`${role}-ollama-${m.id}`} value={m.id}>
-                                          {m.name}
+                                  <div style={{ position: 'relative' }}>
+                                    <select
+                                      className="input-text"
+                                      value={roleState.model}
+                                      onChange={(e) => handleRoleModelChange(role, e.target.value)}
+                                      style={{ cursor: 'pointer', fontSize: '0.78rem', padding: '0.35rem 0.5rem' }}
+                                    >
+                                      {ollamaModels.length === 0 ? (
+                                        <option value={roleState.model || 'llama3'}>
+                                          {roleState.model || 'llama3'} (offline fallback)
                                         </option>
-                                      ))
-                                    )}
-                                  </select>
+                                      ) : (
+                                        ollamaModels.map((m) => (
+                                          <option key={`${role}-ollama-${m.id}`} value={m.id}>
+                                            {m.name} {m.contextWindow ? `(${Math.round(m.contextWindow / 1000)}k ctx)` : ''}
+                                          </option>
+                                        ))
+                                      )}
+                                    </select>
+                                  </div>
                                 ) : (
-                                  <select
-                                    className="input-text"
-                                    value={roleState.model}
-                                    onChange={(e) => handleRoleModelChange(role, e.target.value)}
-                                    style={{ cursor: 'pointer', fontSize: '0.78rem', padding: '0.35rem 0.5rem' }}
-                                  >
-                                    {roleModels.map((m) => {
-                                      const isDefault = m.id === meta.defaultModels[roleState.provider];
-                                      return (
+                                  <div style={{ position: 'relative' }}>
+                                    <select
+                                      className="input-text"
+                                      value={roleState.model}
+                                      onChange={(e) => handleRoleModelChange(role, e.target.value)}
+                                      style={{ cursor: 'pointer', fontSize: '0.78rem', padding: '0.35rem 0.5rem' }}
+                                    >
+                                      {roleModels.map((m) => (
                                         <option key={`${role}-${m.id}`} value={m.id}>
-                                          {m.name} {isDefault ? '★ (Recommended)' : ''}
+                                          {m.name} {m.contextWindow ? `(${Math.round(m.contextWindow / 1000)}k ctx)` : ''}
                                         </option>
-                                      );
-                                    })}
-                                  </select>
+                                      ))}
+                                    </select>
+                                  </div>
                                 )}
                               </div>
                             </div>
@@ -1471,7 +1818,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                     </div>
 
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.65rem' }}>
-                      {SUPPORTED_AI_PROVIDERS.filter((p) => p.id !== 'mock').map((p) => {
+                      {SUPPORTED_AI_PROVIDERS.filter((p) => p.id !== 'mock' && p.id !== 'cli_subscription').map((p) => {
                         const isUsed = providersUsedInProfile.includes(p.id);
                         const isPrimary = p.id === providerId;
                         const keyEntry = providerKeys[p.id] || { apiKey: '', baseUrl: '' };
@@ -1730,42 +2077,59 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                     </span>
                                   );
                                 })}
-                              </div>
+                                                             {k.provider !== 'ollama' && (
+                                  <span
+                                    className="badge"
+                                    style={{
+                                      fontSize: '0.65rem',
+                                      padding: '0.1rem 0.4rem',
+                                      background: k.authMode === 'cli_subscription' || k.apiKey === 'cli_subscription_active' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                                      color: k.authMode === 'cli_subscription' || k.apiKey === 'cli_subscription_active' ? 'var(--accent-emerald)' : 'var(--accent-amber)',
+                                      borderColor: k.authMode === 'cli_subscription' || k.apiKey === 'cli_subscription_active' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)',
+                                      fontWeight: 600
+                                    }}
+                                  >
+                                    {k.authMode === 'cli_subscription' || k.apiKey === 'cli_subscription_active' ? '⚡ Subscription' : '🔑 API Key'}
+                                  </span>
+                                )}
 
-                              {isActive && (
-                                <span
-                                  className="badge badge-done"
-                                  style={{
-                                    fontSize: '0.65rem',
-                                    background: 'rgba(6, 182, 212, 0.2)',
-                                    color: 'var(--accent-cyan)',
-                                    borderColor: 'var(--accent-cyan)'
-                                  }}
-                                >
-                                  Active Profile
-                                </span>
-                              )}
-                              {isCurrentlyEditing && (
-                                <span
-                                  className="badge"
-                                  style={{
-                                    fontSize: '0.65rem',
-                                    background: 'rgba(245, 158, 11, 0.2)',
-                                    color: 'var(--accent-amber)',
-                                    borderColor: 'var(--accent-amber)'
-                                  }}
-                                >
-                                  Editing Above
-                                </span>
-                              )}
+                                {isActive && (
+                                  <span
+                                    className="badge badge-done"
+                                    style={{
+                                      fontSize: '0.65rem',
+                                      background: 'rgba(6, 182, 212, 0.2)',
+                                      color: 'var(--accent-cyan)',
+                                      borderColor: 'var(--accent-cyan)'
+                                    }}
+                                  >
+                                    Active Profile
+                                  </span>
+                                )}
+                                {isCurrentlyEditing && (
+                                  <span
+                                    className="badge"
+                                    style={{
+                                      fontSize: '0.65rem',
+                                      background: 'rgba(245, 158, 11, 0.2)',
+                                      color: 'var(--accent-amber)',
+                                      borderColor: 'var(--accent-amber)'
+                                    }}
+                                  >
+                                    Editing Above
+                                  </span>
+                                )}
+                              </div>
+                              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                                {k.provider === 'ollama'
+                                  ? k.baseUrl || 'http://localhost:11434'
+                                  : (k.authMode === 'cli_subscription' || k.apiKey === 'cli_subscription_active')
+                                    ? `CLI: ${k.cliAgentId || 'claude-code'} (${k.cliExecutionMode || 'interactive'})`
+                                    : k.apiKey
+                                      ? `${k.apiKey.slice(0, 7)}...${k.apiKey.slice(-4)}`
+                                      : 'No Primary Key'}
+                              </span>
                             </div>
-                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                              {k.provider === 'ollama'
-                                ? k.baseUrl || 'http://localhost:11434'
-                                : k.apiKey
-                                  ? `${k.apiKey.slice(0, 7)}...${k.apiKey.slice(-4)}`
-                                  : 'No Primary Key'}
-                            </span>
                           </div>
                         </div>
 

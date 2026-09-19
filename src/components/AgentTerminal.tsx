@@ -38,7 +38,7 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
     }
   }, []);
 
-  const argsKey = args.join(' ');
+  const argsKey = JSON.stringify(args);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -137,7 +137,7 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
       const cols = term.cols > 0 ? term.cols : 120;
       const rows = term.rows > 0 ? term.rows : 40;
       try {
-        ws.send(JSON.stringify({ type: 'spawn', cmd, args: argsKey ? argsKey.split(' ') : [], cwd, cols, rows }));
+        ws.send(JSON.stringify({ type: 'spawn', cmd, args: Array.isArray(args) ? args : [], cwd, cols, rows }));
       } catch (err) {
         console.error('[Ergo Terminal] Spawn send error:', err);
       }

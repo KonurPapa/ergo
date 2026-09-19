@@ -5,6 +5,7 @@ export interface ProviderModel {
   name: string;
   description: string;
   tier?: 'light' | 'standard' | 'advanced' | 'reasoning';
+  contextWindow?: number;
 }
 
 export interface AgentRoleMeta {
@@ -166,17 +167,17 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     keyPlaceholder: 'sk-proj-...',
     keyDocUrl: 'https://platform.openai.com/api-keys',
     models: [
-      { id: 'gpt-5.4', name: 'GPT-5.4', description: 'Flagship frontier frontier model with state-of-the-art coding and agentic execution', tier: 'advanced' },
-      { id: 'gpt-5.2', name: 'GPT-5.2', description: 'Next-generation high-capability frontier model', tier: 'advanced' },
-      { id: 'gpt-5', name: 'GPT-5', description: 'Frontier standard multimodal intelligence', tier: 'advanced' },
-      { id: 'gpt-5-mini', name: 'GPT-5 mini', description: 'Fast, cost-efficient next-gen model (Ideal for Discovery)', tier: 'light' },
-      { id: 'o3-pro', name: 'o3-pro', description: 'Maximum depth reasoning model for complex STEM, math and architecture', tier: 'reasoning' },
-      { id: 'o3', name: 'o3', description: 'Flagship deep reasoning model', tier: 'reasoning' },
-      { id: 'o3-mini', name: 'o3-mini', description: 'High-speed reasoning model for coding and logic', tier: 'reasoning' },
-      { id: 'gpt-4.5-preview', name: 'GPT-4.5 Preview', description: 'Large-scale world knowledge frontier model', tier: 'advanced' },
-      { id: 'o1', name: 'o1 (Full Reasoning)', description: 'Complex reasoning and multi-step logic', tier: 'reasoning' },
-      { id: 'gpt-4o', name: 'GPT-4o', description: 'High-intelligence multimodal flagship model', tier: 'standard' },
-      { id: 'gpt-4o-mini', name: 'GPT-4o mini', description: 'Lightweight & responsive model', tier: 'light' }
+      { id: 'gpt-5.4', name: 'GPT-5.4', description: 'Flagship frontier frontier model with state-of-the-art coding and agentic execution', tier: 'advanced', contextWindow: 256000 },
+      { id: 'gpt-5.2', name: 'GPT-5.2', description: 'Next-generation high-capability frontier model', tier: 'advanced', contextWindow: 256000 },
+      { id: 'gpt-5', name: 'GPT-5', description: 'Frontier standard multimodal intelligence', tier: 'advanced', contextWindow: 256000 },
+      { id: 'gpt-5-mini', name: 'GPT-5 mini', description: 'Fast, cost-efficient next-gen model (Ideal for Discovery)', tier: 'light', contextWindow: 128000 },
+      { id: 'o3-pro', name: 'o3-pro', description: 'Maximum depth reasoning model for complex STEM, math and architecture', tier: 'reasoning', contextWindow: 200000 },
+      { id: 'o3', name: 'o3', description: 'Flagship deep reasoning model', tier: 'reasoning', contextWindow: 200000 },
+      { id: 'o3-mini', name: 'o3-mini', description: 'High-speed reasoning model for coding and logic', tier: 'reasoning', contextWindow: 200000 },
+      { id: 'gpt-4.5-preview', name: 'GPT-4.5 Preview', description: 'Large-scale world knowledge frontier model', tier: 'advanced', contextWindow: 128000 },
+      { id: 'o1', name: 'o1 (Full Reasoning)', description: 'Complex reasoning and multi-step logic', tier: 'reasoning', contextWindow: 200000 },
+      { id: 'gpt-4o', name: 'GPT-4o', description: 'High-intelligence multimodal flagship model', tier: 'standard', contextWindow: 128000 },
+      { id: 'gpt-4o-mini', name: 'GPT-4o mini', description: 'Lightweight & responsive model', tier: 'light', contextWindow: 128000 }
     ]
   },
   {
@@ -196,16 +197,16 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     keyPlaceholder: 'sk-ant-api03-...',
     keyDocUrl: 'https://console.anthropic.com/settings/keys',
     models: [
-      { id: 'claude-fable-5', name: 'Claude Fable 5', description: 'Anthropic’s most capable widely released frontier model', tier: 'advanced' },
-      { id: 'claude-opus-5', name: 'Claude Opus 5', description: 'Complex agentic coding, deep architecture and enterprise work', tier: 'advanced' },
-      { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', description: 'State-of-the-art balance of speed, intelligence and coding', tier: 'standard' },
-      { id: 'claude-mythos-5', name: 'Claude Mythos 5', description: 'High-assurance cybersecurity & specialized reasoning', tier: 'reasoning' },
-      { id: 'claude-opus-4-8', name: 'Claude Opus 4.8', description: 'Deep analysis and advanced agentic execution', tier: 'advanced' },
-      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', description: 'High capability model with extended output support', tier: 'advanced' },
-      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', description: 'High performance coding and workflow execution', tier: 'standard' },
-      { id: 'claude-3-7-sonnet-20250219', name: 'Claude 3.7 Sonnet', description: 'Hybrid standard and extended thinking reasoning', tier: 'standard' },
-      { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', description: 'Previous-generation workhorse coding model', tier: 'standard' },
-      { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', description: 'Fast, lightweight responsiveness', tier: 'light' }
+      { id: 'claude-fable-5', name: 'Claude Fable 5', description: 'Anthropic’s most capable widely released frontier model', tier: 'advanced', contextWindow: 200000 },
+      { id: 'claude-opus-5', name: 'Claude Opus 5', description: 'Complex agentic coding, deep architecture and enterprise work', tier: 'advanced', contextWindow: 200000 },
+      { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', description: 'State-of-the-art balance of speed, intelligence and coding', tier: 'standard', contextWindow: 200000 },
+      { id: 'claude-mythos-5', name: 'Claude Mythos 5', description: 'High-assurance cybersecurity & specialized reasoning', tier: 'reasoning', contextWindow: 200000 },
+      { id: 'claude-opus-4-8', name: 'Claude Opus 4.8', description: 'Deep analysis and advanced agentic execution', tier: 'advanced', contextWindow: 200000 },
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', description: 'High capability model with extended output support', tier: 'advanced', contextWindow: 200000 },
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', description: 'High performance coding and workflow execution', tier: 'standard', contextWindow: 200000 },
+      { id: 'claude-3-7-sonnet-20250219', name: 'Claude 3.7 Sonnet', description: 'Hybrid standard and extended thinking reasoning', tier: 'standard', contextWindow: 200000 },
+      { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', description: 'Previous-generation workhorse coding model', tier: 'standard', contextWindow: 200000 },
+      { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', description: 'Fast, lightweight responsiveness', tier: 'light', contextWindow: 200000 }
     ]
   },
   {
@@ -225,17 +226,17 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     keyPlaceholder: 'AIzaSy...',
     keyDocUrl: 'https://aistudio.google.com/app/apikey',
     models: [
-      { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', description: 'Next-gen flagship hybrid reasoning and ultra-fast generation', tier: 'standard' },
-      { id: 'gemini-3.7-pro', name: 'Gemini 3.7 Pro', description: 'Deep reasoning, agentic coding and complex logic', tier: 'advanced' },
-      { id: 'gemini-3.7-flash-thinking', name: 'Gemini 3.7 Flash Thinking', description: 'Explicit thinking process with adjustable budget', tier: 'reasoning' },
-      { id: 'gemini-3.5-pro', name: 'Gemini 3.5 Pro', description: 'Advanced reasoning and multi-modal architecture', tier: 'advanced' },
-      { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', description: 'Ultra-fast frontier intelligence', tier: 'light' },
-      { id: 'gemini-3.0-flash', name: 'Gemini 3.0 Flash', description: 'High-speed modern multimodal generation', tier: 'light' },
-      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Deep complex reasoning with 2M+ token context', tier: 'advanced' },
-      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Ultra-fast, responsive multimodal model', tier: 'light' },
-      { id: 'gemini-2.0-flash-thinking-exp', name: 'Gemini 2.0 Flash Thinking', description: 'Explicit thinking and multi-step reasoning', tier: 'reasoning' },
-      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', description: 'High speed and low latency', tier: 'light' },
-      { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', description: 'Long context reasoning model', tier: 'advanced' }
+      { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', description: 'Next-gen flagship hybrid reasoning and ultra-fast generation', tier: 'standard', contextWindow: 1000000 },
+      { id: 'gemini-3.7-pro', name: 'Gemini 3.7 Pro', description: 'Deep reasoning, agentic coding and complex logic', tier: 'advanced', contextWindow: 2000000 },
+      { id: 'gemini-3.7-flash-thinking', name: 'Gemini 3.7 Flash Thinking', description: 'Explicit thinking process with adjustable budget', tier: 'reasoning', contextWindow: 1000000 },
+      { id: 'gemini-3.5-pro', name: 'Gemini 3.5 Pro', description: 'Advanced reasoning and multi-modal architecture', tier: 'advanced', contextWindow: 2000000 },
+      { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', description: 'Ultra-fast frontier intelligence', tier: 'light', contextWindow: 1000000 },
+      { id: 'gemini-3.0-flash', name: 'Gemini 3.0 Flash', description: 'High-speed modern multimodal generation', tier: 'light', contextWindow: 1000000 },
+      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Deep complex reasoning with 2M+ token context', tier: 'advanced', contextWindow: 2000000 },
+      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Ultra-fast, responsive multimodal model', tier: 'light', contextWindow: 1000000 },
+      { id: 'gemini-2.0-flash-thinking-exp', name: 'Gemini 2.0 Flash Thinking', description: 'Explicit thinking and multi-step reasoning', tier: 'reasoning', contextWindow: 1000000 },
+      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', description: 'High speed and low latency', tier: 'light', contextWindow: 1000000 },
+      { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', description: 'Long context reasoning model', tier: 'advanced', contextWindow: 2000000 }
     ]
   },
   {
@@ -274,8 +275,7 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     models: [
       { id: 'claude-code', name: 'Claude Code (Claude Pro / Team / Max)', description: 'Official Anthropic coding CLI spending against Claude Pro/Team subscription', tier: 'advanced' },
       { id: 'codex', name: 'OpenAI Codex CLI (ChatGPT Plus / Team / Pro)', description: 'Official OpenAI coding CLI spending against ChatGPT Plus/Team subscription', tier: 'advanced' },
-      { id: 'gemini', name: 'Google Gemini CLI (Google One AI / Pro)', description: 'Official Google Gemini CLI spending against Google One AI / Gemini subscription', tier: 'advanced' },
-      { id: 'antigravity', name: 'Antigravity CLI (Google Antigravity)', description: 'Google Deepmind coding CLI spending against Antigravity subscription', tier: 'advanced' },
+      { id: 'antigravity', name: 'Antigravity CLI (agy)', description: 'Official Google Antigravity coding CLI spending against Google Antigravity subscription', tier: 'advanced' },
       { id: 'aider', name: 'Aider CLI', description: 'Open-source terminal pair programming CLI', tier: 'standard' },
       { id: 'custom', name: 'Custom CLI Command', description: 'Run a custom local binary command or executable path', tier: 'standard' }
     ]
@@ -514,7 +514,8 @@ export async function fetchGeminiModels(apiKey: string): Promise<ProviderModel[]
         id: cleanId,
         name: m.displayName || cleanId,
         description: m.description ? (m.description.length > 80 ? `${m.description.slice(0, 77)}...` : m.description) : 'Gemini Model',
-        tier: isReasoning ? 'reasoning' : isLight ? 'light' : isAdv ? 'advanced' : 'standard'
+        tier: isReasoning ? 'reasoning' : isLight ? 'light' : isAdv ? 'advanced' : 'standard',
+        contextWindow: typeof m.inputTokenLimit === 'number' ? m.inputTokenLimit : undefined
       };
     });
 
@@ -586,6 +587,30 @@ export async function testAiConnection(
   try {
     if (providerId === 'mock' || providerId === 'none') {
       return { success: false, message: 'No active AI provider selected.' };
+    }
+
+    if (credentials.authMode === 'cli_subscription' || providerId === 'cli_subscription') {
+      const defaultCliForProvider = providerId === 'openai' ? 'codex' : providerId === 'gemini' ? 'antigravity' : 'claude-code';
+      const cliTarget = credentials.cliCustomCommand || credentials.cliAgentId || credentials.model || defaultCliForProvider;
+      const isCustom = cliTarget === 'custom' || Boolean(credentials.cliCustomCommand);
+      const detection = await fetchDetectedCliAgents(credentials.cliCustomCommand);
+
+      const targetAgent = isCustom
+        ? detection.custom
+        : detection.agents.find((a) => a.id === cliTarget || a.command === cliTarget) || detection.agents[0];
+
+      if (targetAgent?.isInstalled) {
+        return {
+          success: true,
+          message: `Ready! Detected ${targetAgent.name} at ${targetAgent.detectedPath} (${targetAgent.version || 'installed'}). Running under your ${targetAgent.subscriptionTier}.`,
+          models: SUPPORTED_AI_PROVIDERS.find((p) => p.id === providerId)?.models || []
+        };
+      }
+
+      return {
+        success: false,
+        message: `${targetAgent ? targetAgent.name : 'Selected CLI'} was not found in system PATH. Install with: ${targetAgent?.installCommand || 'npm install -g @anthropic-ai/claude-code'} and run login once.`
+      };
     }
 
     if (providerId === 'openai') {
@@ -688,29 +713,6 @@ export async function testAiConnection(
           message: `Failed to reach Ollama at ${baseUrl}. Ensure Ollama is running (e.g. 'ollama serve') and CORS allows browser requests (OLLAMA_ORIGINS="*"). ${e.message || ''}`
         };
       }
-    }
-
-    if (providerId === 'cli_subscription') {
-      const cliTarget = credentials.cliCustomCommand || credentials.model || 'claude-code';
-      const isCustom = cliTarget === 'custom' || Boolean(credentials.cliCustomCommand);
-      const detection = await fetchDetectedCliAgents(credentials.cliCustomCommand);
-
-      const targetAgent = isCustom
-        ? detection.custom
-        : detection.agents.find((a) => a.id === cliTarget || a.command === cliTarget) || detection.agents[0];
-
-      if (targetAgent?.isInstalled) {
-        return {
-          success: true,
-          message: `Ready! Detected ${targetAgent.name} at ${targetAgent.detectedPath} (${targetAgent.version || 'installed'}). Running under your ${targetAgent.subscriptionTier}.`,
-          models: SUPPORTED_AI_PROVIDERS.find((p) => p.id === 'cli_subscription')?.models || []
-        };
-      }
-
-      return {
-        success: false,
-        message: `${targetAgent ? targetAgent.name : 'Selected CLI'} was not found in system PATH. Install with: ${targetAgent?.installCommand || 'npm install -g @anthropic-ai/claude-code'} and run login once.`
-      };
     }
 
     return { success: false, message: 'Unsupported provider ID.' };

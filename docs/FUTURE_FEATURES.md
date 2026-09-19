@@ -64,7 +64,17 @@
     - user needs to be able to reference files with '@'
         - does this open a modal to select the file, which is a deep link to the file on disk?
     - needs a `/remember` skill that the user can call to force the AI to store that knowledge in its vector DB
-
+    - **can we use a lightweight AI for scanning files (i.e. Sonnet), and then pass that to a more powerful AI that actually does the work (i.e. Opus)?**
+    - **speculative decoding** - smaller model predicts draft tokens, for a larger model to verify and do the work
+        - think of it like the smaller model is making guesses, and the larger model is checking those guesses
+        - for each position, we try to generate multiple tokens with the small model
+        - then we check them all with the big model
+        - this way, if the small model guesses right, we get a speedup
+    - **Run as...**
+        - Single task
+        - Tasks in sequence
+        - Tasks in parallel
+        - Schedule tasks...
 
 
 **Uncle Bob's Notes**:

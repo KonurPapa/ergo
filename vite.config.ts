@@ -254,7 +254,7 @@ async function runCliProcess(options: {
   const started = Date.now();
   const timeoutMs = options.timeoutMs || 180_000;
 
-  const rawCli = (options.cli || 'claude').trim();
+  const rawCli = (options.cli === 'antigravity' ? 'agy' : (options.cli || 'claude')).trim();
   const cliBase = path.basename(rawCli).toLowerCase();
   let args: string[] = Array.isArray(options.customArgs) && options.customArgs.length > 0 ? [...options.customArgs] : [];
 
@@ -291,11 +291,11 @@ async function runCliProcess(options: {
       args.push(combinedPrompt);
     }
   } else if (cliBase.includes('agy')) {
-    if (!args.includes('-p') && !args.includes('--print') && !args.includes('run')) {
-      args.unshift('-p');
+    if (!args.includes('--dangerously-skip-permissions')) {
+      args.push('--dangerously-skip-permissions');
     }
-    if (combinedPrompt.length < 8000) {
-      args.push(combinedPrompt);
+    if (!args.some((a) => a.startsWith('-p=') || a.startsWith('--print='))) {
+      args.push(`-p=${combinedPrompt}`);
     }
   }
 
@@ -1385,6 +1385,8 @@ function ergoFileSystemPlugin(): Plugin {
               provider: 'anthropic',
               subscriptionTier: 'Claude Pro / Team / Enterprise',
               installCommand: 'npm install -g @anthropic-ai/claude-code',
+              loginCommand: 'claude login',
+              loginArgs: ['login'],
               docsUrl: 'https://docs.anthropic.com/claude/docs/claude-code',
               badgeColor: '#d97706',
               supportsHeadless: true,
@@ -1397,31 +1399,23 @@ function ergoFileSystemPlugin(): Plugin {
               provider: 'openai',
               subscriptionTier: 'ChatGPT Plus / Team / Pro',
               installCommand: 'npm install -g @openai/codex',
+              loginCommand: 'codex login',
+              loginArgs: ['login'],
               docsUrl: 'https://github.com/openai/codex',
               badgeColor: '#7c3aed',
               supportsHeadless: true,
               supportsInteractive: true
             },
             {
-              id: 'gemini',
-              name: 'Google Gemini CLI',
-              command: 'gemini',
-              provider: 'gemini',
-              subscriptionTier: 'Google One AI / Gemini Advanced',
-              installCommand: 'npm install -g @google/gemini-cli',
-              docsUrl: 'https://geminicli.com',
-              badgeColor: '#2563eb',
-              supportsHeadless: true,
-              supportsInteractive: true
-            },
-            {
               id: 'antigravity',
-              name: 'Antigravity (agy)',
+              name: 'Antigravity CLI (agy)',
               command: 'agy',
               provider: 'gemini',
-              subscriptionTier: 'Google Antigravity Subscription',
-              installCommand: 'Available via Antigravity IDE',
-              docsUrl: 'https://antigravity.dev',
+              subscriptionTier: 'Google Antigravity / Gemini Code Assist',
+              installCommand: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
+              loginCommand: 'agy',
+              loginArgs: [],
+              docsUrl: 'https://antigravity.google',
               badgeColor: '#2563eb',
               supportsHeadless: true,
               supportsInteractive: true
@@ -1433,6 +1427,8 @@ function ergoFileSystemPlugin(): Plugin {
               provider: 'openai',
               subscriptionTier: 'BYOK / Subscription Proxy',
               installCommand: 'pip install aider-chat',
+              loginCommand: 'aider',
+              loginArgs: [],
               docsUrl: 'https://aider.chat',
               badgeColor: '#059669',
               supportsHeadless: true,
@@ -1445,12 +1441,19 @@ function ergoFileSystemPlugin(): Plugin {
 
           const results = [];
           for (const preset of cliPresets) {
-            const whichRes = await runShellCommand(`which ${preset.command}`, storageDir, 3000);
+            let whichRes = await runShellCommand(`which ${preset.command}`, storageDir, 3000);
+            if (whichRes.exitCode !== 0 && preset.command === 'agy') {
+              const localAgy = path.join(os.homedir(), '.local', 'bin', 'agy');
+              if (fsSync.existsSync(localAgy)) {
+                whichRes = { exitCode: 0, stdout: localAgy, stderr: '', timedOut: false, durationMs: 0 };
+              }
+            }
             const isInstalled = whichRes.exitCode === 0 && Boolean(whichRes.stdout.trim());
             const detectedPath = isInstalled ? whichRes.stdout.trim() : null;
             let version: string | null = null;
             if (isInstalled) {
-              const verRes = await runShellCommand(`${preset.command} --version`, storageDir, 3000);
+              const verCmd = preset.command === 'agy' && detectedPath ? `${detectedPath} --version` : `${preset.command} --version`;
+              const verRes = await runShellCommand(verCmd, storageDir, 3000);
               if (verRes.exitCode === 0 && verRes.stdout.trim()) {
                 version = verRes.stdout.trim().split('\n')[0].slice(0, 50);
               }
@@ -1544,31 +1547,36 @@ function ergoFileSystemPlugin(): Plugin {
         try {
           const fullUrl = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
           let cli = fullUrl.searchParams.get('cli')?.trim() || 'claude';
-          if (cli === 'antigravity') cli = 'gemini';
+          let resolvedCmd = (cli === 'antigravity' || cli === 'gemini') ? 'agy' : cli;
 
-          // 1. Check if CLI binary is in PATH (with fallback for gemini <-> agy)
-          let resolvedCmd = cli;
-          let whichRes = await runShellCommand(`which ${cli}`, storageDir, 3000);
-          if (whichRes.exitCode !== 0 && cli === 'gemini') {
-            const agyRes = await runShellCommand('which agy', storageDir, 3000);
-            if (agyRes.exitCode === 0) {
-              resolvedCmd = 'agy';
-              whichRes = agyRes;
+          // 1. Check if CLI binary is in PATH (with fallback for agy in ~/.local/bin)
+          let whichRes = await runShellCommand(`which ${resolvedCmd}`, storageDir, 3000);
+          if (whichRes.exitCode !== 0 && (cli === 'antigravity' || cli === 'agy' || cli === 'gemini')) {
+            const localAgy = path.join(os.homedir(), '.local', 'bin', 'agy');
+            if (fsSync.existsSync(localAgy)) {
+              resolvedCmd = localAgy;
+              whichRes = { exitCode: 0, stdout: localAgy, stderr: '', timedOut: false, durationMs: 0 };
             }
           }
 
           const isInstalled = whichRes.exitCode === 0 && Boolean(whichRes.stdout.trim());
           if (!isInstalled) {
-            const humanName = cli === 'gemini' ? 'Google Gemini CLI (gemini)' : cli === 'claude' ? 'Claude Code (claude)' : cli;
+            const humanName = (cli === 'antigravity' || cli === 'agy' || cli === 'gemini')
+              ? 'Antigravity CLI (agy)'
+              : cli === 'claude'
+                ? 'Claude Code (claude)'
+                : cli === 'codex'
+                  ? 'OpenAI Codex CLI (codex)'
+                  : cli;
             return sendJson(res, 200, {
-              cli,
+              cli: resolvedCmd,
               isInstalled: false,
               isAuthenticated: false,
               message: `${humanName} is not installed in system PATH.`
             });
           }
 
-          // 2. Check auth status for claude, gemini, codex
+          // 2. Check auth status for claude, antigravity (agy), codex
           let isAuthenticated = false;
           let userEmail: string | null = null;
           let message = 'Not authenticated';
@@ -1596,21 +1604,21 @@ function ergoFileSystemPlugin(): Plugin {
                 message = 'Login required via "claude login"';
               }
             }
-          } else if (cli === 'gemini' || cli.includes('gemini') || resolvedCmd === 'agy') {
+          } else if (cli === 'antigravity' || cli === 'agy' || cli === 'gemini' || resolvedCmd.includes('agy')) {
             const geminiConfigDir = path.join(os.homedir(), '.gemini');
             const userConfigDir = path.join(os.homedir(), '.config', 'gemini');
             const hasGeminiDir = fsSync.existsSync(geminiConfigDir) || fsSync.existsSync(userConfigDir);
             if (hasGeminiDir) {
               isAuthenticated = true;
-              message = `${resolvedCmd} is installed and configured.`;
+              message = 'Antigravity CLI (agy) is authenticated with your Google account.';
             } else {
               const pingRes = await runShellCommand(`${resolvedCmd} --version`, storageDir, 5000);
               if (pingRes.exitCode === 0) {
                 isAuthenticated = true;
-                message = `${resolvedCmd} ready (${pingRes.stdout.trim().split('\n')[0]})`;
+                message = `Antigravity CLI ready (${pingRes.stdout.trim().split('\n')[0]})`;
               } else {
                 isAuthenticated = false;
-                message = `Login required for ${resolvedCmd}`;
+                message = 'Login required for Antigravity CLI (agy)';
               }
             }
           } else if (cli === 'codex') {
@@ -1649,13 +1657,12 @@ function ergoFileSystemPlugin(): Plugin {
         try {
           const body = await parseJsonBody(req);
           let { cli = 'claude' } = body;
-          if (cli === 'antigravity') cli = 'gemini';
 
           let installCmd = 'npm install -g @anthropic-ai/claude-code';
           if (cli === 'codex') {
             installCmd = 'npm install -g @openai/codex';
-          } else if (cli === 'gemini' || cli === 'google') {
-            installCmd = 'npm install -g @google/gemini-cli';
+          } else if (cli === 'antigravity' || cli === 'agy' || cli === 'gemini' || cli === 'google') {
+            installCmd = 'curl -fsSL https://antigravity.google/cli/install.sh | bash';
           } else if (cli === 'aider') {
             installCmd = 'pip install aider-chat';
           }
@@ -1679,33 +1686,36 @@ function ergoFileSystemPlugin(): Plugin {
         try {
           const body = await parseJsonBody(req);
           let { cli = 'claude' } = body;
-          if (cli === 'antigravity') cli = 'gemini';
+          let resolvedCmd = (cli === 'antigravity' || cli === 'gemini') ? 'agy' : cli;
 
-          let resolvedCmd = cli;
-          let whichRes = await runShellCommand(`which ${cli}`, storageDir, 3000);
-          if (whichRes.exitCode !== 0 && cli === 'gemini') {
-            const agyRes = await runShellCommand('which agy', storageDir, 3000);
-            if (agyRes.exitCode === 0) {
-              resolvedCmd = 'agy';
-              whichRes = agyRes;
+          let whichRes = await runShellCommand(`which ${resolvedCmd}`, storageDir, 3000);
+          if (whichRes.exitCode !== 0 && (cli === 'antigravity' || cli === 'agy' || cli === 'gemini')) {
+            const localAgy = path.join(os.homedir(), '.local', 'bin', 'agy');
+            if (fsSync.existsSync(localAgy)) {
+              resolvedCmd = localAgy;
+              whichRes = { exitCode: 0, stdout: localAgy, stderr: '', timedOut: false, durationMs: 0 };
             }
           }
 
           if (whichRes.exitCode !== 0) {
-            const toolName = cli === 'gemini' ? 'Google Gemini CLI (@google/gemini-cli)' : cli === 'claude' ? 'Claude Code (@anthropic-ai/claude-code)' : cli;
+            const toolName = (cli === 'antigravity' || cli === 'agy' || cli === 'gemini')
+              ? 'Antigravity CLI (agy)'
+              : cli === 'claude'
+                ? 'Claude Code (@anthropic-ai/claude-code)'
+                : cli;
             return sendJson(res, 200, {
               success: false,
               authUrl: null,
               output: '',
-              error: `${toolName} is not installed on your system. Please click 'Install & Sign In (1-Click)' above, or connect directly with a Google AI Studio key below.`
+              error: `${toolName} is not installed on your system. Please click 'Install CLI' above to install it directly in the terminal.`
             });
           }
 
           const { spawn } = await import('node:child_process');
 
           let loginArgs = ['login'];
-          if (resolvedCmd === 'gemini') {
-            loginArgs = ['--login'];
+          if (resolvedCmd.includes('agy')) {
+            loginArgs = []; // agy runs interactive authentication loop directly
           }
 
           let spawnError: Error | null = null;

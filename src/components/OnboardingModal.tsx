@@ -19,8 +19,6 @@ import {
   ArrowRight,
   Terminal,
   ShieldCheck,
-  Check,
-  Copy,
   ChevronRight,
   X,
   RefreshCw
@@ -56,20 +54,20 @@ interface ProviderMeta {
 const PROVIDER_METAS: Record<ProviderChoice, ProviderMeta> = {
   gemini: {
     id: 'gemini',
-    name: 'Google Gemini',
-    badge: 'Google One AI / Pro / Ultra',
+    name: 'Google Antigravity',
+    badge: 'Google Antigravity / Gemini Code Assist',
     icon: '✨',
     color: '#3b82f6',
-    cli: 'gemini',
-    cliName: 'Gemini CLI',
-    packageName: '@google/gemini-cli',
-    installCommand: 'npm install -g @google/gemini-cli',
-    loginCommand: 'gemini',
-    loginArgs: ['--login'],
-    signInLabel: 'Sign In with Google Account',
-    description: 'Google One AI Premium, Gemini Advanced, or Google Account.',
-    accountHelp: 'Authenticates with your Google Account in browser or instant Google AI Studio key.',
-    keyDocUrl: 'https://aistudio.google.com/app/apikey'
+    cli: 'agy',
+    cliName: 'Antigravity CLI (agy)',
+    packageName: 'Antigravity Suite',
+    installCommand: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
+    loginCommand: 'agy',
+    loginArgs: [],
+    signInLabel: 'Sign In with Google Antigravity',
+    description: 'Google Antigravity, Gemini Code Assist, or Google Account.',
+    accountHelp: 'Authenticates with your Google Antigravity account or instant Google AI Studio key.',
+    keyDocUrl: 'https://antigravity.google'
   },
   claude: {
     id: 'claude',
@@ -126,7 +124,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   const [showTerminal, setShowTerminal] = useState(false);
   const [loginAuthUrl, setLoginAuthUrl] = useState<string | null>(null);
   const [authSuccess, setAuthSuccess] = useState(false);
-  const [copiedCmd, setCopiedCmd] = useState(false);
 
   // Google Instant Connect State (Zero Terminal path)
   const [googleKeyInput, setGoogleKeyInput] = useState('');
@@ -267,9 +264,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       provider: 'cli_subscription',
       apiKey: 'cli_subscription_active',
       authMode: 'cli_subscription',
-      cliAgentId: currentMeta.id === 'gemini' ? 'gemini' : currentMeta.id === 'codex' ? 'codex' : 'claude-code',
+      cliAgentId: currentMeta.id === 'gemini' ? 'antigravity' : currentMeta.id === 'codex' ? 'codex' : 'claude-code',
       cliExecutionMode: 'interactive',
-      model: currentMeta.id === 'gemini' ? 'gemini' : currentMeta.id === 'codex' ? 'codex' : 'claude-code',
+      model: currentMeta.id === 'gemini' ? 'antigravity' : currentMeta.id === 'codex' ? 'codex' : 'claude-code',
       isConnected: true,
       createdAt: new Date().toISOString()
     };
@@ -754,10 +751,10 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   /* Not Installed */
                   <div>
                     <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.85rem', lineHeight: 1.4 }}>
-                      {currentMeta.cliName} (<code>{currentMeta.cli}</code>) was not detected in your system PATH. Ergo can automatically install it via npm, or you can run the command in your shell.
+                      {currentMeta.cliName} (<code>{currentMeta.cli}</code>) was not detected in your system PATH. Ergo can automatically install and set it up directly inside the app.
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginBottom: '0.85rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginBottom: '0.85rem', flexWrap: 'wrap' }}>
                       <button
                         type="button"
                         onClick={handleInstallCli}
@@ -777,8 +774,29 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           opacity: isInstalling ? 0.75 : 1
                         }}
                       >
-                        {isInstalling ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
-                        <span>{isInstalling ? 'Installing CLI via npm...' : `Install & ${currentMeta.signInLabel} (1-Click)`}</span>
+                        {isInstalling ? <Loader2 size={14} className="animate-spin" /> : <Terminal size={14} />}
+                        <span>{isInstalling ? 'Installing CLI via Terminal...' : `Install & ${currentMeta.signInLabel} (1-Click)`}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowTerminal(true)}
+                        style={{
+                          padding: '0.65rem 0.95rem',
+                          borderRadius: '6px',
+                          background: 'rgba(6, 182, 212, 0.1)',
+                          color: 'var(--accent-cyan)',
+                          fontSize: '0.78rem',
+                          fontWeight: 600,
+                          border: '1px solid rgba(6, 182, 212, 0.25)',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.35rem'
+                        }}
+                      >
+                        <Terminal size={13} />
+                        <span>Launch In-App Terminal</span>
                       </button>
 
                       <button
@@ -795,45 +813,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         }}
                       >
                         Check Again
-                      </button>
-                    </div>
-
-                    {/* Copyable manual command */}
-                    <div
-                      style={{
-                        background: 'rgba(0, 0, 0, 0.35)',
-                        border: '1px solid rgba(255, 255, 255, 0.06)',
-                        borderRadius: '6px',
-                        padding: '0.45rem 0.65rem',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: '0.72rem',
-                        color: 'var(--accent-cyan)'
-                      }}
-                    >
-                      <code>{currentMeta.installCommand}</code>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText(currentMeta.installCommand);
-                          setCopiedCmd(true);
-                          setTimeout(() => setCopiedCmd(false), 2000);
-                        }}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: copiedCmd ? 'var(--accent-emerald)' : 'var(--text-muted)',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.25rem',
-                          fontSize: '0.7rem'
-                        }}
-                      >
-                        {copiedCmd ? <Check size={12} /> : <Copy size={12} />}
-                        <span>{copiedCmd ? 'Copied' : 'Copy'}</span>
                       </button>
                     </div>
                   </div>

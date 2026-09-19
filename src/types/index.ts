@@ -145,6 +145,8 @@ export interface CliDetectedAgent {
   provider: AIProviderId;
   subscriptionTier: string;
   installCommand: string;
+  loginCommand?: string;
+  loginArgs?: string[];
   docsUrl: string;
   badgeColor: string;
   supportsHeadless: boolean;
