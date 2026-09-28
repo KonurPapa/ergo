@@ -453,9 +453,35 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                           <span>{server.name}</span>
                         </div>
 
-                        <span className="badge badge-done" style={{ fontSize: '0.7rem' }}>
-                          Default Connection
-                        </span>
+                        {server.id === 'mcp-laya' ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                            <span
+                              style={{
+                                fontSize: '0.65rem',
+                                fontWeight: 700,
+                                background: isConnected ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+                                color: isConnected ? 'var(--accent-emerald)' : 'var(--text-muted)',
+                                border: `1px solid ${isConnected ? 'rgba(16, 185, 129, 0.3)' : 'rgba(255, 255, 255, 0.1)'}`,
+                                borderRadius: '4px',
+                                padding: '1px 6px'
+                              }}
+                            >
+                              {isConnected ? 'Active ($0 Cost)' : 'Off (Generative Fallback)'}
+                            </span>
+                            <button
+                              type="button"
+                              className={isConnected ? 'btn btn-secondary' : 'btn btn-primary'}
+                              style={{ padding: '0.2rem 0.6rem', fontSize: '0.72rem' }}
+                              onClick={() => onToggleConnectServer(server.id)}
+                            >
+                              {isConnected ? 'Disable' : 'Enable'}
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="badge badge-done" style={{ fontSize: '0.7rem' }}>
+                            Default Connection
+                          </span>
+                        )}
                       </div>
 
                       <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>{server.description}</p>

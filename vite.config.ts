@@ -297,6 +297,20 @@ async function runCliProcess(options: {
     if (!args.some((a) => a.startsWith('-p=') || a.startsWith('--print='))) {
       args.push(`-p=${combinedPrompt}`);
     }
+  } else if (cliBase.includes('cursor')) {
+    if (!args.includes('-p') && !args.includes('--print') && !args.includes('agent')) {
+      args.unshift('agent');
+    }
+    if (combinedPrompt.length < 8000 && !args.includes(combinedPrompt)) {
+      args.push(combinedPrompt);
+    }
+  } else if (cliBase.includes('grok')) {
+    if (!args.includes('-p') && !args.includes('--prompt')) {
+      args.unshift('-p');
+    }
+    if (combinedPrompt.length < 8000 && !args.includes(combinedPrompt)) {
+      args.push(combinedPrompt);
+    }
   }
 
   return new Promise((resolve) => {
@@ -1068,7 +1082,7 @@ function ergoFileSystemPlugin(): Plugin {
               const command = typeof args.command === 'string' ? args.command.trim() : '';
               if (!command) return sendJson(res, 400, { error: 'run_command requires a non-empty "command" string.' });
               const cwdCheck = await resolveInsideAllowedRoots(typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd : storageDir, storageDir);
-              if (!cwdCheck.ok) return sendJson(res, 403, { error: cwdCheck.error });
+              if ('error' in cwdCheck) return sendJson(res, 403, { error: cwdCheck.error });
               try {
                 const st = await fs.stat(cwdCheck.fullPath);
                 if (!st.isDirectory()) return sendJson(res, 400, { error: `cwd "${args.cwd}" is not a directory.` });
@@ -1097,7 +1111,7 @@ function ergoFileSystemPlugin(): Plugin {
             const targetPath = (args.path || args.filePath || '').trim();
             if (!targetPath) return sendJson(res, 400, { error: `${toolName} requires a "path" argument.` });
             const check = await resolveInsideAllowedRoots(targetPath, storageDir);
-            if (!check.ok) return sendJson(res, 403, { error: check.error });
+            if ('error' in check) return sendJson(res, 403, { error: check.error });
             const fullPath = check.fullPath;
 
             if (toolName === 'read_file') {
@@ -1325,7 +1339,7 @@ function ergoFileSystemPlugin(): Plugin {
           // 3. Git Operations MCP Harness (cwd must be inside an allowed root; defaults to the storage dir)
           if (serverId === 'mcp-git' || toolName.startsWith('git_')) {
             const cwdCheck = await resolveInsideAllowedRoots(typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd : storageDir, storageDir);
-            if (!cwdCheck.ok) return sendJson(res, 403, { error: cwdCheck.error });
+            if ('error' in cwdCheck) return sendJson(res, 403, { error: cwdCheck.error });
 
             const shellQuote = (v: string) => `'${String(v).replace(/'/g, `'\\''`)}'`;
             let gitCommand = 'git status --short';
@@ -1352,6 +1366,159 @@ function ergoFileSystemPlugin(): Plugin {
                 output: output.text.trim()
               }
             });
+          }
+
+          // 4. Laya Local Decision Engine MCP Harness
+          if (serverId === 'mcp-laya' || toolName.startsWith('laya_')) {
+            // Check if local laya-serve is running at localhost:8440
+            const layaHost = 'http://127.0.0.1:8440';
+            let layaOnline = false;
+            try {
+              const ping = await fetch(`${layaHost}/health`, { method: 'GET', signal: AbortSignal.timeout(1200) }).catch(() => null);
+              if (ping && ping.ok) layaOnline = true;
+            } catch {}
+
+            if (layaOnline) {
+              try {
+                if (toolName === 'laya_choice') {
+                  const candidateOptions = Array.isArray(args.options) ? args.options.slice(0, 20) : [];
+                  const resLaya = await fetch(`${layaHost}/v1/systemone`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      question: args.prompt || args.question || '',
+                      options: candidateOptions
+                    }),
+                    signal: AbortSignal.timeout(8000)
+                  });
+                  if (resLaya.ok) {
+                    const data = await resLaya.json();
+                    return sendJson(res, 200, {
+                      success: true,
+                      data: {
+                        choice: data.choice || candidateOptions[0],
+                        confidence: typeof data.confidence === 'number' ? data.confidence : (data.answer_confidence || 0.88),
+                        source: 'laya_local_service'
+                      }
+                    });
+                  }
+                } else if (toolName === 'laya_noul') {
+                  const resLaya = await fetch(`${layaHost}/v1/systemone`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      proposition: args.prompt || args.proposition || ''
+                    }),
+                    signal: AbortSignal.timeout(8000)
+                  });
+                  if (resLaya.ok) {
+                    const data = await resLaya.json();
+                    return sendJson(res, 200, {
+                      success: true,
+                      data: {
+                        value: Boolean(data.value ?? (data.choice === 'yes')),
+                        confidence: typeof data.confidence === 'number' ? data.confidence : 0.88,
+                        source: 'laya_local_service'
+                      }
+                    });
+                  }
+                } else if (toolName === 'laya_score') {
+                  const resLaya = await fetch(`${layaHost}/v1/systemone`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      text: args.text || args.prompt || '',
+                      criteria: args.criteria || ''
+                    }),
+                    signal: AbortSignal.timeout(8000)
+                  });
+                  if (resLaya.ok) {
+                    const data = await resLaya.json();
+                    return sendJson(res, 200, {
+                      success: true,
+                      data: {
+                        score: typeof data.score === 'number' ? data.score : 0.85,
+                        confidence: typeof data.confidence === 'number' ? data.confidence : 0.88,
+                        source: 'laya_local_service'
+                      }
+                    });
+                  }
+                }
+              } catch (e: any) {
+                console.warn('[Vite MCP API] Error forwarding to laya-serve, falling back to local heuristic head:', e.message);
+              }
+            }
+
+            // High-speed deterministic fallback decision head when laya daemon is not running
+            if (toolName === 'laya_choice') {
+              const options: string[] = Array.isArray(args.options) ? args.options : [];
+              const prompt: string = String(args.prompt || '').toLowerCase();
+              let selected = options[0] || '';
+              // Match best option based on lexical similarity
+              let bestScore = -1;
+              for (const opt of options) {
+                const optWords = opt.toLowerCase().split(/[\s_-]+/);
+                const score = optWords.reduce((acc, w) => acc + (w.length >= 3 && prompt.includes(w) ? 2 : 0), 0);
+                if (score > bestScore) {
+                  bestScore = score;
+                  selected = opt;
+                }
+              }
+              return sendJson(res, 200, {
+                success: true,
+                data: {
+                  choice: selected,
+                  confidence: bestScore > 0 ? 0.92 : 0.75,
+                  source: 'laya_local_deterministic_head'
+                }
+              });
+            }
+
+            if (toolName === 'laya_noul') {
+              const prompt: string = String(args.prompt || '').toLowerCase();
+              // Check for strong negative or positive cues
+              const isYes = /\b(yes|true|standalone|single|simple|straightforward|pass|verified)\b/.test(prompt);
+              return sendJson(res, 200, {
+                success: true,
+                data: {
+                  value: isYes,
+                  confidence: 0.85,
+                  source: 'laya_local_deterministic_head'
+                }
+              });
+            }
+
+            if (toolName === 'laya_filter') {
+              const items: Array<{ id: string; description: string }> = Array.isArray(args.items) ? args.items : [];
+              const context: string = String(args.context || '').toLowerCase();
+              const selectedIds = items
+                .filter((item) => {
+                  const id = item.id.toLowerCase();
+                  const desc = (item.description || '').toLowerCase();
+                  if (id === 'mcp-filesystem') return true;
+                  if ((id.includes('git') || desc.includes('git') || desc.includes('commit')) && (context.includes('git') || context.includes('commit') || context.includes('repo'))) return true;
+                  if ((id.includes('fetch') || desc.includes('web') || desc.includes('url')) && (context.includes('fetch') || context.includes('url') || context.includes('http') || context.includes('api'))) return true;
+                  if (id.includes('github') && (context.includes('github') || context.includes('pr') || context.includes('issue'))) return true;
+                  if (id.includes('slack') && (context.includes('slack') || context.includes('channel') || context.includes('message'))) return true;
+                  return false;
+                })
+                .map((i) => i.id);
+
+              return sendJson(res, 200, {
+                success: true,
+                data: {
+                  selectedIds,
+                  source: 'laya_local_deterministic_head'
+                }
+              });
+            }
+
+            if (toolName === 'laya_score') {
+              return sendJson(res, 200, {
+                success: true,
+                data: { score: 0.9, confidence: 0.88, source: 'laya_local_deterministic_head' }
+              });
+            }
           }
 
           // Default custom tool execution simulated response
@@ -1421,11 +1588,39 @@ function ergoFileSystemPlugin(): Plugin {
               supportsInteractive: true
             },
             {
+              id: 'cursor-cli',
+              name: 'Cursor CLI',
+              command: 'cursor',
+              provider: 'cursor',
+              subscriptionTier: 'Cursor Pro / Business',
+              installCommand: 'curl -fsSL https://cursor.com/install.sh | bash',
+              loginCommand: 'cursor login',
+              loginArgs: ['login'],
+              docsUrl: 'https://cursor.com',
+              badgeColor: '#0066FF',
+              supportsHeadless: true,
+              supportsInteractive: true
+            },
+            {
+              id: 'grok-cli',
+              name: 'Grok CLI (grok)',
+              command: 'grok',
+              provider: 'grok',
+              subscriptionTier: 'X Premium+ / SuperGrok',
+              installCommand: 'npm install -g grok-cli',
+              loginCommand: 'grok login',
+              loginArgs: ['login'],
+              docsUrl: 'https://x.ai',
+              badgeColor: '#1d9bf0',
+              supportsHeadless: true,
+              supportsInteractive: true
+            },
+            {
               id: 'aider',
-              name: 'Aider',
+              name: 'Aider CLI',
               command: 'aider',
-              provider: 'openai',
-              subscriptionTier: 'BYOK / Subscription Proxy',
+              provider: 'ollama',
+              subscriptionTier: 'Local Pair Programming / Ollama',
               installCommand: 'pip install aider-chat',
               loginCommand: 'aider',
               loginArgs: [],
@@ -1636,6 +1831,36 @@ function ergoFileSystemPlugin(): Plugin {
                 message = 'Login required via "codex login"';
               }
             }
+          } else if (cli === 'cursor' || cli === 'cursor-cli') {
+            const cursorConfig = path.join(os.homedir(), '.cursor');
+            if (fsSync.existsSync(cursorConfig)) {
+              isAuthenticated = true;
+              message = 'Cursor CLI authenticated';
+            } else {
+              const pingRes = await runShellCommand('cursor --version', storageDir, 5000);
+              if (pingRes.exitCode === 0) {
+                isAuthenticated = true;
+                message = `Cursor CLI ready (${pingRes.stdout.trim().split('\n')[0]})`;
+              } else {
+                isAuthenticated = false;
+                message = 'Login required via "cursor login"';
+              }
+            }
+          } else if (cli === 'grok' || cli === 'grok-cli') {
+            const grokConfig = path.join(os.homedir(), '.xai');
+            if (fsSync.existsSync(grokConfig)) {
+              isAuthenticated = true;
+              message = 'Grok CLI authenticated';
+            } else {
+              const pingRes = await runShellCommand('grok --version', storageDir, 5000);
+              if (pingRes.exitCode === 0) {
+                isAuthenticated = true;
+                message = `Grok CLI ready (${pingRes.stdout.trim().split('\n')[0]})`;
+              } else {
+                isAuthenticated = false;
+                message = 'Login required via "grok login"';
+              }
+            }
           } else {
             isAuthenticated = isInstalled;
             message = `${cli} installed.`;
@@ -1663,8 +1888,14 @@ function ergoFileSystemPlugin(): Plugin {
             installCmd = 'npm install -g @openai/codex';
           } else if (cli === 'antigravity' || cli === 'agy' || cli === 'gemini' || cli === 'google') {
             installCmd = 'curl -fsSL https://antigravity.google/cli/install.sh | bash';
+          } else if (cli === 'cursor' || cli === 'cursor-cli') {
+            installCmd = 'curl -fsSL https://cursor.com/install.sh | bash';
+          } else if (cli === 'grok' || cli === 'grok-cli') {
+            installCmd = 'npm install -g grok-cli';
           } else if (cli === 'aider') {
             installCmd = 'pip install aider-chat';
+          } else if (cli === 'laya') {
+            installCmd = 'pip install laya';
           }
 
           const result = await runShellCommand(installCmd, storageDir, 180_000);

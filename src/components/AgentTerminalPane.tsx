@@ -37,8 +37,8 @@ interface AgentTerminalPaneProps {
   cliConfig: CliAgentConfig | null;
 }
 
-const MIN_HEIGHT_PX = 180;
-const DEFAULT_HEIGHT_PERCENT = 40; // % of parent container height
+const MIN_HEIGHT_PX = 220;
+const DEFAULT_HEIGHT_PERCENT = 50; // % of parent container height
 
 export const AgentTerminalPane: React.FC<AgentTerminalPaneProps> = ({
   isOpen,

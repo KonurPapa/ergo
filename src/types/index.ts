@@ -131,7 +131,7 @@ export interface McpToolExecutionResult {
 }
 
 
-export type AIProviderId = 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'cli_subscription' | 'none' | 'mock';
+export type AIProviderId = 'openai' | 'anthropic' | 'gemini' | 'grok' | 'cursor' | 'ollama' | 'cli_subscription' | 'none' | 'mock';
 
 export type AuthMode = 'api_key' | 'cli_subscription';
 

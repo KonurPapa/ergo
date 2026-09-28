@@ -45,6 +45,67 @@ export async function callAiEngine(
     return data.choices?.[0]?.message?.content || '';
   }
 
+  if (provider === 'grok') {
+    if (!apiKey) throw new Error('xAI Grok API key missing.');
+    const reqBody: any = {
+      model: targetModel || (taskType === 'summary' ? 'grok-3' : 'grok-3'),
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt }
+      ]
+    };
+    if (responseFormat === 'json') {
+      reqBody.response_format = { type: 'json_object' };
+    }
+    const res = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(reqBody),
+      signal
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `xAI API returned HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || '';
+  }
+
+  if (provider === 'cursor' && config.authMode !== 'cli_subscription') {
+    // If API key is provided for Cursor, route through OpenAI-compatible endpoint or report configured state
+    if (apiKey) {
+      const reqBody: any = {
+        model: targetModel || 'cursor-agent',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: prompt }
+        ]
+      };
+      if (responseFormat === 'json') {
+        reqBody.response_format = { type: 'json_object' };
+      }
+      const host = (baseUrl || 'https://api.cursor.com/v1').replace(/\/+$/, '');
+      const res = await fetch(`${host}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify(reqBody),
+        signal
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error?.message || `Cursor API returned HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      return data.choices?.[0]?.message?.content || '';
+    }
+  }
+
   if (provider === 'anthropic') {
     if (!apiKey) throw new Error('Anthropic API key missing.');
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -132,7 +193,11 @@ export async function callAiEngine(
       ? 'claude'
       : cliCommand === 'antigravity'
         ? 'agy'
-        : cliCommand;
+        : cliCommand === 'cursor-cli'
+          ? 'cursor'
+          : cliCommand === 'grok-cli'
+            ? 'grok'
+            : cliCommand;
 
     const res = await fetch('/api/cli/execute', {
       method: 'POST',

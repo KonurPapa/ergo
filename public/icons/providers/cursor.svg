@@ -1,0 +1,16 @@
+<svg width="256" height="256" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Top-left facet -->
+  <polygon points="256,44 76,148 256,148" fill="#757575"/>
+  <!-- Top-right facet -->
+  <polygon points="256,44 436,148 256,148" fill="#616161"/>
+  <!-- Left-vertical facet -->
+  <polygon points="76,148 76,362 256,256" fill="#616161"/>
+  <!-- Bottom-left facet -->
+  <polygon points="256,256 76,362 256,467" fill="#BCBCBC"/>
+  <!-- Right shadow facet -->
+  <polygon points="436,148 436,362 346,310" fill="#424242"/>
+  <!-- Right bottom facet -->
+  <polygon points="346,310 436,362 256,467" fill="#BCBCBC"/>
+  <!-- Central white/light arrow facet -->
+  <polygon points="76,148 436,148 256,467 256,256" fill="#EDEDED"/>
+</svg>

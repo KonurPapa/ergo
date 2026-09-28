@@ -215,14 +215,16 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
     };
   }, [cmd, argsKey, cwd]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const isLightTheme = typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'light';
+
   return (
     <div
       ref={containerRef}
+      className="agent-terminal-screen"
       style={{
         width: '100%',
         height: '100%',
-        background: '#0d0f14',
-        borderRadius: '0 0 var(--radius-md) var(--radius-md)',
+        background: isLightTheme ? '#f8fafc' : '#0d0f14',
         overflow: 'hidden',
       }}
     />

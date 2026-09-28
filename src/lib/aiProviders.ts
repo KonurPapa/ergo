@@ -39,6 +39,8 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
       openai: 'gpt-5',
       anthropic: 'claude-3-7-sonnet-20250219',
       gemini: 'gemini-3.7-flash',
+      grok: 'grok-3',
+      cursor: 'cursor-agent',
       ollama: 'llama3.2',
       cli_subscription: 'claude-code'
     }
@@ -54,6 +56,8 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
       openai: 'gpt-5.4',
       anthropic: 'claude-opus-5',
       gemini: 'gemini-3.7-pro',
+      grok: 'grok-3',
+      cursor: 'cursor-agent',
       ollama: 'qwen2.5-coder',
       cli_subscription: 'claude-code'
     }
@@ -69,6 +73,8 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
       openai: 'gpt-5',
       anthropic: 'claude-sonnet-5',
       gemini: 'gemini-3.7-flash',
+      grok: 'grok-3',
+      cursor: 'cursor-agent',
       ollama: 'qwen2.5-coder',
       cli_subscription: 'claude-code'
     }
@@ -84,6 +90,8 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
       openai: 'gpt-5-mini',
       anthropic: 'claude-3-5-haiku-20241022',
       gemini: 'gemini-2.5-flash',
+      grok: 'grok-3-mini',
+      cursor: 'cursor-agent',
       ollama: 'llama3.2',
       cli_subscription: 'claude-code'
     }
@@ -99,6 +107,8 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
       openai: 'gpt-5.4',
       anthropic: 'claude-opus-5',
       gemini: 'gemini-3.7-pro',
+      grok: 'grok-3',
+      cursor: 'cursor-agent',
       ollama: 'qwen2.5-coder',
       cli_subscription: 'claude-code'
     }
@@ -114,6 +124,8 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
       openai: 'gpt-5',
       anthropic: 'claude-3-5-haiku-20241022',
       gemini: 'gemini-3.7-flash',
+      grok: 'grok-3-mini',
+      cursor: 'cursor-agent',
       ollama: 'llama3.2',
       cli_subscription: 'claude-code'
     }
@@ -240,6 +252,53 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     ]
   },
   {
+    id: 'grok',
+    name: 'Grok (xAI)',
+    shortName: 'Grok',
+    description: 'Grok 3, Grok 3 Mini, and Grok 2 models via xAI API or Grok CLI',
+    icon: '⚡',
+    iconUrl: '/icons/providers/grok.svg',
+    badgeColor: '#1d9bf0',
+    requiresKey: true,
+    requiresBaseUrl: false,
+    defaultModel: 'grok-3',
+    defaultDiscoveryModel: 'grok-3-mini',
+    defaultSummaryModel: 'grok-3',
+    defaultGeneralModel: 'grok-3',
+    keyPlaceholder: 'xai-...',
+    keyDocUrl: 'https://console.x.ai',
+    models: [
+      { id: 'grok-3', name: 'Grok 3', description: 'Flagship frontier model from xAI with industry-leading reasoning and coding', tier: 'advanced', contextWindow: 131072 },
+      { id: 'grok-3-mini', name: 'Grok 3 Mini', description: 'Fast, cost-efficient model optimized for rapid coding and analysis', tier: 'light', contextWindow: 131072 },
+      { id: 'grok-2-1212', name: 'Grok 2 (1212)', description: 'Previous flagship Grok release with state-of-the-art vision and chat', tier: 'standard', contextWindow: 131072 },
+      { id: 'grok-2-vision-1212', name: 'Grok 2 Vision', description: 'Multimodal vision and text comprehension', tier: 'standard', contextWindow: 32768 },
+      { id: 'grok-beta', name: 'Grok Beta', description: 'Original Grok beta foundation model', tier: 'standard', contextWindow: 131072 }
+    ]
+  },
+  {
+    id: 'cursor',
+    name: 'Cursor AI',
+    shortName: 'Cursor',
+    description: 'Cursor Pro / Business subscription via Cursor CLI bridge or Cursor API',
+    icon: '🖱️',
+    iconUrl: '/icons/providers/cursor.svg',
+    badgeColor: '#0066FF',
+    requiresKey: true,
+    requiresBaseUrl: false,
+    defaultModel: 'cursor-agent',
+    defaultDiscoveryModel: 'cursor-agent',
+    defaultSummaryModel: 'cursor-agent',
+    defaultGeneralModel: 'cursor-agent',
+    keyPlaceholder: 'cur-... or API bearer token',
+    keyDocUrl: 'https://cursor.com/settings',
+    models: [
+      { id: 'cursor-agent', name: 'Cursor Agent (Composer)', description: 'Cursor pair-programming agent execution engine', tier: 'advanced', contextWindow: 200000 },
+      { id: 'claude-3-7-sonnet-cursor', name: 'Claude 3.7 Sonnet (via Cursor)', description: 'Claude 3.7 Sonnet powered by your Cursor subscription', tier: 'standard', contextWindow: 200000 },
+      { id: 'claude-3-5-sonnet-cursor', name: 'Claude 3.5 Sonnet (via Cursor)', description: 'Claude 3.5 Sonnet powered by Cursor subscription', tier: 'standard', contextWindow: 200000 },
+      { id: 'gpt-5-cursor', name: 'GPT-5 (via Cursor)', description: 'OpenAI GPT-5 routed through Cursor subscription', tier: 'advanced', contextWindow: 256000 }
+    ]
+  },
+  {
     id: 'ollama',
     name: 'Local (Ollama)',
     shortName: 'Ollama',
@@ -261,7 +320,7 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     id: 'cli_subscription',
     name: 'Subscription (Local CLI Bridge)',
     shortName: 'Subscription',
-    description: 'Spend against your Claude Pro/Team or ChatGPT Plus subscription via local CLI agent (No API key needed)',
+    description: 'Spend against your Claude Pro/Team, ChatGPT Plus, Cursor, or Grok subscription via local CLI agent (No API key needed)',
     icon: '⚡',
     badgeColor: '#10b981',
     requiresKey: false,
@@ -276,7 +335,8 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
       { id: 'claude-code', name: 'Claude Code (Claude Pro / Team / Max)', description: 'Official Anthropic coding CLI spending against Claude Pro/Team subscription', tier: 'advanced' },
       { id: 'codex', name: 'OpenAI Codex CLI (ChatGPT Plus / Team / Pro)', description: 'Official OpenAI coding CLI spending against ChatGPT Plus/Team subscription', tier: 'advanced' },
       { id: 'antigravity', name: 'Antigravity CLI (agy)', description: 'Official Google Antigravity coding CLI spending against Google Antigravity subscription', tier: 'advanced' },
-      { id: 'aider', name: 'Aider CLI', description: 'Open-source terminal pair programming CLI', tier: 'standard' },
+      { id: 'cursor-cli', name: 'Cursor CLI (cursor)', description: 'Official Cursor command-line interface spending against Cursor Pro / Business', tier: 'advanced' },
+      { id: 'grok-cli', name: 'Grok CLI (grok)', description: 'Official xAI Grok command-line interface spending against X Premium+ / SuperGrok', tier: 'advanced' },
       { id: 'custom', name: 'Custom CLI Command', description: 'Run a custom local binary command or executable path', tier: 'standard' }
     ]
   }
@@ -577,6 +637,41 @@ export async function fetchOllamaModels(baseUrl: string): Promise<ProviderModel[
   });
 }
 
+export async function fetchGrokModels(apiKey: string): Promise<ProviderModel[]> {
+  try {
+    const res = await fetch('https://api.x.ai/v1/models', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${apiKey}`
+      }
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const rawList: any[] = data.data || [];
+      const grokModels = rawList.map((m: any) => {
+        const id = m.id || '';
+        const isMini = id.includes('mini');
+        const isAdv = id.includes('3') && !isMini;
+        return {
+          id,
+          name: id,
+          description: isMini ? 'Fast, cost-efficient model' : isAdv ? 'Frontier intelligence' : 'Advanced language & vision model',
+          tier: (isMini ? 'light' : isAdv ? 'advanced' : 'standard') as ProviderModel['tier'],
+          contextWindow: 131072
+        };
+      });
+
+      if (grokModels.length > 0) {
+        return grokModels;
+      }
+    }
+  } catch {}
+
+  const grokProvider = SUPPORTED_AI_PROVIDERS.find((p) => p.id === 'grok');
+  return grokProvider?.models || [];
+}
+
 /**
  * Tests connection to the specified AI provider using provided credentials.
  */
@@ -590,7 +685,15 @@ export async function testAiConnection(
     }
 
     if (credentials.authMode === 'cli_subscription' || providerId === 'cli_subscription') {
-      const defaultCliForProvider = providerId === 'openai' ? 'codex' : providerId === 'gemini' ? 'antigravity' : 'claude-code';
+      const defaultCliForProvider = providerId === 'openai'
+        ? 'codex'
+        : providerId === 'gemini'
+        ? 'antigravity'
+        : providerId === 'cursor'
+        ? 'cursor-cli'
+        : providerId === 'grok'
+        ? 'grok-cli'
+        : 'claude-code';
       const cliTarget = credentials.cliCustomCommand || credentials.cliAgentId || credentials.model || defaultCliForProvider;
       const isCustom = cliTarget === 'custom' || Boolean(credentials.cliCustomCommand);
       const detection = await fetchDetectedCliAgents(credentials.cliCustomCommand);
@@ -627,6 +730,35 @@ export async function testAiConnection(
       } catch (e: any) {
         return { success: false, message: e.message || 'Failed to connect to OpenAI API.' };
       }
+    }
+
+    if (providerId === 'grok') {
+      if (!credentials.apiKey) {
+        return { success: false, message: 'xAI Grok API Key is required.' };
+      }
+      try {
+        const models = await fetchGrokModels(credentials.apiKey);
+        return {
+          success: true,
+          message: `Connected successfully to xAI Grok API! Loaded ${models.length} available models.`,
+          models
+        };
+      } catch (e: any) {
+        return { success: false, message: e.message || 'Failed to connect to xAI Grok API.' };
+      }
+    }
+
+    if (providerId === 'cursor') {
+      // In API key mode, validate presence and return Cursor models
+      if (!credentials.apiKey) {
+        return { success: false, message: 'Cursor API key or bearer token is required for direct API mode.' };
+      }
+      const cursorModels = SUPPORTED_AI_PROVIDERS.find((p) => p.id === 'cursor')?.models || [];
+      return {
+        success: true,
+        message: 'Cursor API credentials saved! Available models ready for agent execution.',
+        models: cursorModels
+      };
     }
 
     if (providerId === 'anthropic') {

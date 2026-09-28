@@ -196,6 +196,30 @@ export async function runToolLoop(req: ToolLoopRequest): Promise<ToolLoopResult>
         return runAnthropic(activeReq, tools, usage);
       case 'openai':
         return runOpenAiCompatible(activeReq, tools, usage, 'openai');
+      case 'grok':
+        return runOpenAiCompatible(
+          {
+            ...activeReq,
+            baseUrl: activeReq.baseUrl || 'https://api.x.ai/v1'
+          },
+          tools,
+          usage,
+          'openai'
+        );
+      case 'cursor':
+        // If API key is provided, execute OpenAI-compatible endpoint; otherwise route to CLI bridge
+        if (activeReq.apiKey && !activeReq.model?.includes('cli')) {
+          return runOpenAiCompatible(
+            {
+              ...activeReq,
+              baseUrl: activeReq.baseUrl || 'https://api.cursor.com/v1'
+            },
+            tools,
+            usage,
+            'openai'
+          );
+        }
+        return runCliSubscription(activeReq, tools, usage);
       case 'ollama':
         return runOpenAiCompatible(activeReq, tools, usage, 'ollama');
       case 'gemini':
@@ -578,7 +602,15 @@ async function runGemini(req: ToolLoopRequest, tools: ToolDefinition[], usage: T
 // ─── CLI Subscription Bridge (Headless) ──────────────────────────────────────
 
 async function runCliSubscription(req: ToolLoopRequest, tools: ToolDefinition[], usage: TokenUsage): Promise<ToolLoopResult> {
-  const binary = req.model === 'claude-code' ? 'claude' : req.model === 'antigravity' ? 'agy' : (req.model || 'claude');
+  const binary = req.model === 'claude-code'
+    ? 'claude'
+    : req.model === 'antigravity'
+    ? 'agy'
+    : req.model === 'cursor-cli' || req.model === 'cursor' || req.model === 'cursor-agent'
+    ? 'cursor'
+    : req.model === 'grok-cli' || req.model === 'grok'
+    ? 'grok'
+    : (req.model || 'claude');
   const systemText = joinSystem(req);
   let conversationHistory = req.initialUserMessage;
   let lastText = '';

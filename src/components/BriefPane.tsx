@@ -11,6 +11,7 @@ import {
   type OllamaFallbackChoice
 } from '../types';
 import { AgentTerminal } from './AgentTerminal';
+import { ResizableTerminalContainer } from './ResizableTerminalContainer';
 import { StepStatusIcon, StepUsageBadge, PieceChip, BiblePreview, BaselineContextPreview } from './ExecutionStepExtras';
 import { BvTokenCounterCard } from './BvTokenCounterCard';
 import {
@@ -1408,26 +1409,58 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 
                       {/* Sub-view 1: Embedded Terminal */}
                       {showTerminal && terminalSession ? (
-                        <div className="embedded-terminal-wrapper">
-                          <div className="embedded-terminal-topbar">
-                            <span>
-                              <span style={{ color: 'var(--accent-cyan)', fontWeight: 600 }}>cmd:</span>{' '}
-                              {terminalSession.cmd} {terminalSession.args.join(' ')}
-                            </span>
-                            <span>
-                              <span style={{ color: 'var(--accent-violet)', fontWeight: 600 }}>cwd:</span>{' '}
-                              {terminalSession.cwd}
-                            </span>
-                          </div>
-                          <div className="embedded-terminal-body">
-                            <AgentTerminal
-                              cmd={terminalSession.cmd}
-                              args={terminalSession.args}
-                              cwd={terminalSession.cwd}
-                              onExit={(code) => onSessionExit?.(code)}
-                            />
-                          </div>
-                        </div>
+                        <ResizableTerminalContainer
+                          defaultHeight={480}
+                          minHeight={240}
+                          maxHeight={950}
+                          maximizedHeight={760}
+                          storageKey="ergo_terminal_height_brief"
+                          headerLeft={
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', flexWrap: 'wrap' }}>
+                              <span>
+                                <span style={{ color: 'var(--accent-cyan)', fontWeight: 600 }}>cmd:</span>{' '}
+                                {terminalSession.cmd} {terminalSession.args.join(' ')}
+                              </span>
+                              <span>
+                                <span style={{ color: 'var(--accent-violet)', fontWeight: 600 }}>cwd:</span>{' '}
+                                {terminalSession.cwd}
+                              </span>
+                            </div>
+                          }
+                          headerRight={
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              {onRestartSession && (
+                                <button
+                                  type="button"
+                                  className="terminal-ctrl-btn"
+                                  onClick={() => onRestartSession(task)}
+                                  title="Restart CLI agent in terminal"
+                                >
+                                  <RotateCcw size={10} />
+                                  <span>Restart</span>
+                                </button>
+                              )}
+                              {terminalSession.session.isActive && onKillSession && (
+                                <button
+                                  type="button"
+                                  className="terminal-ctrl-btn is-danger"
+                                  onClick={() => onKillSession(task.id)}
+                                  title="Stop CLI agent process"
+                                >
+                                  <Square size={10} />
+                                  <span>Stop</span>
+                                </button>
+                              )}
+                            </div>
+                          }
+                        >
+                          <AgentTerminal
+                            cmd={terminalSession.cmd}
+                            args={terminalSession.args}
+                            cwd={terminalSession.cwd}
+                            onExit={(code) => onSessionExit?.(code)}
+                          />
+                        </ResizableTerminalContainer>
                       ) : showExecutionSteps ? (
                         /* Sub-view 2: In-place Execution Steps & Logs */
                         <div className="execution-steps-wrapper" style={{ padding: '0.65rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>

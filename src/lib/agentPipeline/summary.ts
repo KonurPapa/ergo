@@ -14,6 +14,7 @@ import { buildBibleSections } from './bible';
 import { type BaselineContext } from './context';
 import { runToolLoop } from './providerLoop';
 import { loadPipelineSkill } from './skills';
+import { performSummaryTriageWithLaya, isLayaMcpConnected } from '../layaClient';
 
 export interface SummaryResult {
   overviewDoc: OverviewDocument;
@@ -69,21 +70,50 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
   const { task, brief, connectedMcps } = ctx;
   const usage = emptyUsage();
 
+  // ── LAYA SYSTEM-1 FAST DECISION GATE ──────────────────────────────────────
+  // If the user has connected mcp-laya, offload taskKind, MCP pruning, and Hardener
+  // necessity decisions to local Laya at $0 token cost in ~30–75ms.
+  let layaTriage: Awaited<ReturnType<typeof performSummaryTriageWithLaya>> = null;
+  if (isLayaMcpConnected(connectedMcps)) {
+    try {
+      layaTriage = await performSummaryTriageWithLaya({
+        task,
+        baselineMarkdown: baseline.baselineMarkdown,
+        connectedMcps
+      });
+      if (layaTriage) {
+        console.log('%c[Ergo Agent Pipeline] ── Laya System 1 Triage ($0 Cost, Local) ──', 'color: #06b6d4; font-weight: bold;');
+        console.log('Laya decisions:', layaTriage);
+      }
+    } catch (e) {
+      console.warn('[Ergo Summary] Laya triage failed, falling back to full LLM generation:', e);
+    }
+  }
+
   ctx.emit({
     id: 'step-overview',
     stage: 'overview',
     agentRole: 'summary',
-    title: 'Summary AI: Building Gherkin Brief & Tool Plan',
-    detail: 'Synthesizing the baseline context into Given-When-Then acceptance scenarios, goals, output destination and the filtered MCP list…',
+    title: layaTriage?.usedLaya
+      ? 'Summary AI: Building Gherkin Brief (Laya Accelerated)'
+      : 'Summary AI: Building Gherkin Brief & Tool Plan',
+    detail: layaTriage?.usedLaya
+      ? `Task classified as [${layaTriage.taskKind}] by local Laya ($0). Synthesizing Given-When-Then acceptance scenarios and checklist goals…`
+      : 'Synthesizing the baseline context into Given-When-Then acceptance scenarios, goals, output destination and the filtered MCP list…',
     status: 'running'
   });
 
-  const serverLines = connectedMcps
-    .filter((m) => m.status === 'connected')
-    .map((m) => `- ${m.name} (id: ${m.id}) — tools: ${m.tools.map((t) => t.name).join(', ')}`);
+  const serverLines = (layaTriage?.requiredMcps
+    ? connectedMcps.filter((m) => layaTriage!.requiredMcps.includes(m.id) || layaTriage!.requiredMcps.includes(m.name))
+    : connectedMcps.filter((m) => m.status === 'connected')
+  ).map((m) => `- ${m.name} (id: ${m.id}) — tools: ${m.tools.map((t) => t.name).join(', ')}`);
+
+  const layaGuidance = layaTriage
+    ? `\nPRE-CLASSIFIED DECISIONS (from local Laya System-1 engine):\n- taskKind: "${layaTriage.taskKind}"\n- requiredMcps: ${JSON.stringify(layaTriage.requiredMcps)}\n- requiresHardener: ${layaTriage.requiresHardener}\n- isStraightforward: ${layaTriage.isStraightforward}\nFocus your generation on concise Given-When-Then brief scenarios, goals, and output_as.`
+    : '';
 
   const userMessage =
-    `${baseline.baselineMarkdown}\n\n## Connected MCP Servers (choose only what this task needs)\n${serverLines.length > 0 ? serverLines.join('\n') : '- (none connected)'}\n\n` +
+    `${baseline.baselineMarkdown}\n\n## Connected MCP Servers (choose only what this task needs)\n${serverLines.length > 0 ? serverLines.join('\n') : '- (none connected)'}\n${layaGuidance}\n\n` +
     'Produce the Overview & Execution Brief JSON now.';
 
   let parsed: any = undefined;
@@ -110,6 +140,17 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
     console.warn('[Ergo Summary] failed, using fallback overview:', e);
   }
   throwIfAborted(ctx.signal);
+
+  // If Laya pre-classified decisions, inject them as trusted defaults into parsed
+  if (layaTriage) {
+    if (!parsed) parsed = {};
+    if (!parsed.taskKind) parsed.taskKind = layaTriage.taskKind;
+    if (!parsed.requiredMcps || parsed.requiredMcps.length === 0) parsed.requiredMcps = layaTriage.requiredMcps;
+    if (parsed.requiresHardener === undefined) {
+      parsed.requiresHardener = layaTriage.requiresHardener;
+      parsed.hardenerReason = layaTriage.hardenerReason;
+    }
+  }
 
   const { overviewDoc, requiredMcps } = buildVerboseOverviewAndRequiredMcps(
     task,

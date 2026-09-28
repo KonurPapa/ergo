@@ -845,7 +845,8 @@ export async function runManager(
         if (!acquired.ok) {
           // Should not happen (scheduler checks canStart), but never deadlock silently.
           piece.status = 'blocked';
-          piece.lastError = `Could not acquire locks: ${acquired.conflicts.map((c) => `${c.file} held by ${c.heldBy}`).join(', ')}`;
+          const conflictDetails = 'conflicts' in acquired ? acquired.conflicts.map((c) => `${c.file} held by ${c.heldBy}`).join(', ') : '';
+          piece.lastError = `Could not acquire locks${conflictDetails ? `: ${conflictDetails}` : ''}`;
           bible.updatePiece(piece.id, { status: 'blocked', lastError: piece.lastError });
           bible.appendEvent({ actor: 'manager', kind: 'lock', text: piece.lastError, pieceId: piece.id });
           return;

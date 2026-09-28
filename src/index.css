@@ -3051,21 +3051,24 @@ body {
   color: var(--text-muted);
 }
 
-/* Embedded Terminal & Live Execution inside Build & Verification Card */
-.embedded-terminal-wrapper {
+/* Embedded Terminal & Live Execution inside Build & Verification Card & Modals */
+.embedded-terminal-wrapper,
+.resizable-terminal-container {
   background: #0d0f14;
   border-top: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   border-radius: 0 0 var(--radius-md) var(--radius-md);
+  position: relative;
 }
 
-.embedded-terminal-topbar {
+.embedded-terminal-topbar,
+.resizable-terminal-topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.35rem 0.85rem;
+  padding: 0.35rem 0.75rem;
   background: rgba(13, 15, 20, 0.95);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   font-size: 0.73rem;
@@ -3074,30 +3077,194 @@ body {
   flex-shrink: 0;
   gap: 0.75rem;
   overflow-x: auto;
+  min-height: 32px;
 }
 
-.embedded-terminal-body {
-  height: 320px;
-  min-height: 240px;
-  max-height: 480px;
+.resizable-terminal-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.resizable-terminal-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.resizable-terminal-height-tag {
+  font-size: 0.65rem;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  opacity: 0.7;
+  transition: opacity 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.resizable-terminal-height-tag.is-visible {
+  opacity: 1;
+  color: var(--accent-cyan);
+  border-color: rgba(6, 182, 212, 0.35);
+  background: rgba(6, 182, 212, 0.08);
+}
+
+.terminal-ctrl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  height: 22px;
+  padding: 0 0.45rem;
+  font-size: 0.68rem;
+  font-weight: 500;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.terminal-ctrl-btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text-bright);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.terminal-ctrl-btn.is-active {
+  background: rgba(6, 182, 212, 0.12);
+  border-color: rgba(6, 182, 212, 0.4);
+  color: var(--accent-cyan);
+}
+
+.terminal-ctrl-btn.is-danger {
+  color: var(--accent-rose);
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.terminal-ctrl-btn.is-danger:hover {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #fff;
+}
+
+.embedded-terminal-body,
+.resizable-terminal-body {
   position: relative;
   overflow: hidden;
   background: #0d0f14;
+  width: 100%;
 }
 
-[data-theme="light"] .embedded-terminal-wrapper {
+/* Bottom manual drag handle */
+.terminal-resize-handle {
+  height: 18px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+  background: rgba(13, 15, 20, 0.98);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  user-select: none;
+  position: relative;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.terminal-resize-handle:hover {
+  background: rgba(6, 182, 212, 0.06);
+  border-top-color: rgba(6, 182, 212, 0.25);
+}
+
+.terminal-resize-handle.is-dragging {
+  background: rgba(6, 182, 212, 0.12);
+  border-top-color: rgba(6, 182, 212, 0.4);
+}
+
+.terminal-resize-grip {
+  width: 38px;
+  height: 4px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.2);
+  transition: width 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.terminal-resize-handle:hover .terminal-resize-grip {
+  width: 52px;
+  background: var(--accent-cyan);
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.4);
+}
+
+.terminal-resize-handle.is-dragging .terminal-resize-grip {
+  width: 60px;
+  background: var(--accent-cyan);
+  box-shadow: 0 0 12px rgba(6, 182, 212, 0.6);
+}
+
+.terminal-resize-handle-tip {
+  position: absolute;
+  right: 0.75rem;
+  font-size: 0.62rem;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.terminal-resize-handle:hover .terminal-resize-handle-tip,
+.terminal-resize-handle.is-dragging .terminal-resize-handle-tip {
+  opacity: 0.85;
+  color: var(--accent-cyan);
+}
+
+/* Light Theme Support */
+[data-theme="light"] .embedded-terminal-wrapper,
+[data-theme="light"] .resizable-terminal-container {
   background: #f8fafc;
   border-top: 1px solid #e2e8f0;
 }
 
-[data-theme="light"] .embedded-terminal-topbar {
+[data-theme="light"] .embedded-terminal-topbar,
+[data-theme="light"] .resizable-terminal-topbar {
   background: #f1f5f9;
   border-bottom: 1px solid #e2e8f0;
   color: var(--text-main);
 }
 
-[data-theme="light"] .embedded-terminal-body {
+[data-theme="light"] .embedded-terminal-body,
+[data-theme="light"] .resizable-terminal-body {
   background: #f8fafc;
+}
+
+[data-theme="light"] .terminal-resize-handle {
+  background: #f1f5f9;
+  border-top: 1px solid #e2e8f0;
+}
+
+[data-theme="light"] .terminal-resize-grip {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="light"] .terminal-ctrl-btn {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #334155;
+}
+
+[data-theme="light"] .terminal-ctrl-btn:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: #0f172a;
 }
 
 .card-item-tag-working {

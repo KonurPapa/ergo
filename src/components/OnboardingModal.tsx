@@ -8,6 +8,7 @@ import {
   type CliAuthStatus
 } from '../lib/aiProviders';
 import { AgentTerminal } from './AgentTerminal';
+import { ResizableTerminalContainer } from './ResizableTerminalContainer';
 import {
   Sparkles,
   Zap,
@@ -136,6 +137,11 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   const [apiKeyProfileName, setApiKeyProfileName] = useState('');
   const [isValidatingKey, setIsValidatingKey] = useState(false);
   const [keyValidationError, setKeyValidationError] = useState<string | null>(null);
+
+  // Laya Local Decision Engine Optional Download State
+  const [showLayaTerminal, setShowLayaTerminal] = useState(false);
+  const [isLayaInstalled, setIsLayaInstalled] = useState(false);
+  const [layaInstallDone, setLayaInstallDone] = useState(false);
 
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -821,29 +827,35 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 {/* Embedded Interactive Terminal if Login Prompted */}
                 {showTerminal && (
                   <div style={{ marginTop: '1rem', borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '0.85rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.73rem', fontWeight: 700, color: 'var(--accent-cyan)' }}>
-                        <Terminal size={13} />
-                        <span>Interactive Authentication Terminal ({currentMeta.cliName})</span>
-                      </div>
-                      {loginAuthUrl && (
-                        <a
-                          href={loginAuthUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ fontSize: '0.7rem', color: 'var(--accent-primary)', textDecoration: 'underline' }}
-                        >
-                          Re-open Authorization URL
-                        </a>
-                      )}
-                    </div>
-                    <div
+                    <ResizableTerminalContainer
+                      defaultHeight={320}
+                      minHeight={200}
+                      maxHeight={600}
+                      maximizedHeight={520}
+                      storageKey="ergo_terminal_height_onboarding"
                       style={{
-                        height: '140px',
+                        border: '1px solid rgba(255, 255, 255, 0.1)',
                         borderRadius: '6px',
-                        overflow: 'hidden',
-                        border: '1px solid rgba(255, 255, 255, 0.1)'
+                        overflow: 'hidden'
                       }}
+                      headerLeft={
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.73rem', fontWeight: 700, color: 'var(--accent-cyan)' }}>
+                          <Terminal size={13} />
+                          <span>Interactive Authentication Terminal ({currentMeta.cliName})</span>
+                        </div>
+                      }
+                      headerRight={
+                        loginAuthUrl ? (
+                          <a
+                            href={loginAuthUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ fontSize: '0.7rem', color: 'var(--accent-primary)', textDecoration: 'underline', marginRight: '0.35rem' }}
+                          >
+                            Re-open Authorization URL
+                          </a>
+                        ) : null
+                      }
                     >
                       <AgentTerminal
                         cmd={currentMeta.cli}
@@ -855,7 +867,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           }
                         }}
                       />
-                    </div>
+                    </ResizableTerminalContainer>
                   </div>
                 )}
               </div>
@@ -1060,6 +1072,139 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               </div>
             </div>
           )}
+
+          {/* Optional Local Zero-Cost System 1 AI: Laya Engine */}
+          <div
+            style={{
+              marginTop: '1.25rem',
+              padding: '1rem 1.15rem',
+              background: 'rgba(6, 182, 212, 0.04)',
+              border: '1px solid rgba(6, 182, 212, 0.22)',
+              borderRadius: '12px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.75rem'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <div
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: '7px',
+                    background: 'rgba(6, 182, 212, 0.15)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'var(--accent-cyan)'
+                  }}
+                >
+                  <Zap size={16} />
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#ffffff', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <span>Laya Local Decision Engine</span>
+                    <span
+                      style={{
+                        fontSize: '0.65rem',
+                        fontWeight: 700,
+                        background: 'rgba(16, 185, 129, 0.15)',
+                        color: 'var(--accent-emerald)',
+                        border: '1px solid rgba(16, 185, 129, 0.3)',
+                        borderRadius: '4px',
+                        padding: '1px 6px'
+                      }}
+                    >
+                      $0 Token Cost
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '0.73rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.4 }}>
+                    Optional System-1 AI running 100% locally on your machine. Offloads task routing and verification decisions in 30–75ms without burning API tokens.
+                  </p>
+                </div>
+              </div>
+
+              {!showLayaTerminal && !layaInstallDone && (
+                <button
+                  type="button"
+                  onClick={() => setShowLayaTerminal(true)}
+                  style={{
+                    padding: '0.45rem 0.85rem',
+                    borderRadius: '6px',
+                    background: 'rgba(6, 182, 212, 0.15)',
+                    color: 'var(--accent-cyan)',
+                    border: '1px solid rgba(6, 182, 212, 0.35)',
+                    fontSize: '0.76rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    flexShrink: 0
+                  }}
+                >
+                  <Terminal size={13} />
+                  <span>Download Laya</span>
+                </button>
+              )}
+
+              {layaInstallDone && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--accent-emerald)', fontSize: '0.76rem', fontWeight: 600 }}>
+                  <CheckCircle2 size={14} />
+                  <span>Installed & Ready</span>
+                </div>
+              )}
+            </div>
+
+            {/* Embedded Terminal for Downloading Laya */}
+            {showLayaTerminal && (
+              <div style={{ marginTop: '0.25rem' }}>
+                <ResizableTerminalContainer
+                  defaultHeight={240}
+                  minHeight={180}
+                  maxHeight={450}
+                  maximizedHeight={400}
+                  storageKey="ergo_terminal_height_laya_onboarding"
+                  style={{
+                    border: '1px solid rgba(6, 182, 212, 0.3)',
+                    borderRadius: '6px',
+                    overflow: 'hidden'
+                  }}
+                  headerLeft={
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.73rem', fontWeight: 700, color: 'var(--accent-cyan)' }}>
+                      <Terminal size={13} />
+                      <span>Installing Laya Local Engine (pip install laya)</span>
+                    </div>
+                  }
+                  headerRight={
+                    <button
+                      type="button"
+                      onClick={() => setShowLayaTerminal(false)}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.7rem' }}
+                    >
+                      Dismiss Terminal
+                    </button>
+                  }
+                >
+                  <AgentTerminal
+                    cmd="pip"
+                    args={['install', 'laya']}
+                    cwd="~"
+                    onExit={(code) => {
+                      if (code === 0) {
+                        setIsLayaInstalled(true);
+                        setLayaInstallDone(true);
+                      }
+                    }}
+                  />
+                </ResizableTerminalContainer>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.35rem' }}>
+                  You can proceed now or skip this step; Laya can always be enabled later from the Connections (MCP) modal.
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Modal Footer */}
