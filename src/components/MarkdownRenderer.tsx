@@ -165,7 +165,18 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
               );
             }
             return <input type={type} checked={checked} readOnly />;
-          }
+          },
+
+          // Images / Screenshots
+          img: ({ src, alt, ...props }) => (
+            <img
+              src={src}
+              alt={alt || 'Task image'}
+              className="task-attached-image"
+              loading="lazy"
+              {...props}
+            />
+          )
         }}
       >
         {content}

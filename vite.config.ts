@@ -579,6 +579,40 @@ function ergoFileSystemPlugin(): Plugin {
         }
       }
 
+      if (url === '/api/files/write-binary' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const { filePath, base64Content } = body;
+
+          if (!filePath || typeof base64Content !== 'string') {
+            return sendJson(res, 400, { error: 'filePath and base64Content are required' });
+          }
+
+          // Strip data URI prefix if present (e.g. "data:image/png;base64,...")
+          const rawBase64 = base64Content.includes(',')
+            ? base64Content.split(',')[1]
+            : base64Content;
+
+          const buffer = Buffer.from(rawBase64, 'base64');
+          const fullPath = path.resolve(storageDir, filePath);
+          await fs.mkdir(path.dirname(fullPath), { recursive: true });
+          await fs.writeFile(fullPath, buffer);
+
+          const now = Date.now();
+          recentWrites.set(filePath, now);
+          recentWrites.set(fullPath, now);
+
+          return sendJson(res, 200, {
+            success: true,
+            filePath,
+            savedAt: new Date().toISOString(),
+          });
+        } catch (err: any) {
+          console.error('[Ergo FS API] Binary write error:', err);
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
       if (url === '/api/files/read' && req.method === 'POST') {
         try {
           const body = await parseJsonBody(req);
@@ -1065,6 +1099,24 @@ function ergoFileSystemPlugin(): Plugin {
         }
       }
 
+      if (url === '/api/mcp/laya/status' && req.method === 'GET') {
+        const layaHost = 'http://127.0.0.1:8440';
+        let daemonOnline = false;
+        try {
+          const ping = await fetch(`${layaHost}/health`, { method: 'GET', signal: AbortSignal.timeout(1000) }).catch(() => null);
+          if (ping && ping.ok) daemonOnline = true;
+        } catch {}
+        return sendJson(res, 200, {
+          success: true,
+          daemonOnline,
+          port: 8440,
+          mode: daemonOnline ? 'neural_service' : 'local_deterministic_fast_head',
+          message: daemonOnline
+            ? 'Connected to local laya-serve daemon on port 8440'
+            : 'Operational via local high-speed deterministic decision head ($0 token cost)'
+        });
+      }
+
       if (url === '/api/mcp/tools/call' && req.method === 'POST') {
         try {
           const body = await parseJsonBody(req);
@@ -1145,6 +1197,9 @@ function ergoFileSystemPlugin(): Plugin {
               const content = typeof args.content === 'string' ? args.content : '';
               await fs.mkdir(path.dirname(fullPath), { recursive: true });
               await fs.writeFile(fullPath, content, 'utf-8');
+              const now = Date.now();
+              recentWrites.set(targetPath, now);
+              recentWrites.set(fullPath, now);
               return sendJson(res, 200, { success: true, data: { path: targetPath, bytes: Buffer.byteLength(content, 'utf-8'), writtenAt: new Date().toISOString() } });
             }
 
@@ -1392,7 +1447,7 @@ function ergoFileSystemPlugin(): Plugin {
                     signal: AbortSignal.timeout(8000)
                   });
                   if (resLaya.ok) {
-                    const data = await resLaya.json();
+                    const data: any = await resLaya.json();
                     return sendJson(res, 200, {
                       success: true,
                       data: {
@@ -1412,7 +1467,7 @@ function ergoFileSystemPlugin(): Plugin {
                     signal: AbortSignal.timeout(8000)
                   });
                   if (resLaya.ok) {
-                    const data = await resLaya.json();
+                    const data: any = await resLaya.json();
                     return sendJson(res, 200, {
                       success: true,
                       data: {
@@ -1433,7 +1488,7 @@ function ergoFileSystemPlugin(): Plugin {
                     signal: AbortSignal.timeout(8000)
                   });
                   if (resLaya.ok) {
-                    const data = await resLaya.json();
+                    const data: any = await resLaya.json();
                     return sendJson(res, 200, {
                       success: true,
                       data: {
@@ -2019,6 +2074,78 @@ function ergoFileSystemPlugin(): Plugin {
             output: '',
             error: err.message || 'Server error during login initialization'
           });
+        }
+      }
+
+      // ─────────────────────────────────────────────────────────────
+      // List media folder: POST /api/media/list
+      // Body: { folderPath: "projects/xxx/media" }
+      // Returns: { files: ["projects/xxx/media/img_123.png", ...] }
+      // ─────────────────────────────────────────────────────────────
+      if (url === '/api/media/list' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const { folderPath } = body;
+          if (!folderPath || typeof folderPath !== 'string') {
+            return sendJson(res, 400, { error: 'folderPath is required' });
+          }
+          const fullFolderPath = path.resolve(storageDir, folderPath);
+          if (!fullFolderPath.startsWith(path.resolve(storageDir))) {
+            return sendJson(res, 403, { error: 'Forbidden' });
+          }
+          let files: string[] = [];
+          try {
+            const entries = await fs.readdir(fullFolderPath);
+            files = entries
+              .filter((name) => /\.(png|jpe?g|gif|webp|svg|bmp|avif|ico)$/i.test(name))
+              .map((name) => `${folderPath}/${name}`);
+          } catch {
+            // Folder doesn't exist yet — no files
+          }
+          return sendJson(res, 200, { success: true, files });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
+      // ─────────────────────────────────────────────────────────────
+      // Static media serving: /api/media/<relativePath>
+      // Serves binary files (images) from storageDir at any sub-path
+      // ─────────────────────────────────────────────────────────────
+      if (url?.startsWith('/api/media/')) {
+        try {
+          const relativePath = decodeURIComponent(url.slice('/api/media/'.length));
+          if (!relativePath || relativePath.includes('..')) {
+            res.statusCode = 400;
+            return res.end('Bad request');
+          }
+          const fullPath = path.resolve(storageDir, relativePath);
+          // Only serve from within storageDir
+          if (!fullPath.startsWith(path.resolve(storageDir))) {
+            res.statusCode = 403;
+            return res.end('Forbidden');
+          }
+          const ext = path.extname(fullPath).toLowerCase();
+          const mimeTypes: Record<string, string> = {
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.gif': 'image/gif',
+            '.webp': 'image/webp',
+            '.svg': 'image/svg+xml',
+            '.bmp': 'image/bmp',
+            '.ico': 'image/x-icon',
+            '.avif': 'image/avif',
+          };
+          const contentType = mimeTypes[ext] || 'application/octet-stream';
+          const fileBuffer = await fs.readFile(fullPath);
+          res.statusCode = 200;
+          res.setHeader('Content-Type', contentType);
+          res.setHeader('Cache-Control', 'public, max-age=3600');
+          return res.end(fileBuffer);
+        } catch {
+          res.statusCode = 404;
+          return res.end('Not found');
         }
       }
 

@@ -45,12 +45,16 @@ import {
   Database,
   PanelRightClose,
   PanelRightOpen,
-  AlertTriangle
+  AlertTriangle,
+  Calendar,
+  Clock
 } from 'lucide-react';
 
 import { RichTextToolbar } from './RichTextToolbar';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ArchivedTasksModal } from './ArchivedTasksModal';
+import { ScheduleTaskModal } from './ScheduleTaskModal';
+import { type ScheduledJob } from '../lib/taskScheduler';
 import { handleMarkdownAutoWrap } from '../lib/markdownEditorUtils';
 
 interface HumanInputCardProps {
@@ -203,6 +207,10 @@ interface BriefPaneProps {
   onTerminateAgent?: (taskId: string | number) => void;
   onArchiveTask?: (taskTitle: string) => void;
   onRemoveAiTask?: (targetId: string | number) => void;
+  // Scheduling props
+  scheduledJobs?: ScheduledJob[];
+  onScheduleTask?: (taskId: string | number, scheduledIso: string, cronExpr?: string) => void;
+  onCancelScheduleTask?: (taskId: string | number) => void;
   // Popout Panel Controls
   isPanelOpen?: boolean;
   onTogglePanel?: () => void;
@@ -219,6 +227,8 @@ interface AiTaskCardProps {
   pendingPermission: McpToolPermissionPrompt | null;
   pendingHumanInput: { prompt: HumanInputPrompt; resolve: (answer: string) => void } | null;
   pendingOllamaFallback: { prompt: OllamaFallbackPrompt; resolve: (choice: OllamaFallbackChoice) => void } | null;
+  scheduledJob?: ScheduledJob;
+  onOpenScheduleModal?: (task: TaskItem) => void;
   onSelect: () => void;
   onSaveBrief: (updatedBrief: AgentContextItem) => void;
   onLiveBriefChange?: (updatedBrief: AgentContextItem) => void;
@@ -274,6 +284,8 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   pendingPermission,
   pendingHumanInput,
   pendingOllamaFallback,
+  scheduledJob,
+  onOpenScheduleModal,
   onSelect,
   onSaveBrief,
   onLiveBriefChange,
@@ -815,6 +827,32 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
           <span className="ai-task-title-text" title={brief?.title || task.title}>
             {brief?.title || task.title}
           </span>
+          {scheduledJob && scheduledJob.status === 'pending' && (
+            <span
+              className="task-scheduled-clock-indicator"
+              title={`Scheduled to execute: ${new Date(scheduledJob.scheduledTime).toLocaleString()}${scheduledJob.cronExpression ? ` (${scheduledJob.cronExpression})` : ''}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenScheduleModal?.(task);
+              }}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                color: 'var(--accent-cyan, #06b6d4)',
+                background: 'rgba(6, 182, 212, 0.12)',
+                border: '1px solid rgba(6, 182, 212, 0.3)',
+                borderRadius: '4px',
+                padding: '0.1rem 0.35rem',
+                fontSize: '0.7rem',
+                cursor: 'pointer',
+                flexShrink: 0,
+              }}
+            >
+              <Clock size={11} />
+              <span>{new Date(scheduledJob.scheduledTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+            </span>
+          )}
           {/* {renderStatusBadge()} */}
         </div>
 
@@ -987,6 +1025,18 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                 >
                   <Edit3 size={13} />
                   <span>Edit Task</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="swimlane-dropdown-item"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    onOpenScheduleModal?.(task);
+                  }}
+                >
+                  <Calendar size={13} style={{ color: 'var(--accent-primary, #6366f1)' }} />
+                  <span>{scheduledJob && scheduledJob.status === 'pending' ? 'Edit Schedule...' : 'Schedule task...'}</span>
                 </button>
 
                 <div className="swimlane-dropdown-divider" />
@@ -1684,11 +1734,15 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   onTerminateAgent,
   onArchiveTask,
   onRemoveAiTask,
+  scheduledJobs = [],
+  onScheduleTask,
+  onCancelScheduleTask,
   isPanelOpen = true,
   onTogglePanel,
 }) => {
   const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
+  const [schedulingTask, setSchedulingTask] = useState<TaskItem | null>(null);
   const headerMenuRef = useRef<HTMLDivElement>(null);
 
   // Close workspace header dropdown on outside click or Escape
@@ -1902,6 +1956,8 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                     (brief.sourceTaskId != null && selectedTaskId === brief.sourceTaskId) ||
                     (brief.id != null && selectedTaskId === brief.id));
 
+                const taskJob = scheduledJobs.find((j) => String(j.taskId) === String(effectiveTask.id) && j.status === 'pending');
+
                 return (
                   <AiTaskCard
                     key={brief.id || brief.sourceTaskId || brief.itemNumber || `brief-${index}`}
@@ -1915,6 +1971,8 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                     pendingPermission={pendingPermissions[effectiveTask.id]?.prompt ?? Object.entries(pendingPermissions || {}).find(([k]) => String(k) === String(effectiveTask.id))?.[1]?.prompt ?? null}
                     pendingHumanInput={pendingHumanInputs[effectiveTask.id] ?? Object.entries(pendingHumanInputs || {}).find(([k]) => String(k) === String(effectiveTask.id))?.[1] ?? null}
                     pendingOllamaFallback={pendingOllamaFallbacks?.[effectiveTask.id] ?? Object.entries(pendingOllamaFallbacks || {}).find(([k]) => String(k) === String(effectiveTask.id))?.[1] ?? null}
+                    scheduledJob={taskJob}
+                    onOpenScheduleModal={(t) => setSchedulingTask(t)}
                     onSelect={() => onSelectTask?.(brief.sourceTaskId || brief.id || effectiveTask.id)}
                     onSaveBrief={onSaveBrief}
                     onLiveBriefChange={onLiveBriefChange}
@@ -1949,6 +2007,24 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
         onUnarchiveTask={onUnarchiveTask}
         onDeleteArchivedTask={onDeleteArchivedTask}
       />
+
+      {/* ── Schedule Task Modal Window ── */}
+      {schedulingTask && (
+        <ScheduleTaskModal
+          isOpen={true}
+          onClose={() => setSchedulingTask(null)}
+          task={schedulingTask}
+          existingJob={scheduledJobs.find((j) => String(j.taskId) === String(schedulingTask.id) && j.status === 'pending')}
+          onSchedule={(tId, iso, cron) => {
+            onScheduleTask?.(tId, iso, cron);
+            setSchedulingTask(null);
+          }}
+          onCancelSchedule={(tId) => {
+            onCancelScheduleTask?.(tId);
+            setSchedulingTask(null);
+          }}
+        />
+      )}
     </div>
   );
 };

@@ -143,6 +143,22 @@ export const DEMO_PROJECTS = INITIAL_PROJECTS;
 
 export const INITIAL_MCP_SERVERS: MCPServer[] = [
   {
+    id: 'mcp-laya',
+    name: 'Laya Local Decision Engine',
+    description: 'Local non-autoregressive System 1 decision engine for micro-decisions, tool routing, and classification at $0 token cost in ~30–75ms. Runs entirely on your CPU/GPU.',
+    iconName: 'Zap',
+    category: 'developer',
+    status: 'disconnected',
+    transport: 'Local Stdio',
+    endpoint: 'stdio://ergo-mcp-laya',
+    serverType: 'bundled_harness',
+    tools: [
+      { id: 'laya_choice', name: 'laya_choice', description: 'Choose the best option among candidates (max 15-20 options per batch) with calibrated probability', autoApprove: true, serverId: 'mcp-laya' },
+      { id: 'laya_score', name: 'laya_score', description: 'Evaluate deliverable quality or relevance with calibrated confidence score (0.0 to 1.0)', autoApprove: true, serverId: 'mcp-laya' },
+      { id: 'laya_noul', name: 'laya_noul', description: 'Evaluate binary yes/no decision propositions without generating tokens', autoApprove: true, serverId: 'mcp-laya' }
+    ]
+  },
+  {
     id: 'mcp-filesystem',
     name: 'Filesystem MCP',
     description: 'Official MCP Filesystem server (server-filesystem) providing safe, root-sandboxed file reading, writing, directory navigation, and file search.',
@@ -196,22 +212,6 @@ export const INITIAL_MCP_SERVERS: MCPServer[] = [
       { id: 'git_diff', name: 'git_diff', description: 'Show changes between commits or working tree', autoApprove: true, serverId: 'mcp-git' },
       { id: 'git_log', name: 'git_log', description: 'Show commit history logs and author metadata', autoApprove: true, serverId: 'mcp-git' },
       { id: 'git_commit', name: 'git_commit', description: 'Record changes to the repository with a commit message', autoApprove: false, serverId: 'mcp-git' }
-    ]
-  },
-  {
-    id: 'mcp-laya',
-    name: 'Laya Local Decision Engine',
-    description: 'Local non-autoregressive System 1 decision engine for micro-decisions, tool routing, and classification at $0 token cost in ~30–75ms. Runs entirely on your CPU/GPU.',
-    iconName: 'Zap',
-    category: 'developer',
-    status: 'disconnected',
-    transport: 'Local Stdio',
-    endpoint: 'stdio://ergo-mcp-laya',
-    serverType: 'bundled_harness',
-    tools: [
-      { id: 'laya_choice', name: 'laya_choice', description: 'Choose the best option among candidates (max 15-20 options per batch) with calibrated probability', autoApprove: true, serverId: 'mcp-laya' },
-      { id: 'laya_score', name: 'laya_score', description: 'Evaluate deliverable quality or relevance with calibrated confidence score (0.0 to 1.0)', autoApprove: true, serverId: 'mcp-laya' },
-      { id: 'laya_noul', name: 'laya_noul', description: 'Evaluate binary yes/no decision propositions without generating tokens', autoApprove: true, serverId: 'mcp-laya' }
     ]
   },
   {

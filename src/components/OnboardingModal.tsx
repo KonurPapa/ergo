@@ -140,7 +140,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
   // Laya Local Decision Engine Optional Download State
   const [showLayaTerminal, setShowLayaTerminal] = useState(false);
-  const [isLayaInstalled, setIsLayaInstalled] = useState(false);
   const [layaInstallDone, setLayaInstallDone] = useState(false);
 
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1193,7 +1192,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     cwd="~"
                     onExit={(code) => {
                       if (code === 0) {
-                        setIsLayaInstalled(true);
                         setLayaInstallDone(true);
                       }
                     }}

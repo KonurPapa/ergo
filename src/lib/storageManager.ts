@@ -1072,7 +1072,7 @@ export class StorageManager {
   public async saveProjectFiles(
     files: Array<{ filePath: string; content: string }>
   ): Promise<{ success: boolean; error?: string }> {
-    let savedAny = false;
+    let allSaved = true;
 
     // 1. Filesystem MCP tool write (Browser-Agnostic)
     try {
@@ -1081,9 +1081,12 @@ export class StorageManager {
           path: file.filePath,
           content: file.content
         });
-        if (mcpRes.success) savedAny = true;
+        if (!mcpRes.success) {
+          allSaved = false;
+          break;
+        }
       }
-      if (savedAny) return { success: true };
+      if (allSaved && files.length > 0) return { success: true };
     } catch {}
 
     if (this.activeHandle && this.folderMetadata.status === 'connected') {
@@ -1169,6 +1172,141 @@ export class StorageManager {
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error creating project' };
     }
+  }
+  /**
+   * Save a binary media file (e.g. image) to projects/<projectId>/media/<filename>
+   * Returns the relative file path on success, or null on failure.
+   *
+   * NOTE: MCP write_file does NOT support binary encoding - it writes the literal
+   * base64 string as text, producing a corrupt file. Use server API or FSA only.
+   */
+  public async saveMediaFile(projectFolderPath: string, file: File): Promise<string | null> {
+    // Generate a unique timestamped filename to avoid collisions
+    const ext = file.name.includes('.')
+      ? '.' + file.name.split('.').pop()!.toLowerCase()
+      : this.mimeToExt(file.type);
+    const safeName = `img_${Date.now()}${ext}`;
+    const relPath = `${projectFolderPath}/media/${safeName}`;
+
+    // Read file as base64 data URI
+    const base64Content = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+    // 1. Server API first — correctly decodes base64 to binary Buffer before writing
+    try {
+      const res = await fetch('/api/files/write-binary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath: relPath, base64Content }),
+      });
+      if (res.ok) return relPath;
+    } catch (err: any) {
+      console.warn('[StorageManager] Binary server API write failed:', err);
+    }
+
+    // 2. FSA (File System Access API) — writes raw binary directly from File object
+    if (this.activeHandle && this.folderMetadata.status === 'connected') {
+      try {
+        const parts = relPath.split('/').filter(Boolean);
+        let currentDir: FileSystemDirectoryHandle = this.activeHandle;
+        for (let i = 0; i < parts.length - 1; i++) {
+          currentDir = await currentDir.getDirectoryHandle(parts[i], { create: true });
+        }
+        const filename = parts[parts.length - 1];
+        const fileHandle = await currentDir.getFileHandle(filename, { create: true });
+        const writable = await (fileHandle as any).createWritable();
+        await writable.write(file);
+        await writable.close();
+        return relPath;
+      } catch (err) {
+        console.warn('[StorageManager] FSA binary write failed:', err);
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Delete a single media file from disk.
+   */
+  public async deleteMediaFile(relPath: string): Promise<void> {
+    // Server API
+    try {
+      await fetch('/api/files/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePaths: [relPath] }),
+      });
+    } catch {}
+
+    // FSA fallback
+    if (this.activeHandle && this.folderMetadata.status === 'connected') {
+      try {
+        const parts = relPath.split('/').filter(Boolean);
+        let currentDir: FileSystemDirectoryHandle = this.activeHandle;
+        for (let i = 0; i < parts.length - 1; i++) {
+          currentDir = await currentDir.getDirectoryHandle(parts[i], { create: false });
+        }
+        const filename = parts[parts.length - 1];
+        await (currentDir as any).removeEntry(filename);
+      } catch {}
+    }
+  }
+
+  /**
+   * Scan all provided markdown strings for /api/media/ references, list the project
+   * media folder, and delete any files that are no longer referenced.
+   */
+  public async cleanupOrphanedMedia(projectFolderPath: string, markdownContents: string[]): Promise<void> {
+    const mediaFolderRelPath = `${projectFolderPath}/media`;
+
+    // Collect all referenced relative media paths from markdown
+    const referencedPaths = new Set<string>();
+    const mediaRefRegex = /\/api\/media\/(projects\/[^\s)"'\]]+)/g;
+    for (const md of markdownContents) {
+      let match: RegExpExecArray | null;
+      const re = new RegExp(mediaRefRegex.source, 'g');
+      while ((match = re.exec(md)) !== null) {
+        referencedPaths.add(match[1]);
+      }
+    }
+
+    // List files currently in the media folder
+    let mediaFiles: string[] = [];
+    try {
+      const res = await fetch('/api/media/list', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folderPath: mediaFolderRelPath }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        mediaFiles = data.files || [];
+      }
+    } catch {}
+
+    // Delete orphans
+    const orphans = mediaFiles.filter((f) => !referencedPaths.has(f));
+    for (const orphan of orphans) {
+      await this.deleteMediaFile(orphan);
+    }
+  }
+
+  private mimeToExt(mime: string): string {
+    const map: Record<string, string> = {
+      'image/png': '.png',
+      'image/jpeg': '.jpg',
+      'image/gif': '.gif',
+      'image/webp': '.webp',
+      'image/svg+xml': '.svg',
+      'image/bmp': '.bmp',
+      'image/avif': '.avif',
+    };
+    return map[mime] || '.png';
   }
 }
 

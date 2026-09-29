@@ -669,7 +669,7 @@ function isUnescapedHumanReview(text: string): boolean {
   return hrRegex.test(text);
 }
 
-function cleanAndUnescapeMarkdown(text: string): string {
+export function cleanAndUnescapeMarkdown(text: string): string {
   let cleaned = text;
 
   // Strip leading checkbox syntax if any

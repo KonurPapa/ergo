@@ -1,22 +1,16 @@
 **AI/ML Features (Future Roadmap)**
-    - **Local LLMs**: Integrate with Ollama, LM Studio, or other local LLM providers for local AI support.
-    - **Model Adaptivity**: User can select effort level, or let it automatically use the best model based on task complexity
-    - **Prompting for Information**: If not enough information is provided in the task brief, the AI should prompt the user for more information as it needs it (similar to how Claude Code pops up multi-choice prompts mid-run)
-    - **Human Summaries**: AI should give brief summaries of completed tasks for human review, as well as any action items the human may need to perform (if any)
-    - Ask the AI what it thinks a particular task is telling it to do (with a lightweight model), so the user can clarify any bad assumptions BEFORE execution
-        - should this just be part of the AGENT_CONTEXT brief's generation process?
-            - yes - this is essentially the Overview card
     - The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with
         - but it should always tell the user what it added (and maybe the task is indicated with a 'review' tag or something)
         - this should happen primarily when it finds something along the way that's out of scope for its current task
+        - make sure what's put in the human task list is always succinct, clear and easily readable - make sure what it stores in its vector DB is verbose enough to be useful for the AI
     - **Autocomplete**
-        - pull from other tasks (excluding subtasks for brevity) to determine most relevant suggestion
-        - autocomplete should never start on an empty task/subtask
+        - pull from other tasks (using vector DB) to determine the most relevant suggestion
         - autocomplete should not start if the user simply moved their cursor to another task, but hasn't started typing anything yet
-        - should have an immediate autocomplete for the current word being typed (after the user has typed 5 chars without a space), and a delayed autocomplete for the rest of the user's sentence if the user pauses for 3+ seconds
+        - should have an immediate autocomplete (after 1 second of no input) for the current word being typed (after the user has typed 4+ chars without a space), and a delayed autocomplete for the rest of the user's sentence if the user pauses for 3+ seconds
+        - autocomplete should never start on an empty task
+            - subtasks it can, based on the rest of the task/subtasks, but after the 3+ second sentence-delay
         - autocomplete should keybind to Tab by default - this should be configurable in settings
         - should be able to be toggled on/off completely in settings
-    - make sure what's put in the human task list is succinct, clear and easily readable - make sure the AI side is verbose enough for the AI, but still in human-readable terms
     - **MCP**:
         - MCP authentication when user clicks 'connect'
         - after connection, the app needs to call `tools/list` and store all available tools for that particular MCP
@@ -37,27 +31,17 @@
             - Terminal session history is in-memory — when you close or reload the app, the PTY process is killed and the tab is gone. The config (which agent to use) persists. Reconnecting to a live PTY after a page reload would require a full server-side session registry
         - can it write out to the user's IDE?
             - if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)
+    - local AI should auto-compact by detault (configurable in AI profile panel advanced settings, under the Ollama section)
     - commands/words in tasks that trigger custom AI logic (skills)
-    - **implement Nostr for remote connection**
-    - maybe implement an 'assistance' slider, which determines how much the AI will ask for clarification during task execution vs. just autonomously assuming
-    - when the user creates/deletes a task, the same task needs to be created/deleted from the AI side, and the numbers adjusted; this way the AI context doc won't get out of sync and start to drift from the human-side task list
-        - this needs to happen IMMEDIATELY so any in-progress tasks don't get thrown off while working
     - AI should be allowed to created its own tasks on the human side, but these should be clearly marked as AI-generated so the user can approve/dismiss them
     - look for an `AGENTS.md` or `CLAUDE.md` file at the project folder and use it as the AI's baseline agent context if found
-    - AI needs to skim task headers, not read the whole task list for every single thing it wants to do
-        - it should never read subtasks unless the task name warrants it
-        - this should also be done by the discovery AI, not the task AI
     - an undo button to revert back to the previous diff
         - how is this handled for non-code tasks?
         - maybe this starts out in V1 just for code
-    - **context-reading w/ fast AI**:
-        - instead of the default where the same powerful AI is doing both context-reading and the actual work, try to restructure the work so that it uses a fast model for acquiring all the context it needs to do the work, then immediately passing that context off the powerful AI to actually do the work
-        - this allows the powerful AI to focus on the actual task, rather than spending time/tokens on context-reading
     - some sort of master list of which files in a codebase are being accessed and by which agents
-        - this would give the user a cool view of what's actually being edited
+        - this would give the user a view of what's actually being edited
         - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts
     - add 'grill-me' to the list of AI assistant abilities, so user can refine their task list
-    - ~~token usage during task execution~~
     - global rules markdown file needs to be added at execution runtime to the AGENTS.md / CLAUDE.md files, which should also store the list of model routing
         - these files also need to be exportable so the user can take them elsewhere if they want
     - user needs to easily be able to create skills, and call them in tasks with '/'
@@ -65,16 +49,21 @@
         - does this open a modal to select the file, which is a deep link to the file on disk?
     - needs a `/remember` skill that the user can call to force the AI to store that knowledge in its vector DB
     - **can we use a lightweight AI for scanning files (i.e. Sonnet), and then pass that to a more powerful AI that actually does the work (i.e. Opus)?**
-    - **speculative decoding** - smaller model predicts draft tokens, for a larger model to verify and do the work
-        - think of it like the smaller model is making guesses, and the larger model is checking those guesses
-        - for each position, we try to generate multiple tokens with the small model
-        - then we check them all with the big model
-        - this way, if the small model guesses right, we get a speedup
+        - see if we can do this w/ Laya instead
     - **Run as...**
         - Single task
         - Tasks in sequence
         - Tasks in parallel
         - Schedule tasks...
+    - Upon completion of a task, the AI should write/update a spec-file (for whatever new thing was built/modified) that gets saved to the vector DB for future runs to read and learn from before they start work
+        - this way, future executions will get better and more informed the more work gets done, and because it's in a vector DB, none of it costs anything to retrieve
+    - when the autosave triggers, this needs to update the local vector DB automatically as well
+    - AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work
+        - maybe implement an 'assistance' slider, which determines how much it asks for clarification and details vs. just autonomously assuming
+        - there should also be an 'effort' slider, which will automatically use less/more powerful models depending on what the user sets that task to
+            - the AI should select the best model for the job by default, unless the user explicitly sets it
+            - these effort-levels should be automatically created when the user sets up a new AI profile, and configurable from the advanced settings in the AI profile panel
+            - we should use the same model throughout work tasks, so we can cache tokens
 
 
 **Uncle Bob's Notes**:
@@ -108,8 +97,9 @@ For your collaborative workspace, focus on model-assisted planning, where the AI
 
 
 **UI/UX Features (Future Roadmap)**
+    - copy Kiro Crew's UI and paste it onto our project
     - **Organization Redesign**: Better task/subtask draggability/regrouping
-    - **Scheduling Tasks**: Add due dates and reminders for tasks, and allow users to schedule tasks to run at specific times.
+    - Add reminders for tasks, which should ping the user at a specific time with their set prompt
     - **Visual Storytelling**: Use visual cues to show progress and achievements
     - **Customizable Dashboard**: Allow users to customize their dashboard with different widgets and layouts.
     - **Themes**: Dark/Light mode, custom
@@ -124,7 +114,6 @@ For your collaborative workspace, focus on model-assisted planning, where the AI
     - a way in the UI to specify fallback conditions for tasks/subtasks
     - a 'human review' card _inside_ task cards, created by the AI after it finishes execution of a task
     - make sure AI is instructed explicitly on _how_ it should return human review and other text
-    - **Attaching Screenshots**: User needs to be able to attach screenshots somehow to tasks (maybe a 'gallery' dropdown?)
     - **give the user a 'how-to' of best practices**
         - how to structure tasks
         - putting down a number of tasks first before running, so the AI has enough context to work effectively
@@ -136,3 +125,13 @@ For your collaborative workspace, focus on model-assisted planning, where the AI
         - is this just part of global rules?
     - microphone access to add/edit tasks
     - we need a screen for reading what the AI has saved in vector storage, and modifying as the user wants
+    - given/when/then UI for tasks, which users can fill out themselves and can be accepted directly by the AI without it needing to build that piece of the gherkin
+
+
+
+**GO LIVE**:
+- working on the web
+    - verify none of the local-first features now break when it's being hosted
+- get subscription connection working
+- get MCP connectors working
+- ~~get scheduled tasks working~~

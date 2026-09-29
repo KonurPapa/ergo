@@ -1445,7 +1445,7 @@ body {
 .tiptap-editor-root .tiptap ol>li>p:not(:first-child),
 .tiptap-editor-root .tiptap ul:not(li ul)>li>p:not(:first-child) {
   margin-top: 0.2rem;
-  color: var(--text-muted);
+  color: var(--text-bright);
   font-weight: 400;
   font-size: 0.88rem;
 }
@@ -1571,7 +1571,7 @@ body {
   gap: 0.55rem;
   font-size: 0.88rem;
   line-height: 1.45;
-  color: var(--text-muted);
+  color: var(--text-bright);
   background: transparent !important;
   border: none !important;
   padding: 0.12rem 0 !important;
@@ -1588,9 +1588,9 @@ body {
   padding: 0 !important;
   line-height: 1.45 !important;
   font-size: 0.88rem !important;
-  color: var(--text-muted);
-  flex: 1 1 0px !important;
-  min-width: 0 !important;
+  color: var(--text-bright);
+  flex: 1 1 200px !important;
+  min-width: 180px !important;
 }
 
 [data-theme="light"] .tiptap-editor-root .tiptap ol>li>ul,
@@ -1604,14 +1604,14 @@ body {
 [data-theme="light"] .tiptap-editor-root .tiptap ul:not(li ul)>li ul>li,
 [data-theme="light"] .tiptap-editor-root .tiptap ol>li ol>li,
 [data-theme="light"] .tiptap-editor-root .tiptap ul:not(li ul)>li ol>li {
-  color: var(--text-main);
+  color: var(--text-bright);
 }
 
 [data-theme="light"] .tiptap-editor-root .tiptap ol>li ul>li>p,
 [data-theme="light"] .tiptap-editor-root .tiptap ul:not(li ul)>li ul>li>p,
 [data-theme="light"] .tiptap-editor-root .tiptap ol>li ol>li>p,
 [data-theme="light"] .tiptap-editor-root .tiptap ul:not(li ul)>li ol>li>p {
-  color: var(--text-main);
+  color: var(--text-bright);
 }
 
 .tiptap-editor-root .tiptap ol>li ul>li::before,
@@ -1637,6 +1637,69 @@ body {
 .tiptap-editor-root .tiptap li ol>li,
 .tiptap-editor-root .tiptap li ul>li {
   counter-increment: none !important;
+}
+
+/* ── Attached Screenshots & Images Styling ── */
+.task-attached-image,
+.tiptap-editor-root .tiptap img {
+  display: block;
+  max-width: 50%;
+  max-height: 480px;
+  width: auto;
+  height: auto;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  margin: 0.5rem 0;
+  object-fit: contain;
+  background: var(--bg-card, #222427);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  flex-shrink: 0;
+}
+
+/* Inside task cards and subtasks: keep max-width capped at 50% when inline */
+.tiptap-editor-root .tiptap ol>li img,
+.tiptap-editor-root .tiptap ul>li img,
+.markdown-styled-content img {
+  max-width: 50%;
+}
+
+/* When placed inside subtask flex rows, make sure image paragraph wraps cleanly to its own row when width is constrained */
+.tiptap-editor-root .tiptap ol>li ul>li>p:has(img),
+.tiptap-editor-root .tiptap ul:not(li ul)>li ul>li>p:has(img),
+.tiptap-editor-root .tiptap ol>li ol>li>p:has(img),
+.tiptap-editor-root .tiptap ul:not(li ul)>li ol>li>p:has(img) {
+  flex: 1 1 240px !important;
+  max-width: 100% !important;
+  width: 100%;
+}
+
+/* On its own wrapped row or at small container widths, let the image scale up to 100% of the available row width */
+.tiptap-editor-root .tiptap ol>li ul>li>p:has(img) img,
+.tiptap-editor-root .tiptap ul:not(li ul)>li ul>li>p:has(img) img {
+  max-width: 100%;
+}
+
+/* Responsive adjustment for narrow lanes/screens (under 420px): always place images on their own full line */
+@media (max-width: 420px) {
+
+  .tiptap-editor-root .tiptap ol>li img,
+  .tiptap-editor-root .tiptap ul>li img,
+  .markdown-styled-content img {
+    max-width: 100% !important;
+  }
+}
+
+.task-attached-image:hover,
+.tiptap-editor-root .tiptap img:hover {
+  border-color: rgba(99, 102, 241, 0.4);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35), 0 0 12px rgba(99, 102, 241, 0.2);
+}
+
+.tiptap-editor-root .tiptap img.ProseMirror-selectednode {
+  outline: 2px solid var(--accent-primary, #6366f1);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.25);
 }
 
 /* Card Section Container styling */
@@ -2150,9 +2213,12 @@ body {
 }
 
 @keyframes subtleGlowPulse {
-  0%, 100% {
+
+  0%,
+  100% {
     box-shadow: 0 0 0 rgba(6, 182, 212, 0);
   }
+
   50% {
     box-shadow: 0 0 8px rgba(6, 182, 212, 0.4);
   }
@@ -2538,13 +2604,16 @@ body {
   background: rgba(59, 130, 246, 0.04);
   border-color: rgba(59, 130, 246, 0.18);
 }
+
 .ai-sub-card.card-overview:hover {
   border-color: rgba(59, 130, 246, 0.32);
 }
+
 .ai-sub-card.card-overview .ai-sub-card-header {
   background: rgba(59, 130, 246, 0.07);
   border-bottom-color: rgba(59, 130, 246, 0.14);
 }
+
 .ai-sub-card.card-overview .ai-sub-card-header:hover {
   background: rgba(59, 130, 246, 0.11);
 }
@@ -2554,13 +2623,16 @@ body {
   background: rgba(234, 179, 8, 0.04);
   border-color: rgba(234, 179, 8, 0.18);
 }
+
 .ai-sub-card.card-related-tasks:hover {
   border-color: rgba(234, 179, 8, 0.32);
 }
+
 .ai-sub-card.card-related-tasks .ai-sub-card-header {
   background: rgba(234, 179, 8, 0.07);
   border-bottom-color: rgba(234, 179, 8, 0.14);
 }
+
 .ai-sub-card.card-related-tasks .ai-sub-card-header:hover {
   background: rgba(234, 179, 8, 0.11);
 }
@@ -2570,21 +2642,26 @@ body {
   background: rgba(168, 85, 247, 0.04);
   border-color: rgba(168, 85, 247, 0.18);
 }
+
 .ai-sub-card.card-steps-actions:hover {
   border-color: rgba(168, 85, 247, 0.32);
 }
+
 .ai-sub-card.card-steps-actions .ai-sub-card-header {
   background: rgba(168, 85, 247, 0.07);
   border-bottom-color: rgba(168, 85, 247, 0.14);
 }
+
 .ai-sub-card.card-steps-actions .ai-sub-card-header:hover {
   background: rgba(168, 85, 247, 0.11);
 }
+
 .ai-sub-card.card-steps-actions.has-pending-alert {
   border-color: rgba(239, 68, 68, 0.55);
   box-shadow: 0 0 16px rgba(239, 68, 68, 0.2);
   background: rgba(239, 68, 68, 0.04);
 }
+
 .ai-sub-card.card-steps-actions.has-pending-alert .ai-sub-card-header {
   background: rgba(239, 68, 68, 0.09);
   border-bottom-color: rgba(239, 68, 68, 0.2);
@@ -2595,13 +2672,16 @@ body {
   background: rgba(20, 184, 166, 0.04);
   border-color: rgba(20, 184, 166, 0.18);
 }
+
 .ai-sub-card.card-completion:hover {
   border-color: rgba(20, 184, 166, 0.32);
 }
+
 .ai-sub-card.card-completion .ai-sub-card-header {
   background: rgba(20, 184, 166, 0.07);
   border-bottom-color: rgba(20, 184, 166, 0.14);
 }
+
 .ai-sub-card.card-completion .ai-sub-card-header:hover {
   background: rgba(20, 184, 166, 0.11);
 }
@@ -2665,13 +2745,16 @@ body {
   background: rgba(59, 130, 246, 0.045);
   border-color: rgba(59, 130, 246, 0.22);
 }
+
 [data-theme="light"] .ai-sub-card.card-overview:hover {
   border-color: rgba(59, 130, 246, 0.38);
 }
+
 [data-theme="light"] .ai-sub-card.card-overview .ai-sub-card-header {
   background: rgba(59, 130, 246, 0.08);
   border-bottom-color: rgba(59, 130, 246, 0.16);
 }
+
 [data-theme="light"] .ai-sub-card.card-overview .ai-sub-card-header:hover {
   background: rgba(59, 130, 246, 0.13);
 }
@@ -2680,13 +2763,16 @@ body {
   background: rgba(234, 179, 8, 0.05);
   border-color: rgba(234, 179, 8, 0.25);
 }
+
 [data-theme="light"] .ai-sub-card.card-related-tasks:hover {
   border-color: rgba(234, 179, 8, 0.4);
 }
+
 [data-theme="light"] .ai-sub-card.card-related-tasks .ai-sub-card-header {
   background: rgba(234, 179, 8, 0.09);
   border-bottom-color: rgba(234, 179, 8, 0.18);
 }
+
 [data-theme="light"] .ai-sub-card.card-related-tasks .ai-sub-card-header:hover {
   background: rgba(234, 179, 8, 0.14);
 }
@@ -2695,13 +2781,16 @@ body {
   background: rgba(168, 85, 247, 0.045);
   border-color: rgba(168, 85, 247, 0.22);
 }
+
 [data-theme="light"] .ai-sub-card.card-steps-actions:hover {
   border-color: rgba(168, 85, 247, 0.38);
 }
+
 [data-theme="light"] .ai-sub-card.card-steps-actions .ai-sub-card-header {
   background: rgba(168, 85, 247, 0.08);
   border-bottom-color: rgba(168, 85, 247, 0.16);
 }
+
 [data-theme="light"] .ai-sub-card.card-steps-actions .ai-sub-card-header:hover {
   background: rgba(168, 85, 247, 0.13);
 }
@@ -2710,13 +2799,16 @@ body {
   background: rgba(20, 184, 166, 0.045);
   border-color: rgba(20, 184, 166, 0.22);
 }
+
 [data-theme="light"] .ai-sub-card.card-completion:hover {
   border-color: rgba(20, 184, 166, 0.38);
 }
+
 [data-theme="light"] .ai-sub-card.card-completion .ai-sub-card-header {
   background: rgba(20, 184, 166, 0.08);
   border-bottom-color: rgba(20, 184, 166, 0.16);
 }
+
 [data-theme="light"] .ai-sub-card.card-completion .ai-sub-card-header:hover {
   background: rgba(20, 184, 166, 0.13);
 }
@@ -4885,11 +4977,14 @@ body {
 }
 
 @keyframes pulseAlertBadge {
-  0%, 100% {
+
+  0%,
+  100% {
     opacity: 1;
     border-color: rgba(239, 68, 68, 0.45);
     box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.3);
   }
+
   50% {
     opacity: 0.85;
     border-color: rgba(239, 68, 68, 0.75);

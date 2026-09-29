@@ -7,7 +7,7 @@ import {
   type CliAgentSetup,
 } from '../types';
 
-import { getAllowedRoots, addAllowedRoot, removeAllowedRoot } from '../lib/mcpClient';
+import { getAllowedRoots, addAllowedRoot, removeAllowedRoot, callMcpTool } from '../lib/mcpClient';
 import {
   Unplug,
   Cpu,
@@ -36,6 +36,8 @@ import {
   Edit3,
   Tag,
   AlertTriangle,
+  RefreshCw,
+  Activity,
 } from 'lucide-react';
 
 interface McpHubModalProps {
@@ -178,6 +180,46 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   const [cliSaved, setCliSaved] = useState(false);
   const [agentPendingDelete, setAgentPendingDelete] = useState<CliAgentSetup | null>(null);
 
+  // Laya local test latency state
+  const [layaTestStatus, setLayaTestStatus] = useState<{
+    testing: boolean;
+    latencyMs?: number;
+    source?: string;
+    error?: string;
+  } | null>(null);
+
+  const handleTestLaya = async () => {
+    setLayaTestStatus({ testing: true });
+    const startTime = performance.now();
+    try {
+      const res = await callMcpTool('mcp-laya', 'laya_choice', {
+        prompt: 'Task priority evaluation test',
+        options: ['critical', 'normal', 'low']
+      });
+      const latencyMs = Math.round(performance.now() - startTime);
+      if (res.success) {
+        const sourceLabel = res.data?.source === 'laya_local_service'
+          ? 'laya-serve daemon (:8440)'
+          : 'local fast head (CPU)';
+        setLayaTestStatus({
+          testing: false,
+          latencyMs,
+          source: sourceLabel
+        });
+      } else {
+        setLayaTestStatus({
+          testing: false,
+          error: res.error || 'Failed to ping Laya bridge'
+        });
+      }
+    } catch (e: any) {
+      setLayaTestStatus({
+        testing: false,
+        error: e.message || 'Connection test error'
+      });
+    }
+  };
+
   const resetCliForm = () => {
     setEditingAgentId(null);
     setCliAgentName('');
@@ -250,7 +292,13 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
     setShowAddForm(false);
   };
 
-  const bundledHarnesses = mcpServers.filter((s) => s.serverType === 'bundled_harness' || s.transport === 'Local Stdio');
+  const bundledHarnesses = mcpServers
+    .filter((s) => s.serverType === 'bundled_harness' || s.transport === 'Local Stdio')
+    .sort((a, b) => {
+      if (a.id === 'mcp-laya') return -1;
+      if (b.id === 'mcp-laya') return 1;
+      return 0;
+    });
   const externalServers = mcpServers.filter((s) => s.serverType !== 'bundled_harness' && s.transport !== 'Local Stdio');
 
   return (
@@ -472,7 +520,12 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                               type="button"
                               className={isConnected ? 'btn btn-secondary' : 'btn btn-primary'}
                               style={{ padding: '0.2rem 0.6rem', fontSize: '0.72rem' }}
-                              onClick={() => onToggleConnectServer(server.id)}
+                              onClick={() => {
+                                onToggleConnectServer(server.id);
+                                if (!isConnected) {
+                                  setTimeout(() => handleTestLaya(), 150);
+                                }
+                              }}
                             >
                               {isConnected ? 'Disable' : 'Enable'}
                             </button>
@@ -485,6 +538,53 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                       </div>
 
                       <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>{server.description}</p>
+
+                      {server.id === 'mcp-laya' && isConnected && (
+                        <div
+                          style={{
+                            background: 'rgba(16, 185, 129, 0.08)',
+                            border: '1px solid rgba(16, 185, 129, 0.25)',
+                            borderRadius: 'var(--radius-sm)',
+                            padding: '0.5rem 0.75rem',
+                            fontSize: '0.75rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '0.5rem',
+                            marginTop: '0.45rem'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-bright)' }}>
+                            <Activity size={14} color="var(--accent-emerald)" />
+                            <span>
+                              {layaTestStatus?.testing ? (
+                                'Testing local decision engine latency…'
+                              ) : layaTestStatus?.latencyMs !== undefined ? (
+                                <>
+                                  <strong style={{ color: 'var(--accent-emerald)' }}>Connected & Active:</strong> {layaTestStatus.latencyMs}ms latency ({layaTestStatus.source})
+                                </>
+                              ) : layaTestStatus?.error ? (
+                                <span style={{ color: '#ef4444' }}>Notice: {layaTestStatus.error}</span>
+                              ) : (
+                                <>
+                                  <strong style={{ color: 'var(--accent-emerald)' }}>Engine Online ($0 Cost):</strong> High-speed System-1 micro-decisions active
+                                </>
+                              )}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ padding: '0.2rem 0.55rem', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                            onClick={handleTestLaya}
+                            disabled={layaTestStatus?.testing}
+                            title="Ping local Laya engine to measure response latency"
+                          >
+                            <RefreshCw size={11} className={layaTestStatus?.testing ? 'animate-spin' : ''} />
+                            <span>{layaTestStatus?.testing ? 'Testing…' : 'Ping Latency'}</span>
+                          </button>
+                        </div>
+                      )}
 
                       {/* <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-dim)', paddingTop: '0.4rem', borderTop: '1px solid var(--border-subtle)' }}>
                         <span>Transport: <strong style={{ color: 'var(--accent-emerald)' }}>{server.transport}</strong></span>

@@ -29,9 +29,10 @@ import {
   parseAgentContextWithArchive,
   serializeTodoMarkdown,
   serializeAgentContextMarkdown,
-  parseSwimLaneMarkdown
+  parseSwimLaneMarkdown,
+  cleanAndUnescapeMarkdown
 } from './lib/parser';
-import { readFilesFromDisk, createProjectOnDisk } from './lib/fileSystem';
+import { readFilesFromDisk, writeFilesToDisk, createProjectOnDisk } from './lib/fileSystem';
 import { storageManager } from './lib/storageManager';
 import {
   preWarmEmbeddings,
@@ -56,6 +57,13 @@ import { ToastContainer, type ToastMessage } from './components/Toast';
 import { executeTaskWithAi, syncTaskOverviewWithAi } from './lib/ai';
 import { DEFAULT_AGENT_PIPELINE_OPTIONS } from './lib/agentPipeline/contracts';
 import { formatOverviewDocToMarkdown } from './lib/agentPipeline/summary';
+import {
+  type ScheduledJob,
+  getScheduledJobs,
+  addScheduledJob,
+  cancelScheduledJob,
+  markJobCompleted
+} from './lib/taskScheduler';
 
 /** Merge persisted (possibly partial / stale) pipeline settings over the defaults, ignoring undefined values. */
 function mergeAgentPipelineOptions(
@@ -115,6 +123,7 @@ export function App() {
   const [archivedBriefs, setArchivedBriefs] = useState<AgentContextItem[]>([]);
   const [headerComments, setHeaderComments] = useState<string>('');
   const [selectedTaskId, setSelectedTaskId] = useState<string | number | null>(null);
+  const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>(() => getScheduledJobs());
 
   // Autosave Hook (defaults to 5 seconds inactivity timeout, writes directly to workspace files)
   const autosave = useAutosave({
@@ -743,15 +752,49 @@ export function App() {
 
       const parsedBriefsWithArchive = parseAgentContextWithArchive(effectiveAgentMd || '');
 
+      // Reconcile briefs with archived tasks:
+      // If an active brief matches an archived task (and is not in allActiveTasks), it belongs in archivedBriefs!
+      const activeBriefs: AgentContextItem[] = [];
+      const archivedBriefsList: AgentContextItem[] = [...parsedBriefsWithArchive.archivedItems];
+      let needsReserialize = false;
+
+      for (const brief of parsedBriefsWithArchive.items) {
+        const cleanBTitle = cleanAndUnescapeMarkdown(brief.title).trim().toLowerCase();
+        const matchesArchived = allArchivedTasks.some(
+          (at) =>
+            (brief.sourceTaskId && (brief.sourceTaskId === at.id || String(brief.sourceTaskId) === String(at.id))) ||
+            at.title.trim().toLowerCase() === cleanBTitle ||
+            cleanAndUnescapeMarkdown(at.title).trim().toLowerCase() === cleanBTitle
+        );
+        const matchesActive = allActiveTasks.some(
+          (t) =>
+            (brief.sourceTaskId && (brief.sourceTaskId === t.id || String(brief.sourceTaskId) === String(t.id))) ||
+            t.title.trim().toLowerCase() === cleanBTitle ||
+            cleanAndUnescapeMarkdown(t.title).trim().toLowerCase() === cleanBTitle
+        );
+
+        if (matchesArchived && !matchesActive) {
+          archivedBriefsList.push({ ...brief, isArchived: true });
+          needsReserialize = true;
+        } else {
+          activeBriefs.push(brief);
+        }
+      }
+
+      if (needsReserialize && agentPath) {
+        effectiveAgentMd = serializeAgentContextMarkdown(activeBriefs, archivedBriefsList);
+        writeFilesToDisk([{ filePath: agentPath, content: effectiveAgentMd }]);
+      }
+
       setTasks(allActiveTasks);
       setArchivedTasks(allArchivedTasks);
       setHeaderComments(firstHeaderComments);
-      setBriefs(parsedBriefsWithArchive.items);
-      setArchivedBriefs(parsedBriefsWithArchive.archivedItems);
+      setBriefs(activeBriefs);
+      setArchivedBriefs(archivedBriefsList);
 
-      if (parsedBriefsWithArchive.items.length > 0) {
+      if (activeBriefs.length > 0) {
         migrateAgentContextToMemory(
-          parsedBriefsWithArchive.items.map((b) => ({
+          activeBriefs.map((b) => ({
             id: String(b.sourceTaskId || b.id || b.itemNumber || '').replace(/^brief_/, ''),
             title: b.title || '',
             overview: b.overview || b.brief || '',
@@ -762,11 +805,11 @@ export function App() {
           console.warn('[Ergo] Background migration of briefs to memory failed:', err);
         });
 
-        const firstBrief = parsedBriefsWithArchive.items[0];
+        const firstBrief = activeBriefs[0];
         const defaultId = firstBrief.sourceTaskId || firstBrief.id || firstBrief.itemNumber || null;
         setSelectedTaskId((prev) =>
           prev !== null &&
-          parsedBriefsWithArchive.items.some(
+          activeBriefs.some(
             (b) => b.id === prev || b.sourceTaskId === prev || b.itemNumber === prev
           )
             ? prev
@@ -861,8 +904,9 @@ export function App() {
 
           if (isActiveProject) {
             if (fileType === 'agent' || relativePath?.endsWith('AGENT_CONTEXT.md')) {
-              const parsedBriefs = parseAgentContextMarkdown(content);
+              const { items: parsedBriefs, archivedItems: parsedArchivedBriefs } = parseAgentContextWithArchive(content);
               setBriefs(parsedBriefs);
+              setArchivedBriefs(parsedArchivedBriefs);
             } else {
               const currentLanes: SwimLaneDoc[] = ap.swimLanes && ap.swimLanes.length > 0
                 ? ap.swimLanes
@@ -939,7 +983,36 @@ export function App() {
           markdown: activeProject?.todoMarkdown || ''
         }];
 
-    const primaryTodoMd = effectiveLanes[0]?.markdown || serializeTodoMarkdown(newTasks, headerComments, currentArchivedTasks);
+    const firstLaneId = effectiveLanes[0]?.id || 'lane-default';
+
+    // Re-serialize each swimlane markdown ensuring active and archived tasks are properly placed
+    const updatedLanes: SwimLaneDoc[] = effectiveLanes.map((lane, idx) => {
+      const laneActive = newTasks.filter(
+        (t) => (t.swimLaneId || firstLaneId) === lane.id
+      );
+      const laneArchived = currentArchivedTasks.filter(
+        (t) => (t.swimLaneId || firstLaneId) === lane.id
+      );
+
+      // Extract existing header comments for this lane
+      let laneHeader = idx === 0 ? headerComments : '';
+      if (!laneHeader && lane.markdown) {
+        try {
+          const parsed = parseSwimLaneMarkdown(lane);
+          if (parsed.headerComments) {
+            laneHeader = parsed.headerComments;
+          }
+        } catch {}
+      }
+
+      const serialized = serializeTodoMarkdown(laneActive, laneHeader, laneArchived);
+      return {
+        ...lane,
+        markdown: serialized,
+      };
+    });
+
+    const primaryTodoMd = updatedLanes[0]?.markdown || serializeTodoMarkdown(newTasks, headerComments, currentArchivedTasks);
     const updatedBriefsMd = serializeAgentContextMarkdown(newBriefs, currentArchivedBriefs);
 
     setProjects((prev) =>
@@ -949,13 +1022,19 @@ export function App() {
               ...p,
               todoMarkdown: primaryTodoMd,
               agentContextMarkdown: updatedBriefsMd,
-              swimLanes: effectiveLanes
+              swimLanes: updatedLanes
             }
           : p
       )
     );
 
-    const filesToSave = effectiveLanes.map((l) => ({ filePath: l.filePath, content: l.markdown }));
+    const currentProj = projects.find((p) => p.id === activeProjectId) || activeProject;
+    const agentPath = currentProj?.agentContextFilePath || (currentProj?.folderPath ? `${currentProj.folderPath}/AGENT_CONTEXT.md` : '');
+
+    const filesToSave = [
+      ...updatedLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
+      ...(agentPath ? [{ filePath: agentPath, content: updatedBriefsMd }] : [])
+    ];
 
     if (immediateDiskSave) {
       autosave.saveImmediately(filesToSave);
@@ -1736,12 +1815,31 @@ export function App() {
 
   // Archive Task Handler (Moves task and corresponding brief into archive section immediately)
   // Takes the live title string read from the editor node, matching by title is immune to stale indices.
-  const handleArchiveTask = (taskTitle: string) => {
-    if (!taskTitle) return;
-    const normalTitle = taskTitle.trim().toLowerCase();
-    const taskToArchive = tasks.find((t) => t.title.trim().toLowerCase() === normalTitle);
+  const handleArchiveTask = (taskTitleOrId: string | number) => {
+    if (!taskTitleOrId && taskTitleOrId !== 0) return;
+    const rawStr = String(taskTitleOrId).trim();
+    const cleanedTitle = cleanAndUnescapeMarkdown(rawStr).toLowerCase();
+    const rawLower = rawStr.toLowerCase();
+
+    // Match task by id, cleaned title, or raw title
+    const taskToArchive = tasks.find(
+      (t) =>
+        String(t.id) === rawStr ||
+        t.title.trim().toLowerCase() === cleanedTitle ||
+        t.title.trim().toLowerCase() === rawLower ||
+        cleanAndUnescapeMarkdown(t.title).trim().toLowerCase() === cleanedTitle
+    );
+
     const matchingBrief = briefs.find(
-      (b) => (taskToArchive && b.sourceTaskId === taskToArchive.id) || b.title.trim().toLowerCase() === normalTitle
+      (b) =>
+        (taskToArchive && (b.sourceTaskId === taskToArchive.id || String(b.sourceTaskId) === String(taskToArchive.id))) ||
+        String(b.id) === rawStr ||
+        String(b.itemNumber) === rawStr ||
+        (taskToArchive && b.title.trim().toLowerCase() === taskToArchive.title.trim().toLowerCase()) ||
+        (taskToArchive && cleanAndUnescapeMarkdown(b.title).trim().toLowerCase() === cleanAndUnescapeMarkdown(taskToArchive.title).trim().toLowerCase()) ||
+        b.title.trim().toLowerCase() === cleanedTitle ||
+        b.title.trim().toLowerCase() === rawLower ||
+        cleanAndUnescapeMarkdown(b.title).trim().toLowerCase() === cleanedTitle
     );
 
     if (!taskToArchive && !matchingBrief) return;
@@ -1759,20 +1857,20 @@ export function App() {
     let nextArchivedTasks = archivedTasks;
 
     if (taskToArchive) {
-      const taskIndex = tasks.findIndex((t) => t.title.trim().toLowerCase() === normalTitle);
-      nextActiveTasks = tasks.filter((t) => t.title.trim().toLowerCase() !== normalTitle);
+      const taskIndex = tasks.indexOf(taskToArchive);
+      nextActiveTasks = tasks.filter((t) => t !== taskToArchive);
       const archivedTask: TaskItem = {
         ...taskToArchive,
         id: nextArchiveId,
         isArchived: true,
-        archivedAtIndex: taskIndex,         // remember original 0-based position
+        archivedAtIndex: taskIndex !== -1 ? taskIndex : undefined,
         category: 'Archive',
         categoryHeadingPrefix: '##',
         swimLaneId: taskToArchive.swimLaneId || (activeProject?.swimLanes?.[0]?.id || 'lane-default'),
         sourceFileName: taskToArchive.sourceFileName || (activeProject?.swimLanes?.[0]?.filePath?.split('/').pop() || 'TODO.md'),
       };
       nextArchivedTasks = [
-        ...archivedTasks.filter((t) => t.title.trim().toLowerCase() !== normalTitle),
+        ...archivedTasks.filter((t) => t.id !== taskToArchive.id && t.title.trim().toLowerCase() !== taskToArchive.title.trim().toLowerCase()),
         archivedTask,
       ];
     }
@@ -1781,9 +1879,14 @@ export function App() {
     let nextArchivedBriefs = archivedBriefs;
 
     if (matchingBrief) {
-      nextActiveBriefs = briefs.filter((b) => b !== matchingBrief);
+      const matchClean = cleanAndUnescapeMarkdown(matchingBrief.title).trim().toLowerCase();
+      nextActiveBriefs = briefs.filter(
+        (b) => b !== matchingBrief && cleanAndUnescapeMarkdown(b.title).trim().toLowerCase() !== matchClean
+      );
       nextArchivedBriefs = [
-        ...archivedBriefs.filter((b) => b.title.trim().toLowerCase() !== normalTitle),
+        ...archivedBriefs.filter(
+          (b) => b !== matchingBrief && cleanAndUnescapeMarkdown(b.title).trim().toLowerCase() !== matchClean
+        ),
         { ...matchingBrief, isArchived: true, itemNumber: nextArchiveId, sourceTaskId: nextArchiveId },
       ];
     }
@@ -1814,12 +1917,25 @@ export function App() {
   // Remove AI Task Handler (Removes unstarted task from AGENT_CONTEXT.md / AI workspace without touching human workspace)
   const handleRemoveAiTask = (targetId: string | number) => {
     const briefToRemove = briefs.find(
-      (b) => b.id === targetId || b.sourceTaskId === targetId || b.itemNumber === targetId
+      (b) =>
+        b.id === targetId ||
+        b.sourceTaskId === targetId ||
+        b.itemNumber === targetId ||
+        String(b.sourceTaskId) === String(targetId) ||
+        String(b.id) === String(targetId) ||
+        String(b.itemNumber) === String(targetId)
     );
     if (!briefToRemove) return;
 
     const nextBriefs = briefs.filter(
-      (b) => b.id !== targetId && b.sourceTaskId !== targetId && b.itemNumber !== targetId
+      (b) =>
+        b !== briefToRemove &&
+        b.id !== targetId &&
+        b.sourceTaskId !== targetId &&
+        b.itemNumber !== targetId &&
+        String(b.sourceTaskId) !== String(targetId) &&
+        String(b.id) !== String(targetId) &&
+        String(b.itemNumber) !== String(targetId)
     );
     if (
       selectedTaskId === targetId ||
@@ -1842,6 +1958,124 @@ export function App() {
       duration: 3500,
     });
   };
+
+  // Schedule Task Handler
+  const handleScheduleTask = (taskId: string | number, scheduledIso: string, cronExpr?: string) => {
+    const task = tasks.find((t) => String(t.id) === String(taskId)) || briefs.find((b) => String(b.sourceTaskId || b.id) === String(taskId));
+    const title = task?.title || 'Scheduled Task';
+    addScheduledJob({
+      taskId,
+      taskTitle: title,
+      scheduledTime: scheduledIso,
+      cronExpression: cronExpr,
+    });
+    setScheduledJobs(getScheduledJobs());
+
+    showToast({
+      type: 'info',
+      title: 'Task Scheduled',
+      message: `Scheduled "${title}" for ${new Date(scheduledIso).toLocaleString()}${cronExpr ? ` (${cronExpr})` : ''}`,
+      duration: 4000,
+    });
+  };
+
+  const handleCancelScheduleTask = (taskId: string | number) => {
+    cancelScheduledJob(taskId);
+    setScheduledJobs(getScheduledJobs());
+
+    showToast({
+      type: 'info',
+      title: 'Schedule Removed',
+      message: 'Scheduled execution for this task has been cancelled.',
+      duration: 3000,
+    });
+  };
+
+  // Ref to track executing status to prevent duplicate triggers
+  const executingTaskIdRef = useRef<string | number | null>(executingTaskId);
+  executingTaskIdRef.current = executingTaskId;
+
+  // Background cron scheduler checker: runs periodically and checks if any scheduled job is due
+  useEffect(() => {
+    const checkScheduledJobs = () => {
+      const jobs = getScheduledJobs();
+      const now = Date.now();
+
+      for (const job of jobs) {
+        if (job.status !== 'pending') continue;
+
+        const scheduledTime = new Date(job.scheduledTime).getTime();
+        if (scheduledTime <= now) {
+          // If task is currently already running, don't retrigger
+          if (executingTaskIdRef.current !== null && String(executingTaskIdRef.current) === String(job.taskId)) {
+            continue;
+          }
+
+          console.log(`[TaskScheduler] Triggering scheduled job ${job.id} for task "${job.taskTitle}"`);
+
+          // Mark job completed or compute next recurrence if cron
+          if (job.cronExpression) {
+            // Re-schedule next recurrence
+            let nextMs = 60 * 60 * 1000; // default 1 hour
+            if (job.cronExpression.includes('* * * *')) {
+              nextMs = 60 * 60 * 1000; // hourly
+            } else if (job.cronExpression.split(' ').length === 5) {
+              nextMs = 24 * 60 * 60 * 1000; // daily
+            }
+            const nextDate = new Date(now + nextMs).toISOString();
+            addScheduledJob({
+              taskId: job.taskId,
+              taskTitle: job.taskTitle,
+              scheduledTime: nextDate,
+              cronExpression: job.cronExpression,
+            });
+          } else {
+            markJobCompleted(job.taskId);
+          }
+
+          setScheduledJobs(getScheduledJobs());
+
+          // Find task item and trigger execution
+          const targetTask = tasks.find((t) => String(t.id) === String(job.taskId));
+          if (targetTask) {
+            showToast({
+              type: 'info',
+              title: 'Scheduled Task Executing',
+              message: `Starting scheduled execution of "${targetTask.title}"…`,
+              duration: 5000,
+            });
+            handleExecuteTask(targetTask);
+          } else {
+            const matchingBrief = briefs.find(
+              (b) => String(b.sourceTaskId) === String(job.taskId) || String(b.id) === String(job.taskId)
+            );
+            if (matchingBrief) {
+              const synthesizedTask: TaskItem = {
+                id: matchingBrief.sourceTaskId || matchingBrief.id || job.taskId,
+                title: matchingBrief.title,
+                category: 'AI Workspace',
+                status: 'not_started',
+                isDone: false,
+                subtasks: [],
+              };
+              showToast({
+                type: 'info',
+                title: 'Scheduled Task Executing',
+                message: `Starting scheduled execution of "${synthesizedTask.title}"…`,
+                duration: 5000,
+              });
+              handleExecuteTask(synthesizedTask);
+            }
+          }
+        }
+      }
+    };
+
+    // Run check immediately on mount and then every 10 seconds
+    checkScheduledJobs();
+    const intervalId = setInterval(checkScheduledJobs, 10000);
+    return () => clearInterval(intervalId);
+  }, [tasks, briefs]);
 
   // Unarchive Task Handler (Restores task from archive back to active workspace)
   const handleUnarchiveTask = (taskId: string | number) => {
@@ -1868,8 +2102,12 @@ export function App() {
 
     const nextActiveTasks = [...tasks, restoredTask];
 
+    const cleanTitle = cleanAndUnescapeMarkdown(taskToUnarchive.title).trim().toLowerCase();
     const matchingArchivedBrief = archivedBriefs.find(
-      (b) => (taskToUnarchive && b.sourceTaskId === taskToUnarchive.id) || b.title.trim().toLowerCase() === normalTitle
+      (b) =>
+        (taskToUnarchive && (b.sourceTaskId === taskToUnarchive.id || String(b.sourceTaskId) === String(taskToUnarchive.id))) ||
+        b.title.trim().toLowerCase() === normalTitle ||
+        cleanAndUnescapeMarkdown(b.title).trim().toLowerCase() === cleanTitle
     );
     const nextArchivedBriefs = archivedBriefs.filter((b) => b !== matchingArchivedBrief);
 
@@ -1898,12 +2136,24 @@ export function App() {
     void removeChunksByTaskId(taskToDelete.id, activeProjectId);
 
     const normalTitle = taskToDelete.title.trim().toLowerCase();
+    const cleanTitle = cleanAndUnescapeMarkdown(taskToDelete.title).trim().toLowerCase();
     const nextArchivedTasks = archivedTasks.filter((t) => t.id !== taskToDelete.id);
     const nextArchivedBriefs = archivedBriefs.filter(
-      (b) => b.title.trim().toLowerCase() !== normalTitle
+      (b) =>
+        b.sourceTaskId !== taskToDelete.id &&
+        String(b.sourceTaskId) !== String(taskToDelete.id) &&
+        b.title.trim().toLowerCase() !== normalTitle &&
+        cleanAndUnescapeMarkdown(b.title).trim().toLowerCase() !== cleanTitle
+    );
+    const nextActiveBriefs = briefs.filter(
+      (b) =>
+        b.sourceTaskId !== taskToDelete.id &&
+        String(b.sourceTaskId) !== String(taskToDelete.id) &&
+        b.title.trim().toLowerCase() !== normalTitle &&
+        cleanAndUnescapeMarkdown(b.title).trim().toLowerCase() !== cleanTitle
     );
 
-    syncAndSaveProject(tasks, briefs, true, nextArchivedTasks, nextArchivedBriefs);
+    syncAndSaveProject(tasks, nextActiveBriefs, true, nextArchivedTasks, nextArchivedBriefs);
   };
 
   // Save Archived Brief Edit
@@ -1932,24 +2182,7 @@ export function App() {
     } else {
       nextBriefs = [...briefs, updatedBrief];
     }
-    setBriefs(nextBriefs);
-
-    const currentTodoMd = serializeTodoMarkdown(tasks, headerComments, archivedTasks);
-    const updatedBriefsMd = serializeAgentContextMarkdown(nextBriefs, archivedBriefs);
-
-    setProjects((prev) =>
-      prev.map((p) =>
-        p.id === activeProjectId
-          ? { ...p, todoMarkdown: currentTodoMd, agentContextMarkdown: updatedBriefsMd }
-          : p
-      )
-    );
-
-    const todoPath = activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`;
-
-    autosave.queueSave([
-      { filePath: todoPath, content: currentTodoMd }
-    ]);
+    syncAndSaveProject(tasks, nextBriefs, false);
   };
 
   // Refine Brief with AI (AI Step 3 Context Syncer & Overview Drafter)
@@ -2052,6 +2285,17 @@ export function App() {
     ];
 
     autosave.queueSave(filesToSave);
+
+    // Debounced orphaned-media cleanup: after images are removed from the editor,
+    // delete any files in the media folder that are no longer referenced.
+    if (activeProject?.folderPath) {
+      const folderPath = activeProject.folderPath;
+      const allMarkdowns = updatedLanes.map((l) => l.markdown);
+      clearTimeout((window as any).__ergoMediaCleanupTimer);
+      (window as any).__ergoMediaCleanupTimer = setTimeout(() => {
+        storageManager.cleanupOrphanedMedia(folderPath, allMarkdowns).catch(() => {});
+      }, 1500);
+    }
   };
 
   // Add new SwimLane column (creates additional markdown file)
@@ -2587,6 +2831,9 @@ export function App() {
             onKillSession={handleKillSession}
             onArchiveTask={handleArchiveTask}
             onRemoveAiTask={handleRemoveAiTask}
+            scheduledJobs={scheduledJobs}
+            onScheduleTask={handleScheduleTask}
+            onCancelScheduleTask={handleCancelScheduleTask}
             isPanelOpen={isAiPanelOpen}
             onTogglePanel={handleToggleAiPanel}
           />
@@ -2611,13 +2858,36 @@ export function App() {
         onClose={() => setIsMcpHubOpen(false)}
         mcpServers={mcpServers}
         onToggleConnectServer={(serverId) =>
-          setMcpServers((prev) =>
-            prev.map((s) => {
+          setMcpServers((prev) => {
+            const next = prev.map((s) => {
               if (s.id !== serverId) return s;
-              if (s.serverType === 'bundled_harness' || s.transport === 'Local Stdio') return s;
-              return { ...s, status: s.status === 'connected' ? 'disconnected' : 'connected' };
-            })
-          )
+              // Allow mcp-laya to toggle even though it is a local stdio harness
+              if (s.id !== 'mcp-laya' && (s.serverType === 'bundled_harness' || s.transport === 'Local Stdio')) return s;
+              return { ...s, status: (s.status === 'connected' ? 'disconnected' : 'connected') as 'connected' | 'disconnected' };
+            });
+            const target = next.find((s) => s.id === serverId);
+            if (target) {
+              const isNowConnected = target.status === 'connected';
+              if (serverId === 'mcp-laya') {
+                showToast({
+                  type: isNowConnected ? 'success' : 'info',
+                  title: isNowConnected ? 'Laya Local Engine Connected' : 'Laya Local Engine Disconnected',
+                  message: isNowConnected
+                    ? 'Active ($0 cost): High-speed micro-decisions and task triage will run locally on your machine.'
+                    : 'Off: Agent pipeline has reverted to standard generative LLM triage.',
+                  duration: 4000
+                });
+              } else {
+                showToast({
+                  type: 'info',
+                  title: `${target.name} ${isNowConnected ? 'Connected' : 'Disconnected'}`,
+                  message: `Connection status updated to ${target.status}.`,
+                  duration: 3000
+                });
+              }
+            }
+            return next;
+          })
         }
         onToggleToolAutoApprove={(serverId, toolId) =>
           setMcpServers((prev) =>

@@ -14,9 +14,11 @@ import ListItem from '@tiptap/extension-list-item';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import Link from '@tiptap/extension-link';
+import Image from '@tiptap/extension-image';
 import Typography from '@tiptap/extension-typography';
 import { Markdown } from 'tiptap-markdown';
 import { stripHeaderComments, parseSwimLaneMarkdown } from '../lib/parser';
+import { storageManager } from '../lib/storageManager';
 import { HumanAiAssistantModal } from './HumanAiAssistantModal';
 import { ArchivedTasksModal } from './ArchivedTasksModal';
 
@@ -47,6 +49,7 @@ import {
   Quote,
   Minus,
   Link as LinkIcon,
+  Image as ImageIcon,
   Undo2,
   Redo2,
   Type,
@@ -57,7 +60,8 @@ import {
   AlertCircle,
   X,
   Edit2,
-  MoreHorizontal
+  MoreHorizontal,
+  CornerDownRight
 } from 'lucide-react';
 
 interface WithMarkdownStorage {
@@ -571,6 +575,8 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
     y: number;
   } | null>(null);
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // Local parsed items for this swim lane (each gets unique lane-scoped IDs)
   const laneParsed = useMemo(() => parseSwimLaneMarkdown(lane), [lane]);
   const laneTasks = laneParsed.items;
@@ -843,154 +849,154 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                   const cardActionsWidget = Decoration.widget(
                     pos + 1,
                     (view) => {
-                        const container = document.createElement('div');
-                        container.className = 'card-actions-wrapper';
-                        container.setAttribute('contenteditable', 'false');
+                      const container = document.createElement('div');
+                      container.className = 'card-actions-wrapper';
+                      container.setAttribute('contenteditable', 'false');
 
-                        // Running status pill
-                        if (isCardRunning) {
-                          const runningPill = document.createElement('div');
-                          runningPill.className = 'task-running-badge-pill';
-                          runningPill.innerHTML = `<span class="live-pulse-dot-working"></span><span>RUNNING</span>`;
-                          container.appendChild(runningPill);
+                      // Running status pill
+                      if (isCardRunning) {
+                        const runningPill = document.createElement('div');
+                        runningPill.className = 'task-running-badge-pill';
+                        runningPill.innerHTML = `<span class="live-pulse-dot-working"></span><span>RUNNING</span>`;
+                        container.appendChild(runningPill);
+                      }
+
+                      // Add Task to AI Workspace button
+                      const addBtn = document.createElement('button');
+                      addBtn.className = 'card-action-btn card-add-task-btn card-add-subtask-btn';
+                      addBtn.setAttribute('contenteditable', 'false');
+                      addBtn.type = 'button';
+                      addBtn.title = 'Add Task (to AI Workspace)';
+                      addBtn.setAttribute('aria-label', 'Add Task to AI Workspace');
+                      addBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 10 20 15 15 20"></polyline><path d="M4 4v7a4 4 0 0 0 4 4h12"></path></svg>`;
+
+                      addBtn.addEventListener('mousedown', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      });
+
+                      addBtn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+
+                        let taskContextText = '';
+                        if (matchedTask) {
+                          taskContextText = matchedTask.title;
+                          if (matchedTask.subtasks && matchedTask.subtasks.length > 0) {
+                            taskContextText += '\n' + matchedTask.subtasks.map((st) => `- ${st.text}`).join('\n');
+                          }
+                        }
+                        if (!taskContextText) {
+                          try {
+                            taskContextText = view.state.doc.textBetween(pos, pos + node.nodeSize, '\n').trim();
+                          } catch {
+                            taskContextText = node.textContent.trim();
+                          }
                         }
 
-                        // Add Task to AI Workspace button
-                        const addBtn = document.createElement('button');
-                        addBtn.className = 'card-action-btn card-add-task-btn card-add-subtask-btn';
-                        addBtn.setAttribute('contenteditable', 'false');
-                        addBtn.type = 'button';
-                        addBtn.title = 'Add Task (to AI Workspace)';
-                        addBtn.setAttribute('aria-label', 'Add Task to AI Workspace');
-                        addBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`;
+                        if (taskContextText && onCreateTaskFromSelectionRef.current) {
+                          onCreateTaskFromSelectionRef.current(taskContextText, lane.id, lane.title, matchedTask);
+                        }
+                      });
 
-                        addBtn.addEventListener('mousedown', (e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                        });
+                      // Task Options menu button with nested Archive functionality
+                      const menuWrapper = document.createElement('div');
+                      menuWrapper.style.position = 'relative';
 
-                        addBtn.addEventListener('click', (e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
+                      const menuBtn = document.createElement('button');
+                      menuBtn.className = 'card-action-btn card-menu-btn';
+                      menuBtn.setAttribute('contenteditable', 'false');
+                      menuBtn.type = 'button';
+                      menuBtn.title = 'Task options';
+                      menuBtn.setAttribute('aria-label', 'Task options');
+                      menuBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="2.2"></circle><circle cx="19" cy="12" r="2.2"></circle><circle cx="5" cy="12" r="2.2"></circle></svg>`;
 
-                          let taskContextText = '';
-                          if (matchedTask) {
-                            taskContextText = matchedTask.title;
-                            if (matchedTask.subtasks && matchedTask.subtasks.length > 0) {
-                              taskContextText += '\n' + matchedTask.subtasks.map((st) => `- ${st.text}`).join('\n');
+                      let dropdownEl: HTMLElement | null = null;
+
+                      const closeMenu = () => {
+                        if (dropdownEl && dropdownEl.parentNode) {
+                          dropdownEl.parentNode.removeChild(dropdownEl);
+                          dropdownEl = null;
+                          menuBtn.classList.remove('active');
+                        }
+                        document.removeEventListener('mousedown', handleOutside);
+                        document.removeEventListener('keydown', handleKey);
+                      };
+
+                      const handleOutside = (ev: MouseEvent) => {
+                        if (dropdownEl && !menuWrapper.contains(ev.target as Node)) {
+                          closeMenu();
+                        }
+                      };
+
+                      const handleKey = (ev: KeyboardEvent) => {
+                        if (ev.key === 'Escape') {
+                          closeMenu();
+                        }
+                      };
+
+                      menuBtn.addEventListener('mousedown', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      });
+
+                      menuBtn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+
+                        if (dropdownEl) {
+                          closeMenu();
+                          return;
+                        }
+
+                        menuBtn.classList.add('active');
+                        dropdownEl = document.createElement('div');
+                        dropdownEl.className = 'card-dropdown-menu';
+                        dropdownEl.setAttribute('contenteditable', 'false');
+
+                        if (onArchiveTaskRef.current) {
+                          const archiveItem = document.createElement('button');
+                          archiveItem.type = 'button';
+                          archiveItem.className = 'card-dropdown-item';
+                          archiveItem.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg><span>Archive Task</span>`;
+
+                          archiveItem.addEventListener('mousedown', (ev) => {
+                            ev.preventDefault();
+                            ev.stopPropagation();
+                          });
+
+                          archiveItem.addEventListener('click', (ev) => {
+                            ev.preventDefault();
+                            ev.stopPropagation();
+                            closeMenu();
+                            collapsedCardsState.delete(cardKey);
+
+                            if (onArchiveTaskRef.current) {
+                              const liveTitle = firstBlockNode?.textContent?.trim() || '';
+                              onArchiveTaskRef.current(liveTitle);
                             }
-                          }
-                          if (!taskContextText) {
-                            try {
-                              taskContextText = view.state.doc.textBetween(pos, pos + node.nodeSize, '\n').trim();
-                            } catch {
-                              taskContextText = node.textContent.trim();
-                            }
-                          }
+                          });
 
-                          if (taskContextText && onCreateTaskFromSelectionRef.current) {
-                            onCreateTaskFromSelectionRef.current(taskContextText, lane.id, lane.title, matchedTask);
-                          }
-                        });
+                          dropdownEl.appendChild(archiveItem);
+                        }
 
-                        // Task Options menu button with nested Archive functionality
-                        const menuWrapper = document.createElement('div');
-                        menuWrapper.style.position = 'relative';
+                        menuWrapper.appendChild(dropdownEl);
 
-                        const menuBtn = document.createElement('button');
-                        menuBtn.className = 'card-action-btn card-menu-btn';
-                        menuBtn.setAttribute('contenteditable', 'false');
-                        menuBtn.type = 'button';
-                        menuBtn.title = 'Task options';
-                        menuBtn.setAttribute('aria-label', 'Task options');
-                        menuBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="2.2"></circle><circle cx="19" cy="12" r="2.2"></circle><circle cx="5" cy="12" r="2.2"></circle></svg>`;
+                        setTimeout(() => {
+                          document.addEventListener('mousedown', handleOutside);
+                          document.addEventListener('keydown', handleKey);
+                        }, 0);
+                      });
 
-                        let dropdownEl: HTMLElement | null = null;
+                      menuWrapper.appendChild(menuBtn);
+                      container.appendChild(addBtn);
+                      container.appendChild(menuWrapper);
 
-                        const closeMenu = () => {
-                          if (dropdownEl && dropdownEl.parentNode) {
-                            dropdownEl.parentNode.removeChild(dropdownEl);
-                            dropdownEl = null;
-                            menuBtn.classList.remove('active');
-                          }
-                          document.removeEventListener('mousedown', handleOutside);
-                          document.removeEventListener('keydown', handleKey);
-                        };
-
-                        const handleOutside = (ev: MouseEvent) => {
-                          if (dropdownEl && !menuWrapper.contains(ev.target as Node)) {
-                            closeMenu();
-                          }
-                        };
-
-                        const handleKey = (ev: KeyboardEvent) => {
-                          if (ev.key === 'Escape') {
-                            closeMenu();
-                          }
-                        };
-
-                        menuBtn.addEventListener('mousedown', (e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                        });
-
-                        menuBtn.addEventListener('click', (e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-
-                          if (dropdownEl) {
-                            closeMenu();
-                            return;
-                          }
-
-                          menuBtn.classList.add('active');
-                          dropdownEl = document.createElement('div');
-                          dropdownEl.className = 'card-dropdown-menu';
-                          dropdownEl.setAttribute('contenteditable', 'false');
-
-                          if (onArchiveTaskRef.current) {
-                            const archiveItem = document.createElement('button');
-                            archiveItem.type = 'button';
-                            archiveItem.className = 'card-dropdown-item';
-                            archiveItem.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg><span>Archive Task</span>`;
-
-                            archiveItem.addEventListener('mousedown', (ev) => {
-                              ev.preventDefault();
-                              ev.stopPropagation();
-                            });
-
-                            archiveItem.addEventListener('click', (ev) => {
-                              ev.preventDefault();
-                              ev.stopPropagation();
-                              closeMenu();
-                              collapsedCardsState.delete(cardKey);
-
-                              if (onArchiveTaskRef.current) {
-                                const liveTitle = firstBlockNode?.textContent?.trim() || '';
-                                onArchiveTaskRef.current(liveTitle);
-                              }
-                            });
-
-                            dropdownEl.appendChild(archiveItem);
-                          }
-
-                          menuWrapper.appendChild(dropdownEl);
-
-                          setTimeout(() => {
-                            document.addEventListener('mousedown', handleOutside);
-                            document.addEventListener('keydown', handleKey);
-                          }, 0);
-                        });
-
-                        menuWrapper.appendChild(menuBtn);
-                        container.appendChild(addBtn);
-                        container.appendChild(menuWrapper);
-
-                        return container;
-                      },
-                      { side: 1, stopEvent: () => true }
-                    );
-                    decorations.push(cardActionsWidget);
+                      return container;
+                    },
+                    { side: 1, stopEvent: () => true }
+                  );
+                  decorations.push(cardActionsWidget);
 
                 } else {
                   // Subtask list item
@@ -1205,6 +1211,13 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         },
       }),
       Typography,
+      Image.configure({
+        inline: false,
+        allowBase64: true,
+        HTMLAttributes: {
+          class: 'task-attached-image',
+        },
+      }),
       Markdown.configure({
         html: false,
         tightLists: true,
@@ -1225,6 +1238,50 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       attributes: {
         class: 'tiptap obsidian-editor',
         spellcheck: 'false',
+      },
+      handlePaste: (view, event) => {
+        const items = event.clipboardData?.items;
+        if (!items) return false;
+
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (item.type.startsWith('image/')) {
+            const file = item.getAsFile();
+            if (file) {
+              event.preventDefault();
+              const folderPath = project?.folderPath || 'projects/default-workspace';
+              storageManager.saveMediaFile(folderPath, file).then((relPath) => {
+                if (!view || view.isDestroyed) return;
+                const src = relPath
+                  ? `/api/media/${relPath}`
+                  : URL.createObjectURL(file); // fallback: blob URL (in-memory only)
+                const { state, dispatch } = view;
+                const imageNode = state.schema.nodes.image?.create({ src, alt: file.name || 'Pasted screenshot' });
+                if (imageNode) {
+                  const tr = state.tr.replaceSelectionWith(imageNode);
+                  dispatch(tr);
+                }
+              }).catch(() => {
+                // Fallback to base64 on any error
+                const reader = new FileReader();
+                reader.onload = (readerEvent) => {
+                  const src = readerEvent.target?.result as string;
+                  if (src && view && !view.isDestroyed) {
+                    const { state, dispatch } = view;
+                    const imageNode = state.schema.nodes.image?.create({ src, alt: file.name || 'Pasted screenshot' });
+                    if (imageNode) {
+                      const tr = state.tr.replaceSelectionWith(imageNode);
+                      dispatch(tr);
+                    }
+                  }
+                };
+                reader.readAsDataURL(file);
+              });
+              return true;
+            }
+          }
+        }
+        return false;
       },
     },
     onFocus: () => {
@@ -1357,11 +1414,14 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
 
   // Synchronize editor content when external lane.markdown changes
   useEffect(() => {
-    if (editor && !editor.isFocused) {
+    if (editor) {
       const stripped = stripHeaderComments(lane.markdown);
       const storage = (editor as unknown as WithMarkdownStorage).storage;
       const currentMd = storage.markdown?.getMarkdown();
       if (currentMd !== stripped) {
+        // If the editor is focused, check whether focus is actually inside the ProseMirror dom
+        // When clicking dropdown action buttons (e.g. Archive Task), the editor may have had focus
+        // but external state changes should win.
         editor.commands.setContent(stripped, { emitUpdate: false });
       }
     }
@@ -1379,6 +1439,47 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
     }
     editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
   }, [editor]);
+
+  const triggerImageUpload = useCallback(() => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+      fileInputRef.current.click();
+    }
+  }, []);
+
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0 || !editor) return;
+
+    const folderPath = project?.folderPath || 'projects/default-workspace';
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (file.type.startsWith('image/')) {
+        const capturedEditor = editor;
+        storageManager.saveMediaFile(folderPath, file).then((relPath) => {
+          if (!capturedEditor || capturedEditor.isDestroyed) return;
+          const src = relPath
+            ? `/api/media/${relPath}`
+            : URL.createObjectURL(file);
+          capturedEditor.chain().focus().setImage({ src, alt: file.name || 'Attached screenshot' }).run();
+        }).catch(() => {
+          // Fallback to base64
+          const reader = new FileReader();
+          reader.onload = (readerEvent) => {
+            const src = readerEvent.target?.result as string;
+            if (src && capturedEditor && !capturedEditor.isDestroyed) {
+              capturedEditor.chain().focus().setImage({ src, alt: file.name || 'Attached screenshot' }).run();
+            }
+          };
+          reader.readAsDataURL(file);
+        });
+      }
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  }, [editor, project]);
 
   const laneDoneCount = laneTasks.filter((t) => t.isDone).length;
 
@@ -1544,6 +1645,9 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
             <ToolbarBtn onClick={setLink} active={editor?.isActive('link')} title="Link ([text](url))">
               <LinkIcon size={13} />
             </ToolbarBtn>
+            <ToolbarBtn onClick={triggerImageUpload} title="Attach Image / Screenshot">
+              <ImageIcon size={13} />
+            </ToolbarBtn>
           </div>
 
           <Sep />
@@ -1684,6 +1788,16 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         </div>
       )}
 
+      {/* Hidden file input for uploading images/screenshots */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileChange}
+        accept="image/*"
+        multiple
+        style={{ display: 'none' }}
+      />
+
       {/* Freeform Selection "Run" & Style Controls Floating Tooltip */}
       {selectionTooltip && selectionTooltip.visible && typeof document !== 'undefined' && createPortal(
         <div
@@ -1704,7 +1818,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
             onClick={handleRunSelection}
             title="Add as task to AI Workspace"
           >
-            <Plus size={12} strokeWidth={2.5} />
+            <CornerDownRight size={12} strokeWidth={2.5} />
             <span>Add Task</span>
           </button>
 
@@ -1758,6 +1872,16 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
             title="Link ([text](url))"
           >
             <LinkIcon size={13} />
+          </button>
+
+          {/* Photo / Screenshot */}
+          <button
+            type="button"
+            className="selection-tooltip-btn"
+            onClick={triggerImageUpload}
+            title="Attach Image / Screenshot"
+          >
+            <ImageIcon size={13} />
           </button>
 
           {/* Subtask (Bullet) */}

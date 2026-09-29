@@ -183,9 +183,11 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
   }
 
   const rawKind = typeof parsed?.taskKind === 'string' ? parsed.taskKind.trim().toLowerCase() : '';
-  const taskKind: TaskKind = (TASK_KINDS as string[]).includes(rawKind)
-    ? (rawKind as TaskKind)
-    : inferTaskKind(`${task.category} ${task.title} ${task.subtasks.map((s) => s.text).join(' ')} ${overviewDoc.output_as}`);
+  const taskKind: TaskKind = (layaTriage?.usedLaya && layaTriage.taskKind)
+    ? layaTriage.taskKind
+    : ((TASK_KINDS as string[]).includes(rawKind)
+      ? (rawKind as TaskKind)
+      : inferTaskKind(`${task.category} ${task.title} ${task.subtasks.map((s) => s.text).join(' ')} ${overviewDoc.output_as}`));
   overviewDoc.taskKind = taskKind;
 
   const outputText = (overviewDoc.output_as || '').toLowerCase();
@@ -199,7 +201,10 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
   let requiresHardener: boolean;
   let hardenerReason: string | undefined;
 
-  if (isStandaloneSingleDeliverable && isSmallScope) {
+  if (layaTriage?.usedLaya) {
+    requiresHardener = layaTriage.requiresHardener;
+    hardenerReason = layaTriage.hardenerReason;
+  } else if (isStandaloneSingleDeliverable && isSmallScope) {
     // Single deliverable / standalone tasks (e.g. single HTML game, standalone script) MUST skip Hardener to conserve tokens
     requiresHardener = false;
     hardenerReason = 'Standalone single deliverable; skipping Hardener to conserve tokens per workflow rules.';
