@@ -74,11 +74,15 @@ export interface MCPServer {
   iconUrl?: string;
   category: 'developer' | 'productivity' | 'design' | 'analytics' | 'database';
   status: 'connected' | 'disconnected' | 'authenticating';
-  transport: 'OAuth 2.1' | 'SSE' | 'Local Stdio';
+  transport: 'OAuth 2.1' | 'SSE' | 'Local Stdio' | string;
   endpoint: string;
   tools: MCPTool[];
   serverType?: 'bundled_harness' | 'external_oauth';
   lastSyncedAt?: string;
+  isCustom?: boolean;
+  authHeader?: string;
+  authUsername?: string;
+  error?: string;
 }
 
 export interface MCPTool {
@@ -88,6 +92,7 @@ export interface MCPTool {
   autoApprove: boolean;
   serverId?: string;
   category?: string;
+  inputSchema?: Record<string, any>;
 }
 
 export interface McpRootBoundary {

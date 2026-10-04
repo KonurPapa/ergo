@@ -19,10 +19,12 @@ import {
   type OllamaFallbackPrompt,
   type SwimLaneDoc,
   type AgentPipelineOptions,
-  type TaskStatus
+  type TaskStatus,
+  type McpSecretEntry
 } from './types';
 
 import { INITIAL_PROJECTS, createNewProjectData, INITIAL_MCP_SERVERS } from './lib/demoData';
+import { GITHUB_MCP_TOOLS } from './lib/githubMcpTools';
 import {
   parseTodoMarkdown,
   parseAgentContextMarkdown,
@@ -37,6 +39,8 @@ import { storageManager } from './lib/storageManager';
 import {
   preWarmEmbeddings,
   migrateAgentContextToMemory,
+  archiveTaskToVectorMemory,
+  runSessionRetrospective,
   removeChunksByTaskId,
   clearProjectMemory,
   clearAllMemory
@@ -140,13 +144,24 @@ export function App() {
           return INITIAL_MCP_SERVERS.map((initServer) => {
             const match = parsed.find((s: MCPServer) => s.id === initServer.id);
             if (!match) return initServer;
+            const mergedTools = (match.tools && match.tools.length >= initServer.tools.length)
+              ? match.tools.map((mt: any) => {
+                  const initTool = initServer.tools.find((it) => it.name === mt.name);
+                  return {
+                    ...initTool,
+                    ...mt,
+                    inputSchema: mt.inputSchema || initTool?.inputSchema
+                  };
+                })
+              : initServer.tools.map((initTool) => {
+                  const toolMatch = match.tools?.find((t: any) => t.id === initTool.id || t.name === initTool.name);
+                  return toolMatch ? { ...initTool, autoApprove: Boolean(toolMatch.autoApprove) } : initTool;
+                });
+
             return {
               ...initServer,
-              status: match.status ?? initServer.status,
-              tools: initServer.tools.map((initTool) => {
-                const toolMatch = match.tools?.find((t: any) => t.id === initTool.id || t.name === initTool.name);
-                return toolMatch ? { ...initTool, autoApprove: Boolean(toolMatch.autoApprove) } : initTool;
-              })
+              ...match,
+              tools: mergedTools
             };
           }).concat(parsed.filter((s: MCPServer) => !INITIAL_MCP_SERVERS.some((init) => init.id === s.id)));
         }
@@ -225,11 +240,11 @@ export function App() {
   const [_activeTerminalTaskId, setActiveTerminalTaskId] = useState<string | number | null>(null);
 
 
-  // Theme State (Default: 'light')
+  // Theme State (Default: 'dark' to match Kiro Crew)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('ergo_theme');
     if (saved === 'dark' || saved === 'light') return saved;
-    return 'light';
+    return 'dark';
   });
 
   // Agent Execution Pipeline tuning (concurrency, QA retries, tool rounds, cleaner/hardener gates)
@@ -336,17 +351,51 @@ export function App() {
     }
   }, [activeProjectId, activeKeyId, autosave.delaySec, autosave.isEnabled, theme, hasCompletedOnboarding, agentPipelineOptions]);
 
+  // MCP Secrets State (config/secrets.json)
+  const [mcpSecrets, setMcpSecrets] = useState<Record<string, McpSecretEntry>>({});
+
+  useEffect(() => {
+    storageManager.loadSecrets().then((sec) => {
+      if (sec?.mcpSecrets) {
+        setMcpSecrets(sec.mcpSecrets);
+      }
+    }).catch(() => {});
+  }, []);
+
+  // Sync GitHub MCP status on startup
+  useEffect(() => {
+    fetch('/api/mcp/github/status')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.configured) {
+          setMcpServers((prev) =>
+            prev.map((s) => {
+              if (s.id !== 'mcp-github') return s;
+              return {
+                ...s,
+                status: 'connected',
+                authUsername: data.username,
+                tools: (s.tools && s.tools.length >= 26) ? s.tools : GITHUB_MCP_TOOLS
+              };
+            })
+          );
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // Sync secrets (config/secrets.json)
   useEffect(() => {
     storageManager.saveSecrets({
       version: 1,
       updatedAt: new Date().toISOString(),
       userApiKeys,
+      mcpSecrets,
       cliAgent: cliAgentConfig ?? undefined,
       cliAgents,
       activeCliAgentId,
     });
-  }, [userApiKeys, cliAgentConfig, cliAgents, activeCliAgentId]);
+  }, [userApiKeys, mcpSecrets, cliAgentConfig, cliAgents, activeCliAgentId]);
 
 
   // Active AI Provider Config
@@ -360,6 +409,10 @@ export function App() {
         summaryModel: activeKey.summaryModel || pMeta?.defaultSummaryModel || activeKey.generalModel || activeKey.model || 'gpt-4o',
         generalModel: activeKey.generalModel || activeKey.model || pMeta?.defaultGeneralModel || 'gpt-4o',
         workerModel: activeKey.workerModel || undefined,
+        authMode: activeKey.authMode || (activeKey.apiKey === 'cli_subscription_active' ? 'cli_subscription' : 'api_key'),
+        cliAgentId: activeKey.cliAgentId,
+        cliCustomCommand: activeKey.cliCustomCommand,
+        cliExecutionMode: activeKey.cliExecutionMode,
         apiKey: activeKey.apiKey,
         baseUrl: activeKey.baseUrl,
         isConnected: true
@@ -388,6 +441,10 @@ export function App() {
         loggerModel: activeKey.loggerModel || undefined,
         roleConfigs: activeKey.roleConfigs || undefined,
         providerKeys: activeKey.providerKeys || undefined,
+        authMode: activeKey.authMode || (activeKey.apiKey === 'cli_subscription_active' ? 'cli_subscription' : 'api_key'),
+        cliAgentId: activeKey.cliAgentId,
+        cliCustomCommand: activeKey.cliCustomCommand,
+        cliExecutionMode: activeKey.cliExecutionMode,
         apiKey: activeKey.apiKey,
         baseUrl: activeKey.baseUrl,
         isConnected: true
@@ -718,16 +775,33 @@ export function App() {
             markdown: activeProject.todoMarkdown || ''
           }];
 
-      const agentPath = activeProject.agentContextFilePath || `${activeProject.folderPath}/AGENT_CONTEXT.md`;
-      const allPathsToRead = [...currentLanes.map((l) => l.filePath), agentPath];
+      const agentPath = activeProject.agentContextFilePath || (activeProject.folderPath ? `${activeProject.folderPath}/AGENT_CONTEXT.md` : '');
+      const allPathsToRead = [...currentLanes.map((l) => l.filePath), ...(agentPath ? [agentPath] : [])];
 
       // Try reading latest live files directly from disk
       const diskFiles = await readFilesFromDisk(allPathsToRead);
       if (!isMounted) return;
 
-      let effectiveAgentMd = activeProject.agentContextMarkdown;
-      if (diskFiles[agentPath] !== null && diskFiles[agentPath] !== undefined) {
-        effectiveAgentMd = diskFiles[agentPath]!;
+      // Migrate legacy AGENT_CONTEXT.md if found on disk, then permanently remove it from disk
+      if (agentPath && diskFiles[agentPath] !== null && diskFiles[agentPath] !== undefined) {
+        try {
+          const { items: legacyItems } = parseAgentContextWithArchive(diskFiles[agentPath]!);
+          if (legacyItems.length > 0) {
+            void migrateAgentContextToMemory(
+              legacyItems.map((b) => ({
+                id: String(b.sourceTaskId || b.id || b.itemNumber || '').replace(/^brief_/, ''),
+                title: b.title || '',
+                overview: b.overview || b.brief || '',
+                completion: b.completion || '',
+                projectId: activeProjectId,
+              }))
+            );
+          }
+          // Remove AGENT_CONTEXT.md from disk so it never exists on disk again
+          void storageManager.deleteFile(agentPath);
+        } catch (migErr) {
+          console.warn('[Ergo] Cleanup of legacy AGENT_CONTEXT.md:', migErr);
+        }
       }
 
       const effectiveSwimLanes = currentLanes.map((lane) => {
@@ -750,50 +824,40 @@ export function App() {
         }
       }
 
-      const parsedBriefsWithArchive = parseAgentContextWithArchive(effectiveAgentMd || '');
-
-      // Reconcile briefs with archived tasks:
-      // If an active brief matches an archived task (and is not in allActiveTasks), it belongs in archivedBriefs!
-      const activeBriefs: AgentContextItem[] = [];
-      const archivedBriefsList: AgentContextItem[] = [...parsedBriefsWithArchive.archivedItems];
-      let needsReserialize = false;
-
-      for (const brief of parsedBriefsWithArchive.items) {
-        const cleanBTitle = cleanAndUnescapeMarkdown(brief.title).trim().toLowerCase();
-        const matchesArchived = allArchivedTasks.some(
-          (at) =>
-            (brief.sourceTaskId && (brief.sourceTaskId === at.id || String(brief.sourceTaskId) === String(at.id))) ||
-            at.title.trim().toLowerCase() === cleanBTitle ||
-            cleanAndUnescapeMarkdown(at.title).trim().toLowerCase() === cleanBTitle
-        );
-        const matchesActive = allActiveTasks.some(
-          (t) =>
-            (brief.sourceTaskId && (brief.sourceTaskId === t.id || String(brief.sourceTaskId) === String(t.id))) ||
-            t.title.trim().toLowerCase() === cleanBTitle ||
-            cleanAndUnescapeMarkdown(t.title).trim().toLowerCase() === cleanBTitle
-        );
-
-        if (matchesArchived && !matchesActive) {
-          archivedBriefsList.push({ ...brief, isArchived: true });
-          needsReserialize = true;
-        } else {
-          activeBriefs.push(brief);
+      // If any legacy archived tasks were found in markdown, archive them to vector storage and clean up markdown!
+      if (allArchivedTasks.length > 0) {
+        for (const at of allArchivedTasks) {
+          void archiveTaskToVectorMemory({
+            taskId: at.id,
+            taskTitle: at.title,
+            category: at.category,
+            status: at.status,
+            subtasks: at.subtasks,
+            projectId: activeProjectId,
+          });
         }
+        // Write clean swimlanes without archived blocks
+        const cleanedLanes = effectiveSwimLanes.map((l) => ({
+          ...l,
+          markdown: serializeTodoMarkdown(
+            allActiveTasks.filter((t) => (t.swimLaneId || 'lane-default') === l.id),
+            firstHeaderComments
+          ),
+        }));
+        writeFilesToDisk(cleanedLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })));
       }
 
-      if (needsReserialize && agentPath) {
-        effectiveAgentMd = serializeAgentContextMarkdown(activeBriefs, archivedBriefsList);
-        writeFilesToDisk([{ filePath: agentPath, content: effectiveAgentMd }]);
-      }
+      const parsedBriefsWithArchive = parseAgentContextWithArchive(activeProject.agentContextMarkdown || '');
+      const activeBriefs: AgentContextItem[] = parsedBriefsWithArchive.items;
 
       setTasks(allActiveTasks);
-      setArchivedTasks(allArchivedTasks);
+      setArchivedTasks([]);
       setHeaderComments(firstHeaderComments);
       setBriefs(activeBriefs);
-      setArchivedBriefs(archivedBriefsList);
+      setArchivedBriefs([]);
 
       if (activeBriefs.length > 0) {
-        migrateAgentContextToMemory(
+        void migrateAgentContextToMemory(
           activeBriefs.map((b) => ({
             id: String(b.sourceTaskId || b.id || b.itemNumber || '').replace(/^brief_/, ''),
             title: b.title || '',
@@ -801,9 +865,7 @@ export function App() {
             completion: b.completion || '',
             projectId: activeProjectId,
           }))
-        ).catch((err) => {
-          console.warn('[Ergo] Background migration of briefs to memory failed:', err);
-        });
+        );
 
         const firstBrief = activeBriefs[0];
         const defaultId = firstBrief.sourceTaskId || firstBrief.id || firstBrief.itemNumber || null;
@@ -829,7 +891,7 @@ export function App() {
             ? {
                 ...p,
                 todoMarkdown: primaryTodoMd,
-                agentContextMarkdown: effectiveAgentMd,
+                agentContextMarkdown: '',
                 swimLanes: effectiveSwimLanes
               }
             : p
@@ -878,7 +940,8 @@ export function App() {
               if (!isMatch) return p;
 
               if (fileType === 'agent' || relativePath?.endsWith('AGENT_CONTEXT.md')) {
-                return { ...p, agentContextMarkdown: content };
+                if (relativePath) void storageManager.deleteFile(relativePath);
+                return p;
               } else {
                 const updatedLanes = (p.swimLanes || []).map((l) =>
                   l.filePath === relativePath ? { ...l, markdown: content } : l
@@ -899,14 +962,12 @@ export function App() {
             (ap.id === projectId ||
               ap.folderPath === `projects/${projectId}` ||
               ap.todoFilePath === relativePath ||
-              ap.agentContextFilePath === relativePath ||
               (ap.swimLanes && ap.swimLanes.some((l) => l.filePath === relativePath)));
 
           if (isActiveProject) {
             if (fileType === 'agent' || relativePath?.endsWith('AGENT_CONTEXT.md')) {
-              const { items: parsedBriefs, archivedItems: parsedArchivedBriefs } = parseAgentContextWithArchive(content);
-              setBriefs(parsedBriefs);
-              setArchivedBriefs(parsedArchivedBriefs);
+              // Ignore AGENT_CONTEXT.md - context lives in vector memory
+              return;
             } else {
               const currentLanes: SwimLaneDoc[] = ap.swimLanes && ap.swimLanes.length > 0
                 ? ap.swimLanes
@@ -985,12 +1046,9 @@ export function App() {
 
     const firstLaneId = effectiveLanes[0]?.id || 'lane-default';
 
-    // Re-serialize each swimlane markdown ensuring active and archived tasks are properly placed
+    // Re-serialize each swimlane markdown ensuring only active tasks are placed
     const updatedLanes: SwimLaneDoc[] = effectiveLanes.map((lane, idx) => {
       const laneActive = newTasks.filter(
-        (t) => (t.swimLaneId || firstLaneId) === lane.id
-      );
-      const laneArchived = currentArchivedTasks.filter(
         (t) => (t.swimLaneId || firstLaneId) === lane.id
       );
 
@@ -1005,15 +1063,14 @@ export function App() {
         } catch {}
       }
 
-      const serialized = serializeTodoMarkdown(laneActive, laneHeader, laneArchived);
+      const serialized = serializeTodoMarkdown(laneActive, laneHeader);
       return {
         ...lane,
         markdown: serialized,
       };
     });
 
-    const primaryTodoMd = updatedLanes[0]?.markdown || serializeTodoMarkdown(newTasks, headerComments, currentArchivedTasks);
-    const updatedBriefsMd = serializeAgentContextMarkdown(newBriefs, currentArchivedBriefs);
+    const primaryTodoMd = updatedLanes[0]?.markdown || serializeTodoMarkdown(newTasks, headerComments);
 
     setProjects((prev) =>
       prev.map((p) =>
@@ -1021,20 +1078,14 @@ export function App() {
           ? {
               ...p,
               todoMarkdown: primaryTodoMd,
-              agentContextMarkdown: updatedBriefsMd,
               swimLanes: updatedLanes
             }
           : p
       )
     );
 
-    const currentProj = projects.find((p) => p.id === activeProjectId) || activeProject;
-    const agentPath = currentProj?.agentContextFilePath || (currentProj?.folderPath ? `${currentProj.folderPath}/AGENT_CONTEXT.md` : '');
-
-    const filesToSave = [
-      ...updatedLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
-      ...(agentPath ? [{ filePath: agentPath, content: updatedBriefsMd }] : [])
-    ];
+    // Save only swimlane markdown files (e.g. TODO.md) — AGENT_CONTEXT.md is never written to disk
+    const filesToSave = updatedLanes.map((l) => ({ filePath: l.filePath, content: l.markdown }));
 
     if (immediateDiskSave) {
       autosave.saveImmediately(filesToSave);
@@ -1185,7 +1236,7 @@ export function App() {
     const selectId = sourceTask ? sourceTask.id : (newBrief.id || null);
     setSelectedTaskId(selectId);
 
-    // Persist to state and AGENT_CONTEXT.md immediately
+    // Persist to state and workspace immediately
     syncAndSaveProject(tasks, nextBriefs, true);
 
     showToast({
@@ -1382,10 +1433,14 @@ export function App() {
     if (!cliAgentConfig?.command) {
       const activeKey = userApiKeys.find((k) => k.id === activeKeyId);
       const pMeta = activeKey ? SUPPORTED_AI_PROVIDERS.find((p) => p.id === activeKey.provider) : undefined;
-      const requiresKey = pMeta ? pMeta.requiresKey : true;
+      const requiresKey = pMeta ? pMeta.requiresKey !== false : true;
+      const isSubscription =
+        activeKey?.authMode === 'cli_subscription' ||
+        activeKey?.apiKey === 'cli_subscription_active' ||
+        activeKey?.provider === 'cli_subscription';
       const hasValidKey = !!(
         activeKey &&
-        (!requiresKey || (activeKey.apiKey && activeKey.apiKey.trim().length > 0))
+        (isSubscription || !requiresKey || (activeKey.apiKey && activeKey.apiKey.trim().length > 0))
       );
 
       if (!hasValidKey) {
@@ -1630,7 +1685,7 @@ export function App() {
           }
         );
 
-        // Completed execution: apply results & persist to TODO.md and AGENT_CONTEXT.md
+        // Completed execution: apply results & persist to TODO.md and vector memory
         const nextTasks = tasks.map((t) => (String(t.id) === String(res.updatedTask.id) ? res.updatedTask : t));
         const existingBriefIdx = briefs.findIndex(
           (b) =>
@@ -1766,6 +1821,18 @@ export function App() {
         }
 
         syncAndSaveProject(nextTasks, nextBriefs, true);
+
+        // Persist concise completion output & learnings directly to local vector memory
+        void runSessionRetrospective({
+          taskId,
+          taskTitle: task.title,
+          projectId: activeProjectId,
+          overview: updatedBrief.overview || '',
+          buildLog: updatedBrief.buildAndVerification || '',
+          completion: completionText,
+          createdFiles: updatedBrief.createdFiles || [],
+          allScenariosPass: true,
+        });
       }
     }
   };
@@ -1813,6 +1880,107 @@ export function App() {
     syncAndSaveProject(tasks, nextBriefs, true);
   };
 
+  // Helper to ensure an array of tasks have AI execution cards / briefs in AI Workspace
+  const ensureBriefsForTasks = (
+    taskList: TaskItem[],
+    laneId: string,
+    laneTitle: string
+  ): AgentContextItem[] => {
+    let currentBriefsList = [...briefs];
+    let maxNumber = currentBriefsList.length > 0 ? Math.max(...currentBriefsList.map((b) => b.itemNumber || 0)) : 0;
+
+    for (const item of taskList) {
+      const existingIdx = currentBriefsList.findIndex(
+        (b) =>
+          (b.sourceTaskId != null && b.sourceTaskId === item.id) ||
+          b.title.trim().toLowerCase() === item.title.trim().toLowerCase()
+      );
+
+      let contextText = item.title;
+      if (item.subtasks && item.subtasks.length > 0) {
+        contextText += '\n' + item.subtasks.map((st) => `- ${st.text}`).join('\n');
+      }
+
+      if (existingIdx === -1) {
+        maxNumber += 1;
+        const newBrief: AgentContextItem = {
+          id: `brief_${item.id}`,
+          sourceTaskId: item.id,
+          sourceLaneId: laneId,
+          sourceLaneTitle: laneTitle,
+          itemNumber: maxNumber,
+          title: item.title,
+          status: item.status || 'not_started',
+          overview: contextText,
+          buildAndVerification: '',
+          completion: '',
+          brief: contextText,
+          built: '',
+          validation: '',
+        };
+        currentBriefsList.push(newBrief);
+      }
+    }
+
+    syncAndSaveProject(tasks, currentBriefsList, true);
+    return currentBriefsList;
+  };
+
+  // Run tasks sequentially one after another
+  const handleRunTasksSequence = async (
+    taskList: TaskItem[],
+    laneId: string,
+    laneTitle: string
+  ) => {
+    if (!taskList || taskList.length === 0) return;
+
+    // Ensure AI Workspace panel is open so user sees the task execution cards
+    setIsAiPanelOpen(true);
+    ensureBriefsForTasks(taskList, laneId, laneTitle);
+
+    showToast({
+      type: 'info',
+      title: 'Sequential Execution Started',
+      message: `Running ${taskList.length} tasks in sequence.`,
+      duration: 3500,
+    });
+
+    for (let i = 0; i < taskList.length; i++) {
+      const task = taskList[i];
+      // Check if user terminated everything
+      try {
+        await handleExecuteTask(task);
+      } catch (err) {
+        console.error(`[Sequence] Error running task ${task.title}:`, err);
+      }
+    }
+  };
+
+  // Run tasks in parallel / concurrently (agentic mode)
+  const handleRunTasksParallel = async (
+    taskList: TaskItem[],
+    laneId: string,
+    laneTitle: string
+  ) => {
+    if (!taskList || taskList.length === 0) return;
+
+    // Ensure AI Workspace panel is open so user sees all task execution cards
+    setIsAiPanelOpen(true);
+    ensureBriefsForTasks(taskList, laneId, laneTitle);
+
+    showToast({
+      type: 'info',
+      title: 'Parallel Execution Started',
+      message: `Running ${taskList.length} tasks in parallel agentically.`,
+      duration: 3500,
+    });
+
+    await Promise.allSettled(
+      taskList.map((task) => handleExecuteTask(task))
+    );
+  };
+
+
   // Archive Task Handler (Moves task and corresponding brief into archive section immediately)
   // Takes the live title string read from the editor node, matching by title is immune to stale indices.
   const handleArchiveTask = (taskTitleOrId: string | number) => {
@@ -1844,51 +2012,31 @@ export function App() {
 
     if (!taskToArchive && !matchingBrief) return;
 
-    // Assign a unique ID in the 1000+ range for the archived task
-    const nextArchiveId = (archivedTasks.length > 0 || archivedBriefs.length > 0)
-      ? Math.max(
-          ...archivedTasks.map((t) => (typeof t.id === 'number' ? t.id : 1000)),
-          ...archivedBriefs.map((b) => b.itemNumber || 0),
-          1000
-        ) + 1
-      : 1001;
+    const taskTitle = taskToArchive?.title || matchingBrief?.title || 'Archived Task';
+    const taskIdToStore = taskToArchive?.id || matchingBrief?.sourceTaskId || matchingBrief?.id || Date.now();
 
-    let nextActiveTasks = tasks;
-    let nextArchivedTasks = archivedTasks;
+    // 1. Persist concise summary & notes directly into local vector storage
+    void archiveTaskToVectorMemory({
+      taskId: taskIdToStore,
+      taskTitle,
+      category: taskToArchive?.category,
+      status: taskToArchive?.status || (taskToArchive?.isDone ? 'done' : 'archived'),
+      overview: matchingBrief?.overview || matchingBrief?.brief,
+      completion: matchingBrief?.completion || matchingBrief?.validation,
+      subtasks: taskToArchive?.subtasks,
+      projectId: activeProjectId,
+    });
 
-    if (taskToArchive) {
-      const taskIndex = tasks.indexOf(taskToArchive);
-      nextActiveTasks = tasks.filter((t) => t !== taskToArchive);
-      const archivedTask: TaskItem = {
-        ...taskToArchive,
-        id: nextArchiveId,
-        isArchived: true,
-        archivedAtIndex: taskIndex !== -1 ? taskIndex : undefined,
-        category: 'Archive',
-        categoryHeadingPrefix: '##',
-        swimLaneId: taskToArchive.swimLaneId || (activeProject?.swimLanes?.[0]?.id || 'lane-default'),
-        sourceFileName: taskToArchive.sourceFileName || (activeProject?.swimLanes?.[0]?.filePath?.split('/').pop() || 'TODO.md'),
-      };
-      nextArchivedTasks = [
-        ...archivedTasks.filter((t) => t.id !== taskToArchive.id && t.title.trim().toLowerCase() !== taskToArchive.title.trim().toLowerCase()),
-        archivedTask,
-      ];
-    }
+    // 2. Remove task from active human workspace
+    const nextActiveTasks = taskToArchive ? tasks.filter((t) => t !== taskToArchive) : tasks;
 
+    // 3. Remove brief from AI workspace
     let nextActiveBriefs = briefs;
-    let nextArchivedBriefs = archivedBriefs;
-
     if (matchingBrief) {
       const matchClean = cleanAndUnescapeMarkdown(matchingBrief.title).trim().toLowerCase();
       nextActiveBriefs = briefs.filter(
         (b) => b !== matchingBrief && cleanAndUnescapeMarkdown(b.title).trim().toLowerCase() !== matchClean
       );
-      nextArchivedBriefs = [
-        ...archivedBriefs.filter(
-          (b) => b !== matchingBrief && cleanAndUnescapeMarkdown(b.title).trim().toLowerCase() !== matchClean
-        ),
-        { ...matchingBrief, isArchived: true, itemNumber: nextArchiveId, sourceTaskId: nextArchiveId },
-      ];
     }
 
     if (
@@ -1905,16 +2053,114 @@ export function App() {
       );
     }
 
-    syncAndSaveProject(nextActiveTasks, nextActiveBriefs, true, nextArchivedTasks, nextArchivedBriefs);
+    // 4. Save clean workspace without AGENT_CONTEXT.md or <!-- ARCHIVE --> blocks
+    syncAndSaveProject(nextActiveTasks, nextActiveBriefs, true);
 
     showToast({
       type: 'info',
-      title: 'Task Archived',
-      message: `"${taskToArchive?.title || matchingBrief?.title}" was moved to the archive. Find it anytime in the workspace header menu (•••) > Archived Tasks.`,
+      title: 'Task Archived to AI Brain',
+      message: `"${taskTitle}" was removed from the workspace and safely retained in vector storage.`,
+      duration: 3500,
     });
   };
 
-  // Remove AI Task Handler (Removes unstarted task from AGENT_CONTEXT.md / AI workspace without touching human workspace)
+  // Restore a task from Vector DB into the active workspace
+  const handleRestoreMemoryAsTask = (chunk: import('./lib/memory').MemoryChunk) => {
+    const rawTitle = chunk.metadata.taskTitle || chunk.text.split('\n')[0].replace(/^Task:\s*/i, '').replace(/^Archived Task:\s*/i, '').replace(/[#*`_~]/g, '').trim();
+    const title = rawTitle || 'Restored Task';
+    const nextId = tasks.length > 0 ? Math.max(...tasks.map((t) => (typeof t.id === 'number' ? t.id : 0))) + 1 : 1;
+    const restoredLaneId = activeProject?.swimLanes?.[0]?.id || 'lane-default';
+
+    // Parse subtasks from metadata (direct array or JSON string) or parse checklist from chunk.text
+    let restoredSubtasks: Array<{ id: string; text: string; isDone: boolean; isHumanReview?: boolean }> = [];
+    if (chunk.metadata.subtasks && Array.isArray(chunk.metadata.subtasks) && chunk.metadata.subtasks.length > 0) {
+      restoredSubtasks = chunk.metadata.subtasks.map((st, i) => ({
+        id: `${nextId}-${i + 1}`,
+        text: st.text,
+        isDone: !!st.isDone,
+        isHumanReview: !!st.isHumanReview,
+      }));
+    } else if (chunk.metadata.serializedSubtasks) {
+      try {
+        const parsed = JSON.parse(chunk.metadata.serializedSubtasks);
+        if (Array.isArray(parsed)) {
+          restoredSubtasks = parsed.map((st: any, i: number) => ({
+            id: `${nextId}-${i + 1}`,
+            text: st.text || String(st),
+            isDone: !!st.isDone,
+            isHumanReview: !!st.isHumanReview,
+          }));
+        }
+      } catch (err) {
+        console.warn('[RestoreTask] Failed to parse serializedSubtasks:', err);
+      }
+    }
+
+    if (restoredSubtasks.length === 0 && chunk.text) {
+      // Fallback: extract subtasks from `Checklist:` or bullet lines in chunk.text
+      const lines = chunk.text.split('\n');
+      let inChecklist = false;
+      for (const line of lines) {
+        if (/^Checklist:/i.test(line.trim())) {
+          inChecklist = true;
+          continue;
+        }
+        if (inChecklist && line.trim().startsWith('##')) {
+          break;
+        }
+        const match = line.match(/^[\s*-]*\[([ xX])\]\s*(.*)$/);
+        if (match) {
+          const isDone = match[1].toLowerCase() === 'x';
+          const subText = match[2].trim();
+          if (subText) {
+            restoredSubtasks.push({
+              id: `${nextId}-${restoredSubtasks.length + 1}`,
+              text: subText,
+              isDone,
+            });
+          }
+        }
+      }
+    }
+
+    const restoredTask: TaskItem = {
+      id: nextId,
+      title,
+      category: chunk.metadata.category || 'General',
+      listIndex: tasks.length + 1,
+      listType: 'ordered',
+      status: 'not_started',
+      isDone: false,
+      subtasks: restoredSubtasks,
+      swimLaneId: restoredLaneId,
+    };
+
+    const restoredBrief: AgentContextItem = {
+      id: `brief_${nextId}`,
+      sourceTaskId: nextId,
+      sourceLaneId: restoredLaneId,
+      title,
+      status: 'not_started',
+      overview: chunk.text,
+      buildAndVerification: '',
+      completion: '',
+      createdFiles: [],
+    };
+
+    const nextTasks = [...tasks, restoredTask];
+    const nextBriefs = [...briefs, restoredBrief];
+    setSelectedTaskId(nextId);
+    syncAndSaveProject(nextTasks, nextBriefs, true);
+
+    showToast({
+      type: 'success',
+      title: 'Restored to Workspace',
+      message: `"${title}" has been restored to your active workspace with ${restoredSubtasks.length} subtask${restoredSubtasks.length === 1 ? '' : 's'}.`,
+      duration: 3000,
+    });
+  };
+
+  // Remove AI Task Handler (Removes unstarted task from AI workspace without touching human workspace)
   const handleRemoveAiTask = (targetId: string | number) => {
     const briefToRemove = briefs.find(
       (b) =>
@@ -1955,6 +2201,88 @@ export function App() {
       type: 'info',
       title: 'Task Removed from AI Workspace',
       message: `Removed "${briefToRemove.title}" from the AI workspace. You can re-add it anytime from the human workspace.`,
+      duration: 3500,
+    });
+  };
+
+  // Purge Task Handler: Permanently removes task and all execution logs from AI Workspace & Vector DB
+  const handlePurgeTaskFromAi = async (targetId: string | number) => {
+    const briefToRemove = briefs.find(
+      (b) =>
+        b.id === targetId ||
+        b.sourceTaskId === targetId ||
+        b.itemNumber === targetId ||
+        String(b.sourceTaskId) === String(targetId) ||
+        String(b.id) === String(targetId) ||
+        String(b.itemNumber) === String(targetId)
+    );
+    const targetTitle = briefToRemove?.title || String(targetId);
+
+    // 1. Remove brief from AI workspace state
+    const nextBriefs = briefs.filter(
+      (b) =>
+        b !== briefToRemove &&
+        b.id !== targetId &&
+        b.sourceTaskId !== targetId &&
+        b.itemNumber !== targetId &&
+        String(b.sourceTaskId) !== String(targetId) &&
+        String(b.id) !== String(targetId) &&
+        String(b.itemNumber) !== String(targetId)
+    );
+    if (
+      selectedTaskId === targetId ||
+      (briefToRemove && (selectedTaskId === briefToRemove.sourceTaskId || selectedTaskId === briefToRemove.id))
+    ) {
+      setSelectedTaskId(
+        nextBriefs.length > 0
+          ? nextBriefs[0].sourceTaskId || nextBriefs[0].id || nextBriefs[0].itemNumber || null
+          : null
+      );
+    }
+    setBriefs(nextBriefs);
+    syncAndSaveProject(tasks, nextBriefs, true);
+
+    // 2. Clear in-memory execution logs & steps
+    const idKeys = [
+      targetId,
+      String(targetId),
+      briefToRemove?.id,
+      briefToRemove?.sourceTaskId,
+      briefToRemove?.sourceTaskId ? String(briefToRemove.sourceTaskId) : null,
+      briefToRemove?.id ? String(briefToRemove.id) : null,
+    ].filter(Boolean) as (string | number)[];
+
+    setTaskExecutionSteps((prev) => {
+      const next = { ...prev };
+      for (const k of idKeys) {
+        delete next[k];
+      }
+      return next;
+    });
+
+    setTerminalSessions((prev) =>
+      prev.filter((s) => !idKeys.some((k) => String(k) === String(s.session.taskId)))
+    );
+
+    // 3. Delete completely from local vector DB
+    try {
+      const taskIdsToPurge = [
+        targetId,
+        briefToRemove?.sourceTaskId,
+        briefToRemove?.id,
+      ].filter(Boolean) as (string | number)[];
+
+      for (const tid of taskIdsToPurge) {
+        await removeChunksByTaskId(tid, activeProjectId);
+      }
+    } catch (err) {
+      console.warn('[PurgeTask] Failed to delete chunks from vector memory:', err);
+    }
+
+    showToast({
+      type: 'info',
+      title: 'Task Removed Completely',
+      message: `"${targetTitle}" and its execution logs have been permanently deleted from AI Workspace and vector memory.`,
       duration: 3500,
     });
   };
@@ -2317,7 +2645,7 @@ export function App() {
     const fileName = `${slug.toUpperCase().replace(/-/g, '_')}.md`;
     const filePath = `${activeProject.folderPath}/${fileName}`;
 
-    const defaultContent = `<!-- Swimlane Title: ${title} -->\n<!-- Project: ${activeProject.name} | Folder: ${activeProject.folderPath} -->\n<!-- Linked Context: ${activeProject.agentContextFilePath} -->\n\n## ${title} Tasks\n\n1. Initial Task in ${title}\n    - Define task scope and subtasks\n`;
+    const defaultContent = `<!-- Swimlane Title: ${title} -->\n<!-- Project: ${activeProject.name} | Folder: ${activeProject.folderPath} -->\n\n## ${title} Tasks\n\n1. Initial Task in ${title}\n    - Define task scope and subtasks\n`;
 
     const newLane: SwimLaneDoc = {
       id: `lane-${Date.now()}`,
@@ -2756,19 +3084,26 @@ export function App() {
             isAssistantOpen={isDraftModalOpen}
             onCloseAssistant={() => setIsDraftModalOpen(false)}
             project={activeProject}
-            agentContextMarkdown={activeProject?.agentContextMarkdown || serializeAgentContextMarkdown(briefs, archivedBriefs)}
+            agentContextMarkdown=""
             aiConfig={aiConfig}
             mcpServers={mcpServers}
             onApplyAssistantResult={handleApplyAssistantResult}
             onArchiveTask={handleArchiveTask}
             onUnarchiveTask={handleUnarchiveTask}
             onDeleteArchivedTask={handleDeleteArchivedTask}
+            onRestoreMemoryAsTask={handleRestoreMemoryAsTask}
             swimLanes={activeProject?.swimLanes}
             onAddSwimLane={handleAddSwimLane}
             onRenameSwimLane={handleRenameSwimLane}
             onDeleteSwimLane={handleDeleteSwimLane}
             onSwimLaneMarkdownChange={handleSwimLaneMarkdownChange}
             onCreateTaskFromSelection={handleCreateTaskFromSelection}
+            onRunTasksSequence={handleRunTasksSequence}
+            onRunTasksParallel={handleRunTasksParallel}
+            onScheduleTask={(id, iso, cron) => {
+              setIsAiPanelOpen(true);
+              handleScheduleTask(id, iso, cron);
+            }}
           />
         </div>
 
@@ -2800,6 +3135,8 @@ export function App() {
           <BriefPane
             tasks={tasks}
             briefs={briefs}
+            projectId={activeProjectId}
+            projectName={activeProject?.name}
             archivedTasks={archivedTasks}
             archivedBriefs={archivedBriefs}
             swimLanes={activeProject?.swimLanes}
@@ -2814,6 +3151,7 @@ export function App() {
             onSyncOverviewWithTask={handleSyncOverviewWithTask}
             onUnarchiveTask={handleUnarchiveTask}
             onDeleteArchivedTask={handleDeleteArchivedTask}
+            onRestoreMemoryAsTask={handleRestoreMemoryAsTask}
             onSaveArchivedBrief={handleSaveArchivedBrief}
             autosaveStatus={autosave.status}
             autosaveDelaySec={autosave.delaySec}
@@ -2831,6 +3169,7 @@ export function App() {
             onKillSession={handleKillSession}
             onArchiveTask={handleArchiveTask}
             onRemoveAiTask={handleRemoveAiTask}
+            onPurgeTaskFromAi={handlePurgeTaskFromAi}
             scheduledJobs={scheduledJobs}
             onScheduleTask={handleScheduleTask}
             onCancelScheduleTask={handleCancelScheduleTask}
@@ -2861,8 +3200,8 @@ export function App() {
           setMcpServers((prev) => {
             const next = prev.map((s) => {
               if (s.id !== serverId) return s;
-              // Allow mcp-laya to toggle even though it is a local stdio harness
-              if (s.id !== 'mcp-laya' && (s.serverType === 'bundled_harness' || s.transport === 'Local Stdio')) return s;
+              // Allow mcp-laya and external services to toggle
+              if (s.id !== 'mcp-laya' && s.id !== 'mcp-github' && s.serverType === 'bundled_harness') return s;
               return { ...s, status: (s.status === 'connected' ? 'disconnected' : 'connected') as 'connected' | 'disconnected' };
             });
             const target = next.find((s) => s.id === serverId);
@@ -2902,6 +3241,10 @@ export function App() {
           )
         }
         onAddCustomServer={(newServer) => setMcpServers([...mcpServers, newServer])}
+        onDeleteCustomServer={(serverId) => setMcpServers((prev) => prev.filter((s) => s.id !== serverId))}
+        onUpdateServer={(updatedServer) =>
+          setMcpServers((prev) => prev.map((s) => (s.id === updatedServer.id ? updatedServer : s)))
+        }
         cliAgentConfig={cliAgentConfig}
         onSaveCliAgent={(config) => setCliAgentConfig(config)}
         cliAgents={cliAgents}
@@ -2917,10 +3260,8 @@ export function App() {
         isOpen={isRawMarkdownOpen}
         onClose={() => setIsRawMarkdownOpen(false)}
         todoMarkdown={activeProject?.todoMarkdown || serializeTodoMarkdown(tasks, headerComments)}
-        agentContextMarkdown={activeProject?.agentContextMarkdown || serializeAgentContextMarkdown(briefs)}
         folderPath={activeProject?.folderPath}
         todoFilePath={activeProject?.todoFilePath}
-        agentContextFilePath={activeProject?.agentContextFilePath}
         swimLanes={activeProject?.swimLanes}
         onSaveMarkdown={handleSaveRawMarkdown}
         onExportProject={handleExportProject}

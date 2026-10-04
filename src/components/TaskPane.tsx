@@ -21,6 +21,8 @@ import { stripHeaderComments, parseSwimLaneMarkdown } from '../lib/parser';
 import { storageManager } from '../lib/storageManager';
 import { HumanAiAssistantModal } from './HumanAiAssistantModal';
 import { ArchivedTasksModal } from './ArchivedTasksModal';
+import { BatchRunModal } from './BatchRunModal';
+import { ScheduleTaskModal } from './ScheduleTaskModal';
 
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state';
@@ -505,6 +507,9 @@ interface SwimLaneColumnProps {
   onEditorReady?: (laneId: string, editorInstance: any) => void;
   // Freeform text selection or task card handler to create AI task
   onCreateTaskFromSelection?: (selectedText: string, laneId: string, laneTitle: string, sourceTask?: TaskItemType) => void;
+  onRunTasksSequence?: (tasks: TaskItemType[], laneId: string, laneTitle: string) => void;
+  onRunTasksParallel?: (tasks: TaskItemType[], laneId: string, laneTitle: string) => void;
+  onScheduleTask?: (taskId: string | number, scheduledIso: string, cronExpr?: string) => void;
   // Selected lane action drawer props
   isAssistantOpen?: boolean;
   onOpenAssistant?: () => void;
@@ -537,6 +542,9 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   archivedTasksCount = 0,
   onArchiveTask,
   onCreateTaskFromSelection,
+  onRunTasksSequence,
+  onRunTasksParallel,
+  onScheduleTask,
   assistantDrawerHeight,
   onEditorReady,
   isAssistantOpen = false,
@@ -566,6 +574,18 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
 
   const onCreateTaskFromSelectionRef = useRef(onCreateTaskFromSelection);
   onCreateTaskFromSelectionRef.current = onCreateTaskFromSelection;
+
+  // Run-task menu modal state (batch sequence/parallel + schedule)
+  const [batchModal, setBatchModal] = useState<{
+    mode: 'sequence' | 'parallel';
+    task: TaskItemType;
+    remaining: TaskItemType[];
+  } | null>(null);
+  const [scheduleModalTask, setScheduleModalTask] = useState<TaskItemType | null>(null);
+  const setBatchModalRef = useRef(setBatchModal);
+  setBatchModalRef.current = setBatchModal;
+  const setScheduleModalTaskRef = useRef(setScheduleModalTask);
+  setScheduleModalTaskRef.current = setScheduleModalTask;
 
   // Freeform Text Selection Run Tooltip State
   const [selectionTooltip, setSelectionTooltip] = useState<{
@@ -861,13 +881,13 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                         container.appendChild(runningPill);
                       }
 
-                      // Add Task to AI Workspace button
+                      // Run Task button
                       const addBtn = document.createElement('button');
                       addBtn.className = 'card-action-btn card-add-task-btn card-add-subtask-btn';
                       addBtn.setAttribute('contenteditable', 'false');
                       addBtn.type = 'button';
-                      addBtn.title = 'Add Task (to AI Workspace)';
-                      addBtn.setAttribute('aria-label', 'Add Task to AI Workspace');
+                      addBtn.title = 'Run task...';
+                      addBtn.setAttribute('aria-label', 'Run task...');
                       addBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 10 20 15 15 20"></polyline><path d="M4 4v7a4 4 0 0 0 4 4h12"></path></svg>`;
 
                       addBtn.addEventListener('mousedown', (e) => {
@@ -875,10 +895,11 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                         e.stopPropagation();
                       });
 
-                      addBtn.addEventListener('click', (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
+                      const runWrapper = document.createElement('div');
+                      runWrapper.style.position = 'relative';
+                      let runDropdownEl: HTMLElement | null = null;
 
+                      const getTaskContextText = () => {
                         let taskContextText = '';
                         if (matchedTask) {
                           taskContextText = matchedTask.title;
@@ -893,11 +914,121 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                             taskContextText = node.textContent.trim();
                           }
                         }
+                        return taskContextText;
+                      };
 
-                        if (taskContextText && onCreateTaskFromSelectionRef.current) {
-                          onCreateTaskFromSelectionRef.current(taskContextText, lane.id, lane.title, matchedTask);
+                      const closeRunMenu = () => {
+                        if (runDropdownEl && runDropdownEl.parentNode) {
+                          runDropdownEl.parentNode.removeChild(runDropdownEl);
                         }
+                        runDropdownEl = null;
+                        addBtn.classList.remove('active');
+                        document.removeEventListener('mousedown', handleRunOutside);
+                        document.removeEventListener('keydown', handleRunKey);
+                      };
+                      const handleRunOutside = (ev: MouseEvent) => {
+                        if (runDropdownEl && !runWrapper.contains(ev.target as Node)) closeRunMenu();
+                      };
+                      const handleRunKey = (ev: KeyboardEvent) => {
+                        if (ev.key === 'Escape') closeRunMenu();
+                      };
+
+                      addBtn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+
+                        if (runDropdownEl) {
+                          closeRunMenu();
+                          return;
+                        }
+
+                        addBtn.classList.add('active');
+                        runDropdownEl = document.createElement('div');
+                        runDropdownEl.className = 'card-dropdown-menu';
+                        runDropdownEl.setAttribute('contenteditable', 'false');
+
+                        const items: { label: string; tip: string; icon: string; action: () => void }[] = [
+                          {
+                            label: 'Single task',
+                            tip: 'Run this task',
+                            icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>`,
+                            action: () => {
+                              const text = getTaskContextText();
+                              if (text && onCreateTaskFromSelectionRef.current) {
+                                onCreateTaskFromSelectionRef.current(text, lane.id, lane.title, matchedTask);
+                              }
+                            },
+                          },
+                          {
+                            label: 'Tasks in sequence...',
+                            tip: 'Run this and X number of following tasks in this list in order',
+                            icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="10" y1="6" x2="21" y2="6"></line><line x1="10" y1="12" x2="21" y2="12"></line><line x1="10" y1="18" x2="21" y2="18"></line><path d="M4 6h1v4"></path><path d="M4 10h2"></path><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"></path></svg>`,
+                            action: () => {
+                              if (!matchedTask) return;
+                              const idx = laneTasksRef.current.findIndex((t) => t.id === matchedTask.id);
+                              setBatchModalRef.current({
+                                mode: 'sequence',
+                                task: matchedTask,
+                                remaining: idx >= 0 ? laneTasksRef.current.slice(idx + 1) : [],
+                              });
+                            },
+                          },
+                          {
+                            label: 'Tasks in parallel...',
+                            tip: 'Run this and X number of following tasks in this list at once',
+                            icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="12" r="2.5"></circle><circle cx="18" cy="6" r="2"></circle><circle cx="18" cy="12" r="2"></circle><circle cx="18" cy="18" r="2"></circle><path d="M8.5 12h7.5"></path><path d="M8.5 11c3 0 5-3.5 7.5-4.5"></path><path d="M8.5 13c3 0 5 3.5 7.5 4.5"></path></svg>`,
+                            action: () => {
+                              if (!matchedTask) return;
+                              const idx = laneTasksRef.current.findIndex((t) => t.id === matchedTask.id);
+                              setBatchModalRef.current({
+                                mode: 'parallel',
+                                task: matchedTask,
+                                remaining: idx >= 0 ? laneTasksRef.current.slice(idx + 1) : [],
+                              });
+                            },
+                          },
+                          {
+                            label: 'Schedule task...',
+                            tip: 'Set this task to run on a schedule',
+                            icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>`,
+                            action: () => {
+                              if (!matchedTask) return;
+                              // Create the AI execution card first so it is visible in the AI workspace
+                              const text = getTaskContextText();
+                              if (text && onCreateTaskFromSelectionRef.current) {
+                                onCreateTaskFromSelectionRef.current(text, lane.id, lane.title, matchedTask);
+                              }
+                              setScheduleModalTaskRef.current(matchedTask);
+                            },
+                          },
+                        ];
+
+                        for (const it of items) {
+                          const btn = document.createElement('button');
+                          btn.type = 'button';
+                          btn.className = 'card-dropdown-item';
+                          btn.title = it.tip;
+                          btn.innerHTML = `${it.icon}<span>${it.label}</span>`;
+                          btn.addEventListener('mousedown', (ev) => {
+                            ev.preventDefault();
+                            ev.stopPropagation();
+                          });
+                          btn.addEventListener('click', (ev) => {
+                            ev.preventDefault();
+                            ev.stopPropagation();
+                            closeRunMenu();
+                            it.action();
+                          });
+                          runDropdownEl.appendChild(btn);
+                        }
+
+                        runWrapper.appendChild(runDropdownEl);
+                        setTimeout(() => {
+                          document.addEventListener('mousedown', handleRunOutside);
+                          document.addEventListener('keydown', handleRunKey);
+                        }, 0);
                       });
+                      runWrapper.appendChild(addBtn);
 
                       // Task Options menu button with nested Archive functionality
                       const menuWrapper = document.createElement('div');
@@ -989,7 +1120,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                       });
 
                       menuWrapper.appendChild(menuBtn);
-                      container.appendChild(addBtn);
+                      container.appendChild(runWrapper);
                       container.appendChild(menuWrapper);
 
                       return container;
@@ -1896,6 +2027,32 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         </div>,
         document.body
       )}
+
+      {batchModal && (
+        <BatchRunModal
+          key={`${batchModal.mode}_${batchModal.task.id}`}
+          isOpen
+          mode={batchModal.mode}
+          startTask={batchModal.task}
+          remainingTasks={batchModal.remaining}
+          onClose={() => setBatchModal(null)}
+          onConfirm={(selected, mode) => {
+            if (mode === 'sequence') onRunTasksSequence?.(selected, lane.id, lane.title);
+            else onRunTasksParallel?.(selected, lane.id, lane.title);
+          }}
+        />
+      )}
+      {scheduleModalTask && (
+        <ScheduleTaskModal
+          isOpen
+          task={scheduleModalTask}
+          onClose={() => setScheduleModalTask(null)}
+          onSchedule={(taskId, iso, cron) => {
+            onScheduleTask?.(taskId, iso, cron);
+            setScheduleModalTask(null);
+          }}
+        />
+      )}
     </div>
   );
 };
@@ -1921,12 +2078,16 @@ interface TaskPaneProps {
   onArchiveTask?: (taskTitle: string) => void;
   onUnarchiveTask?: (taskId: string | number) => void;
   onDeleteArchivedTask?: (taskId: string | number) => void;
+  onRestoreMemoryAsTask?: (chunk: import('../lib/memory').MemoryChunk) => void;
   swimLanes?: SwimLaneDoc[];
   onAddSwimLane?: (afterLaneId?: string) => void;
   onRenameSwimLane?: (laneId: string, newTitle: string) => void;
   onDeleteSwimLane?: (laneId: string) => void;
   onSwimLaneMarkdownChange?: (laneId: string, newMarkdown: string) => void;
   onCreateTaskFromSelection?: (selectedText: string, laneId: string, laneTitle: string, sourceTask?: TaskItemType) => void;
+  onRunTasksSequence?: (tasks: TaskItemType[], laneId: string, laneTitle: string) => void;
+  onRunTasksParallel?: (tasks: TaskItemType[], laneId: string, laneTitle: string) => void;
+  onScheduleTask?: (taskId: string | number, scheduledIso: string, cronExpr?: string) => void;
 }
 
 export const TaskPane: React.FC<TaskPaneProps> = ({
@@ -1949,12 +2110,16 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   onArchiveTask,
   onUnarchiveTask,
   onDeleteArchivedTask,
+  onRestoreMemoryAsTask,
   swimLanes,
   onAddSwimLane,
   onRenameSwimLane,
   onDeleteSwimLane,
   onSwimLaneMarkdownChange,
   onCreateTaskFromSelection,
+  onRunTasksSequence,
+  onRunTasksParallel,
+  onScheduleTask,
 }) => {
   const [showStyles, setShowStyles] = useState(false);
   const [assistantDrawerHeight, setAssistantDrawerHeight] = useState<number>(0);
@@ -2093,6 +2258,9 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
               archivedTasksCount={archivedTasks.length}
               onArchiveTask={onArchiveTask}
               onCreateTaskFromSelection={onCreateTaskFromSelection}
+              onRunTasksSequence={onRunTasksSequence}
+              onRunTasksParallel={onRunTasksParallel}
+              onScheduleTask={onScheduleTask}
               assistantDrawerHeight={assistantDrawerHeight}
               onEditorReady={handleEditorReady}
               isAssistantOpen={isAssistantOpen}
@@ -2118,14 +2286,17 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
         ))}
       </div>
 
-      {/* ── Archived Tasks Modal Window ── */}
+      {/* ── Archived Tasks & AI Brain Modal Window ── */}
       <ArchivedTasksModal
         isOpen={isArchiveModalOpen}
         onClose={() => setIsArchiveModalOpen(false)}
+        projectId={project?.id}
+        projectName={project?.name}
         archivedTasks={archivedTasks}
         swimLanes={effectiveSwimLanes}
         onUnarchiveTask={onUnarchiveTask}
         onDeleteArchivedTask={onDeleteArchivedTask}
+        onRestoreMemoryAsTask={onRestoreMemoryAsTask}
       />
     </div>
   );

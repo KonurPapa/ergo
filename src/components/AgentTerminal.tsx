@@ -12,6 +12,8 @@ export interface AgentTerminalProps {
   onReady?: () => void;
   /** Called on a spawn/connection error */
   onError?: (message: string) => void;
+  /** If true, sends a kill signal to the PTY on unmount (default: false to keep background sessions alive across view toggles) */
+  killOnUnmount?: boolean;
 }
 
 export const AgentTerminal: React.FC<AgentTerminalProps> = ({
@@ -21,6 +23,7 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
   onExit,
   onReady,
   onError,
+  killOnUnmount = false,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -50,55 +53,55 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
 
     // ── Create xterm terminal ─────────────────────────────────────────────
     const term = new Terminal({
-      fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Menlo', monospace",
-      fontSize: 13,
+      fontFamily: "'Intel One Mono', 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Menlo', monospace",
+      fontSize: 16,
       lineHeight: 1.4,
       theme: isLightTheme
         ? {
             background:          '#f8fafc',
-            foreground:          '#1e293b',
-            cursor:              '#6366f1',
+            foreground:          '#18181b',
+            cursor:              '#059669',
             cursorAccent:        '#ffffff',
-            selectionBackground: 'rgba(99, 102, 241, 0.25)',
+            selectionBackground: 'rgba(0, 212, 146, 0.2)',
             black:               '#f1f5f9',
-            red:                 '#e11d48',
+            red:                 '#ef4444',
             green:               '#059669',
             yellow:              '#d97706',
             blue:                '#2563eb',
-            magenta:             '#7c3aed',
+            magenta:             '#8b5cf6',
             cyan:                '#0891b2',
-            white:               '#1e293b',
+            white:               '#18181b',
             brightBlack:         '#94a3b8',
             brightRed:           '#f43f5e',
             brightGreen:         '#10b981',
             brightYellow:        '#f59e0b',
             brightBlue:          '#3b82f6',
-            brightMagenta:       '#8b5cf6',
+            brightMagenta:       '#a78bfa',
             brightCyan:          '#06b6d4',
-            brightWhite:         '#0f172a',
+            brightWhite:         '#09090b',
           }
         : {
-            background:          '#0d0f14',
-            foreground:          '#c9d1d9',
-            cursor:              '#58a6ff',
-            cursorAccent:        '#0d0f14',
-            selectionBackground: 'rgba(88, 166, 255, 0.25)',
-            black:               '#0d0f14',
-            red:                 '#f85149',
-            green:               '#56d364',
-            yellow:              '#e3b341',
-            blue:                '#58a6ff',
-            magenta:             '#bc8cff',
-            cyan:                '#39c5cf',
-            white:               '#c9d1d9',
-            brightBlack:         '#4d5566',
-            brightRed:           '#ff7b72',
-            brightGreen:         '#3fb950',
-            brightYellow:        '#d29922',
-            brightBlue:          '#79c0ff',
-            brightMagenta:       '#d2a8ff',
-            brightCyan:          '#56d4dd',
-            brightWhite:         '#ffffff',
+            background:          '#12141a',
+            foreground:          '#e4e4e7',
+            cursor:              '#00d492',
+            cursorAccent:        '#12141a',
+            selectionBackground: 'rgba(0, 212, 146, 0.25)',
+            black:               '#12141a',
+            red:                 '#ef4444',
+            green:               '#00d492',
+            yellow:              '#eab308',
+            blue:                '#2563eb',
+            magenta:             '#a78bfa',
+            cyan:                '#06b6d4',
+            white:               '#e4e4e7',
+            brightBlack:         '#52525b',
+            brightRed:           '#f87171',
+            brightGreen:         '#34d399',
+            brightYellow:        '#fde047',
+            brightBlue:          '#60a5fa',
+            brightMagenta:       '#c4b5fd',
+            brightCyan:          '#67e8f9',
+            brightWhite:         '#fafafa',
           },
       allowProposedApi: true,
       scrollback: 5000,
@@ -198,7 +201,7 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
     return () => {
       isDisposed = true;
       ro.disconnect();
-      if (ws.readyState === WebSocket.OPEN) {
+      if (killOnUnmount && ws.readyState === WebSocket.OPEN) {
         try {
           ws.send(JSON.stringify({ type: 'kill' }));
         } catch {}

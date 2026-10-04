@@ -7,6 +7,10 @@ export {
   // Vector engine core
   searchMemory,
   addChunks,
+  getAllChunks,
+  updateChunk,
+  upsertCustomChunk,
+  deleteChunk,
   removeChunksById,
   removeChunksByTaskId,
   removeChunksByProjectId,
@@ -20,6 +24,7 @@ export {
   embedBatch,
   isEmbeddingReady,
   preWarmEmbeddings,
+  EMBEDDING_DIM,
   // Types
   type MemoryNamespace,
   type MemoryChunk,
@@ -32,6 +37,7 @@ export {
   // Session retrospective
   runSessionRetrospective,
   migrateAgentContextToMemory,
+  archiveTaskToVectorMemory,
   // Types
   type Learning,
   type LearningCategory,

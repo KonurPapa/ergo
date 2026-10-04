@@ -55,8 +55,6 @@
         - Tasks in sequence
         - Tasks in parallel
         - Schedule tasks...
-    - Upon completion of a task, the AI should write/update a spec-file (for whatever new thing was built/modified) that gets saved to the vector DB for future runs to read and learn from before they start work
-        - this way, future executions will get better and more informed the more work gets done, and because it's in a vector DB, none of it costs anything to retrieve
     - when the autosave triggers, this needs to update the local vector DB automatically as well
     - AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work
         - maybe implement an 'assistance' slider, which determines how much it asks for clarification and details vs. just autonomously assuming
@@ -94,10 +92,11 @@ Highlights for your application:
 
 For your collaborative workspace, focus on model-assisted planning, where the AI helps create the structural design (types, call graphs) before it writes the implementation. This increases transparency, ensures the human retains ownership, and prevents the "code slop" typical of purely agentic loops.
 
+Maybe the implementation looks something like the AI drafting its plan and building out initial infrastructure (types, call graphs, etc.) It could even send the user back a flowchart of the logic/architecture it intends to implement, before getting down in the weeds of full implementation.
+
 
 
 **UI/UX Features (Future Roadmap)**
-    - copy Kiro Crew's UI and paste it onto our project
     - **Organization Redesign**: Better task/subtask draggability/regrouping
     - Add reminders for tasks, which should ping the user at a specific time with their set prompt
     - **Visual Storytelling**: Use visual cues to show progress and achievements
@@ -124,8 +123,10 @@ For your collaborative workspace, focus on model-assisted planning, where the AI
     - ability to create a code-formatting doc
         - is this just part of global rules?
     - microphone access to add/edit tasks
-    - we need a screen for reading what the AI has saved in vector storage, and modifying as the user wants
+    - ~~we need a screen for reading what the AI has saved in vector storage, and modifying as the user wants~~
     - given/when/then UI for tasks, which users can fill out themselves and can be accepted directly by the AI without it needing to build that piece of the gherkin
+    - there could be a way to create flowcharts within the app, directly assigned to particular tasks
+        - this should probably be in `mermaid` format, so it can be visually represented by the user but then sent straight to the AI
 
 
 

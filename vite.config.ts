@@ -239,6 +239,135 @@ async function runShellCommand(command: string, cwd: string, timeoutMs: number):
 }
 
 /**
+ * Manages official GitHub MCP server (@modelcontextprotocol/server-github) running over local stdio IPC.
+ */
+class GithubMcpClient {
+  private proc: any = null;
+  private token: string | null = null;
+  private buffer = '';
+  private pending = new Map<number, { resolve: (val: any) => void; reject: (err: any) => void; timer: any }>();
+  private reqId = 1;
+  private readyPromise: Promise<void> | null = null;
+
+  async getProc(token: string) {
+    if (this.proc && this.token === token && !this.proc.killed) {
+      await this.readyPromise;
+      return this.proc;
+    }
+    if (this.proc) {
+      try { this.proc.kill(); } catch {}
+    }
+    this.token = token;
+    const { spawn } = await import('node:child_process');
+    this.proc = spawn('npx', ['-y', '@modelcontextprotocol/server-github'], {
+      env: { ...process.env, GITHUB_PERSONAL_ACCESS_TOKEN: token },
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    this.buffer = '';
+    this.pending.clear();
+
+    this.proc.stdout.on('data', (chunk: any) => {
+      this.buffer += chunk.toString();
+      const lines = this.buffer.split('\n');
+      this.buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.id && this.pending.has(msg.id)) {
+            const { resolve, reject, timer } = this.pending.get(msg.id)!;
+            clearTimeout(timer);
+            this.pending.delete(msg.id);
+            if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
+            else resolve(msg.result);
+          }
+        } catch {}
+      }
+    });
+
+    this.proc.on('exit', () => {
+      this.proc = null;
+      for (const { reject, timer } of this.pending.values()) {
+        clearTimeout(timer);
+        reject(new Error('GitHub MCP server process exited'));
+      }
+      this.pending.clear();
+    });
+
+    this.readyPromise = new Promise<void>((resolve, reject) => {
+      const initId = this.reqId++;
+      const timer = setTimeout(() => reject(new Error('GitHub MCP initialization timed out')), 25000);
+      this.pending.set(initId, {
+        resolve: () => {
+          try {
+            this.proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+          } catch {}
+          resolve();
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+        timer
+      });
+      try {
+        this.proc.stdin.write(JSON.stringify({
+          jsonrpc: '2.0',
+          id: initId,
+          method: 'initialize',
+          params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'ergo', version: '1.0.0' } }
+        }) + '\n');
+      } catch (writeErr) {
+        clearTimeout(timer);
+        reject(writeErr);
+      }
+    });
+
+    await this.readyPromise;
+    return this.proc;
+  }
+
+  async sendRequest(token: string, method: string, params: any, timeoutMs = 25000): Promise<any> {
+    await this.getProc(token);
+    const id = this.reqId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`GitHub MCP ${method} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      try {
+        this.proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+      } catch (err) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(err);
+      }
+    });
+  }
+
+  async listTools(token: string) {
+    const res = await this.sendRequest(token, 'tools/list', {});
+    return res?.tools || [];
+  }
+
+  async callTool(token: string, name: string, args: any) {
+    const res = await this.sendRequest(token, 'tools/call', { name, arguments: args });
+    return res;
+  }
+
+  kill() {
+    if (this.proc) {
+      try { this.proc.kill(); } catch {}
+      this.proc = null;
+      this.token = null;
+    }
+  }
+}
+
+const githubMcpClient = new GithubMcpClient();
+
+/**
  * Runs a local CLI coding agent process (e.g. claude -p, codex, agy, aider) headlessly.
  * Pipes the prompt to stdin and CLI arguments, and captures standard output.
  */
@@ -252,15 +381,24 @@ async function runCliProcess(options: {
 }): Promise<{ exitCode: number; stdout: string; stderr: string; timedOut: boolean; durationMs: number }> {
   const { spawn } = await import('node:child_process');
   const started = Date.now();
-  const timeoutMs = options.timeoutMs || 180_000;
+  const timeoutMs = options.timeoutMs || 60_000;
 
   const rawCli = (options.cli === 'antigravity' ? 'agy' : (options.cli || 'claude')).trim();
-  const cliBase = path.basename(rawCli).toLowerCase();
+  let executable = rawCli;
+  if (rawCli === 'agy' || rawCli === 'antigravity') {
+    const localAgy = path.join(os.homedir(), '.local', 'bin', 'agy');
+    if (fsSync.existsSync(localAgy)) {
+      executable = localAgy;
+    }
+  }
+  const cliBase = path.basename(executable).toLowerCase();
   let args: string[] = Array.isArray(options.customArgs) && options.customArgs.length > 0 ? [...options.customArgs] : [];
 
   const combinedPrompt = options.systemPrompt
     ? `${options.systemPrompt.trim()}\n\nTask:\n${options.prompt.trim()}`
     : options.prompt.trim();
+
+  let passedPromptInArgs = false;
 
   if (cliBase.includes('claude')) {
     if (!args.includes('-p') && !args.includes('--print')) {
@@ -272,10 +410,12 @@ async function runCliProcess(options: {
     // For Claude Code CLI, pass the prompt directly as argument when under 8000 chars for reliable single-command dispatch
     if (combinedPrompt.length < 8000 && !args.includes(combinedPrompt)) {
       args.push(combinedPrompt);
+      passedPromptInArgs = true;
     }
   } else if (cliBase.includes('aider')) {
     if (!args.includes('--message') && !args.includes('-m')) {
       args.push('--message', combinedPrompt);
+      passedPromptInArgs = true;
     }
     if (!args.includes('--no-git')) {
       args.push('--no-git');
@@ -289,13 +429,15 @@ async function runCliProcess(options: {
     }
     if (combinedPrompt.length < 8000) {
       args.push(combinedPrompt);
+      passedPromptInArgs = true;
     }
   } else if (cliBase.includes('agy')) {
     if (!args.includes('--dangerously-skip-permissions')) {
       args.push('--dangerously-skip-permissions');
     }
-    if (!args.some((a) => a.startsWith('-p=') || a.startsWith('--print='))) {
-      args.push(`-p=${combinedPrompt}`);
+    if (!args.includes('-p') && !args.includes('--print') && !args.some((a) => a.startsWith('-p=') || a.startsWith('--print='))) {
+      args.push('-p', combinedPrompt);
+      passedPromptInArgs = true;
     }
   } else if (cliBase.includes('cursor')) {
     if (!args.includes('-p') && !args.includes('--print') && !args.includes('agent')) {
@@ -303,6 +445,7 @@ async function runCliProcess(options: {
     }
     if (combinedPrompt.length < 8000 && !args.includes(combinedPrompt)) {
       args.push(combinedPrompt);
+      passedPromptInArgs = true;
     }
   } else if (cliBase.includes('grok')) {
     if (!args.includes('-p') && !args.includes('--prompt')) {
@@ -310,6 +453,7 @@ async function runCliProcess(options: {
     }
     if (combinedPrompt.length < 8000 && !args.includes(combinedPrompt)) {
       args.push(combinedPrompt);
+      passedPromptInArgs = true;
     }
   }
 
@@ -327,10 +471,11 @@ async function runCliProcess(options: {
     }, timeoutMs);
 
     try {
-      proc = spawn(rawCli, args, {
+      proc = spawn(executable, args, {
         cwd: options.cwd,
         env: {
           ...process.env,
+          PATH: `${path.join(os.homedir(), '.local', 'bin')}:${process.env.PATH || ''}`,
           CI: '1',
           NON_INTERACTIVE: '1',
           FORCE_COLOR: '0'
@@ -368,10 +513,12 @@ async function runCliProcess(options: {
         });
       });
 
-      // Write prompt to stdin as well for CLIs reading piped input
+      // Write prompt to stdin only if NOT passed via argument flags to prevent stdin read hang
       try {
         if (proc.stdin && !proc.stdin.destroyed) {
-          proc.stdin.write(combinedPrompt);
+          if (!passedPromptInArgs) {
+            proc.stdin.write(combinedPrompt);
+          }
           proc.stdin.end();
         }
       } catch {}
@@ -1117,10 +1264,276 @@ function ergoFileSystemPlugin(): Plugin {
         });
       }
 
+      // ── GitHub MCP Integration Endpoints ──
+      if (url === '/api/mcp/github/status' && req.method === 'GET') {
+        try {
+          const secretsPath = path.join(storageDir, 'config', 'secrets.json');
+          let mcpSecrets: any = {};
+          try {
+            const raw = await fs.readFile(secretsPath, 'utf-8');
+            mcpSecrets = JSON.parse(raw).mcpSecrets || {};
+          } catch {}
+
+          const ghEntry = mcpSecrets['mcp-github'];
+          const token = ghEntry?.token || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GITHUB_TOKEN;
+          if (!token) {
+            return sendJson(res, 200, { configured: false });
+          }
+
+          return sendJson(res, 200, {
+            configured: true,
+            username: ghEntry?.username || 'configured',
+            name: ghEntry?.name,
+            avatarUrl: ghEntry?.avatarUrl,
+            scopes: ghEntry?.scopes,
+            connectedAt: ghEntry?.connectedAt
+          });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
+      if (url === '/api/mcp/github/verify' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const rawToken = (body.token || '').trim();
+          if (!rawToken) {
+            return sendJson(res, 400, { error: 'GitHub token is required' });
+          }
+          const cleanToken = rawToken.replace(/^Bearer\s+/i, '').replace(/^token\s+/i, '');
+
+          const userRes = await fetch('https://api.github.com/user', {
+            headers: {
+              'Authorization': `Bearer ${cleanToken}`,
+              'User-Agent': 'Ergo-MCP/1.0',
+              'Accept': 'application/vnd.github.v3+json'
+            },
+            signal: AbortSignal.timeout(10_000)
+          });
+
+          if (!userRes.ok) {
+            const errBody: any = await userRes.json().catch(() => ({}));
+            return sendJson(res, userRes.status, {
+              success: false,
+              error: errBody.message ? `GitHub authentication failed: ${errBody.message}` : `GitHub returned status ${userRes.status}`
+            });
+          }
+
+          const user: any = await userRes.json();
+          const scopes = userRes.headers.get('x-oauth-scopes') || '';
+
+          return sendJson(res, 200, {
+            success: true,
+            user: {
+              login: user.login,
+              name: user.name,
+              avatarUrl: user.avatar_url,
+              htmlUrl: user.html_url
+            },
+            scopes
+          });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message || 'Error verifying GitHub token' });
+        }
+      }
+
+      if (url === '/api/mcp/github/connect' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const rawToken = (body.token || '').trim();
+          if (!rawToken) {
+            return sendJson(res, 400, { error: 'GitHub token is required' });
+          }
+          const cleanToken = rawToken.replace(/^Bearer\s+/i, '').replace(/^token\s+/i, '');
+
+          // 1. Validate token with GitHub API
+          const userRes = await fetch('https://api.github.com/user', {
+            headers: {
+              'Authorization': `Bearer ${cleanToken}`,
+              'User-Agent': 'Ergo-MCP/1.0',
+              'Accept': 'application/vnd.github.v3+json'
+            },
+            signal: AbortSignal.timeout(10_000)
+          });
+
+          if (!userRes.ok) {
+            const errBody: any = await userRes.json().catch(() => ({}));
+            return sendJson(res, 401, {
+              success: false,
+              error: errBody.message ? `GitHub authentication failed: ${errBody.message}` : `GitHub returned status ${userRes.status}`
+            });
+          }
+
+          const user: any = await userRes.json();
+          const scopes = userRes.headers.get('x-oauth-scopes') || '';
+
+          // 2. Discover live tools from official GitHub MCP server
+          let rawTools: any[] = [];
+          try {
+            rawTools = await githubMcpClient.listTools(cleanToken);
+          } catch (mcpErr: any) {
+            console.warn('[Vite MCP API] Error discovering tools from GitHub MCP process:', mcpErr.message);
+          }
+
+          const tools = rawTools.map((t: any) => ({
+            id: `gh_${t.name}`,
+            name: t.name,
+            description: t.description,
+            autoApprove: t.name.startsWith('search_') || t.name.startsWith('list_') || t.name.startsWith('get_'),
+            serverId: 'mcp-github',
+            inputSchema: t.inputSchema
+          }));
+
+          // 3. Persist to storageDir/config/secrets.json
+          const secretsPath = path.join(storageDir, 'config', 'secrets.json');
+          let currentSecrets: any = { version: 1, updatedAt: new Date().toISOString(), userApiKeys: [], mcpSecrets: {} };
+          try {
+            const raw = await fs.readFile(secretsPath, 'utf-8');
+            currentSecrets = JSON.parse(raw);
+          } catch {}
+
+          if (!currentSecrets.mcpSecrets) currentSecrets.mcpSecrets = {};
+          currentSecrets.mcpSecrets['mcp-github'] = {
+            token: cleanToken,
+            username: user.login,
+            name: user.name,
+            avatarUrl: user.avatar_url,
+            scopes,
+            connectedAt: new Date().toISOString()
+          };
+          currentSecrets.updatedAt = new Date().toISOString();
+
+          await fs.writeFile(secretsPath, JSON.stringify(currentSecrets, null, 2), 'utf-8');
+
+          return sendJson(res, 200, {
+            success: true,
+            user: {
+              login: user.login,
+              name: user.name,
+              avatarUrl: user.avatar_url,
+              htmlUrl: user.html_url
+            },
+            tools: tools.length > 0 ? tools : undefined
+          });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message || 'Error connecting GitHub MCP' });
+        }
+      }
+
+      if (url === '/api/mcp/github/disconnect' && req.method === 'POST') {
+        try {
+          const secretsPath = path.join(storageDir, 'config', 'secrets.json');
+          try {
+            const raw = await fs.readFile(secretsPath, 'utf-8');
+            const secrets = JSON.parse(raw);
+            if (secrets.mcpSecrets?.['mcp-github']) {
+              delete secrets.mcpSecrets['mcp-github'];
+              secrets.updatedAt = new Date().toISOString();
+              await fs.writeFile(secretsPath, JSON.stringify(secrets, null, 2), 'utf-8');
+            }
+          } catch {}
+
+          githubMcpClient.kill();
+          return sendJson(res, 200, { success: true });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
+      // ── Remote MCP Discovery (tools/list) ──
+      if (url === '/api/mcp/remote/discover' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const { endpoint, authHeader } = body;
+          if (!endpoint || typeof endpoint !== 'string') {
+            return sendJson(res, 400, { error: 'endpoint is required' });
+          }
+
+          let normalized = endpoint.trim();
+          if (!normalized.startsWith('http://') && !normalized.startsWith('https://')) {
+            normalized = `https://${normalized}`;
+          }
+
+          const reqHeaders: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json, text/event-stream'
+          };
+          if (authHeader) {
+            reqHeaders['Authorization'] = authHeader.trim().startsWith('Bearer ') || authHeader.trim().startsWith('token ')
+              ? authHeader.trim()
+              : `Bearer ${authHeader.trim()}`;
+          }
+
+          // Construct standard MCP JSON-RPC tools/list payload
+          const rpcPayload = {
+            jsonrpc: '2.0',
+            id: `disc-${Date.now()}`,
+            method: 'tools/list',
+            params: {}
+          };
+
+          const timeoutSignal = AbortSignal.timeout(10_000);
+          let remoteRes: Response;
+          try {
+            remoteRes = await fetch(normalized, {
+              method: 'POST',
+              headers: reqHeaders,
+              body: JSON.stringify(rpcPayload),
+              signal: timeoutSignal
+            });
+          } catch (fetchErr: any) {
+            // Check if GET returns SSE or capabilities
+            try {
+              const getRes = await fetch(normalized, {
+                method: 'GET',
+                headers: reqHeaders,
+                signal: AbortSignal.timeout(4000)
+              });
+              if (getRes.status === 401 || getRes.status === 403) {
+                return sendJson(res, 401, {
+                  error: 'Endpoint requires authentication credentials (OAuth or API Key).',
+                  authRequired: true,
+                  status: getRes.status
+                });
+              }
+            } catch {}
+            return sendJson(res, 502, {
+              error: `Unable to connect to MCP endpoint (${fetchErr.message}). Check URL and network connectivity.`
+            });
+          }
+
+          if (remoteRes.status === 401 || remoteRes.status === 403) {
+            return sendJson(res, 401, {
+              error: 'Authentication failed. Please verify your token or re-authenticate.',
+              authRequired: true,
+              status: remoteRes.status
+            });
+          }
+
+          if (!remoteRes.ok) {
+            return sendJson(res, remoteRes.status, {
+              error: `Remote MCP server responded with status HTTP ${remoteRes.status}`
+            });
+          }
+
+          const resData: any = await remoteRes.json().catch(() => ({}));
+          const tools = resData?.result?.tools || resData?.tools || (Array.isArray(resData) ? resData : []);
+          const serverInfo = resData?.result?.serverInfo || resData?.serverInfo || { name: new URL(normalized).hostname };
+
+          return sendJson(res, 200, {
+            success: true,
+            serverInfo,
+            tools
+          });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message || 'Error discovering remote MCP endpoint' });
+        }
+      }
+
       if (url === '/api/mcp/tools/call' && req.method === 'POST') {
         try {
           const body = await parseJsonBody(req);
-          const { serverId, toolName, args } = body;
+          const { serverId, toolName, args, endpoint, authHeader } = body;
 
           if (!toolName) {
             return sendJson(res, 400, { error: 'toolName is required' });
@@ -1576,7 +1989,112 @@ function ergoFileSystemPlugin(): Plugin {
             }
           }
 
-          // Default custom tool execution simulated response
+          // 4.5. GitHub MCP Stdio Runner
+          const GITHUB_TOOLS = new Set([
+            'create_or_update_file', 'search_repositories', 'create_repository', 'get_file_contents',
+            'push_files', 'create_issue', 'create_pull_request', 'fork_repository', 'create_branch',
+            'list_commits', 'list_issues', 'update_issue', 'add_issue_comment', 'search_code',
+            'search_issues', 'search_users', 'get_issue', 'get_pull_request', 'list_pull_requests',
+            'create_pull_request_review', 'merge_pull_request', 'get_pull_request_files',
+            'get_pull_request_status', 'update_pull_request_branch', 'get_pull_request_comments',
+            'get_pull_request_reviews'
+          ]);
+
+          if (serverId === 'mcp-github' || GITHUB_TOOLS.has(toolName)) {
+            let token = (authHeader || '').trim();
+            if (token.startsWith('Bearer ')) token = token.slice(7).trim();
+            if (token.startsWith('token ')) token = token.slice(6).trim();
+
+            if (!token) {
+              try {
+                const secretsPath = path.join(storageDir, 'config', 'secrets.json');
+                const rawSecrets = await fs.readFile(secretsPath, 'utf-8');
+                const parsed = JSON.parse(rawSecrets);
+                token = parsed.mcpSecrets?.['mcp-github']?.token || '';
+              } catch {}
+            }
+            if (!token) {
+              token = process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GITHUB_TOKEN || '';
+            }
+
+            if (!token) {
+              return sendJson(res, 401, {
+                error: 'GitHub Personal Access Token is required to execute GitHub MCP tools. Connect GitHub in the MCP Hub to authenticate.'
+              });
+            }
+
+            try {
+              const toolResult = await githubMcpClient.callTool(token, toolName, args || {});
+              const payload = toolResult?.content !== undefined ? toolResult.content : toolResult;
+              return sendJson(res, 200, {
+                success: true,
+                data: payload
+              });
+            } catch (err: any) {
+              return sendJson(res, 502, {
+                error: `GitHub MCP execution error: ${err.message}`
+              });
+            }
+          }
+
+          // 5. Remote MCP Endpoint Forwarding
+          if (endpoint && typeof endpoint === 'string' && (endpoint.startsWith('http://') || endpoint.startsWith('https://'))) {
+            try {
+              const reqHeaders: Record<string, string> = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json, text/event-stream'
+              };
+              if (authHeader) {
+                reqHeaders['Authorization'] = authHeader.trim().startsWith('Bearer ') || authHeader.trim().startsWith('token ')
+                  ? authHeader.trim()
+                  : `Bearer ${authHeader.trim()}`;
+              }
+
+              const rpcCall = {
+                jsonrpc: '2.0',
+                id: `call-${Date.now()}`,
+                method: 'tools/call',
+                params: {
+                  name: toolName,
+                  arguments: args || {}
+                }
+              };
+
+              const remoteRes = await fetch(endpoint, {
+                method: 'POST',
+                headers: reqHeaders,
+                body: JSON.stringify(rpcCall),
+                signal: AbortSignal.timeout(30_000)
+              });
+
+              if (!remoteRes.ok) {
+                const errText = await remoteRes.text().catch(() => '');
+                return sendJson(res, remoteRes.status, {
+                  error: `Remote MCP server (${serverId}) returned error HTTP ${remoteRes.status}: ${errText.slice(0, 300)}`
+                });
+              }
+
+              const remoteData: any = await remoteRes.json().catch(() => ({}));
+              if (remoteData?.error) {
+                return sendJson(res, 400, {
+                  error: remoteData.error.message || `Remote MCP tool error: ${JSON.stringify(remoteData.error)}`
+                });
+              }
+
+              // Return the inner result.content array or structured data
+              const resultPayload = remoteData?.result !== undefined ? remoteData.result : remoteData;
+              return sendJson(res, 200, {
+                success: true,
+                data: resultPayload
+              });
+            } catch (remoteErr: any) {
+              return sendJson(res, 502, {
+                error: `Failed to dispatch tool "${toolName}" to remote MCP at ${endpoint}: ${remoteErr.message}`
+              });
+            }
+          }
+
+          // Default fallback tool execution response
           return sendJson(res, 200, {
             success: true,
             data: {

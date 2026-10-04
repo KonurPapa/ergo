@@ -216,7 +216,7 @@ export class BibleStore {
     out.push(s.goals || '1. Complete the task as described.', '');
 
     out.push('## Output Destination & Method');
-    out.push(`- **Destination**: ${s.outputAs || 'Record results in AGENT_CONTEXT.md.'}`);
+    out.push(`- **Destination**: ${s.outputAs || 'Record concise output results in local vector memory.'}`);
     out.push(`- **Required MCPs**: ${s.requiredMcps.length > 0 ? s.requiredMcps.join(', ') : '(none — pure reasoning/text)'}`);
     out.push(`- **Allowed Boundaries**: ${s.allowedRoots.length > 0 ? s.allowedRoots.join(', ') : s.metadata.projectPath}`, '');
 

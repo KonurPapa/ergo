@@ -1,4 +1,5 @@
 import { type ProjectData, type MCPServer } from '../types';
+import { GITHUB_MCP_TOOLS } from './githubMcpTools';
 
 export function createSlug(text: string): string {
   return text
@@ -20,16 +21,14 @@ export function createNewProjectData(
   const id = `project-${Date.now()}`;
   const folderPath = `projects/${slug}`;
   const todoFilePath = `${folderPath}/TODO.md`;
-  const agentContextFilePath = `${folderPath}/AGENT_CONTEXT.md`;
 
   const defaultTodoMarkdown = `<!-- Project: ${name} | Folder: ${folderPath} -->
-<!-- Linked Context: ${agentContextFilePath} -->
 
 ## ${name} Tasks
 
 1. Initial Task Setup
     - Define project scope and task list
-    - Verify bi-directional link with ${agentContextFilePath}`;
+    - Verify AI task execution and vector memory context`;
 
   const defaultAgentContextMarkdown = `<!-- Project: ${name} | Folder: ${folderPath} -->
 <!-- Linked Tasks: ${todoFilePath} -->
@@ -51,10 +50,10 @@ Rules of the split:
 Setup initial project structure and link human task list with agent context briefs.
 
 **Build & Verification**
-Created project folder structure under ${folderPath} with isolated TODO.md and AGENT_CONTEXT.md. Verified directory paths and unique markdown file references.
+Created project folder structure under ${folderPath} with isolated TODO.md and local vector storage. Verified directory paths and markdown file references.
 
 **Completion**
-Initial project structure initialized. All core file links verified.`;
+Initial project structure initialized. All core links verified.`;
 
   const todoMd = initialTodoMarkdown || defaultTodoMarkdown;
   const agentMd = initialAgentContextMarkdown || defaultAgentContextMarkdown;
@@ -65,7 +64,6 @@ Initial project structure initialized. All core file links verified.`;
     description: description || `Project folder and markdown storage for ${name}.`,
     folderPath,
     todoFilePath,
-    agentContextFilePath,
     todoMarkdown: todoMd,
     agentContextMarkdown: agentMd,
     connectedMcps: ['mcp-filesystem', 'mcp-fetch', 'mcp-git'],
@@ -84,19 +82,17 @@ export const INITIAL_PROJECTS: ProjectData[] = [
   {
     id: 'default-workspace',
     name: 'Default Workspace',
-    description: 'Main project folder storing TODO.md and AGENT_CONTEXT.md',
+    description: 'Main project folder storing workspace markdown and vector memory',
     folderPath: 'projects/default-workspace',
     todoFilePath: 'projects/default-workspace/TODO.md',
-    agentContextFilePath: 'projects/default-workspace/AGENT_CONTEXT.md',
     connectedMcps: ['mcp-filesystem', 'mcp-fetch', 'mcp-git'],
     todoMarkdown: `<!-- Project: Default Workspace | Folder: projects/default-workspace -->
-<!-- Linked Context: projects/default-workspace/AGENT_CONTEXT.md -->
 
 ## Core Tasks
 
 1. Initial Task Setup
     - Define project scope and task list
-    - Verify bi-directional link with AGENT_CONTEXT.md`,
+    - Verify AI task execution and vector memory context`,
     agentContextMarkdown: `<!-- Project: Default Workspace | Folder: projects/default-workspace -->
 <!-- Linked Tasks: projects/default-workspace/TODO.md -->
 # Default Workspace Context — the verbose half of \`projects/default-workspace/TODO.md\`
@@ -117,23 +113,23 @@ Rules of the split:
 Setup initial project structure and link human task list with agent context briefs.
 
 **Build & Verification**
-Created project folder structure under projects/default-workspace with isolated TODO.md and AGENT_CONTEXT.md. Verified directory paths and unique markdown file references.
+Created project folder structure under projects/default-workspace with isolated TODO.md and local vector storage. Verified directory paths and markdown file references.
 
 **Completion**
-Initial project structure initialized. All core file links verified.`,
+Initial project structure initialized. All core links verified.`,
     swimLanes: [
       {
         id: 'lane-default',
         title: 'Human Workspace',
         filePath: 'projects/default-workspace/TODO.md',
         markdown: `<!-- Project: Default Workspace | Folder: projects/default-workspace -->
-<!-- Linked Context: projects/default-workspace/AGENT_CONTEXT.md -->
+<!-- Linked Context: Local Vector Storage (ergo-vector-memory) -->
 
 ## Core Tasks
 
 1. Initial Task Setup
     - Define project scope and task list
-    - Verify bi-directional link with AGENT_CONTEXT.md`
+    - Verify zero-token context retrieval with vector memory`
       }
     ]
   }
@@ -217,19 +213,15 @@ export const INITIAL_MCP_SERVERS: MCPServer[] = [
   {
     id: 'mcp-github',
     name: 'GitHub',
-    description: 'Access repositories, pull requests, issue tracking, code commits, and CI workflow runs.',
+    description: 'Access repositories, pull requests, issue tracking, code commits, branch inspection, and CI workflows via the official Model Context Protocol server.',
     iconName: 'Github',
     iconUrl: '/icons/github.svg',
     category: 'developer',
     status: 'disconnected',
-    transport: 'OAuth 2.1',
-    endpoint: 'https://mcp.github.com/v1',
+    transport: 'Local Stdio',
+    endpoint: 'stdio://@modelcontextprotocol/server-github',
     serverType: 'external_oauth',
-    tools: [
-      { id: 'gh_create_issue', name: 'create_issue', description: 'Create a new issue in a target repository', autoApprove: false, serverId: 'mcp-github' },
-      { id: 'gh_list_prs', name: 'list_pull_requests', description: 'List open PRs with CI and review status', autoApprove: true, serverId: 'mcp-github' },
-      { id: 'gh_post_comment', name: 'post_pr_comment', description: 'Post review comments on pull requests and issues', autoApprove: false, serverId: 'mcp-github' }
-    ]
+    tools: GITHUB_MCP_TOOLS
   },
   {
     id: 'mcp-gcal',
@@ -240,7 +232,7 @@ export const INITIAL_MCP_SERVERS: MCPServer[] = [
     category: 'productivity',
     status: 'disconnected',
     transport: 'OAuth 2.1',
-    endpoint: 'https://mcp.google.com/calendar/v3',
+    endpoint: '',
     serverType: 'external_oauth',
     tools: [
       { id: 'gcal_list_events', name: 'list_calendar_events', description: 'Query upcoming calendar schedule and availability', autoApprove: true, serverId: 'mcp-gcal' },
@@ -257,7 +249,7 @@ export const INITIAL_MCP_SERVERS: MCPServer[] = [
     category: 'productivity',
     status: 'disconnected',
     transport: 'OAuth 2.1',
-    endpoint: 'https://mcp.salesforce.com/services/oauth2',
+    endpoint: '',
     serverType: 'external_oauth',
     tools: [
       { id: 'sf_query_records', name: 'query_salesforce_records', description: 'Run SOQL queries to search accounts, leads, and opportunities', autoApprove: true, serverId: 'mcp-salesforce' },
@@ -273,8 +265,8 @@ export const INITIAL_MCP_SERVERS: MCPServer[] = [
     iconUrl: '/icons/slack.svg',
     category: 'productivity',
     status: 'disconnected',
-    transport: 'OAuth 2.1',
-    endpoint: 'https://mcp.slack.com/sse',
+    transport: 'Local Stdio',
+    endpoint: 'stdio://@modelcontextprotocol/server-slack',
     serverType: 'external_oauth',
     tools: [
       { id: 'slack_send_msg', name: 'send_channel_message', description: 'Send message or announcement to a Slack channel', autoApprove: false, serverId: 'mcp-slack' },
@@ -291,7 +283,7 @@ export const INITIAL_MCP_SERVERS: MCPServer[] = [
     category: 'productivity',
     status: 'disconnected',
     transport: 'OAuth 2.1',
-    endpoint: 'https://mcp.notion.com/v1',
+    endpoint: '',
     serverType: 'external_oauth',
     tools: [
       { id: 'notion_query_database', name: 'query_database_entries', description: 'Query and filter Notion workspace database records', autoApprove: true, serverId: 'mcp-notion' },

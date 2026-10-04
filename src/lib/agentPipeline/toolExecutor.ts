@@ -209,7 +209,10 @@ export function createToolExecutor(opts: ToolExecutorOptions): (calls: ToolCallR
     let content = '';
     let isError = false;
     try {
-      const result = await callMcpTool(def.serverId, call.name, args);
+      const result = await callMcpTool(def.serverId, call.name, args, {
+        endpoint: def.endpoint,
+        authHeader: def.authHeader
+      });
       if (result.success) {
         content = stringifyResultData(result.data);
         if (call.name === 'run_command' && result.data && typeof result.data === 'object' && result.data.exitCode !== undefined && result.data.exitCode !== 0) {

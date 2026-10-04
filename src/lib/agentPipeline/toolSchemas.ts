@@ -209,15 +209,17 @@ export function buildToolDefinitions(connectedMcps: MCPServer[], requiredMcps: s
         description: spec ? spec.description : `[${server.name}] ${tool.description}`,
         inputSchema: spec
           ? spec.schema
-          : {
+          : (tool.inputSchema || {
               type: 'object',
               properties: { args: { type: 'object', description: 'Tool arguments as a JSON object.' } },
               required: []
-            },
+            }),
         serverId: server.id,
         serverName: server.name,
         readOnly: spec ? spec.readOnly : isReadOnlyTool(tool.name),
-        autoApprove: Boolean(tool.autoApprove)
+        autoApprove: Boolean(tool.autoApprove),
+        endpoint: server.endpoint,
+        authHeader: server.authHeader
       });
     }
   }

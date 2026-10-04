@@ -20,7 +20,7 @@ import { callMcpTool, formatConnectionsForAiPrompt, getAllowedRoots } from './mc
 import { storageManager } from './storageManager';
 import { parseTodoMarkdown, parseAgentContextMarkdown } from './parser';
 import { callAiEngine, stripSkillFrontmatter, extractStringFromAiValue } from './llmClient';
-import { type SearchResult } from './memory';
+import { type SearchResult, runSessionRetrospective, type RetrospectiveInput } from './memory';
 
 // The agent execution pipeline (Discovery → Summary → Manager → Cleaner → Hardener → Logger)
 // lives in ./agentPipeline. Re-exported here so existing imports keep working.
@@ -1473,6 +1473,23 @@ export async function runOfflineExecution(
     subtasks: allSubtasks.length > 0 ? allSubtasks : task.subtasks.map((s) => ({ ...s, isDone: true }))
   };
 
+  // Run session retrospective to store concise results & learnings in vector memory
+  try {
+    const retroInput: RetrospectiveInput = {
+      taskId: task.id,
+      taskTitle: task.title,
+      projectId: project?.id,
+      overview: overviewContent,
+      buildLog: buildVerificationContent,
+      completion: completionContent,
+      createdFiles: sampleCreatedFiles,
+      allScenariosPass: true,
+    };
+    void runSessionRetrospective(retroInput);
+  } catch (err) {
+    console.warn('[Ergo Offline] Session retrospective failed (non-fatal):', err);
+  }
+
   onStepUpdate({
     id: offlineSteps[4].id!,
     time: new Date().toLocaleTimeString(),
@@ -1480,7 +1497,7 @@ export async function runOfflineExecution(
     title: reviewSubtasks.length > 0 ? 'Task Built — Human Review Pending' : 'Task Execution Completed Successfully!',
     detail: reviewSubtasks.length > 0
       ? `Task #${task.id} changes recorded in TODO.md with Human Review verification step(s).`
-      : `Item #${task.id} marked DONE in TODO.md. Agent build record appended to AGENT_CONTEXT.md.`,
+      : `Item #${task.id} marked DONE in TODO.md. Concise output & learnings saved to vector memory.`,
     status: 'success',
     totalUsage: { inputTokens: 1450, outputTokens: 420, cachedInputTokens: 300, cacheWriteTokens: 0, calls: 3 }
   });

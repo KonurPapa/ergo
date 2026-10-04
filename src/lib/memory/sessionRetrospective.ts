@@ -152,27 +152,31 @@ function extractLessons(input: RetrospectiveInput): Learning[] {
     }
   }
 
-  // Always create a task completion summary as a 'tasks' namespace chunk keyed on the internal taskId
-  if (input.createdFiles.length > 0 || input.allScenariosPass) {
-    const summaryParts = [
-      `Task: "${input.taskTitle}"`,
-      input.allScenariosPass ? 'All scenarios passed.' : 'Some scenarios did not pass.',
-      input.createdFiles.length > 0
-        ? `Files: ${input.createdFiles.slice(0, 10).join(', ')}${input.createdFiles.length > 10 ? ` (+${input.createdFiles.length - 10} more)` : ''}`
-        : '',
-      input.qaVerdict ? `QA: ${input.qaVerdict}` : '',
-    ].filter(Boolean);
+  // Always create a concise task completion output summary in the 'tasks' namespace
+  const cleanCompletion = input.completion ? input.completion.replace(/<!--[\s\S]*?-->/g, '').trim() : '';
+  const conciseOutput = cleanCompletion
+    ? cleanCompletion.split('\n').filter((l) => l.trim().length > 0).slice(0, 4).join(' ')
+    : '';
 
-    lessons.push({
-      id: `task_summary_${input.projectId || 'default'}_${input.taskId}`,
-      lesson: summaryParts.join(' | '),
-      category: 'general',
-      taskId: input.taskId,
-      taskTitle: input.taskTitle,
-      projectId: input.projectId,
-      timestamp: Date.now(),
-    });
-  }
+  const summaryParts = [
+    `Task: "${input.taskTitle}"`,
+    input.allScenariosPass ? 'All scenarios passed.' : 'Execution completed.',
+    conciseOutput ? `Output: ${conciseOutput.slice(0, 300)}` : '',
+    input.createdFiles.length > 0
+      ? `Files: ${input.createdFiles.slice(0, 10).join(', ')}${input.createdFiles.length > 10 ? ` (+${input.createdFiles.length - 10} more)` : ''}`
+      : '',
+    input.qaVerdict ? `QA: ${input.qaVerdict}` : '',
+  ].filter(Boolean);
+
+  lessons.push({
+    id: `task_summary_${input.projectId || 'default'}_${input.taskId}`,
+    lesson: summaryParts.join(' | '),
+    category: 'general',
+    taskId: input.taskId,
+    taskTitle: input.taskTitle,
+    projectId: input.projectId,
+    timestamp: Date.now(),
+  });
 
   return lessons;
 }
@@ -337,5 +341,67 @@ export async function migrateAgentContextToMemory(
 
   const stored = await addChunks(chunks);
   console.log(`[SessionRetrospective] Migration complete: ${stored} chunks stored`);
+  return stored;
+}
+
+/**
+ * Archive a task directly to vector memory.
+ * Stores a concise task summary and any relevant brief notes in the 'tasks' namespace,
+ * ensuring the AI retains this context even after the task is removed from active workspaces.
+ */
+export async function archiveTaskToVectorMemory(input: {
+  taskId: string | number;
+  taskTitle: string;
+  category?: string;
+  status?: string;
+  overview?: string;
+  completion?: string;
+  subtasks?: Array<{ text: string; isDone?: boolean }>;
+  projectId?: string;
+}): Promise<number> {
+  const normTaskId = String(input.taskId).replace(/^brief_/, '');
+  const projId = input.projectId || 'default';
+  const cleanTitle = input.taskTitle.trim();
+
+  const lines: string[] = [
+    `Archived Task: "${cleanTitle}"`,
+    input.category ? `Category: ${input.category}` : '',
+    input.status ? `Status: ${input.status}` : '',
+  ].filter(Boolean);
+
+  if (input.overview && input.overview.trim().length > 0) {
+    lines.push(`Overview: ${input.overview.trim().slice(0, 500)}`);
+  }
+
+  if (input.completion && input.completion.trim().length > 0) {
+    const cleanComp = input.completion.replace(/<!--[\s\S]*?-->/g, '').trim();
+    lines.push(`Completion: ${cleanComp.slice(0, 500)}`);
+  }
+
+  if (input.subtasks && input.subtasks.length > 0) {
+    const subtaskLines = input.subtasks.map((st) => `- [${st.isDone ? 'x' : ' '}] ${st.text}`);
+    lines.push(`Checklist:\n${subtaskLines.join('\n')}`);
+  }
+
+  const chunkText = lines.join('\n\n');
+
+  const chunk = {
+    id: `archived_${projId}_${normTaskId}`,
+    namespace: 'tasks' as MemoryNamespace,
+    text: chunkText,
+    metadata: {
+      taskId: normTaskId,
+      taskTitle: cleanTitle,
+      category: input.category || 'general',
+      projectId: input.projectId,
+      source: 'workspace-archive',
+      tags: ['archived', input.category || 'general'].filter(Boolean),
+      subtasks: input.subtasks,
+      serializedSubtasks: input.subtasks ? JSON.stringify(input.subtasks) : undefined,
+    } as ChunkMetadata,
+  };
+
+  const stored = await addChunks([chunk]);
+  console.log(`[SessionRetrospective] Archived task #${normTaskId} "${cleanTitle}" to vector memory`);
   return stored;
 }

@@ -141,7 +141,7 @@ export async function executeTaskWithAi(
   const isLiveAi =
     aiConfig.provider !== 'none' &&
     aiConfig.provider !== 'mock' &&
-    (aiConfig.apiKey || aiConfig.provider === 'ollama');
+    (aiConfig.apiKey || aiConfig.provider === 'ollama' || aiConfig.authMode === 'cli_subscription' || aiConfig.provider === 'cli_subscription');
 
   if (!isLiveAi) {
     return runOfflineExecution(task, brief, project, connectedMcps, onStepUpdate, onRequestPermission, onRequestHumanInput);

@@ -317,22 +317,14 @@ function serializeTaskListMarkdown(items: TaskItem[]): string {
 export function serializeTodoMarkdown(
   items: TaskItem[],
   headerComment?: string,
-  archivedItems: TaskItem[] = []
+  _archivedItems: TaskItem[] = []
 ): string {
   let md = headerComment && headerComment.trim() ? `${headerComment.trim()}\n\n` : '';
 
-  // Separate active and archived if mixed in items
+  // Active tasks only — archived tasks are removed from the workspace and preserved in vector memory
   const active = items.filter((i) => !i.isArchived);
-  const explicitArchived = items.filter((i) => i.isArchived);
-  const allArchived = [...explicitArchived, ...archivedItems];
 
   md += serializeTaskListMarkdown(active);
-
-  if (allArchived.length > 0) {
-    const archiveMd = serializeTaskListMarkdown(allArchived);
-    md = md.trim() + `\n\n${ARCHIVE_DELIMITER}\n\n${archiveMd}`;
-  }
-
   return md.trim();
 }
 

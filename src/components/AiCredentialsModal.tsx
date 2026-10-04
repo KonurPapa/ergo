@@ -1485,7 +1485,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                 }}
                               >
                                 <Terminal size={12} color="var(--accent-cyan)" />
-                                <span>Launch Terminal</span>
+                                <span>Open Terminal Shell</span>
                               </button>
                             </>
                           )}
@@ -1513,6 +1513,12 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                           )}
                         </div>
                       </div>
+
+                      {isInstalled && (
+                        <div style={{ marginTop: '0.45rem', padding: '0.4rem 0.65rem', background: 'rgba(16, 185, 129, 0.08)', borderRadius: '5px', border: '1px solid rgba(16, 185, 129, 0.22)', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                          <span style={{ color: 'var(--accent-emerald)', fontWeight: 600 }}>⚡ Active CLI Subscription Bridge:</span> During task execution, all workflow AI requests (Summary, Manager, QA) are automatically bridged headlessly through {currentAgent?.name || 'the CLI'} using your authenticated subscription.
+                        </div>
+                      )}
 
                       {/* Embedded Interactive Terminal Drawer */}
                       {cliTerminalState.isOpen && (

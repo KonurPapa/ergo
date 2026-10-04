@@ -11,13 +11,20 @@ import {
 export async function callMcpTool(
   serverId: string,
   toolName: string,
-  args: Record<string, any> = {}
+  args: Record<string, any> = {},
+  options?: { endpoint?: string; authHeader?: string }
 ): Promise<McpToolExecutionResult> {
   try {
     const res = await fetch('/api/mcp/tools/call', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ serverId, toolName, args })
+      body: JSON.stringify({
+        serverId,
+        toolName,
+        args,
+        endpoint: options?.endpoint,
+        authHeader: options?.authHeader
+      })
     });
 
     if (!res.ok) {
@@ -142,15 +149,78 @@ export async function removeAllowedRoot(id: string): Promise<McpRootBoundary[]> 
 }
 
 /**
+ * Connect to an MCP endpoint (or check status) and discover tools via tools/list
+ */
+export async function discoverRemoteMcpTools(
+  endpoint: string,
+  authHeader?: string
+): Promise<{
+  success: boolean;
+  serverInfo?: { name: string; version?: string };
+  tools: MCPTool[];
+  error?: string;
+  authRequired?: boolean;
+}> {
+  try {
+    const res = await fetch('/api/mcp/remote/discover', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint, authHeader })
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      return {
+        success: false,
+        tools: [],
+        error: data.error || `Discovery failed with status ${res.status}`,
+        authRequired: Boolean(data.authRequired)
+      };
+    }
+
+    const discoveredTools: MCPTool[] = (data.tools || []).map((t: any, idx: number) => ({
+      id: t.name ? `tool-${t.name}-${idx}` : `tool-${idx}`,
+      name: t.name || `tool_${idx}`,
+      description: t.description || 'Remote MCP Tool',
+      autoApprove: false,
+      inputSchema: t.inputSchema || t.schema || undefined
+    }));
+
+    return {
+      success: true,
+      serverInfo: data.serverInfo,
+      tools: discoveredTools
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      tools: [],
+      error: err?.message || 'Network error reaching MCP endpoint'
+    };
+  }
+}
+
+/**
  * Sync and fetch latest tools list for an MCP server (Implements `tools/list`)
  */
 export async function syncMcpServerTools(server: MCPServer): Promise<MCPTool[]> {
   // If bundled harness, verify tools with local host
-  if (server.serverType === 'bundled_harness') {
+  if (server.serverType === 'bundled_harness' || server.transport === 'Local Stdio') {
     return server.tools.map((t) => ({ ...t, serverId: server.id }));
   }
 
-  // If remote OAuth/SSE server, attempt discovery or return configured tools
+  // If remote server, query /api/mcp/remote/discover to pull current tools
+  if (server.endpoint) {
+    const res = await discoverRemoteMcpTools(server.endpoint, server.authHeader);
+    if (res.success && res.tools.length > 0) {
+      return res.tools.map((t) => ({
+        ...t,
+        serverId: server.id,
+        autoApprove: server.tools.find((existing) => existing.name === t.name)?.autoApprove ?? t.autoApprove
+      }));
+    }
+  }
+
   return server.tools.map((t) => ({ ...t, serverId: server.id }));
 }
 
@@ -235,6 +305,15 @@ export function guessRelevantTools(prompt: string, availableTools: MCPTool[]): s
       tool.serverId === 'mcp-zapier'
     ) {
       selected.add(tool.id);
+    }
+
+    // Generic match on custom MCP tool name or description keyword overlap
+    const words = tName.split(/[_\s-]+/).filter((w) => w.length >= 3);
+    for (const w of words) {
+      if (lower.includes(w)) {
+        selected.add(tool.id);
+        break;
+      }
     }
   });
 
@@ -351,3 +430,71 @@ export function formatConnectionsForAiPrompt(
 
   return lines.join('\n');
 }
+
+/**
+ * Get GitHub MCP connection status and configured account
+ */
+export async function getGithubMcpStatus(): Promise<{
+  configured: boolean;
+  username?: string;
+  name?: string;
+  avatarUrl?: string;
+  connectedAt?: string;
+}> {
+  try {
+    const res = await fetch('/api/mcp/github/status');
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {}
+  return { configured: false };
+}
+
+/**
+ * Connect GitHub MCP with a Personal Access Token
+ */
+export async function connectGithubMcp(token: string): Promise<{
+  success: boolean;
+  user?: { login: string; name?: string; avatarUrl?: string };
+  tools?: MCPTool[];
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/mcp/github/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: token.trim() })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      return {
+        success: false,
+        error: data.error || `GitHub connection failed (status ${res.status})`
+      };
+    }
+    return {
+      success: true,
+      user: data.user,
+      tools: data.tools
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || 'Network error connecting to GitHub MCP'
+    };
+  }
+}
+
+/**
+ * Disconnect GitHub MCP
+ */
+export async function disconnectGithubMcp(): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch('/api/mcp/github/disconnect', { method: 'POST' });
+    const data = await res.json();
+    return { success: Boolean(data?.success) };
+  } catch (err: any) {
+    return { success: false, error: err?.message };
+  }
+}
+

@@ -186,18 +186,25 @@ export async function callAiEngine(
     return data.message?.content || '';
   }
 
-  if (provider === 'cli_subscription' || config.authMode === 'cli_subscription') {
-    const cliCommand = config.cliCustomCommand || config.model || 'claude';
+  if (provider === 'cli_subscription' || config.authMode === 'cli_subscription' || config.apiKey === 'cli_subscription_active') {
+    const cliTarget = config.cliCustomCommand || config.cliAgentId || (
+      config.provider === 'gemini' ? 'antigravity' :
+      config.provider === 'openai' ? 'codex' :
+      config.provider === 'cursor' ? 'cursor-cli' :
+      config.provider === 'grok' ? 'grok-cli' :
+      config.provider === 'ollama' ? 'aider' :
+      config.model || 'claude'
+    );
     // Map preset IDs like 'claude-code' to binary 'claude'
-    const binary = cliCommand === 'claude-code'
+    const binary = cliTarget === 'claude-code'
       ? 'claude'
-      : cliCommand === 'antigravity'
+      : cliTarget === 'antigravity'
         ? 'agy'
-        : cliCommand === 'cursor-cli'
+        : cliTarget === 'cursor-cli'
           ? 'cursor'
-          : cliCommand === 'grok-cli'
+          : cliTarget === 'grok-cli'
             ? 'grok'
-            : cliCommand;
+            : cliTarget;
 
     const res = await fetch('/api/cli/execute', {
       method: 'POST',
@@ -207,7 +214,7 @@ export async function callAiEngine(
         prompt,
         systemPrompt,
         responseFormat,
-        timeoutMs: 180_000
+        timeoutMs: 60_000
       }),
       signal
     });

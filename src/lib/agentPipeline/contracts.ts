@@ -18,6 +18,7 @@ import {
   type AgentPipelineOptions,
   type AgentRole,
   type AgentContextItem,
+  type AuthMode,
   type ExecutionStep,
   type HumanInputPrompt,
   type MCPServer,
@@ -85,6 +86,8 @@ export interface ToolDefinition {
   readOnly: boolean;
   /** Mirrors MCPTool.autoApprove — false means the user is prompted before execution. */
   autoApprove: boolean;
+  endpoint?: string;
+  authHeader?: string;
 }
 
 export interface ToolCallRequest {
@@ -123,6 +126,9 @@ export interface ToolLoopRequest {
   model: string;
   apiKey?: string;
   baseUrl?: string;
+  authMode?: AuthMode;
+  cliAgentId?: string;
+  cliCustomCommand?: string;
   /**
    * Cached block 2 — role skill + execution rules. Byte-identical for every agent sharing a role
    * within a run. Rendered AFTER sharedContext so all roles share the longest possible prefix.
@@ -209,6 +215,9 @@ export interface ResolvedRoleTarget {
   model: string;
   apiKey?: string;
   baseUrl?: string;
+  authMode?: AuthMode;
+  cliAgentId?: string;
+  cliCustomCommand?: string;
 }
 
 /** Resolve which model a role should use — decided once per run (route at task boundaries). */
@@ -248,11 +257,18 @@ export function resolveRoleTarget(config: AIProviderConfig, role: AgentRole): Re
   const apiKey = creds?.apiKey || (provider === config.provider ? config.apiKey : undefined);
   const baseUrl = creds?.baseUrl || (provider === config.provider ? config.baseUrl : undefined);
 
+  const authMode = config.authMode || (apiKey === 'cli_subscription_active' ? 'cli_subscription' : undefined);
+  const cliAgentId = config.cliAgentId;
+  const cliCustomCommand = config.cliCustomCommand;
+
   return {
     provider,
     model,
     apiKey,
-    baseUrl
+    baseUrl,
+    authMode,
+    cliAgentId,
+    cliCustomCommand
   };
 }
 
@@ -282,6 +298,9 @@ export function buildToolLoopRequest(
     model?: string;
     apiKey?: string;
     baseUrl?: string;
+    authMode?: AuthMode;
+    cliAgentId?: string;
+    cliCustomCommand?: string;
   }
 ): ToolLoopRequest {
   const target = resolveRoleTarget(ctx.aiConfig, role);
@@ -290,6 +309,9 @@ export function buildToolLoopRequest(
     model: params.model ?? target.model,
     apiKey: params.apiKey ?? target.apiKey,
     baseUrl: params.baseUrl ?? target.baseUrl,
+    authMode: params.authMode ?? target.authMode,
+    cliAgentId: params.cliAgentId ?? target.cliAgentId,
+    cliCustomCommand: params.cliCustomCommand ?? target.cliCustomCommand,
     signal: ctx.signal,
     ollamaFailureState: ctx.ollamaFailureState,
     taskId: ctx.task.id,

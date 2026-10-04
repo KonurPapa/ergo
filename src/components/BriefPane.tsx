@@ -176,6 +176,8 @@ const HumanInputCard: React.FC<HumanInputCardProps> = ({ prompt, onSubmit }) => 
 interface BriefPaneProps {
   tasks: TaskItem[];
   briefs: AgentContextItem[];
+  projectId?: string;
+  projectName?: string;
   archivedTasks?: TaskItem[];
   archivedBriefs?: AgentContextItem[];
   swimLanes?: import('../types').SwimLaneDoc[];
@@ -189,6 +191,7 @@ interface BriefPaneProps {
   onSyncOverviewWithTask?: (task: TaskItem) => Promise<string | void>;
   onUnarchiveTask?: (taskId: string | number) => void;
   onDeleteArchivedTask?: (taskId: string | number) => void;
+  onRestoreMemoryAsTask?: (chunk: import('../lib/memory').MemoryChunk) => void;
   onSaveArchivedBrief?: (brief: AgentContextItem) => void;
   autosaveStatus?: 'idle' | 'pending' | 'saving' | 'saved' | 'error';
   autosaveDelaySec?: number;
@@ -207,6 +210,7 @@ interface BriefPaneProps {
   onTerminateAgent?: (taskId: string | number) => void;
   onArchiveTask?: (taskTitle: string) => void;
   onRemoveAiTask?: (targetId: string | number) => void;
+  onPurgeTaskFromAi?: (targetId: string | number) => void;
   // Scheduling props
   scheduledJobs?: ScheduledJob[];
   onScheduleTask?: (taskId: string | number, scheduledIso: string, cronExpr?: string) => void;
@@ -244,6 +248,7 @@ interface AiTaskCardProps {
   onTerminateAgent?: (taskId: string | number) => void;
   onArchiveTask?: (taskTitle: string) => void;
   onRemoveAiTask?: (targetId: string | number) => void;
+  onPurgeTaskFromAi?: (targetId: string | number) => void;
 }
 
 type CardStatus = 'not_started' | 'working' | 'done';
@@ -301,6 +306,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   onTerminateAgent,
   onArchiveTask,
   onRemoveAiTask,
+  onPurgeTaskFromAi,
 }) => {
   const [isTaskCollapsed, setIsTaskCollapsed] = useState(!isSelected);
   const [isEditing, setIsEditing] = useState(false);
@@ -308,8 +314,10 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   const [buildVerificationText, setBuildVerificationText] = useState('');
   const [completionText, setCompletionText] = useState('');
   const [viewModeSection2, setViewModeSection2] = useState<'notes' | 'terminal' | 'steps'>('notes');
+  const [isTerminalInStepsOpen, setIsTerminalInStepsOpen] = useState(true);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isGherkinOpen, setIsGherkinOpen] = useState(false);
+  const [isPurgeConfirmOpen, setIsPurgeConfirmOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const hasPendingAlert = !!(pendingPermission || pendingOllamaFallback);
 
@@ -473,17 +481,40 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     }
   }, [task.id, brief]);
 
-  // Reset edit and card states when switching tasks or when task status/done state changes
+  // Reset edit and card states when switching tasks
+  const prevTaskIdRef = useRef(task.id);
   useEffect(() => {
+    const isNewTask = prevTaskIdRef.current !== task.id;
+    prevTaskIdRef.current = task.id;
+
     setIsEditing(false);
-    setViewModeSection2('notes');
-    setCollapsedCards({
-      overview: false,
-      vectorMemory: true,
-      steps: true,
-      completion: false,
-    });
-  }, [task.id, task.status, task.isDone]);
+
+    if (isNewTask) {
+      if (terminalSession?.session) {
+        setViewModeSection2('terminal');
+        setCollapsedCards({
+          overview: false,
+          vectorMemory: true,
+          steps: false,
+          completion: false,
+        });
+      } else {
+        setViewModeSection2('notes');
+        setCollapsedCards({
+          overview: false,
+          vectorMemory: true,
+          steps: true,
+          completion: false,
+        });
+      }
+    } else {
+      // If task status changed on the same task, ensure terminal session stays visible if active
+      if (terminalSession?.session?.isActive) {
+        setViewModeSection2('terminal');
+        setCollapsedCards((prev) => ({ ...prev, steps: false }));
+      }
+    }
+  }, [task.id, task.status, task.isDone, terminalSession]);
 
   const prevWorkingRef = useRef(isWorking);
   useEffect(() => {
@@ -782,7 +813,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     if (isTaskDone) return true;
     if (executionSteps.some((s) => (s.stage === 'built_record' || s.stage === 'done') && s.status === 'success')) return true;
     if (terminalSession?.session && !terminalSession.session.isActive && terminalSession.session.exitCode === 0) return true;
-    if (Boolean((brief?.completion && brief.completion.trim().length > 0) || (brief?.validation && brief.validation.trim().length > 0))) return true;
+    if ((brief?.completion && brief.completion.trim().length > 0) || (brief?.validation && brief.validation.trim().length > 0)) return true;
     return false;
   }, [isWorking, isStoppedPartway, isTaskDone, executionSteps, terminalSession, brief?.completion, brief?.validation]);
 
@@ -1042,35 +1073,157 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                 <div className="swimlane-dropdown-divider" />
 
                 {isTaskStarted ? (
-                  <button
-                    type="button"
-                    className="swimlane-dropdown-item"
-                    onClick={() => {
-                      setIsMenuOpen(false);
-                      onArchiveTask?.(task.title || brief?.title || '');
-                    }}
-                  >
-                    <Archive size={13} style={{ color: '#f59e0b' }} />
-                    <span>Archive Task</span>
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="swimlane-dropdown-item"
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        onArchiveTask?.(task.title || brief?.title || '');
+                      }}
+                    >
+                      <Archive size={13} style={{ color: '#f59e0b' }} />
+                      <span>Archive Task</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="swimlane-dropdown-item is-danger"
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        setIsPurgeConfirmOpen(true);
+                      }}
+                    >
+                      <Trash2 size={13} />
+                      <span>Remove task</span>
+                    </button>
+                  </>
                 ) : (
-                  <button
-                    type="button"
-                    className="swimlane-dropdown-item is-danger"
-                    onClick={() => {
-                      setIsMenuOpen(false);
-                      onRemoveAiTask?.(brief?.id || brief?.sourceTaskId || brief?.itemNumber || task.id);
-                    }}
-                  >
-                    <Trash2 size={13} />
-                    <span>Remove from AI Workspace</span>
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="swimlane-dropdown-item is-danger"
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        setIsPurgeConfirmOpen(true);
+                      }}
+                    >
+                      <Trash2 size={13} />
+                      <span>Remove task</span>
+                    </button>
+                  </>
                 )}
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {/* Confirmation Modal for Removing Task from AI Workspace and local Vector DB */}
+      {isPurgeConfirmOpen && (
+        <div className="modal-overlay" onClick={() => setIsPurgeConfirmOpen(false)} style={{ zIndex: 120 }}>
+          <div
+            className="modal-content"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: '460px',
+              background: 'var(--bg-card, #222427)',
+              border: '1px solid rgba(244, 63, 94, 0.35)',
+              borderRadius: '10px',
+              boxShadow: '0 20px 50px rgba(0,0,0,0.7)',
+              padding: 0,
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              className="modal-header"
+              style={{
+                padding: '0.85rem 1.25rem',
+                borderBottom: '1px solid rgba(255,255,255,0.08)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-rose, #f43f5e)' }}>
+                <AlertTriangle size={18} />
+                <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600 }}>Remove Task?</h4>
+              </div>
+              <button
+                type="button"
+                className="btn-icon"
+                onClick={() => setIsPurgeConfirmOpen(false)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            <div style={{ padding: '1.15rem 1.25rem', fontSize: '0.86rem', lineHeight: 1.6, color: 'var(--text-main, rgba(255,255,255,0.85))' }}>
+              Are you sure you want to remove this task and any execution logs from the AI Workspace? This action can't be undone.
+              <div
+                style={{
+                  marginTop: '0.75rem',
+                  padding: '0.5rem 0.75rem',
+                  background: 'rgba(0,0,0,0.3)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: '6px',
+                  fontWeight: 500,
+                  color: '#fff',
+                  fontSize: '0.82rem',
+                }}
+              >
+                "{task.title || brief?.title || 'Selected Task'}"
+              </div>
+            </div>
+
+            <div
+              className="modal-footer"
+              style={{
+                padding: '0.75rem 1.25rem',
+                borderTop: '1px solid rgba(255,255,255,0.08)',
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: '0.5rem',
+                background: 'var(--bg-darkest, #191a1c)',
+              }}
+            >
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setIsPurgeConfirmOpen(false)}
+                style={{ height: '30px', padding: '0 0.85rem', fontSize: '0.78rem' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => {
+                  setIsPurgeConfirmOpen(false);
+                  if (onPurgeTaskFromAi) {
+                    onPurgeTaskFromAi(brief?.id || brief?.sourceTaskId || brief?.itemNumber || task.id);
+                  } else if (onRemoveAiTask) {
+                    onRemoveAiTask(brief?.id || brief?.sourceTaskId || brief?.itemNumber || task.id);
+                  }
+                }}
+                style={{
+                  height: '30px',
+                  padding: '0 0.95rem',
+                  fontSize: '0.78rem',
+                  background: 'var(--accent-rose, #f43f5e)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '5px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Remove Permanently
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Task Card Content (Collapsible) ── */}
       {!isTaskCollapsed && (
@@ -1522,6 +1675,77 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                             />
                           )}
 
+                          {/* Embedded Live CLI Terminal Card (Visible in Steps view when a session is active or available) */}
+                          {terminalSession && (
+                            <div className={`ai-step-gherkin-card ${isTerminalInStepsOpen ? 'is-open' : 'is-collapsed'}`} style={{ border: '1px solid rgba(6, 182, 212, 0.35)', background: 'rgba(6, 182, 212, 0.03)' }}>
+                              <div
+                                className="ai-step-gherkin-header"
+                                onClick={() => setIsTerminalInStepsOpen((v) => !v)}
+                                title={isTerminalInStepsOpen ? 'Collapse Terminal Session' : 'Expand Terminal Session'}
+                                style={{ background: 'rgba(6, 182, 212, 0.08)' }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                  <button
+                                    type="button"
+                                    className={`card-collapse-btn ${!isTerminalInStepsOpen ? 'is-collapsed' : ''}`}
+                                    aria-label={isTerminalInStepsOpen ? 'Collapse Terminal Session' : 'Expand Terminal Session'}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setIsTerminalInStepsOpen((v) => !v);
+                                    }}
+                                  >
+                                    <ChevronDown size={11} className="collapse-chevron" />
+                                  </button>
+                                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                    <Terminal size={12} />
+                                    <span>Live Agent Terminal ({terminalSession.cmd})</span>
+                                  </span>
+                                  {terminalSession.session.isActive && (
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: 'var(--accent-emerald)', fontWeight: 600 }}>
+                                      <span className="live-pulse-dot-working" style={{ width: 6, height: 6 }} />
+                                      <span>RUNNING</span>
+                                    </span>
+                                  )}
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }} onClick={(e) => e.stopPropagation()}>
+                                  {onRestartSession && (
+                                    <button
+                                      type="button"
+                                      className="terminal-ctrl-btn"
+                                      onClick={() => onRestartSession(task)}
+                                      title="Restart CLI agent in terminal"
+                                    >
+                                      <RotateCcw size={10} />
+                                      <span>Restart</span>
+                                    </button>
+                                  )}
+                                  {terminalSession.session.isActive && onKillSession && (
+                                    <button
+                                      type="button"
+                                      className="terminal-ctrl-btn is-danger"
+                                      onClick={() => onKillSession(task.id)}
+                                      title="Stop CLI agent process"
+                                    >
+                                      <Square size={10} />
+                                      <span>Stop</span>
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              {isTerminalInStepsOpen && (
+                                <div style={{ height: '360px', overflow: 'hidden', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                                  <AgentTerminal
+                                    cmd={terminalSession.cmd}
+                                    args={terminalSession.args}
+                                    cwd={terminalSession.cwd}
+                                    onExit={(code) => onSessionExit?.(code)}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          )}
+
                       {/* Top Card: Acceptance Brief (Gherkin Scenarios) - Collapsed by default */}
                       {gherkinBrief && (
                         <div className={`ai-step-gherkin-card ${isGherkinOpen ? 'is-open' : 'is-collapsed'}`}>
@@ -1705,6 +1929,8 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 export const BriefPane: React.FC<BriefPaneProps> = ({
   tasks,
   briefs,
+  projectId,
+  projectName,
   archivedTasks = [],
   archivedBriefs = [],
   swimLanes = [],
@@ -1718,6 +1944,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   onSyncOverviewWithTask,
   onUnarchiveTask,
   onDeleteArchivedTask,
+  onRestoreMemoryAsTask,
   onSaveArchivedBrief: _onSaveArchivedBrief,
   terminalSessions = [],
   executingTaskId = null,
@@ -1734,37 +1961,15 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   onTerminateAgent,
   onArchiveTask,
   onRemoveAiTask,
+  onPurgeTaskFromAi,
   scheduledJobs = [],
   onScheduleTask,
   onCancelScheduleTask,
   isPanelOpen = true,
   onTogglePanel,
 }) => {
-  const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
   const [schedulingTask, setSchedulingTask] = useState<TaskItem | null>(null);
-  const headerMenuRef = useRef<HTMLDivElement>(null);
-
-  // Close workspace header dropdown on outside click or Escape
-  useEffect(() => {
-    if (!isHeaderMenuOpen) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (headerMenuRef.current && !headerMenuRef.current.contains(e.target as Node)) {
-        setIsHeaderMenuOpen(false);
-      }
-    };
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setIsHeaderMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isHeaderMenuOpen]);
 
   const activeTaskRunningCount = runningTaskIds.length;
   const doneCount = briefs.filter((b) => b.status === 'done').length;
@@ -1832,16 +2037,19 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
           </button>
         </div>
 
-        {/* Archived Tasks Modal Window */}
+        {/* Archived Tasks & AI Brain Modal Window */}
         <ArchivedTasksModal
           isOpen={isArchiveModalOpen}
           onClose={() => setIsArchiveModalOpen(false)}
+          projectId={projectId}
+          projectName={projectName}
           archivedTasks={archivedTasks}
           swimLanes={swimLanes}
           briefs={briefs}
           archivedBriefs={archivedBriefs}
           onUnarchiveTask={onUnarchiveTask}
           onDeleteArchivedTask={onDeleteArchivedTask}
+          onRestoreMemoryAsTask={onRestoreMemoryAsTask}
         />
       </div>
     );
@@ -1866,39 +2074,37 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
               </span>
             )}
 
-            {/* AI Workspace Header Actions Menu */}
-            <div style={{ position: 'relative' }} ref={headerMenuRef}>
-              <button
-                type="button"
-                className={`swimlane-menu-btn ${isHeaderMenuOpen ? 'active' : ''}`}
-                onClick={() => setIsHeaderMenuOpen((prev) => !prev)}
-                title="Workspace actions"
-                aria-label="Workspace actions"
-              >
-                <MoreHorizontal size={15} />
-              </button>
-
-              {isHeaderMenuOpen && (
-                <div className="swimlane-dropdown-menu" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    type="button"
-                    className="swimlane-dropdown-item"
-                    onClick={() => {
-                      setIsHeaderMenuOpen(false);
-                      setIsArchiveModalOpen(true);
-                    }}
-                  >
-                    <Archive size={13} style={{ color: '#f59e0b' }} />
-                    <span>Archived Tasks</span>
-                    {archivedTasks.length > 0 && (
-                      <span className="dropdown-item-badge" style={{ marginLeft: 'auto', fontSize: '0.7rem', padding: '0.05rem 0.35rem', borderRadius: '8px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.35)', color: '#f59e0b', fontWeight: 600 }}>
-                        {archivedTasks.length}
-                      </span>
-                    )}
-                  </button>
-                </div>
+            {/* Archive Tasks Header Icon Button */}
+            <button
+              type="button"
+              className="swimlane-menu-btn"
+              onClick={() => setIsArchiveModalOpen(true)}
+              title="Archived Tasks"
+              aria-label="Archived Tasks"
+              style={{ position: 'relative' }}
+            >
+              <Archive size={15} style={{ color: '#f59e0b' }} />
+              {archivedTasks.length > 0 && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: '-4px',
+                    right: '-4px',
+                    fontSize: '0.62rem',
+                    fontWeight: 700,
+                    padding: '0 0.28rem',
+                    borderRadius: '8px',
+                    background: '#f59e0b',
+                    color: '#000',
+                    lineHeight: '13px',
+                    minWidth: '13px',
+                    textAlign: 'center',
+                  }}
+                >
+                  {archivedTasks.length}
+                </span>
               )}
-            </div>
+            </button>
 
             {/* Collapse AI Workspace Panel Button */}
             {onTogglePanel && (
@@ -1988,6 +2194,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                     onTerminateAgent={onTerminateAgent}
                     onArchiveTask={onArchiveTask}
                     onRemoveAiTask={(targetId) => onRemoveAiTask?.(targetId)}
+                    onPurgeTaskFromAi={(targetId) => onPurgeTaskFromAi?.(targetId)}
                   />
                 );
               })}
@@ -1996,16 +2203,19 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
         </div>
       </div>
 
-      {/* ── Archived Tasks Modal Window ── */}
+      {/* ── Archived Tasks & AI Brain Modal Window ── */}
       <ArchivedTasksModal
         isOpen={isArchiveModalOpen}
         onClose={() => setIsArchiveModalOpen(false)}
+        projectId={projectId}
+        projectName={projectName}
         archivedTasks={archivedTasks}
         swimLanes={swimLanes}
         briefs={briefs}
         archivedBriefs={archivedBriefs}
         onUnarchiveTask={onUnarchiveTask}
         onDeleteArchivedTask={onDeleteArchivedTask}
+        onRestoreMemoryAsTask={onRestoreMemoryAsTask}
       />
 
       {/* ── Schedule Task Modal Window ── */}

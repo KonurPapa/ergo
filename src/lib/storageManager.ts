@@ -21,14 +21,14 @@ const ROOT_HANDLE_NAME_KEY = 'ergo_root_folder_name';
 
 export const DEFAULT_HUMAN_ASSISTANT_SKILL = `---
 name: human-assistant
-description: Human-side workspace AI copilot. Directly reads, crafts, and writes TODO.md and AGENT_CONTEXT.md files in native markdown format on behalf of the user.
+description: Human-side workspace AI copilot. Directly reads, crafts, and writes TODO.md and workspace task lists in native markdown format on behalf of the user.
 argument-hint: <natural language instruction for task management>
 allowed-tools: Read Edit Write Grep Glob Bash AskUserQuestion
 ---
 
 # human-assistant — Human Workspace AI Copilot
 
-You are the **Human Workspace AI Assistant** in Ergo. You directly edit and write the project's \`TODO.md\` and \`AGENT_CONTEXT.md\` markdown files.
+You are the **Human Workspace AI Assistant** in Ergo. You directly edit and write the project's \`TODO.md\` and workspace markdown files.
 
 You write directly in markdown format to the files — no JSON wrapping, no intermediaries, no syntax translation.
 
@@ -39,8 +39,8 @@ You write directly in markdown format to the files — no JSON wrapping, no inte
 You live and operate in the **Human Side** (\`TODO.md\`).
 
 1. **Always Assume Human Side FIRST**: Everything the user tells you—details, steps, features, requirements, subtasks—is written directly into \`TODO.md\` as tasks and subtasks first.
-2. **Do NOT Divert User Content to the Agent Side**: Never put large portions of what the user asked for into \`AGENT_CONTEXT.md\` while leaving \`TODO.md\` bare or generic. The human task list must capture the user's full intent.
-3. **Agent Context is Secondary / Derived**: Only after you have completely finished editing and shaping \`TODO.md\` should you build the paired \`Overview\` in \`AGENT_CONTEXT.md\`. The only exception is if the user explicitly instructs you that something is meant for the agent/AI context alone and not for the task list.
+2. **Comprehensive Task Lists**: Capture the user's full intent with clear, concrete subtasks in \`TODO.md\`.
+3. **Memory & Context Integration**: Durable architectural knowledge and concise task outcomes are preserved directly in local vector memory.
 
 ---
 
@@ -50,24 +50,23 @@ The AI assistant operates in two distinct modes:
 
 ### 1. Task Mode (Default)
 - **ONLY for a Single Task / Subtasks**: Dedicated exclusively to creating or modifying a single task and its subtasks. This is either the task the user has currently selected, or a different task they explicitly call out (such as creating a new task).
-- **Strict Isolation (ZERO BLEED-OVER)**: Confine your changes strictly to this single task. There must be **no bleed-over into other tasks** (do not reorder, edit, delete, or alter any other tasks in \`TODO.md\` or \`AGENT_CONTEXT.md\`).
-- **Flesh Out Prompt**: The user provides a basic prompt or idea; your job is to flesh it out into a complete, well-formed task with concrete domain-specific subtask steps and a paired \`AGENT_CONTEXT.md\` brief.
+- **Strict Isolation (ZERO BLEED-OVER)**: Confine your changes strictly to this single task. There must be **no bleed-over into other tasks** (do not reorder, edit, delete, or alter any other tasks in \`TODO.md\`).
+- **Flesh Out Prompt**: The user provides a basic prompt or idea; your job is to flesh it out into a complete, well-formed task with concrete domain-specific subtask steps.
 
 ### 2. Architect Mode
 - **ALWAYS for Numerous Tasks**: Specifically designed for creating or modifying multiple tasks across the workspace.
 - **Higher-Level Scope**: NEVER assume it is confined to a single task; always assume that the instructions the user gives are higher-level, broader architectural goals that should span multiple tasks, subtasks, and roadmap milestones.
 - **Extrapolate Broadly**: Break down the user's high-level vision into structured categories and tasks with clear domain subtasks.
-- **Strict Markdown Hierarchy**: Always maintain correct markdown list formatting (numbered tasks \`1.\`, \`2.\`, 4-space indented subtasks \`    - \`, and category headers \`##\`), and generate paired \`### N. Title\` briefs in \`AGENT_CONTEXT.md\` for all tasks.
+- **Strict Markdown Hierarchy**: Always maintain correct markdown list formatting (numbered tasks \`1.\`, \`2.\`, 4-space indented subtasks \`    - \`, and category headers \`##\`).
 
 ---
 
 ## Direct Markdown Editing Flow (STRICTLY FOLLOW)
 
-1. Read TODO.md & AGENT_CONTEXT.md  (Inspect current tasks, numbering, categories)
-2. Check Mode & Interpret Intent     (Task mode = single task; Architect mode = multi-task roadmap)
-3. Write TODO.md                     (Apply changes directly in markdown — Human side FIRST)
-4. Sync AGENT_CONTEXT.md             (Update paired ### N. Title sections directly in markdown)
-5. Report Summary                    (Concise report with clickable line pointers)
+1. Read TODO.md                  (Inspect current tasks, numbering, categories)
+2. Check Mode & Interpret Intent (Task mode = single task; Architect mode = multi-task roadmap)
+3. Write TODO.md                 (Apply changes directly in markdown — Human side FIRST)
+4. Report Summary                (Concise report with clickable line pointers)
 
 ---
 
@@ -96,48 +95,18 @@ Key rules:
 
 ---
 
-## AGENT_CONTEXT.md Markdown Formatting Rules
-
-Each task gets a mirrored section in \`AGENT_CONTEXT.md\`:
-
-\`\`\`markdown
-### 1. Task Title
-
-**Status:** not started
-
-**Overview**
-
-Description of what this task accomplishes, architectural context, and affected files.
-
-**Build & Verification**
-
-(Empty until work begins)
-
-**Completion**
-
-(Empty until work is done)
-
----
-\`\`\`
-
----
-
 ## Deletion Rule (CRITICAL)
 
-You **MUST NEVER** delete tasks or briefs without explicit user permission.
+You **MUST NEVER** delete tasks without explicit user permission.
 
 ---
 
 ## Direct File Output Format
 
-When editing files, output the markdown directly into the target files or format:
+When editing files, output the markdown directly into TODO.md:
 
 \`\`\`markdown:TODO.md
 # TODO.md content directly in markdown
-\`\`\`
-
-\`\`\`markdown:AGENT_CONTEXT.md
-# AGENT_CONTEXT.md content directly in markdown
 \`\`\`
 `;
 
@@ -152,9 +121,9 @@ allowed-tools: Read Grep
 
 You are **AI 1** in the Ergo Human AI Assistant 3-stage pipeline.
 
-Your sole responsibility is to analyze the user's query in the context of the existing \`TODO.md\` and \`AGENT_CONTEXT.md\` workspace files and produce a concise briefing for **AI 2 (TODO Builder)**.
+Your sole responsibility is to analyze the user's query in the context of the existing \`TODO.md\` workspace tasks and produce a concise briefing for **AI 2 (TODO Builder)**.
 
-1. **Skim Existing Headers & Tasks**: Inspect current categories (\`## ...\`), task titles (\`1. ...\`), subtasks (\`    - ...\`), and briefs (\`### N. Title\`).
+1. **Skim Existing Headers & Tasks**: Inspect current categories (\`## ...\`), task titles (\`1. ...\`), subtasks (\`    - ...\`), and task briefs.
 2. **Interpret Mode & Scope**:
    - **Task Mode**: ONLY for creating or modifying a single task/subtasks — either the task currently selected, or a different task explicitly called out (e.g. creating a new task). Strict isolation, zero bleed-over.
    - **Architect Mode**: ALWAYS for creating or modifying numerous tasks. Treat user instructions as higher-level goals spanning multiple tasks, subtasks, and roadmap milestones.
@@ -185,8 +154,8 @@ Your sole responsibility is to take the user's request, the **Context Analysis f
 
 export const DEFAULT_ASSISTANT_CONTEXT_SYNCER_SKILL = `---
 name: assistant-context-syncer
-description: AI Step 3: Synchronizes AGENT_CONTEXT.md to pair 1-to-1 with TODO.md and drafts/edits rich Overviews for all new or modified tasks.
-argument-hint: <updated TODO.md, AI 1 context, and current AGENT_CONTEXT.md>
+description: AI Step 3: Synchronizes technical task briefs and drafts/edits rich Overviews for all new or modified tasks.
+argument-hint: <updated TODO.md, AI 1 context, and current briefs>
 allowed-tools: Read Edit Write
 ---
 
@@ -194,7 +163,7 @@ allowed-tools: Read Edit Write
 
 You are **AI 3** in the Ergo Human AI Assistant 3-stage pipeline.
 
-Your sole responsibility is to take the **updated \`TODO.md\`** produced by AI 2, the **Context Analysis from AI 1**, and the current \`AGENT_CONTEXT.md\`, and generate the **complete, updated \`AGENT_CONTEXT.md\`** in native markdown.
+Your sole responsibility is to take the **updated \`TODO.md\`** produced by AI 2, the **Context Analysis from AI 1**, and current task briefs, and generate the updated briefs.
 
 1. Ensure 1-to-1 paired \`### N. Task Title\` sections matching \`TODO.md\` order and numbering.
 2. For all created/modified tasks, draft rich \`Overview\`s detailing Done-State, In Context, and Seams.
@@ -834,13 +803,24 @@ export class StorageManager {
       localStorage.setItem('ergo_user_api_keys', JSON.stringify(secrets.userApiKeys));
     } catch {}
 
+    // Preserve existing mcpSecrets if not passed
+    let payload: AppSecrets = { ...secrets };
+    if (!payload.mcpSecrets) {
+      try {
+        const existing = await this.loadSecrets();
+        if (existing?.mcpSecrets) {
+          payload.mcpSecrets = existing.mcpSecrets;
+        }
+      } catch {}
+    }
+
     let saved = false;
 
     // 1. Filesystem MCP tool write (Browser-Agnostic)
     try {
       const mcpRes = await callMcpTool('mcp-filesystem', 'write_file', {
         path: 'config/secrets.json',
-        content: JSON.stringify(secrets, null, 2)
+        content: JSON.stringify(payload, null, 2)
       });
       if (mcpRes.success) saved = true;
     } catch {}
@@ -848,7 +828,7 @@ export class StorageManager {
     if (this.activeHandle && this.folderMetadata.status === 'connected') {
       try {
         const configDir = await getOrCreateSubdir(this.activeHandle, 'config');
-        await writeFileTextToDir(configDir, 'secrets.json', JSON.stringify(secrets, null, 2));
+        await writeFileTextToDir(configDir, 'secrets.json', JSON.stringify(payload, null, 2));
         saved = true;
       } catch (err) {
         console.warn('[StorageManager] Error writing secrets to FSA handle:', err);
@@ -860,7 +840,7 @@ export class StorageManager {
       const res = await fetch('/api/config/write', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'secrets', data: secrets })
+        body: JSON.stringify({ type: 'secrets', data: payload })
       });
       if (res.ok) saved = true;
     } catch {}
@@ -1022,7 +1002,6 @@ export class StorageManager {
               description: `Project directory: projects/${name}`,
               folderPath: `projects/${name}`,
               todoFilePath: `projects/${name}/TODO.md`,
-              agentContextFilePath: `projects/${name}/AGENT_CONTEXT.md`,
               todoMarkdown: todoMd,
               agentContextMarkdown: agentMd,
               swimLanes,
@@ -1231,16 +1210,18 @@ export class StorageManager {
   }
 
   /**
-   * Delete a single media file from disk.
+   * Delete a file from disk.
    */
-  public async deleteMediaFile(relPath: string): Promise<void> {
+  public async deleteFile(relPath: string): Promise<boolean> {
+    let deleted = false;
     // Server API
     try {
-      await fetch('/api/files/delete', {
+      const res = await fetch('/api/files/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filePaths: [relPath] }),
       });
+      if (res.ok) deleted = true;
     } catch {}
 
     // FSA fallback
@@ -1253,8 +1234,17 @@ export class StorageManager {
         }
         const filename = parts[parts.length - 1];
         await (currentDir as any).removeEntry(filename);
+        deleted = true;
       } catch {}
     }
+    return deleted;
+  }
+
+  /**
+   * Delete a single media file from disk.
+   */
+  public async deleteMediaFile(relPath: string): Promise<void> {
+    await this.deleteFile(relPath);
   }
 
   /**

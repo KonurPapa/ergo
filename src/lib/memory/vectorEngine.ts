@@ -36,6 +36,10 @@ export interface ChunkMetadata {
   tags?: string[];
   /** Source of the chunk (e.g. 'session-retrospective', 'migration', 'manual') */
   source?: string;
+  /** Subtasks associated with this task if archived from workspace */
+  subtasks?: Array<{ text: string; isDone?: boolean; isHumanReview?: boolean }>;
+  /** JSON-serialized subtasks for persistent roundtripping */
+  serializedSubtasks?: string;
 }
 
 export interface SearchResult {
@@ -504,6 +508,116 @@ export async function getChunkCount(namespace?: MemoryNamespace, projectId?: str
 export async function hasChunk(id: string): Promise<boolean> {
   const cache = await ensureCacheLoaded();
   return cache.some((c) => c.id === id);
+}
+
+/**
+ * Get all chunks across all namespaces (for visual inspection and management),
+ * optionally filtered by project ID.
+ */
+export async function getAllChunks(projectId?: string): Promise<MemoryChunk[]> {
+  const cache = await ensureCacheLoaded();
+  let result = [...cache];
+  if (projectId) {
+    result = result.filter((c) => c.metadata.projectId === projectId);
+  }
+  // Sort newest first
+  return result.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/**
+ * Update a chunk's text, namespace, or metadata.
+ * If the text changed, a fresh 384-dim embedding is generated.
+ */
+export async function updateChunk(
+  id: string,
+  updates: {
+    text?: string;
+    namespace?: MemoryNamespace;
+    metadata?: Partial<ChunkMetadata>;
+  }
+): Promise<MemoryChunk | null> {
+  const cache = await ensureCacheLoaded();
+  const index = cache.findIndex((c) => c.id === id);
+  if (index === -1) return null;
+
+  const existing = cache[index];
+  let newEmbedding = existing.embedding;
+
+  if (updates.text && updates.text.trim() !== existing.text.trim()) {
+    const freshEmb = await embed(updates.text.trim());
+    if (freshEmb) {
+      newEmbedding = freshEmb;
+    }
+  }
+
+  const updated: MemoryChunk = {
+    ...existing,
+    text: updates.text !== undefined ? updates.text.trim() : existing.text,
+    namespace: updates.namespace || existing.namespace,
+    metadata: {
+      ...existing.metadata,
+      ...(updates.metadata || {}),
+    },
+    embedding: newEmbedding,
+  };
+
+  // Persist to IndexedDB
+  try {
+    const db = await openDb();
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    store.put(toStored(updated));
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (err) {
+    console.warn('[VectorEngine] Failed to update chunk in IndexedDB:', err);
+  }
+
+  cache[index] = updated;
+  console.log(`[VectorEngine] Updated chunk ${id} (${updated.namespace})`);
+  return updated;
+}
+
+/**
+ * Add or overwrite a custom chunk in the vector store.
+ */
+export async function upsertCustomChunk(input: {
+  id?: string;
+  text: string;
+  namespace?: MemoryNamespace;
+  metadata?: ChunkMetadata;
+}): Promise<MemoryChunk | null> {
+  const text = input.text.trim();
+  if (!text) return null;
+
+  const chunkId = input.id || `custom_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const namespace = input.namespace || 'learnings';
+  const meta: ChunkMetadata = {
+    ...input.metadata,
+    source: input.metadata?.source || 'user-custom',
+  };
+
+  await addChunks([
+    {
+      id: chunkId,
+      namespace,
+      text,
+      metadata: meta,
+    },
+  ]);
+
+  const cache = await ensureCacheLoaded();
+  return cache.find((c) => c.id === chunkId) || null;
+}
+
+/**
+ * Delete a single chunk by ID.
+ */
+export async function deleteChunk(id: string): Promise<boolean> {
+  const removed = await removeChunksById([id]);
+  return removed > 0;
 }
 
 /**

@@ -191,6 +191,17 @@ export async function runToolLoop(req: ToolLoopRequest): Promise<ToolLoopResult>
 
   const executeProvider = async (activeReq: ToolLoopRequest): Promise<ToolLoopResult> => {
     const tools = activeReq.tools || [];
+
+    // Intercept subscription-based execution (authMode === 'cli_subscription' or apiKey === 'cli_subscription_active')
+    const isSubscriptionMode =
+      activeReq.provider === 'cli_subscription' ||
+      activeReq.authMode === 'cli_subscription' ||
+      activeReq.apiKey === 'cli_subscription_active';
+
+    if (isSubscriptionMode) {
+      return runCliSubscription(activeReq, tools, usage);
+    }
+
     switch (activeReq.provider) {
       case 'anthropic':
         return runAnthropic(activeReq, tools, usage);
@@ -602,15 +613,47 @@ async function runGemini(req: ToolLoopRequest, tools: ToolDefinition[], usage: T
 // ─── CLI Subscription Bridge (Headless) ──────────────────────────────────────
 
 async function runCliSubscription(req: ToolLoopRequest, tools: ToolDefinition[], usage: TokenUsage): Promise<ToolLoopResult> {
-  const binary = req.model === 'claude-code'
-    ? 'claude'
-    : req.model === 'antigravity'
-    ? 'agy'
-    : req.model === 'cursor-cli' || req.model === 'cursor' || req.model === 'cursor-agent'
-    ? 'cursor'
-    : req.model === 'grok-cli' || req.model === 'grok'
-    ? 'grok'
-    : (req.model || 'claude');
+  let binary = 'claude';
+  if (req.cliCustomCommand) {
+    binary = req.cliCustomCommand;
+  } else if (req.cliAgentId) {
+    binary = req.cliAgentId === 'antigravity'
+      ? 'agy'
+      : req.cliAgentId === 'claude-code'
+      ? 'claude'
+      : req.cliAgentId === 'codex'
+      ? 'codex'
+      : req.cliAgentId === 'cursor-cli' || req.cliAgentId === 'cursor'
+      ? 'cursor'
+      : req.cliAgentId === 'grok-cli' || req.cliAgentId === 'grok'
+      ? 'grok'
+      : req.cliAgentId === 'aider'
+      ? 'aider'
+      : req.cliAgentId;
+  } else if (req.provider === 'gemini') {
+    binary = 'agy';
+  } else if (req.provider === 'openai') {
+    binary = 'codex';
+  } else if (req.provider === 'cursor') {
+    binary = 'cursor';
+  } else if (req.provider === 'grok') {
+    binary = 'grok';
+  } else if (req.provider === 'ollama') {
+    binary = 'aider';
+  } else if (req.model === 'antigravity' || req.model?.includes('agy') || req.model?.includes('gemini')) {
+    binary = 'agy';
+  } else if (req.model === 'codex') {
+    binary = 'codex';
+  } else if (req.model === 'cursor-cli' || req.model === 'cursor') {
+    binary = 'cursor';
+  } else if (req.model === 'grok-cli' || req.model === 'grok') {
+    binary = 'grok';
+  } else if (req.model === 'claude-code' || req.model?.includes('claude')) {
+    binary = 'claude';
+  } else if (req.model) {
+    binary = req.model;
+  }
+
   const systemText = joinSystem(req);
   let conversationHistory = req.initialUserMessage;
   let lastText = '';
@@ -621,7 +664,10 @@ async function runCliSubscription(req: ToolLoopRequest, tools: ToolDefinition[],
 
     let toolsInstruction = '';
     if (tools.length > 0) {
-      toolsInstruction = `\n\nAvailable tools: ${tools.map((t) => t.name).join(', ')}. If calling a tool, format as <tool_call>{"name": "...", "args": {...}}</tool_call>.`;
+      toolsInstruction = `\n\n## Available Tools:\n` +
+        tools.map((t) => `- ${t.name}: ${t.description}\n  Parameters: ${JSON.stringify(t.inputSchema)}`).join('\n') +
+        `\n\nTo call a tool, you MUST output a tool call block formatted as:\n<tool_call>{"name": "<tool_name>", "args": {<arguments>}}</tool_call>\n` +
+        `When you are finished, reply with your summary ending with "STATUS: DONE".`;
     }
 
     const res = await fetch('/api/cli/execute', {
@@ -631,7 +677,8 @@ async function runCliSubscription(req: ToolLoopRequest, tools: ToolDefinition[],
         cli: binary,
         prompt: conversationHistory + toolsInstruction,
         systemPrompt: systemText,
-        timeoutMs: 180_000
+        responseFormat: req.responseFormat,
+        timeoutMs: 60_000
       }),
       signal: req.signal
     });

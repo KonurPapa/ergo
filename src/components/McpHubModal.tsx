@@ -7,7 +7,17 @@ import {
   type CliAgentSetup,
 } from '../types';
 
-import { getAllowedRoots, addAllowedRoot, removeAllowedRoot, callMcpTool } from '../lib/mcpClient';
+import {
+  getAllowedRoots,
+  addAllowedRoot,
+  removeAllowedRoot,
+  callMcpTool,
+  discoverRemoteMcpTools,
+  connectGithubMcp,
+  disconnectGithubMcp,
+  getGithubMcpStatus
+} from '../lib/mcpClient';
+import { GITHUB_MCP_TOOLS } from '../lib/githubMcpTools';
 import {
   Unplug,
   Cpu,
@@ -38,6 +48,13 @@ import {
   AlertTriangle,
   RefreshCw,
   Activity,
+  Globe,
+  Key,
+  Eye,
+  EyeOff,
+  Search,
+  ChevronDown,
+  ChevronRight
 } from 'lucide-react';
 
 interface McpHubModalProps {
@@ -47,6 +64,8 @@ interface McpHubModalProps {
   onToggleConnectServer: (serverId: string) => void;
   onToggleToolAutoApprove: (serverId: string, toolId: string) => void;
   onAddCustomServer: (newServer: MCPServer) => void;
+  onDeleteCustomServer?: (serverId: string) => void;
+  onUpdateServer?: (server: MCPServer) => void;
   /** Persist CLI agent config when user clicks Save */
   cliAgentConfig: CliAgentConfig | null;
   onSaveCliAgent: (config: CliAgentConfig | null) => void;
@@ -154,6 +173,8 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   onToggleConnectServer,
   onToggleToolAutoApprove,
   onAddCustomServer,
+  onDeleteCustomServer,
+  onUpdateServer,
   cliAgentConfig,
   onSaveCliAgent,
   cliAgents = [],
@@ -167,9 +188,47 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   const [showAddForm, setShowAddForm] = useState(false);
   const [newServerName, setNewServerName] = useState('');
   const [newServerEndpoint, setNewServerEndpoint] = useState('');
+  const [newServerAuthHeader, setNewServerAuthHeader] = useState('');
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+  const [discoveredPreview, setDiscoveredPreview] = useState<{
+    serverName: string;
+    toolsCount: number;
+    tools: any[];
+  } | null>(null);
+
+  const [connectingServerId, setConnectingServerId] = useState<string | null>(null);
   const [roots, setRoots] = useState<McpRootBoundary[]>([]);
   const [newRootPath, setNewRootPath] = useState('');
   const [newRootName, setNewRootName] = useState('');
+
+  // GitHub connection modal state
+  const [isGhAuthModalOpen, setIsGhAuthModalOpen] = useState(false);
+  const [ghTokenInput, setGhTokenInput] = useState('');
+  const [isGhTesting, setIsGhTesting] = useState(false);
+  const [ghAuthError, setGhAuthError] = useState<string | null>(null);
+  const [showGhToken, setShowGhToken] = useState(false);
+  const [ghAccountInfo, setGhAccountInfo] = useState<{ username?: string; name?: string; avatarUrl?: string } | null>(null);
+
+  // Generic External Server modal state (for Slack, Notion, GCal, etc.)
+  const [selectedExternalModalServer, setSelectedExternalModalServer] = useState<MCPServer | null>(null);
+  const [genericEndpointInput, setGenericEndpointInput] = useState('');
+  const [genericTokenInput, setGenericTokenInput] = useState('');
+  const [genericAuthError, setGenericAuthError] = useState<string | null>(null);
+  const [isGenericTesting, setIsGenericTesting] = useState(false);
+
+  // Per-server tool search query
+  const [toolSearchQueries, setToolSearchQueries] = useState<Record<string, string>>({});
+
+  // Collapsed / Expanded state for connection cards (collapsed by default)
+  const [expandedServerIds, setExpandedServerIds] = useState<Record<string, boolean>>({});
+
+  const toggleExpandedServer = (serverId: string) => {
+    setExpandedServerIds((prev) => ({
+      ...prev,
+      [serverId]: !prev[serverId]
+    }));
+  };
 
   // CLI agent local state
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
@@ -241,6 +300,13 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       getAllowedRoots().then(setRoots);
+      getGithubMcpStatus()
+        .then((st) => {
+          if (st.configured) {
+            setGhAccountInfo({ username: st.username, name: st.name, avatarUrl: st.avatarUrl });
+          }
+        })
+        .catch(() => { });
       if (!editingAgentId) {
         setSelectedPresetId(cliAgentConfig?.presetId ?? (cliAgentConfig?.command ? (CLI_AGENT_PRESETS.find((p) => p.command === cliAgentConfig.command)?.id || 'custom') : null));
         setCliAgentName(cliAgentConfig?.name ?? '');
@@ -267,39 +333,236 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
     setRoots(updated);
   };
 
-  const handleAddSubmit = (e: React.FormEvent) => {
+  const handleDiscoverEndpoint = async (url: string, auth?: string) => {
+    if (!url.trim()) return null;
+    setIsDiscovering(true);
+    setDiscoveryError(null);
+    try {
+      const res = await discoverRemoteMcpTools(url.trim(), auth?.trim() || undefined);
+      if (res.success) {
+        setDiscoveredPreview({
+          serverName: res.serverInfo?.name || new URL(url.startsWith('http') ? url : `https://${url}`).hostname,
+          toolsCount: res.tools.length,
+          tools: res.tools
+        });
+        if (!newServerName && res.serverInfo?.name) {
+          setNewServerName(res.serverInfo.name);
+        }
+        return res;
+      } else {
+        setDiscoveryError(res.error || 'Failed to discover tools on target endpoint.');
+        return res;
+      }
+    } catch (err: any) {
+      setDiscoveryError(err.message || 'Discovery error');
+      return null;
+    } finally {
+      setIsDiscovering(false);
+    }
+  };
+
+  const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newServerName || !newServerEndpoint) return;
+    if (!newServerEndpoint.trim()) return;
+
+    let targetUrl = newServerEndpoint.trim();
+    if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+      targetUrl = `https://${targetUrl}`;
+    }
+
+    let defaultName = newServerName.trim();
+    if (!defaultName) {
+      try {
+        defaultName = new URL(targetUrl).hostname.replace(/^mcp\./, '');
+      } catch {
+        defaultName = 'Remote MCP';
+      }
+    }
+
+    setIsDiscovering(true);
+    setDiscoveryError(null);
+
+    const discovery = await discoverRemoteMcpTools(targetUrl, newServerAuthHeader.trim() || undefined);
+    setIsDiscovering(false);
+
+    let toolsToRegister = discovery.tools;
+    if (!toolsToRegister || toolsToRegister.length === 0) {
+      toolsToRegister = [
+        {
+          id: `tool-1-${Date.now()}`,
+          name: 'execute_remote_tool',
+          description: 'Execute remote action on custom server',
+          autoApprove: false
+        }
+      ];
+    }
 
     const created: MCPServer = {
       id: `custom-${Date.now()}`,
-      name: newServerName,
-      description: 'Custom MCP connection.',
+      name: discovery.serverInfo?.name || defaultName,
+      description: `Remote MCP server (${targetUrl})`,
       iconName: 'Cpu',
       category: 'developer',
       status: 'connected',
-      transport: 'OAuth 2.1',
-      endpoint: newServerEndpoint,
+      transport: 'SSE',
+      endpoint: targetUrl,
       serverType: 'external_oauth',
-      tools: [
-        { id: `tool-1-${Date.now()}`, name: 'execute_remote_tool', description: 'Execute remote action on custom server', autoApprove: false }
-      ]
+      isCustom: true,
+      authHeader: newServerAuthHeader.trim() || undefined,
+      lastSyncedAt: new Date().toISOString(),
+      tools: toolsToRegister.map((t) => ({ ...t, serverId: `custom-${Date.now()}` }))
     };
 
     onAddCustomServer(created);
     setNewServerName('');
     setNewServerEndpoint('');
+    setNewServerAuthHeader('');
+    setDiscoveredPreview(null);
     setShowAddForm(false);
   };
 
+  const handleConnectExternal = async (server: MCPServer) => {
+    // 1. GitHub Server Handling
+    if (server.id === 'mcp-github') {
+      if (server.status === 'connected') {
+        // Disconnect GitHub
+        setConnectingServerId(server.id);
+        try {
+          await disconnectGithubMcp();
+          if (onUpdateServer) {
+            onUpdateServer({
+              ...server,
+              status: 'disconnected',
+              authUsername: undefined,
+              authHeader: undefined,
+              error: undefined
+            });
+          } else {
+            onToggleConnectServer(server.id);
+          }
+          setGhAccountInfo(null);
+        } finally {
+          setConnectingServerId(null);
+        }
+        return;
+      }
+
+      // If disconnected, open the GitHub Authentication modal
+      setGhAuthError(null);
+      setIsGhAuthModalOpen(true);
+      return;
+    }
+
+    // 2. Custom User-Added Server
+    if (server.isCustom && server.endpoint) {
+      if (server.status === 'connected') {
+        onToggleConnectServer(server.id);
+        return;
+      }
+
+      setConnectingServerId(server.id);
+      try {
+        const disc = await discoverRemoteMcpTools(server.endpoint, server.authHeader);
+        if (disc.success && disc.tools.length > 0 && onUpdateServer) {
+          const updated: MCPServer = {
+            ...server,
+            status: 'connected',
+            lastSyncedAt: new Date().toISOString(),
+            tools: disc.tools.map((t) => ({ ...t, serverId: server.id })),
+            error: undefined
+          };
+          onUpdateServer(updated);
+        } else {
+          if (onUpdateServer) {
+            onUpdateServer({
+              ...server,
+              status: 'disconnected',
+              error: disc.error || 'Failed to connect to endpoint'
+            });
+          }
+        }
+      } catch (err: any) {
+        if (onUpdateServer) {
+          onUpdateServer({
+            ...server,
+            status: 'disconnected',
+            error: err.message
+          });
+        }
+      } finally {
+        setConnectingServerId(null);
+      }
+      return;
+    }
+
+    // 3. Other Preset External Apps (Slack, GCal, Salesforce, Notion)
+    if (server.status === 'connected') {
+      onToggleConnectServer(server.id);
+      return;
+    }
+
+    // Prompt user for credentials / endpoint URL
+    setSelectedExternalModalServer(server);
+    setGenericEndpointInput(server.endpoint || '');
+    setGenericTokenInput(server.authHeader || '');
+    setGenericAuthError(null);
+  };
+
+  const handleConnectGithub = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const token = ghTokenInput.trim();
+    if (!token) {
+      setGhAuthError('Please enter a GitHub Personal Access Token.');
+      return;
+    }
+
+    setIsGhTesting(true);
+    setGhAuthError(null);
+
+    try {
+      const res = await connectGithubMcp(token);
+      if (!res.success) {
+        setGhAuthError(res.error || 'Authentication failed. Please verify your token.');
+        setIsGhTesting(false);
+        return;
+      }
+
+      const githubServer = mcpServers.find((s) => s.id === 'mcp-github');
+      if (githubServer && onUpdateServer) {
+        const toolsToSet = res.tools && res.tools.length > 0 ? res.tools : GITHUB_MCP_TOOLS;
+        onUpdateServer({
+          ...githubServer,
+          status: 'connected',
+          authUsername: res.user?.login,
+          authHeader: token,
+          tools: toolsToSet.map((t) => ({ ...t, serverId: 'mcp-github' })),
+          lastSyncedAt: new Date().toISOString(),
+          error: undefined
+        });
+      }
+
+      setGhAccountInfo({
+        username: res.user?.login,
+        name: res.user?.name,
+        avatarUrl: res.user?.avatarUrl
+      });
+      setIsGhAuthModalOpen(false);
+      setGhTokenInput('');
+    } catch (err: any) {
+      setGhAuthError(err.message || 'Unexpected connection error');
+    } finally {
+      setIsGhTesting(false);
+    }
+  };
+
   const bundledHarnesses = mcpServers
-    .filter((s) => s.serverType === 'bundled_harness' || s.transport === 'Local Stdio')
+    .filter((s) => s.serverType === 'bundled_harness' && s.id !== 'mcp-github' && s.id !== 'mcp-slack')
     .sort((a, b) => {
       if (a.id === 'mcp-laya') return -1;
       if (b.id === 'mcp-laya') return 1;
       return 0;
     });
-  const externalServers = mcpServers.filter((s) => s.serverType !== 'bundled_harness' && s.transport !== 'Local Stdio');
+  const externalServers = mcpServers.filter((s) => s.serverType !== 'bundled_harness' || s.id === 'mcp-github' || s.id === 'mcp-slack');
 
   return (
     <div
@@ -493,137 +756,145 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               <div className="mcp-grid">
                 {bundledHarnesses.map((server) => {
                   const isConnected = server.status === 'connected';
+                  const isExpanded = !!expandedServerIds[server.id];
+
                   return (
-                    <div key={server.id} className={`mcp-card ${isConnected ? 'connected' : ''}`}>
+                    <div
+                      key={server.id}
+                      className={`mcp-card ${isConnected ? 'connected' : ''} ${!isExpanded ? 'collapsed' : ''}`}
+                      onClick={() => {
+                        if (!isExpanded) {
+                          toggleExpandedServer(server.id);
+                        }
+                      }}
+                    >
                       <div className="mcp-header">
                         <div className="mcp-title">
-                          {renderServerIcon(server, isConnected)}
-                          <span>{server.name}</span>
-                        </div>
-
-                        {server.id === 'mcp-laya' ? (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                            <span
-                              style={{
-                                fontSize: '0.65rem',
-                                fontWeight: 700,
-                                background: isConnected ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255, 255, 255, 0.05)',
-                                color: isConnected ? 'var(--accent-emerald)' : 'var(--text-muted)',
-                                border: `1px solid ${isConnected ? 'rgba(16, 185, 129, 0.3)' : 'rgba(255, 255, 255, 0.1)'}`,
-                                borderRadius: '4px',
-                                padding: '1px 6px'
-                              }}
-                            >
-                              {isConnected ? 'Active ($0 Cost)' : 'Off (Generative Fallback)'}
-                            </span>
-                            <button
-                              type="button"
-                              className={isConnected ? 'btn btn-secondary' : 'btn btn-primary'}
-                              style={{ padding: '0.2rem 0.6rem', fontSize: '0.72rem' }}
-                              onClick={() => {
-                                onToggleConnectServer(server.id);
-                                if (!isConnected) {
-                                  setTimeout(() => handleTestLaya(), 150);
-                                }
-                              }}
-                            >
-                              {isConnected ? 'Disable' : 'Enable'}
-                            </button>
-                          </div>
-                        ) : (
-                          <span className="badge badge-done" style={{ fontSize: '0.7rem' }}>
-                            Default Connection
-                          </span>
-                        )}
-                      </div>
-
-                      <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>{server.description}</p>
-
-                      {server.id === 'mcp-laya' && isConnected && (
-                        <div
-                          style={{
-                            background: 'rgba(16, 185, 129, 0.08)',
-                            border: '1px solid rgba(16, 185, 129, 0.25)',
-                            borderRadius: 'var(--radius-sm)',
-                            padding: '0.5rem 0.75rem',
-                            fontSize: '0.75rem',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: '0.5rem',
-                            marginTop: '0.45rem'
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-bright)' }}>
-                            <Activity size={14} color="var(--accent-emerald)" />
-                            <span>
-                              {layaTestStatus?.testing ? (
-                                'Testing local decision engine latency…'
-                              ) : layaTestStatus?.latencyMs !== undefined ? (
-                                <>
-                                  <strong style={{ color: 'var(--accent-emerald)' }}>Connected & Active:</strong> {layaTestStatus.latencyMs}ms latency ({layaTestStatus.source})
-                                </>
-                              ) : layaTestStatus?.error ? (
-                                <span style={{ color: '#ef4444' }}>Notice: {layaTestStatus.error}</span>
-                              ) : (
-                                <>
-                                  <strong style={{ color: 'var(--accent-emerald)' }}>Engine Online ($0 Cost):</strong> High-speed System-1 micro-decisions active
-                                </>
-                              )}
-                            </span>
-                          </div>
                           <button
                             type="button"
-                            className="btn btn-secondary"
-                            style={{ padding: '0.2rem 0.55rem', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
-                            onClick={handleTestLaya}
-                            disabled={layaTestStatus?.testing}
-                            title="Ping local Laya engine to measure response latency"
+                            className="mcp-collapse-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleExpandedServer(server.id);
+                            }}
+                            title={isExpanded ? 'Collapse card' : 'Expand permissions & details'}
+                            aria-label={isExpanded ? 'Collapse card' : 'Expand permissions & details'}
                           >
-                            <RefreshCw size={11} className={layaTestStatus?.testing ? 'animate-spin' : ''} />
-                            <span>{layaTestStatus?.testing ? 'Testing…' : 'Ping Latency'}</span>
+                            {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                          </button>
+                          {renderServerIcon(server, isConnected)}
+                          <span>{server.name}</span>
+                          {!isExpanded && server.tools.length > 0 && (
+                            <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontWeight: 500, fontFamily: 'var(--font-mono)' }}>
+                              ({server.tools.length} {server.tools.length === 1 ? 'tool' : 'tools'})
+                            </span>
+                          )}
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                          <button
+                            type="button"
+                            className={isConnected ? 'btn btn-secondary' : 'btn btn-primary'}
+                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem' }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onToggleConnectServer(server.id);
+                              if (!isConnected) {
+                                setTimeout(() => handleTestLaya(), 150);
+                              }
+                            }}
+                          >
+                            {isConnected ? 'Disable' : 'Enable'}
                           </button>
                         </div>
-                      )}
+                      </div>
 
-                      {/* <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-dim)', paddingTop: '0.4rem', borderTop: '1px solid var(--border-subtle)' }}>
-                        <span>Transport: <strong style={{ color: 'var(--accent-emerald)' }}>{server.transport}</strong></span>
-                        <span style={{ fontFamily: 'var(--font-mono)' }}>{server.tools.length} tools registered</span>
-                      </div> */}
+                      {isExpanded && (
+                        <>
+                          <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>{server.description}</p>
 
-                      {/* Discovered Tools List */}
-                      {isConnected && server.tools.length > 0 && (
-                        <div style={{ background: 'var(--code-bg)', border: '1px solid var(--code-border)', padding: '0.75rem 0.85rem', borderRadius: 'var(--radius-sm)', marginTop: '0.35rem', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)' }}>
-                          <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                            <Shield size={13} />
-                            <span>Auto-Approval</span>
-                          </div>
-                          <p style={{ fontSize: '0.72rem', color: 'var(--text-dim)', margin: '0 0 0.5rem 0', lineHeight: 1.4 }}>
-                            Control AI action permissions globally. Toggle Auto-Approve to allow agents to run commands automatically.
-                          </p>
-
-                          {server.tools.map((tool) => (
-                            <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.35rem 0', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
-                              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--code-text)', fontSize: '0.78rem', fontWeight: 500 }}>{tool.name}</span>
+                          {server.id === 'mcp-laya' && isConnected && (
+                            <div
+                              style={{
+                                background: 'rgba(16, 185, 129, 0.08)',
+                                border: '1px solid rgba(16, 185, 129, 0.25)',
+                                borderRadius: 'var(--radius-sm)',
+                                padding: '0.5rem 0.75rem',
+                                fontSize: '0.75rem',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: '0.5rem',
+                                marginTop: '0.45rem'
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-bright)' }}>
+                                <Activity size={14} color="var(--accent-emerald)" />
+                                <span>
+                                  {layaTestStatus?.testing ? (
+                                    'Testing local decision engine latency…'
+                                  ) : layaTestStatus?.latencyMs !== undefined ? (
+                                    <>
+                                      <strong style={{ color: 'var(--accent-emerald)' }}>Connected & Active:</strong> {layaTestStatus.latencyMs}ms latency ({layaTestStatus.source})
+                                    </>
+                                  ) : layaTestStatus?.error ? (
+                                    <span style={{ color: '#ef4444' }}>Notice: {layaTestStatus.error}</span>
+                                  ) : (
+                                    <>
+                                      <strong style={{ color: 'var(--accent-emerald)' }}>Engine Online ($0 Cost):</strong> High-speed System-1 micro-decisions active
+                                    </>
+                                  )}
+                                </span>
+                              </div>
                               <button
-                                style={{
-                                  background: tool.autoApprove ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)',
-                                  color: tool.autoApprove ? '#34d399' : '#fbbf24',
-                                  border: '1px solid ' + (tool.autoApprove ? 'rgba(16, 185, 129, 0.45)' : 'rgba(245, 158, 11, 0.45)'),
-                                  padding: '0.2rem 0.55rem',
-                                  borderRadius: '4px',
-                                  fontSize: '0.72rem',
-                                  cursor: 'pointer',
-                                  fontWeight: 600,
-                                  transition: 'all 0.15s ease'
-                                }}
-                                onClick={() => onToggleToolAutoApprove(server.id, tool.id)}
+                                type="button"
+                                className="btn btn-secondary"
+                                style={{ padding: '0.2rem 0.55rem', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                                onClick={handleTestLaya}
+                                disabled={layaTestStatus?.testing}
+                                title="Ping local Laya engine to measure response latency"
                               >
-                                {tool.autoApprove ? 'Auto-Approve' : 'Ask Permission'}
+                                <RefreshCw size={11} className={layaTestStatus?.testing ? 'animate-spin' : ''} />
+                                <span>{layaTestStatus?.testing ? 'Testing…' : 'Ping Latency'}</span>
                               </button>
                             </div>
-                          ))}
-                        </div>
+                          )}
+
+                          {/* Discovered Tools List & Permissions */}
+                          {isConnected && server.tools.length > 0 && (
+                            <div style={{ background: 'var(--code-bg)', border: '1px solid var(--code-border)', padding: '0.75rem 0.85rem', borderRadius: 'var(--radius-sm)', marginTop: '0.35rem', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)' }}>
+                              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                <Shield size={13} />
+                                <span>Auto-Approval & Permissions</span>
+                              </div>
+                              <p style={{ fontSize: '0.72rem', color: 'var(--text-dim)', margin: '0 0 0.5rem 0', lineHeight: 1.4 }}>
+                                Control AI action permissions globally. Toggle Auto-Approve to allow agents to run commands automatically.
+                              </p>
+
+                              {server.tools.map((tool) => (
+                                <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.35rem 0', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--code-text)', fontSize: '0.78rem', fontWeight: 500 }}>{tool.name}</span>
+                                  <button
+                                    style={{
+                                      background: tool.autoApprove ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                                      color: tool.autoApprove ? '#34d399' : '#fbbf24',
+                                      border: '1px solid ' + (tool.autoApprove ? 'rgba(16, 185, 129, 0.45)' : 'rgba(245, 158, 11, 0.45)'),
+                                      padding: '0.2rem 0.55rem',
+                                      borderRadius: '4px',
+                                      fontSize: '0.72rem',
+                                      cursor: 'pointer',
+                                      fontWeight: 600,
+                                      transition: 'all 0.15s ease'
+                                    }}
+                                    onClick={() => onToggleToolAutoApprove(server.id, tool.id)}
+                                  >
+                                    {tool.autoApprove ? 'Auto-Approve' : 'Ask Permission'}
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                   );
@@ -755,25 +1026,111 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
           {activeTab === 'external' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
               {showAddForm && (
-                <form onSubmit={handleAddSubmit} style={{ background: 'var(--bg-card)', border: '1px solid var(--border-glow)', borderRadius: 'var(--radius-md)', padding: '1.25rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                    <h4 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: 0 }}>
-                      Add Remote MCP Endpoint (OAuth 2.1 PKCE)
-                    </h4>
+                <form
+                  onSubmit={handleAddSubmit}
+                  style={{
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--accent-cyan)',
+                    boxShadow: '0 0 20px rgba(6, 182, 212, 0.15)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '1.25rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.85rem'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Globe size={16} color="var(--accent-cyan)" />
+                      <h4 style={{ fontSize: '0.88rem', fontWeight: 700, color: '#fff', margin: 0 }}>
+                        Connect Custom MCP Endpoint
+                      </h4>
+                    </div>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      Non-technical? Just paste your MCP URL below and click Connect
+                    </span>
                   </div>
+
+                  <div>
+                    <label className="input-label" style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
+                      MCP Endpoint URL <span style={{ color: 'var(--accent-rose)' }}>*</span>
+                    </label>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <input
+                        type="text"
+                        className="input-text"
+                        placeholder="https://mcp.my-tool.com/sse or http://localhost:3000/sse"
+                        value={newServerEndpoint}
+                        onChange={(e) => {
+                          setNewServerEndpoint(e.target.value);
+                          setDiscoveryError(null);
+                        }}
+                        style={{ flex: 1 }}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        disabled={!newServerEndpoint.trim() || isDiscovering}
+                        onClick={() => handleDiscoverEndpoint(newServerEndpoint, newServerAuthHeader)}
+                        style={{ fontSize: '0.78rem', whiteSpace: 'nowrap' }}
+                      >
+                        <RefreshCw size={13} className={isDiscovering ? 'animate-spin' : ''} />
+                        <span>{isDiscovering ? 'Testing…' : 'Test Endpoint'}</span>
+                      </button>
+                    </div>
+                  </div>
+
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
                     <div>
-                      <label className="input-label">Server Name</label>
-                      <input type="text" className="input-text" placeholder="e.g. Asana MCP" value={newServerName} onChange={(e) => setNewServerName(e.target.value)} />
+                      <label className="input-label" style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
+                        Display Name <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(auto-detected if blank)</span>
+                      </label>
+                      <input
+                        type="text"
+                        className="input-text"
+                        placeholder="e.g. Asana, Linear, Airtable"
+                        value={newServerName}
+                        onChange={(e) => setNewServerName(e.target.value)}
+                      />
                     </div>
                     <div>
-                      <label className="input-label">MCP SSE Endpoint URL</label>
-                      <input type="text" className="input-text" placeholder="https://mcp.asana.com/sse" value={newServerEndpoint} onChange={(e) => setNewServerEndpoint(e.target.value)} />
+                      <label className="input-label" style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
+                        API Key / Bearer Token <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(optional)</span>
+                      </label>
+                      <input
+                        type="password"
+                        className="input-text"
+                        placeholder="Leave blank if public / unauthenticated"
+                        value={newServerAuthHeader}
+                        onChange={(e) => setNewServerAuthHeader(e.target.value)}
+                      />
                     </div>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
-                    <button type="button" className="btn btn-secondary" style={{ fontSize: '0.8rem' }} onClick={() => setShowAddForm(false)}>Cancel</button>
-                    <button type="submit" className="btn btn-primary" style={{ fontSize: '0.8rem' }}>Authorize & Connect</button>
+
+                  {discoveryError && (
+                    <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: 'var(--radius-sm)', padding: '0.5rem 0.75rem', color: '#f87171', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <AlertTriangle size={14} />
+                      <span>{discoveryError}</span>
+                    </div>
+                  )}
+
+                  {discoveredPreview && (
+                    <div style={{ background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.25)', borderRadius: 'var(--radius-sm)', padding: '0.5rem 0.75rem', color: 'var(--accent-emerald)', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <CheckCircle2 size={15} />
+                      <span>
+                        Discovered <strong>{discoveredPreview.toolsCount}</strong> tools from <strong>{discoveredPreview.serverName}</strong>: {discoveredPreview.tools.slice(0, 4).map((t) => t.name).join(', ')}{discoveredPreview.toolsCount > 4 ? '…' : ''}
+                      </span>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.25rem' }}>
+                    <button type="button" className="btn btn-secondary" style={{ fontSize: '0.8rem' }} onClick={() => setShowAddForm(false)}>
+                      Cancel
+                    </button>
+                    <button type="submit" className="btn btn-primary" disabled={!newServerEndpoint.trim() || isDiscovering} style={{ fontSize: '0.8rem', gap: '0.35rem' }}>
+                      <Check size={14} />
+                      <span>{isDiscovering ? 'Connecting…' : 'Connect & Discover Tools'}</span>
+                    </button>
                   </div>
                 </form>
               )}
@@ -781,60 +1138,240 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               <div className="mcp-grid">
                 {externalServers.map((server) => {
                   const isConnected = server.status === 'connected';
+                  const isConnecting = connectingServerId === server.id;
+                  const isExpanded = !!expandedServerIds[server.id];
+
                   return (
-                    <div key={server.id} className={`mcp-card ${isConnected ? 'connected' : ''}`}>
+                    <div
+                      key={server.id}
+                      className={`mcp-card ${isConnected ? 'connected' : ''} ${!isExpanded ? 'collapsed' : ''}`}
+                      onClick={() => {
+                        if (!isExpanded) {
+                          toggleExpandedServer(server.id);
+                        }
+                      }}
+                    >
                       <div className="mcp-header">
                         <div className="mcp-title">
+                          <button
+                            type="button"
+                            className="mcp-collapse-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleExpandedServer(server.id);
+                            }}
+                            title={isExpanded ? 'Collapse card' : 'Expand permissions & details'}
+                            aria-label={isExpanded ? 'Collapse card' : 'Expand permissions & details'}
+                          >
+                            {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                          </button>
                           {renderServerIcon(server, isConnected)}
                           <span>{server.name}</span>
+                          {server.isCustom && (
+                            <span style={{ fontSize: '0.62rem', background: 'rgba(255,255,255,0.06)', padding: '1px 5px', borderRadius: '3px', color: 'var(--accent-cyan)' }}>
+                              Custom
+                            </span>
+                          )}
+                          {!isExpanded && server.tools.length > 0 && (
+                            <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontWeight: 500, fontFamily: 'var(--font-mono)' }}>
+                              ({server.tools.length} {server.tools.length === 1 ? 'tool' : 'tools'})
+                            </span>
+                          )}
                         </div>
 
-                        <button
-                          className={isConnected ? 'btn btn-secondary' : 'btn btn-primary'}
-                          style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem' }}
-                          onClick={() => onToggleConnectServer(server.id)}
-                        >
-                          {isConnected ? 'Disconnect' : 'Connect'}
-                        </button>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                          {server.id === 'mcp-github' && isConnected && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              style={{ padding: '0.25rem 0.45rem', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setGhAuthError(null);
+                                setIsGhAuthModalOpen(true);
+                              }}
+                              title="Configure GitHub Token"
+                            >
+                              <Key size={12} />
+                              <span>Key</span>
+                            </button>
+                          )}
+
+                          <button
+                            className={isConnected ? 'btn btn-secondary' : 'btn btn-primary'}
+                            style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem', minWidth: '75px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}
+                            disabled={isConnecting}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleConnectExternal(server);
+                            }}
+                          >
+                            {isConnecting ? (
+                              <>
+                                <RefreshCw size={12} className="animate-spin" />
+                                <span>Syncing…</span>
+                              </>
+                            ) : isConnected ? (
+                              <span>Disconnect</span>
+                            ) : (
+                              <span>Connect</span>
+                            )}
+                          </button>
+
+                          {server.isCustom && onDeleteCustomServer && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              style={{ padding: '0.25rem 0.45rem', color: 'var(--accent-rose)', fontSize: '0.72rem' }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDeleteCustomServer(server.id);
+                              }}
+                              title="Remove custom connection"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
                       </div>
 
-                      <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>{server.description}</p>
+                      {isExpanded && (
+                        <>
+                          <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>{server.description}</p>
 
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-dim)', paddingTop: '0.4rem', borderTop: '1px solid var(--border-subtle)' }}>
-                        <span>Transport: {server.transport}</span>
-                        <span style={{ fontFamily: 'var(--font-mono)' }}>{server.endpoint.replace('https://', '')}</span>
-                      </div>
-
-                      {/* Discovered Tools List */}
-                      {isConnected && server.tools.length > 0 && (
-                        <div style={{ background: 'var(--code-bg)', border: '1px solid var(--code-border)', padding: '0.75rem 0.85rem', borderRadius: 'var(--radius-sm)', marginTop: '0.35rem', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)' }}>
-                          <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                            <Shield size={13} />
-                            <span>Available MCP Tools & Security Policies</span>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-dim)', paddingTop: '0.4rem', borderTop: '1px solid var(--border-subtle)' }}>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: isConnected ? 'var(--accent-emerald)' : 'var(--text-dim)' }} />
+                              <span>{isConnected ? 'Active & Ready' : 'Disconnected'}</span>
+                              {isConnected && (server.authUsername || (server.id === 'mcp-github' && ghAccountInfo?.username)) && (
+                                <span style={{ color: 'var(--accent-cyan)', fontWeight: 600, fontSize: '0.72rem', background: 'rgba(6, 182, 212, 0.1)', padding: '1px 6px', borderRadius: '4px' }}>
+                                  @{server.authUsername || ghAccountInfo?.username}
+                                </span>
+                              )}
+                            </span>
+                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={server.endpoint}>
+                              {server.id === 'mcp-github'
+                                ? (isConnected ? 'Stdio MCP (@modelcontextprotocol/server-github)' : 'Personal Token Required')
+                                : (server.endpoint ? server.endpoint.replace('https://', '').replace('http://', '') : 'Configuration Required')}
+                            </span>
                           </div>
 
-                          {server.tools.map((tool) => (
-                            <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.35rem 0', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
-                              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--code-text)', fontSize: '0.78rem', fontWeight: 500 }}>{tool.name}</span>
-                              <button
-                                style={{
-                                  background: tool.autoApprove ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)',
-                                  color: tool.autoApprove ? '#34d399' : '#fbbf24',
-                                  border: '1px solid ' + (tool.autoApprove ? 'rgba(16, 185, 129, 0.45)' : 'rgba(245, 158, 11, 0.45)'),
-                                  padding: '0.2rem 0.55rem',
-                                  borderRadius: '4px',
-                                  fontSize: '0.72rem',
-                                  cursor: 'pointer',
-                                  fontWeight: 600,
-                                  transition: 'all 0.15s ease'
-                                }}
-                                onClick={() => onToggleToolAutoApprove(server.id, tool.id)}
-                              >
-                                {tool.autoApprove ? 'Auto-Approve' : 'Ask Permission'}
-                              </button>
+                          {server.error && (
+                            <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.6rem', color: '#f87171', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '0.35rem' }}>
+                              <AlertTriangle size={13} style={{ flexShrink: 0 }} />
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{server.error}</span>
                             </div>
-                          ))}
-                        </div>
+                          )}
+
+                          {/* Tools List & Permissions */}
+                          {server.tools.length > 0 && (
+                            <div style={{ background: 'var(--code-bg)', border: '1px solid var(--code-border)', padding: '0.75rem 0.85rem', borderRadius: 'var(--radius-sm)', marginTop: '0.35rem', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)' }}>
+                              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: isConnected ? 'var(--accent-cyan)' : 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                  <Shield size={13} />
+                                  <span>{isConnected ? `Discovered Tools (${server.tools.length})` : `Available Tools (${server.tools.length})`}</span>
+                                </div>
+                                {isConnected && (
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      setConnectingServerId(server.id);
+                                      if (server.id === 'mcp-github') {
+                                        const st = await getGithubMcpStatus();
+                                        if (st.configured && onUpdateServer) {
+                                          onUpdateServer({
+                                            ...server,
+                                            status: 'connected',
+                                            authUsername: st.username,
+                                            lastSyncedAt: new Date().toISOString()
+                                          });
+                                        }
+                                      } else if (server.endpoint) {
+                                        const disc = await discoverRemoteMcpTools(server.endpoint, server.authHeader);
+                                        if (disc.success && disc.tools.length > 0 && onUpdateServer) {
+                                          onUpdateServer({
+                                            ...server,
+                                            lastSyncedAt: new Date().toISOString(),
+                                            tools: disc.tools.map((t) => ({ ...t, serverId: server.id })),
+                                            error: undefined
+                                          });
+                                        }
+                                      }
+                                      setConnectingServerId(null);
+                                    }}
+                                    disabled={connectingServerId === server.id}
+                                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.68rem' }}
+                                    title="Sync latest tools from endpoint"
+                                  >
+                                    <RefreshCw size={11} className={connectingServerId === server.id ? 'animate-spin' : ''} />
+                                    <span>Refresh</span>
+                                  </button>
+                                )}
+                              </div>
+
+                              {server.tools.length > 6 && (
+                                <div style={{ position: 'relative', marginBottom: '0.4rem' }}>
+                                  <Search size={11} style={{ position: 'absolute', left: '0.5rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
+                                  <input
+                                    type="text"
+                                    className="input-text"
+                                    placeholder={`Filter ${server.tools.length} tools...`}
+                                    value={toolSearchQueries[server.id] || ''}
+                                    onChange={(e) => setToolSearchQueries({ ...toolSearchQueries, [server.id]: e.target.value })}
+                                    style={{
+                                      width: '100%',
+                                      paddingLeft: '1.6rem',
+                                      paddingRight: '0.5rem',
+                                      paddingTop: '0.2rem',
+                                      paddingBottom: '0.2rem',
+                                      fontSize: '0.72rem',
+                                      height: '24px'
+                                    }}
+                                  />
+                                </div>
+                              )}
+
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', maxHeight: '180px', overflowY: 'auto' }}>
+                                {server.tools
+                                  .filter((tool) => {
+                                    const q = (toolSearchQueries[server.id] || '').toLowerCase().trim();
+                                    if (!q) return true;
+                                    return tool.name.toLowerCase().includes(q) || (tool.description && tool.description.toLowerCase().includes(q));
+                                  })
+                                  .map((tool) => (
+                                    <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.3rem 0', borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', overflow: 'hidden' }}>
+                                        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--code-text)', fontSize: '0.76rem', fontWeight: 600 }}>{tool.name}</span>
+                                        {tool.description && (
+                                          <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '280px' }} title={tool.description}>
+                                            {tool.description}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <button
+                                        type="button"
+                                        style={{
+                                          background: tool.autoApprove ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                                          color: tool.autoApprove ? '#34d399' : '#fbbf24',
+                                          border: '1px solid ' + (tool.autoApprove ? 'rgba(16, 185, 129, 0.45)' : 'rgba(245, 158, 11, 0.45)'),
+                                          padding: '0.2rem 0.55rem',
+                                          borderRadius: '4px',
+                                          fontSize: '0.7rem',
+                                          cursor: 'pointer',
+                                          fontWeight: 600,
+                                          flexShrink: 0,
+                                          transition: 'all 0.15s ease'
+                                        }}
+                                        onClick={() => onToggleToolAutoApprove(server.id, tool.id)}
+                                      >
+                                        {tool.autoApprove ? 'Auto-Approve' : 'Ask Permission'}
+                                      </button>
+                                    </div>
+                                  ))}
+                              </div>
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                   );
@@ -1412,6 +1949,323 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
           </button>
         </div>
       </div>
+
+      {/* GitHub Authentication Modal */}
+      {isGhAuthModalOpen && (
+        <div
+          className="modal-overlay"
+          style={{ zIndex: 1100, backgroundColor: 'rgba(0,0,0,0.78)', backdropFilter: 'blur(4px)' }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isGhTesting) setIsGhAuthModalOpen(false);
+          }}
+        >
+          <div
+            className="modal-content"
+            style={{
+              maxWidth: '560px',
+              padding: '1.75rem',
+              borderRadius: 'var(--radius-lg)',
+              border: '1px solid rgba(255,255,255,0.14)',
+              boxShadow: '0 25px 60px rgba(0,0,0,0.6)',
+              position: 'relative'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <div
+                  style={{
+                    width: '42px',
+                    height: '42px',
+                    borderRadius: '10px',
+                    background: 'linear-gradient(135deg, #24292e 0%, #0d1117 100%)',
+                    border: '1px solid rgba(255,255,255,0.18)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.3)'
+                  }}
+                >
+                  <Code size={22} color="#fff" />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: '#fff' }}>
+                    Connect GitHub MCP
+                  </h3>
+                  <p style={{ margin: '0.15rem 0 0', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                    Execute the official GitHub Model Context Protocol server locally
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => !isGhTesting && setIsGhAuthModalOpen(false)}
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '0.25rem' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Quick 1-Click Helper Banner for Non-Techies */}
+            <div
+              style={{
+                background: 'rgba(56, 189, 248, 0.08)',
+                border: '1px solid rgba(56, 189, 248, 0.25)',
+                borderRadius: 'var(--radius-md)',
+                padding: '1rem',
+                marginBottom: '1.25rem'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--accent-cyan)', marginBottom: '0.25rem' }}>
+                    Need a Personal Access Token?
+                  </div>
+                  <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>
+                    Generate a token on GitHub with recommended scopes (<code style={{ color: '#fff', fontSize: '0.72rem' }}>repo</code>, <code style={{ color: '#fff', fontSize: '0.72rem' }}>read:org</code>, <code style={{ color: '#fff', fontSize: '0.72rem' }}>user</code>) already pre-checked.
+                  </div>
+                </div>
+                <a
+                  href="https://github.com/settings/tokens/new?scopes=repo,read:org,user&description=Ergo%20MCP"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-secondary"
+                  style={{
+                    fontSize: '0.76rem',
+                    whiteSpace: 'nowrap',
+                    gap: '0.35rem',
+                    flexShrink: 0,
+                    color: 'var(--accent-cyan)',
+                    borderColor: 'rgba(56, 189, 248, 0.4)'
+                  }}
+                >
+                  <ExternalLink size={13} />
+                  <span>Generate Token ↗</span>
+                </a>
+              </div>
+            </div>
+
+            {/* Token Form */}
+            <form onSubmit={handleConnectGithub}>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
+                  Personal Access Token <span style={{ color: 'var(--accent-rose)' }}>*</span>
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type={showGhToken ? 'text' : 'password'}
+                    className="input-text"
+                    placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                    value={ghTokenInput}
+                    onChange={(e) => {
+                      setGhTokenInput(e.target.value);
+                      setGhAuthError(null);
+                    }}
+                    disabled={isGhTesting}
+                    autoFocus
+                    style={{
+                      width: '100%',
+                      paddingRight: '2.5rem',
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: '0.82rem'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowGhToken(!showGhToken)}
+                    style={{
+                      position: 'absolute',
+                      right: '0.65rem',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--text-muted)',
+                      cursor: 'pointer',
+                      padding: 0
+                    }}
+                  >
+                    {showGhToken ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.35rem' }}>
+                  Stored securely in your workspace <code style={{ color: 'var(--accent-amber)' }}>config/secrets.json</code> and never transmitted to Ergo cloud servers.
+                </div>
+              </div>
+
+              {ghAuthError && (
+                <div
+                  style={{
+                    background: 'rgba(239, 68, 68, 0.1)',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '0.6rem 0.8rem',
+                    color: '#f87171',
+                    fontSize: '0.76rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    marginBottom: '1rem'
+                  }}
+                >
+                  <AlertTriangle size={15} style={{ flexShrink: 0 }} />
+                  <span>{ghAuthError}</span>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem', marginTop: '1.25rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setIsGhAuthModalOpen(false)}
+                  disabled={isGhTesting}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={!ghTokenInput.trim() || isGhTesting}
+                  style={{ gap: '0.4rem', minWidth: '160px', justifyContent: 'center' }}
+                >
+                  {isGhTesting ? (
+                    <>
+                      <RefreshCw size={13} className="animate-spin" />
+                      <span>Connecting…</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check size={14} />
+                      <span>Authenticate & Connect</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Generic External Server Modal */}
+      {selectedExternalModalServer && (
+        <div
+          className="modal-overlay"
+          style={{ zIndex: 1100, backgroundColor: 'rgba(0,0,0,0.78)', backdropFilter: 'blur(4px)' }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isGenericTesting) setSelectedExternalModalServer(null);
+          }}
+        >
+          <div
+            className="modal-content"
+            style={{
+              maxWidth: '540px',
+              padding: '1.75rem',
+              borderRadius: 'var(--radius-lg)',
+              border: '1px solid rgba(255,255,255,0.14)',
+              boxShadow: '0 25px 60px rgba(0,0,0,0.6)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                {renderServerIcon(selectedExternalModalServer, false)}
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: '#fff' }}>
+                    Connect {selectedExternalModalServer.name}
+                  </h3>
+                  <p style={{ margin: '0.15rem 0 0', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                    Provide endpoint URL or credentials to connect
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedExternalModalServer(null)}
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!genericEndpointInput.trim()) {
+                  setGenericAuthError('Endpoint URL is required');
+                  return;
+                }
+                setIsGenericTesting(true);
+                setGenericAuthError(null);
+                const disc = await discoverRemoteMcpTools(genericEndpointInput, genericTokenInput);
+                if (disc.success && disc.tools.length > 0 && onUpdateServer) {
+                  onUpdateServer({
+                    ...selectedExternalModalServer,
+                    status: 'connected',
+                    endpoint: genericEndpointInput.trim(),
+                    authHeader: genericTokenInput.trim() || undefined,
+                    tools: disc.tools.map((t) => ({ ...t, serverId: selectedExternalModalServer.id })),
+                    lastSyncedAt: new Date().toISOString(),
+                    error: undefined
+                  });
+                  setSelectedExternalModalServer(null);
+                } else {
+                  setGenericAuthError(disc.error || 'Failed to connect and discover tools at this endpoint');
+                }
+                setIsGenericTesting(false);
+              }}
+            >
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                  MCP Server Endpoint URL <span style={{ color: 'var(--accent-rose)' }}>*</span>
+                </label>
+                <input
+                  type="text"
+                  className="input-text"
+                  placeholder="https://mcp.your-service.com/sse or http://localhost:3000/sse"
+                  value={genericEndpointInput}
+                  onChange={(e) => {
+                    setGenericEndpointInput(e.target.value);
+                    setGenericAuthError(null);
+                  }}
+                  style={{ width: '100%', fontSize: '0.82rem' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                  API Key / Bot Token <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(optional)</span>
+                </label>
+                <input
+                  type="password"
+                  className="input-text"
+                  placeholder="Leave empty if not required"
+                  value={genericTokenInput}
+                  onChange={(e) => setGenericTokenInput(e.target.value)}
+                  style={{ width: '100%', fontSize: '0.82rem' }}
+                />
+              </div>
+
+              {genericAuthError && (
+                <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 'var(--radius-sm)', padding: '0.6rem 0.8rem', color: '#f87171', fontSize: '0.76rem', display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
+                  <AlertTriangle size={15} style={{ flexShrink: 0 }} />
+                  <span>{genericAuthError}</span>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem', marginTop: '1.25rem' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setSelectedExternalModalServer(null)}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={!genericEndpointInput.trim() || isGenericTesting}>
+                  {isGenericTesting ? 'Connecting…' : 'Connect & Discover'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
