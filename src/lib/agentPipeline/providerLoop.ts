@@ -670,6 +670,14 @@ async function runCliSubscription(req: ToolLoopRequest, tools: ToolDefinition[],
         `When you are finished, reply with your summary ending with "STATUS: DONE".`;
     }
 
+    const cliEnv: Record<string, string> = {};
+    if (req.apiKey && req.apiKey !== 'cli_subscription_active') {
+      if (binary === 'claude') cliEnv['ANTHROPIC_API_KEY'] = req.apiKey.trim();
+      else if (binary === 'codex' || binary === 'openai') cliEnv['OPENAI_API_KEY'] = req.apiKey.trim();
+      else if (binary === 'agy' || binary === 'antigravity') cliEnv['GEMINI_API_KEY'] = req.apiKey.trim();
+      else if (binary === 'grok') cliEnv['XAI_API_KEY'] = req.apiKey.trim();
+    }
+
     const res = await fetch('/api/cli/execute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -678,7 +686,8 @@ async function runCliSubscription(req: ToolLoopRequest, tools: ToolDefinition[],
         prompt: conversationHistory + toolsInstruction,
         systemPrompt: systemText,
         responseFormat: req.responseFormat,
-        timeoutMs: 60_000
+        timeoutMs: 60_000,
+        env: cliEnv
       }),
       signal: req.signal
     });

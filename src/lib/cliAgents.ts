@@ -172,7 +172,8 @@ export function buildTaskCliPrompt(task: TaskItem, brief?: AgentContextItem): st
 export function buildCliArgsForTask(
   cmd: string,
   extraArgsString: string = '',
-  prompt: string
+  prompt: string,
+  hasApiKey: boolean = false
 ): string[] {
   // Parse extraArgsString into separate tokens, respecting quotes if present
   const tokens: string[] = [];
@@ -197,7 +198,11 @@ export function buildCliArgsForTask(
 
   if (baseCmd === 'claude') {
     // Claude Code accepts positional prompt: claude [options] [prompt]
-    return [...tokens, prompt];
+    const claudeTokens = [...tokens];
+    if (hasApiKey && !claudeTokens.includes('--settings')) {
+      claudeTokens.push('--settings', '{"apiKeyHelper":""}');
+    }
+    return [...claudeTokens, prompt];
   }
 
   if (baseCmd === 'aider') {

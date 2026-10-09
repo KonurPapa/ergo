@@ -364,6 +364,7 @@ export async function executeCliHeadless(options: {
   cwd?: string;
   args?: string[];
   timeoutMs?: number;
+  env?: Record<string, string>;
 }): Promise<CliExecutionResult> {
   const res = await fetch('/api/cli/execute', {
     method: 'POST',

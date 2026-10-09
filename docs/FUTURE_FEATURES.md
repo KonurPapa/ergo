@@ -124,8 +124,35 @@ Maybe the implementation looks something like the AI drafting its plan and build
     - how do we handle MCP token expirations?
     - create a default TODO.md file that new projects clone when created
     - the last-used project needs to be the one that restores when the user returns to the page again / reloads
-    - the AI profile and project need ot be synced, so that if the user last used a different AI profile on a different project, switchign projects automatically switches to the last AI profile as well
+    - the AI profile and project need to be synced, so that if the user last used a different AI profile on a different project, switching projects automatically switches to the last AI profile as well
     - the AI should only check off tasks as completed if it successfully gets to the end, not if the user stops a task partway through
+    - **make the Ergo app icon `❯` but with a purple gradient across it**
+    - tasks with a code line in them don't correctly check/uncheck from the boxes
+    - nest the download button into the settings panel
+    - remove the AI workstation form being a panel and instead have it be a section directly against the background
+    - **task headers / grouping**
+        - headers should automatically be assigned a random color from a palette when the user makes a header
+        - this header should be able to be assigned a different color from right-click context menu
+            - figure out how to represent this in the markdown file so it translates back into the UI
+        - instead of the task group name taking up as much space in the task card, it should just be the task number of the same color as the corresponding header
+            - this needs to dynamically change if the user changes the task header color from the human side
+            - hovering over it should show the full group name in the tooltip
+    - related tasks sohuld move above overview, since it chronologically comes first
+    - the AI should not ask if I want to use the associated API key during execution - it should always assume that if it's set, we want to use it
+    - see if AI providers have built-in commands for upgrading/migrating to newer models (like what claude has w/ `/claude-api migrate`)
+    - allowed folders should be grouped into either global or per-project
+        - this way, if a user has specific allowed folders for a project, the AI won't be able to read other folders that don't apply to its current project
+    - a right-click context menu should show up in the human side task list, with options for:
+        - Undo (Ctrl+Z)
+        - Redo (Ctrl+Y)
+        - Cut (Ctrl+X)
+        - Copy (Ctrl+C)
+        - Duplicate (Ctrl+D)
+        - Paste (Ctrl+V)
+        - Paste from Markdown (Ctrl+Shift+V)
+            - pastes directly into the markdown file so formatting can apply directly
+        - Delete (Ctrl+Delete)
+        - Select All (Ctrl+A)
 
 
 

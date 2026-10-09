@@ -1749,6 +1749,8 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                                     cmd={terminalSession.cmd}
                                     args={terminalSession.args}
                                     cwd={terminalSession.cwd}
+                                    env={terminalSession.env}
+                                    forceRestart={terminalSession.forceRestart}
                                     taskId={task.id}
                                     sessionId={String(terminalSession.session.taskId)}
                                     onExit={(code) => onSessionExit?.(code)}
@@ -1880,6 +1882,8 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                                             cmd={terminalSession.cmd}
                                             args={terminalSession.args}
                                             cwd={terminalSession.cwd}
+                                            env={terminalSession.env}
+                                            forceRestart={terminalSession.forceRestart}
                                             taskId={task.id}
                                             sessionId={String(terminalSession.session.taskId)}
                                             onExit={(code) => onSessionExit?.(code)}
@@ -1913,6 +1917,8 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                                 cmd={terminalSession.cmd}
                                 args={terminalSession.args}
                                 cwd={terminalSession.cwd}
+                                env={terminalSession.env}
+                                forceRestart={terminalSession.forceRestart}
                                 taskId={task.id}
                                 sessionId={String(terminalSession.session.taskId)}
                                 isActive={terminalSession.session.isActive}

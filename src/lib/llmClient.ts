@@ -108,6 +108,12 @@ export async function callAiEngine(
 
   if (provider === 'anthropic') {
     if (!apiKey) throw new Error('Anthropic API key missing.');
+    let modelName = targetModel || (taskType === 'summary' ? 'claude-3-7-sonnet-20250219' : 'claude-3-7-sonnet-20250219');
+    if (modelName === 'claude-opus-5' || modelName === 'claude-opus') {
+      modelName = 'claude-3-7-sonnet-20250219';
+    } else if (modelName === 'claude-sonnet-5' || modelName === 'claude-sonnet') {
+      modelName = 'claude-3-7-sonnet-20250219';
+    }
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -117,7 +123,7 @@ export async function callAiEngine(
         'anthropic-dangerous-direct-browser-access': 'true'
       },
       body: JSON.stringify({
-        model: targetModel || (taskType === 'summary' ? 'claude-3-7-sonnet-20250219' : 'claude-opus-5'),
+        model: modelName,
         max_tokens: 4000,
         system: systemPrompt,
         messages: [{ role: 'user', content: prompt }]
@@ -206,6 +212,20 @@ export async function callAiEngine(
             ? 'grok'
             : cliTarget;
 
+    const env: Record<string, string> = {};
+    if (config.apiKey && config.apiKey !== 'cli_subscription_active') {
+      if (binary === 'claude') env['ANTHROPIC_API_KEY'] = config.apiKey.trim();
+      else if (binary === 'codex' || binary === 'openai') env['OPENAI_API_KEY'] = config.apiKey.trim();
+      else if (binary === 'agy' || binary === 'antigravity') env['GEMINI_API_KEY'] = config.apiKey.trim();
+      else if (binary === 'grok') env['XAI_API_KEY'] = config.apiKey.trim();
+    }
+    if (config.providerKeys) {
+      if (config.providerKeys.anthropic?.apiKey) env['ANTHROPIC_API_KEY'] = config.providerKeys.anthropic.apiKey.trim();
+      if (config.providerKeys.openai?.apiKey) env['OPENAI_API_KEY'] = config.providerKeys.openai.apiKey.trim();
+      if (config.providerKeys.gemini?.apiKey) env['GEMINI_API_KEY'] = config.providerKeys.gemini.apiKey.trim();
+      if (config.providerKeys.grok?.apiKey) env['XAI_API_KEY'] = config.providerKeys.grok.apiKey.trim();
+    }
+
     const res = await fetch('/api/cli/execute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -214,7 +234,8 @@ export async function callAiEngine(
         prompt,
         systemPrompt,
         responseFormat,
-        timeoutMs: 60_000
+        timeoutMs: 60_000,
+        env
       }),
       signal
     });

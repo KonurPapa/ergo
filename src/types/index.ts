@@ -666,6 +666,10 @@ export interface SpawnedSession {
   /** resolved command + args */
   cmd: string;
   args: string[];
+  /** Environment variables forwarded to the spawned process */
+  env?: Record<string, string>;
+  /** If true, tells PTY server to kill any prior lingering session for this task */
+  forceRestart?: boolean;
 }
 
 // ─── Human Workspace AI Assistant Types ──────────────────────────────────────

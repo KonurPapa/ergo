@@ -1826,8 +1826,65 @@ export function App() {
         }
       }
 
+      // Collect API keys to pass to the spawned CLI agent process environment
+      const env: Record<string, string> = {};
+      if (activeKey?.apiKey && activeKey.apiKey !== 'cli_subscription_active') {
+        if (activeKey.provider === 'anthropic' || effectiveCli.command.includes('claude')) {
+          env.ANTHROPIC_API_KEY = activeKey.apiKey.trim();
+        } else if (activeKey.provider === 'openai' || effectiveCli.command.includes('codex')) {
+          env.OPENAI_API_KEY = activeKey.apiKey.trim();
+        } else if (activeKey.provider === 'gemini' || effectiveCli.command.includes('agy')) {
+          env.GEMINI_API_KEY = activeKey.apiKey.trim();
+        } else if (activeKey.provider === 'grok' || effectiveCli.command.includes('grok')) {
+          env.XAI_API_KEY = activeKey.apiKey.trim();
+        }
+      }
+      if (activeKey?.providerKeys) {
+        if (activeKey.providerKeys.anthropic?.apiKey) env.ANTHROPIC_API_KEY = activeKey.providerKeys.anthropic.apiKey.trim();
+        if (activeKey.providerKeys.openai?.apiKey) env.OPENAI_API_KEY = activeKey.providerKeys.openai.apiKey.trim();
+        if (activeKey.providerKeys.gemini?.apiKey) env.GEMINI_API_KEY = activeKey.providerKeys.gemini.apiKey.trim();
+        if (activeKey.providerKeys.grok?.apiKey) env.XAI_API_KEY = activeKey.providerKeys.grok.apiKey.trim();
+      }
+
+      // Check all configured userApiKeys for any provider keys not yet filled
+      for (const k of userApiKeys) {
+        if (k.apiKey && k.apiKey !== 'cli_subscription_active') {
+          if (k.provider === 'anthropic' && !env.ANTHROPIC_API_KEY) {
+            env.ANTHROPIC_API_KEY = k.apiKey.trim();
+          } else if (k.provider === 'openai' && !env.OPENAI_API_KEY) {
+            env.OPENAI_API_KEY = k.apiKey.trim();
+          } else if (k.provider === 'gemini' && !env.GEMINI_API_KEY) {
+            env.GEMINI_API_KEY = k.apiKey.trim();
+          } else if (k.provider === 'grok' && !env.XAI_API_KEY) {
+            env.XAI_API_KEY = k.apiKey.trim();
+          }
+        }
+        if (k.providerKeys) {
+          if (k.providerKeys.anthropic?.apiKey && !env.ANTHROPIC_API_KEY) env.ANTHROPIC_API_KEY = k.providerKeys.anthropic.apiKey.trim();
+          if (k.providerKeys.openai?.apiKey && !env.OPENAI_API_KEY) env.OPENAI_API_KEY = k.providerKeys.openai.apiKey.trim();
+          if (k.providerKeys.gemini?.apiKey && !env.GEMINI_API_KEY) env.GEMINI_API_KEY = k.providerKeys.gemini.apiKey.trim();
+          if (k.providerKeys.grok?.apiKey && !env.XAI_API_KEY) env.XAI_API_KEY = k.providerKeys.grok.apiKey.trim();
+        }
+      }
+
+      const hasApiKeyForCli = Boolean(
+        (effectiveCli.command.includes('claude') && env.ANTHROPIC_API_KEY) ||
+        (effectiveCli.command.includes('codex') && env.OPENAI_API_KEY) ||
+        (effectiveCli.command.includes('agy') && env.GEMINI_API_KEY) ||
+        (effectiveCli.command.includes('grok') && env.XAI_API_KEY)
+      );
+
       const prompt = buildTaskCliPrompt(task, currentBrief);
-      const args = buildCliArgsForTask(effectiveCli.command, effectiveCli.extraArgs, prompt);
+      const args = buildCliArgsForTask(effectiveCli.command, effectiveCli.extraArgs, prompt, hasApiKeyForCli);
+
+      // Ensure any lingering background PTY process for this task is cleanly killed
+      try {
+        fetch('/api/pty/kill', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taskId: String(task.id), sessionId: String(task.id) }),
+        }).catch(() => {});
+      } catch {}
 
       // Create or reuse a session for this task
       const session: TerminalSession = {
@@ -1842,6 +1899,8 @@ export function App() {
         cwd,
         cmd: effectiveCli.command,
         args,
+        env,
+        forceRestart: true,
       };
 
       setTerminalSessions((prev) => {
