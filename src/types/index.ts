@@ -64,6 +64,8 @@ export interface AgentContextItem {
   followUps?: string;
   rawContent?: string;
   passes?: Array<{ title: string; content: string }>;
+  requiredMcps?: string[];
+  selectedMcpTools?: string[];
 }
 
 export interface MCPServer {
@@ -135,6 +137,43 @@ export interface McpToolExecutionResult {
   error?: string;
 }
 
+export interface WorkspaceSkill {
+  id: string;
+  name: string;
+  description: string;
+  rules?: string;
+  instructions: string;
+  triggerKeywords: string[];
+  enabled: boolean;
+  isBuiltIn?: boolean;
+  filePath?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type WorkspaceMcpAction =
+  | 'workspace_create_task'
+  | 'workspace_update_task'
+  | 'workspace_delete_task'
+  | 'workspace_create_subtask'
+  | 'workspace_update_subtask'
+  | 'workspace_delete_subtask'
+  | 'workspace_list_swim_lanes'
+  | 'workspace_create_swim_lane'
+  | 'workspace_update_swim_lane'
+  | 'workspace_delete_swim_lane'
+  | 'workspace_move_task_lane'
+  | 'workspace_list_mcp_servers'
+  | 'workspace_read_mcp_server'
+  | 'workspace_read_mcp_tools'
+  | 'workspace_execute_ai_task'
+  | 'workspace_run_tasks_sequence'
+  | 'workspace_run_tasks_parallel'
+  | 'workspace_schedule_task'
+  | 'workspace_cancel_scheduled_task'
+  | 'workspace_create_ai_brief'
+  | 'workspace_update_ai_brief';
+
 
 export type AIProviderId = 'openai' | 'anthropic' | 'gemini' | 'grok' | 'cursor' | 'ollama' | 'cli_subscription' | 'none' | 'mock';
 
@@ -180,6 +219,8 @@ export interface AIProviderConfig {
   authMode?: AuthMode;
   cliAgentId?: string;
   cliCustomCommand?: string;
+  cliPresetId?: string;
+  cliExtraArgs?: string;
   cliSubscriptionTier?: string;
   cliExecutionMode?: 'headless' | 'interactive';
   summaryModel?: string;
@@ -205,6 +246,8 @@ export interface ProviderCredentials {
   authMode?: AuthMode;
   cliAgentId?: string;
   cliCustomCommand?: string;
+  cliPresetId?: string;
+  cliExtraArgs?: string;
   cliSubscriptionTier?: string;
   cliExecutionMode?: 'headless' | 'interactive';
   model?: string;
@@ -229,6 +272,8 @@ export interface UserApiKey {
   authMode?: AuthMode;
   cliAgentId?: string;
   cliCustomCommand?: string;
+  cliPresetId?: string;
+  cliExtraArgs?: string;
   cliSubscriptionTier?: string;
   cliExecutionMode?: 'headless' | 'interactive';
   baseUrl?: string;
@@ -248,6 +293,32 @@ export interface UserApiKey {
 }
 
 
+export interface RunningJobInfo {
+  id: string;
+  taskId: string | number;
+  taskTitle: string;
+  type: 'cli' | 'in_place' | 'scheduled';
+  status: 'queued' | 'in_progress' | 'completed' | 'cancelled' | 'failed';
+  startedAt: string;
+  completedAt?: string;
+  sessionId?: string;
+  cmd?: string;
+  args?: string[];
+  cwd?: string;
+  laneId?: string;
+  laneTitle?: string;
+}
+
+export interface RunningJobsDoc {
+  version: number;
+  projectId: string;
+  updatedAt: string;
+  tasks: AgentContextItem[];
+  runningJobs: RunningJobInfo[];
+  queuedTaskIds: (string | number)[];
+  taskExecutionSteps: Record<string, ExecutionStep[]>;
+}
+
 export interface ProjectData {
   id: string;
   name: string;
@@ -257,6 +328,7 @@ export interface ProjectData {
   agentContextFilePath?: string; // (Legacy)
   todoMarkdown: string;
   agentContextMarkdown?: string; // (Legacy)
+  runningJobsDoc?: RunningJobsDoc;
   connectedMcps: string[];
   swimLanes?: SwimLaneDoc[];
 }
@@ -498,6 +570,11 @@ export interface FolderMetadata {
   lastSyncedAt?: string;
 }
 
+export interface AutocompleteSettings {
+  enabled: boolean;
+  keybinding: 'Tab' | 'ArrowRight' | 'Enter';
+}
+
 export interface AppSettings {
   version: number;
   activeProjectId: string;
@@ -510,6 +587,8 @@ export interface AppSettings {
   hasCompletedOnboarding?: boolean;
   /** Agent execution pipeline tuning (concurrency, QA retries, tool rounds). */
   agentPipeline?: Partial<AgentPipelineOptions>;
+  /** Autocomplete configuration (toggle, keybinding). */
+  autocomplete?: AutocompleteSettings;
 }
 
 export interface StorageDirectoryConfig {
@@ -600,6 +679,7 @@ export interface HumanAiAssistantResult {
   requiresDeletionApproval?: boolean;
   deletionReason?: string;
   aggregatedReport?: string;
+  selectedMcpTools?: string[];
 }
 
 // ─── Agent Execution Pipeline Types ─────────────────────────────────────────

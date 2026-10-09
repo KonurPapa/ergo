@@ -8,10 +8,12 @@ import {
   type McpToolPermissionPrompt,
   type HumanInputPrompt,
   type OllamaFallbackPrompt,
-  type OllamaFallbackChoice
+  type OllamaFallbackChoice,
+  type MCPServer
 } from '../types';
 import { AgentTerminal } from './AgentTerminal';
 import { ResizableTerminalContainer } from './ResizableTerminalContainer';
+import { CliAgentNotesBridge } from './CliAgentNotesBridge';
 import { StepStatusIcon, StepUsageBadge, PieceChip, BiblePreview, BaselineContextPreview } from './ExecutionStepExtras';
 import { BvTokenCounterCard } from './BvTokenCounterCard';
 import {
@@ -54,6 +56,7 @@ import { RichTextToolbar } from './RichTextToolbar';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ArchivedTasksModal } from './ArchivedTasksModal';
 import { ScheduleTaskModal } from './ScheduleTaskModal';
+import { TaskMcpToolsModal } from './TaskMcpToolsModal';
 import { type ScheduledJob } from '../lib/taskScheduler';
 import { handleMarkdownAutoWrap } from '../lib/markdownEditorUtils';
 
@@ -213,11 +216,14 @@ interface BriefPaneProps {
   onPurgeTaskFromAi?: (targetId: string | number) => void;
   // Scheduling props
   scheduledJobs?: ScheduledJob[];
+  queuedTaskIds?: (string | number)[];
   onScheduleTask?: (taskId: string | number, scheduledIso: string, cronExpr?: string) => void;
   onCancelScheduleTask?: (taskId: string | number) => void;
   // Popout Panel Controls
   isPanelOpen?: boolean;
   onTogglePanel?: () => void;
+  mcpServers?: MCPServer[];
+  onUpdateTaskMcpTools?: (taskId: string | number, toolNames: string[]) => void;
 }
 
 interface AiTaskCardProps {
@@ -225,6 +231,7 @@ interface AiTaskCardProps {
   brief: AgentContextItem | undefined;
   isSelected: boolean;
   isWorking: boolean;
+  isQueued?: boolean;
   terminalSession: SpawnedSession | null;
   isExecuting: boolean;
   executionSteps: ExecutionStep[];
@@ -249,9 +256,11 @@ interface AiTaskCardProps {
   onArchiveTask?: (taskTitle: string) => void;
   onRemoveAiTask?: (targetId: string | number) => void;
   onPurgeTaskFromAi?: (targetId: string | number) => void;
+  mcpServers?: MCPServer[];
+  onUpdateTaskMcpTools?: (taskId: string | number, toolNames: string[]) => void;
 }
 
-type CardStatus = 'not_started' | 'working' | 'done';
+type CardStatus = 'not_started' | 'queued' | 'working' | 'done';
 
 const CardStatusChip: React.FC<{ status: CardStatus }> = ({ status }) => {
   if (status === 'working') {
@@ -259,6 +268,28 @@ const CardStatusChip: React.FC<{ status: CardStatus }> = ({ status }) => {
       <span className="card-status-chip is-working">
         <Loader2 size={11} className="spin-animate" />
         <span>Working...</span>
+      </span>
+    );
+  }
+  if (status === 'queued') {
+    return (
+      <span
+        className="card-status-chip is-queued"
+        style={{
+          background: 'rgba(234, 179, 8, 0.12)',
+          color: 'var(--warning, #eab308)',
+          border: '1px solid rgba(234, 179, 8, 0.3)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '0.3rem',
+          padding: '0.12rem 0.45rem',
+          borderRadius: '4px',
+          fontSize: '0.68rem',
+          fontWeight: 600
+        }}
+      >
+        <Clock size={11} />
+        <span>Queued</span>
       </span>
     );
   }
@@ -283,6 +314,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   brief,
   isSelected,
   isWorking,
+  isQueued = false,
   terminalSession,
   isExecuting,
   executionSteps,
@@ -307,17 +339,26 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   onArchiveTask,
   onRemoveAiTask,
   onPurgeTaskFromAi,
+  mcpServers: _mcpServers = [],
+  onUpdateTaskMcpTools: _onUpdateTaskMcpTools,
 }) => {
   const [isTaskCollapsed, setIsTaskCollapsed] = useState(!isSelected);
   const [isEditing, setIsEditing] = useState(false);
   const [overviewText, setOverviewText] = useState('');
   const [buildVerificationText, setBuildVerificationText] = useState('');
   const [completionText, setCompletionText] = useState('');
-  const [viewModeSection2, setViewModeSection2] = useState<'notes' | 'terminal' | 'steps'>('notes');
-  const [isTerminalInStepsOpen, setIsTerminalInStepsOpen] = useState(true);
+  const [viewModeSection2, setViewModeSection2] = useState<'notes' | 'steps'>('notes');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isGherkinOpen, setIsGherkinOpen] = useState(false);
   const [isPurgeConfirmOpen, setIsPurgeConfirmOpen] = useState(false);
+  const [isMcpModalOpen, setIsMcpModalOpen] = useState(false);
+
+  const activeTaskTools = React.useMemo(() => {
+    if (task.mcpRequired && task.mcpRequired.length > 0) return task.mcpRequired;
+    if (brief?.selectedMcpTools && brief.selectedMcpTools.length > 0) return brief.selectedMcpTools;
+    if (brief?.requiredMcps && brief.requiredMcps.length > 0) return brief.requiredMcps;
+    return [];
+  }, [task.mcpRequired, brief?.selectedMcpTools, brief?.requiredMcps]);
   const menuRef = useRef<HTMLDivElement>(null);
   const hasPendingAlert = !!(pendingPermission || pendingOllamaFallback);
 
@@ -491,7 +532,6 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 
     if (isNewTask) {
       if (terminalSession?.session) {
-        setViewModeSection2('terminal');
         setCollapsedCards({
           overview: false,
           vectorMemory: true,
@@ -499,7 +539,6 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
           completion: false,
         });
       } else {
-        setViewModeSection2('notes');
         setCollapsedCards({
           overview: false,
           vectorMemory: true,
@@ -508,9 +547,8 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
         });
       }
     } else {
-      // If task status changed on the same task, ensure terminal session stays visible if active
+      // If task status changed on the same task, ensure Actions card stays visible if active
       if (terminalSession?.session?.isActive) {
-        setViewModeSection2('terminal');
         setCollapsedCards((prev) => ({ ...prev, steps: false }));
       }
     }
@@ -637,7 +675,6 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   }, [isCompletionWorking, task.isDone, task.status, completionText, executionSteps]);
 
   // Determine what to display in Section 2 (Build & Verification / Steps & Actions)
-  const showTerminal = viewModeSection2 === 'terminal' && !isEditing;
   const showExecutionSteps = viewModeSection2 === 'steps' && !isEditing;
 
   const handleFieldChange = (
@@ -884,6 +921,28 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
               <span>{new Date(scheduledJob.scheduledTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
             </span>
           )}
+          {isQueued && (
+            <span
+              className="task-queued-indicator"
+              title="This task is queued in workspace"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                color: 'var(--warning, #eab308)',
+                background: 'rgba(234, 179, 8, 0.12)',
+                border: '1px solid rgba(234, 179, 8, 0.3)',
+                borderRadius: '4px',
+                padding: '0.1rem 0.35rem',
+                fontSize: '0.7rem',
+                fontWeight: 500,
+                flexShrink: 0,
+              }}
+            >
+              <Clock size={11} />
+              <span>Queued</span>
+            </span>
+          )}
           {/* {renderStatusBadge()} */}
         </div>
 
@@ -911,12 +970,14 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
             </>
           ) : (
             <>
-              {/* Main Task Action Button: Working... / Resume Task / Rerun Task / Run Task */}
+              {/* Main Task Action Button: Working... / Queued / Resume Task / Rerun Task / Run Task */}
               <button
                 type="button"
                 className={`execute-task-btn ${
                   isWorking
                     ? 'is-working'
+                    : isQueued
+                    ? 'is-queued'
                     : isStoppedPartway
                     ? 'is-resume'
                     : hasRunBefore
@@ -930,18 +991,25 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                 title={
                   isWorking
                     ? 'Agent is working on this task...'
+                    : isQueued
+                    ? 'Task is currently queued for execution'
                     : isStoppedPartway
                     ? 'Resume this task where it was left off'
                     : hasRunBefore
                     ? 'Rerun this task'
                     : 'Start the AI on this task'
                 }
-                disabled={isWorking}
+                disabled={isWorking || isQueued}
               >
                 {isWorking ? (
                   <>
                     <Loader2 size={12} className="spin-animate" />
                     <span>Working...</span>
+                  </>
+                ) : isQueued ? (
+                  <>
+                    <Clock size={12} />
+                    <span>Queued</span>
                   </>
                 ) : isStoppedPartway ? (
                   <>
@@ -962,23 +1030,18 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
               </button>
 
               {/* Stop active running agent or active terminal session */}
-              {isExecuting && onTerminateAgent && (
+              {isWorking && (onTerminateAgent || onKillSession) && (
                 <button
                   type="button"
                   className="stop-task-btn"
-                  onClick={() => onTerminateAgent(task.id)}
-                  title="Stop the running agent immediately"
-                >
-                  <Square size={11} />
-                  <span>Stop</span>
-                </button>
-              )}
-              {!isExecuting && terminalSession?.session.isActive && onKillSession && (
-                <button
-                  type="button"
-                  className="stop-task-btn"
-                  onClick={() => onKillSession(task.id)}
-                  title="Stop CLI agent process"
+                  onClick={() => {
+                    if (onTerminateAgent) {
+                      onTerminateAgent(task.id);
+                    } else if (onKillSession) {
+                      onKillSession(task.id);
+                    }
+                  }}
+                  title="Stop the running task immediately"
                 >
                   <Square size={11} />
                   <span>Stop</span>
@@ -1068,6 +1131,18 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                 >
                   <Calendar size={13} style={{ color: 'var(--accent-primary, #6366f1)' }} />
                   <span>{scheduledJob && scheduledJob.status === 'pending' ? 'Edit Schedule...' : 'Schedule task...'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="swimlane-dropdown-item"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    setIsMcpModalOpen(true);
+                  }}
+                >
+                  <Wrench size={13} style={{ color: 'var(--accent-purple, #a855f7)' }} />
+                  <span>Configure MCP Tools{activeTaskTools.length > 0 ? ` (${activeTaskTools.length})` : ''}...</span>
                 </button>
 
                 <div className="swimlane-dropdown-divider" />
@@ -1319,8 +1394,8 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                       {summaryDoc ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
                           {/* <div className="goals-brief-title">Goals & Success Criteria</div> */}
-                          <div style={{ fontSize: '0.78rem', whiteSpace: 'pre-wrap', color: 'var(--text-main)', lineHeight: '1.45' }}>
-                            {summaryDoc.goals}
+                          <div style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: '1.45' }}>
+                            <MarkdownRenderer content={summaryDoc.goals} />
                           </div>
                           {/* {summaryDoc.goals && (
                             <div className="goals-brief-box">
@@ -1580,18 +1655,16 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                       {/* Internal View Switcher Bar */}
                       <div className="actions-view-switcher-bar">
                         <span className="actions-switcher-label">
-                          {showTerminal
-                            ? `Terminal (${terminalSession?.cmd})`
-                            : showExecutionSteps
-                              ? executionSteps.length > 0
-                                ? `${executionSteps.length} action${executionSteps.length === 1 ? '' : 's'}`
-                                : 'Execution Steps'
-                              : 'Notes'}
+                          {showExecutionSteps
+                            ? executionSteps.length > 0
+                              ? `${executionSteps.length} action${executionSteps.length === 1 ? '' : 's'}`
+                              : 'Execution Steps'
+                            : 'Notes'}
                         </span>
                         <div className="steps-notes-chip">
                           <button
                             type="button"
-                            className={`steps-notes-segment ${!showExecutionSteps && !showTerminal ? 'active' : ''}`}
+                            className={`steps-notes-segment ${!showExecutionSteps ? 'active' : ''}`}
                             onClick={() => setViewModeSection2('notes')}
                             title="Switch to Notes view"
                           >
@@ -1600,72 +1673,18 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                           </button>
                           <button
                             type="button"
-                            className={`steps-notes-segment ${showExecutionSteps || showTerminal ? 'active' : ''}`}
-                            onClick={() => setViewModeSection2(terminalSession ? 'terminal' : 'steps')}
-                            title={terminalSession ? 'Switch to Terminal view' : 'Switch to Steps view'}
+                            className={`steps-notes-segment ${showExecutionSteps ? 'active' : ''}`}
+                            onClick={() => setViewModeSection2('steps')}
+                            title="Switch to Steps view"
                           >
-                            {terminalSession ? <Terminal size={10} /> : <Sparkles size={10} />}
-                            <span>{terminalSession ? 'Terminal' : 'Steps'}</span>
+                            <Sparkles size={10} />
+                            <span>Steps</span>
                           </button>
                         </div>
                       </div>
 
-                      {/* Sub-view 1: Embedded Terminal */}
-                      {showTerminal && terminalSession ? (
-                        <ResizableTerminalContainer
-                          defaultHeight={480}
-                          minHeight={240}
-                          maxHeight={950}
-                          maximizedHeight={760}
-                          storageKey="ergo_terminal_height_brief"
-                          headerLeft={
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', flexWrap: 'wrap' }}>
-                              <span>
-                                <span style={{ color: 'var(--accent-cyan)', fontWeight: 600 }}>cmd:</span>{' '}
-                                {terminalSession.cmd} {terminalSession.args.join(' ')}
-                              </span>
-                              <span>
-                                <span style={{ color: 'var(--accent-violet)', fontWeight: 600 }}>cwd:</span>{' '}
-                                {terminalSession.cwd}
-                              </span>
-                            </div>
-                          }
-                          headerRight={
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                              {onRestartSession && (
-                                <button
-                                  type="button"
-                                  className="terminal-ctrl-btn"
-                                  onClick={() => onRestartSession(task)}
-                                  title="Restart CLI agent in terminal"
-                                >
-                                  <RotateCcw size={10} />
-                                  <span>Restart</span>
-                                </button>
-                              )}
-                              {terminalSession.session.isActive && onKillSession && (
-                                <button
-                                  type="button"
-                                  className="terminal-ctrl-btn is-danger"
-                                  onClick={() => onKillSession(task.id)}
-                                  title="Stop CLI agent process"
-                                >
-                                  <Square size={10} />
-                                  <span>Stop</span>
-                                </button>
-                              )}
-                            </div>
-                          }
-                        >
-                          <AgentTerminal
-                            cmd={terminalSession.cmd}
-                            args={terminalSession.args}
-                            cwd={terminalSession.cwd}
-                            onExit={(code) => onSessionExit?.(code)}
-                          />
-                        </ResizableTerminalContainer>
-                      ) : showExecutionSteps ? (
-                        /* Sub-view 2: In-place Execution Steps & Logs */
+                      {showExecutionSteps ? (
+                        /* Sub-view 1: In-place Execution Steps & Workflow */
                         <div className="execution-steps-wrapper" style={{ padding: '0.65rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
                           {/* Interactive Mid-Build Human Clarification Card if active */}
                           {pendingHumanInput && onHumanInputChoice && (
@@ -1675,186 +1694,266 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                             />
                           )}
 
-                          {/* Embedded Live CLI Terminal Card (Visible in Steps view when a session is active or available) */}
-                          {terminalSession && (
-                            <div className={`ai-step-gherkin-card ${isTerminalInStepsOpen ? 'is-open' : 'is-collapsed'}`} style={{ border: '1px solid rgba(6, 182, 212, 0.35)', background: 'rgba(6, 182, 212, 0.03)' }}>
-                              <div
-                                className="ai-step-gherkin-header"
-                                onClick={() => setIsTerminalInStepsOpen((v) => !v)}
-                                title={isTerminalInStepsOpen ? 'Collapse Terminal Session' : 'Expand Terminal Session'}
-                                style={{ background: 'rgba(6, 182, 212, 0.08)' }}
-                              >
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                                  <button
-                                    type="button"
-                                    className={`card-collapse-btn ${!isTerminalInStepsOpen ? 'is-collapsed' : ''}`}
-                                    aria-label={isTerminalInStepsOpen ? 'Collapse Terminal Session' : 'Expand Terminal Session'}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setIsTerminalInStepsOpen((v) => !v);
-                                    }}
-                                  >
-                                    <ChevronDown size={11} className="collapse-chevron" />
-                                  </button>
-                                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                                    <Terminal size={12} />
-                                    <span>Live Agent Terminal ({terminalSession.cmd})</span>
-                                  </span>
-                                  {terminalSession.session.isActive && (
-                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: 'var(--accent-emerald)', fontWeight: 600 }}>
-                                      <span className="live-pulse-dot-working" style={{ width: 6, height: 6 }} />
-                                      <span>RUNNING</span>
-                                    </span>
-                                  )}
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }} onClick={(e) => e.stopPropagation()}>
-                                  {onRestartSession && (
-                                    <button
-                                      type="button"
-                                      className="terminal-ctrl-btn"
-                                      onClick={() => onRestartSession(task)}
-                                      title="Restart CLI agent in terminal"
-                                    >
-                                      <RotateCcw size={10} />
-                                      <span>Restart</span>
-                                    </button>
-                                  )}
-                                  {terminalSession.session.isActive && onKillSession && (
-                                    <button
-                                      type="button"
-                                      className="terminal-ctrl-btn is-danger"
-                                      onClick={() => onKillSession(task.id)}
-                                      title="Stop CLI agent process"
-                                    >
-                                      <Square size={10} />
-                                      <span>Stop</span>
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-
-                              {isTerminalInStepsOpen && (
-                                <div style={{ height: '360px', overflow: 'hidden', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                          {/* Fallback Agent Terminal in Steps view if session exists but no manager step is in list */}
+                          {terminalSession &&
+                            !executionSteps.some(
+                              (s) =>
+                                s.agentRole === 'manager' ||
+                                s.id.includes('step-manager-') ||
+                                s.stage === 'execution'
+                            ) && (
+                              <div style={{ marginTop: '0.2rem' }}>
+                                <ResizableTerminalContainer
+                                  defaultHeight={380}
+                                  minHeight={200}
+                                  maxHeight={800}
+                                  maximizedHeight={680}
+                                  storageKey="ergo_terminal_height_step"
+                                  headerLeft={
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap', fontSize: '0.72rem' }}>
+                                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: 'var(--accent-cyan)', fontWeight: 600 }}>
+                                        <Terminal size={12} />
+                                        <span>Agent Terminal ({terminalSession.cmd})</span>
+                                      </span>
+                                      <span style={{ color: 'var(--text-muted)' }}>cwd: {terminalSession.cwd}</span>
+                                    </div>
+                                  }
+                                  headerRight={
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                      {onRestartSession && (
+                                        <button
+                                          type="button"
+                                          className="terminal-ctrl-btn"
+                                          onClick={() => onRestartSession(task)}
+                                          title="Restart CLI agent in terminal"
+                                        >
+                                          <RotateCcw size={10} />
+                                          <span>Restart</span>
+                                        </button>
+                                      )}
+                                      {terminalSession.session.isActive && onKillSession && (
+                                        <button
+                                          type="button"
+                                          className="terminal-ctrl-btn is-danger"
+                                          onClick={() => onKillSession(task.id)}
+                                          title="Stop CLI agent process"
+                                        >
+                                          <Square size={10} />
+                                          <span>Stop</span>
+                                        </button>
+                                      )}
+                                    </div>
+                                  }
+                                >
                                   <AgentTerminal
                                     cmd={terminalSession.cmd}
                                     args={terminalSession.args}
                                     cwd={terminalSession.cwd}
+                                    taskId={task.id}
+                                    sessionId={String(terminalSession.session.taskId)}
                                     onExit={(code) => onSessionExit?.(code)}
                                   />
-                                </div>
-                              )}
-                            </div>
-                          )}
+                                </ResizableTerminalContainer>
+                              </div>
+                            )}
 
-                      {/* Top Card: Acceptance Brief (Gherkin Scenarios) - Collapsed by default */}
-                      {gherkinBrief && (
-                        <div className={`ai-step-gherkin-card ${isGherkinOpen ? 'is-open' : 'is-collapsed'}`}>
-                          <div
-                            className="ai-step-gherkin-header"
-                            onClick={() => setIsGherkinOpen((v) => !v)}
-                            title={isGherkinOpen ? 'Collapse Acceptance Brief' : 'Expand Acceptance Brief'}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                              <button
-                                type="button"
-                                className={`card-collapse-btn ${!isGherkinOpen ? 'is-collapsed' : ''}`}
-                                aria-label={isGherkinOpen ? 'Collapse Acceptance Brief' : 'Expand Acceptance Brief'}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setIsGherkinOpen((v) => !v);
-                                }}
+                          {/* Acceptance Brief (Gherkin Scenarios) - Collapsed by default */}
+                          {gherkinBrief && (
+                            <div className={`ai-step-gherkin-card ${isGherkinOpen ? 'is-open' : 'is-collapsed'}`}>
+                              <div
+                                className="ai-step-gherkin-header"
+                                onClick={() => setIsGherkinOpen((v) => !v)}
+                                title={isGherkinOpen ? 'Collapse Acceptance Brief' : 'Expand Acceptance Brief'}
                               >
-                                <ChevronDown size={11} className="collapse-chevron" />
-                              </button>
-                              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                                <span>🥒</span>
-                                <span>Acceptance Brief (Gherkin Scenarios)</span>
-                              </span>
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                              <span className="card-item-tag-completed" style={{ fontSize: '0.65rem' }}>
-                                Gherkin Spec
-                              </span>
-                            </div>
-                          </div>
-
-                          {isGherkinOpen && (
-                            <div className="ai-step-gherkin-body">
-                              <pre className="gherkin-brief-pre">
-                                {gherkinBrief}
-                              </pre>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Execution Steps */}
-                      <div className="execution-steps">
-                        {executionSteps.length === 0 ? (
-                          <div className="ai-card-hint" style={{ margin: '0.4rem 0' }}>
-                            No execution steps recorded yet. Agent actions and tool logs will appear here when the task runs.
-                          </div>
-                        ) : (
-                          executionSteps.map((step) => (
-                            <div key={step.id} className={`step-card ${step.status} stage-${step.stage}`} style={step.stage === 'mcp_call' && step.pieceId ? { marginLeft: '0.65rem' } : undefined}>
-                              <div className="step-header">
-                                <div className="step-title">
-                                  <StepStatusIcon step={step} size={13} />
-                                  <PieceChip pieceId={step.stage === 'mcp_call' ? step.pieceId : undefined} />
-                                  <span style={{ fontSize: '0.8rem', color: step.status === 'cancelled' ? 'var(--text-muted)' : undefined }}>{step.title}</span>
-                                </div>
-                                <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                                  <StepUsageBadge usage={step.usage} />
-                                  <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-                                    {step.time}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                  <button
+                                    type="button"
+                                    className={`card-collapse-btn ${!isGherkinOpen ? 'is-collapsed' : ''}`}
+                                    aria-label={isGherkinOpen ? 'Collapse Acceptance Brief' : 'Expand Acceptance Brief'}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setIsGherkinOpen((v) => !v);
+                                    }}
+                                  >
+                                    <ChevronDown size={11} className="collapse-chevron" />
+                                  </button>
+                                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                    <span>🥒</span>
+                                    <span>Acceptance Brief (Gherkin Scenarios)</span>
                                   </span>
-                                </span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                  <span className="card-item-tag-completed" style={{ fontSize: '0.65rem' }}>
+                                    Gherkin Spec
+                                  </span>
+                                </div>
                               </div>
 
-                              <div className="step-detail">{step.detail}</div>
-                              <BiblePreview markdown={step.bibleMarkdown} filePath={step.bibleMarkdown ? step.bibleFilePath : undefined} />
-
-                              {step.humanInputPrompt && step.status === 'running' && onHumanInputChoice && !pendingHumanInput && (
-                                <div style={{ marginTop: '0.4rem' }}>
-                                  <HumanInputCard
-                                    prompt={step.humanInputPrompt}
-                                    onSubmit={onHumanInputChoice}
-                                  />
+                              {isGherkinOpen && (
+                                <div className="ai-step-gherkin-body">
+                                  <pre className="gherkin-brief-pre">
+                                    {gherkinBrief}
+                                  </pre>
                                 </div>
                               )}
-
-                              {step.widgetType && renderMcpAppWidget(step.widgetType, step.widgetData)}
                             </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  ) : isEditing ? (
-                    <div style={{ padding: '0.55rem 0.75rem' }}>
-                      <textarea
-                        ref={buildVerificationRef}
-                        className="obsidian-card-textarea"
-                        placeholder="Record mid-task progress, steps taken on the journey, architectural choices, and why..."
-                        value={buildVerificationText}
-                        onChange={(e) => handleFieldChange('buildAndVerification', e.target.value)}
-                        onKeyDown={(e) => handleMarkdownAutoWrap(e, (val) => handleFieldChange('buildAndVerification', val))}
-                        onFocus={() => setActiveFocusedRef(buildVerificationRef)}
-                        rows={4}
-                      />
-                    </div>
-                  ) : (
-                    <div className="brief-body" style={{ padding: '0.55rem 0.75rem' }}>
-                      {buildVerificationText ? (
-                        <div className="brief-markdown-render">
-                          <MarkdownRenderer content={buildVerificationText} />
+                          )}
+
+                          {/* Execution Steps */}
+                          <div className="execution-steps">
+                            {executionSteps.length === 0 ? (
+                              <div className="ai-card-hint" style={{ margin: '0.4rem 0' }}>
+                                No execution steps recorded yet. Agent actions and tool logs will appear here when the task runs.
+                              </div>
+                            ) : (
+                              executionSteps.map((step) => (
+                                <div key={step.id} className={`step-card ${step.status} stage-${step.stage}`} style={step.stage === 'mcp_call' && step.pieceId ? { marginLeft: '0.65rem' } : undefined}>
+                                  <div className="step-header">
+                                    <div className="step-title">
+                                      <StepStatusIcon step={step} size={13} />
+                                      <PieceChip pieceId={step.stage === 'mcp_call' ? step.pieceId : undefined} />
+                                      <span style={{ fontSize: '0.8rem', color: step.status === 'cancelled' ? 'var(--text-muted)' : undefined }}>{step.title}</span>
+                                    </div>
+                                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                      <StepUsageBadge usage={step.usage} />
+                                      <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
+                                        {step.time}
+                                      </span>
+                                    </span>
+                                  </div>
+
+                                  <div className="step-detail"><MarkdownRenderer content={step.detail} /></div>
+                                  <BiblePreview markdown={step.bibleMarkdown} filePath={step.bibleMarkdown ? step.bibleFilePath : undefined} />
+
+                                  {/* Embedded Live Agent Terminal inside the agent step */}
+                                  {terminalSession &&
+                                    (step.agentRole === 'manager' ||
+                                      step.id.includes('step-manager-') ||
+                                      (step.stage === 'execution' &&
+                                        !executionSteps.some(
+                                          (s) => s.id !== step.id && (s.id.includes('step-manager-') || s.agentRole === 'manager')
+                                        ))) && (
+                                      <div style={{ marginTop: '0.65rem' }}>
+                                        <ResizableTerminalContainer
+                                          defaultHeight={380}
+                                          minHeight={200}
+                                          maxHeight={800}
+                                          maximizedHeight={680}
+                                          storageKey="ergo_terminal_height_step"
+                                          headerLeft={
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap', fontSize: '0.72rem' }}>
+                                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: 'var(--accent-cyan)', fontWeight: 600 }}>
+                                                <Terminal size={12} />
+                                                <span>Agent Terminal ({terminalSession.cmd})</span>
+                                              </span>
+                                              <span style={{ color: 'var(--text-muted)' }}>cwd: {terminalSession.cwd}</span>
+                                            </div>
+                                          }
+                                          headerRight={
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                              {onRestartSession && (
+                                                <button
+                                                  type="button"
+                                                  className="terminal-ctrl-btn"
+                                                  onClick={() => onRestartSession(task)}
+                                                  title="Restart CLI agent in terminal"
+                                                >
+                                                  <RotateCcw size={10} />
+                                                  <span>Restart</span>
+                                                </button>
+                                              )}
+                                              {terminalSession.session.isActive && onKillSession && (
+                                                <button
+                                                  type="button"
+                                                  className="terminal-ctrl-btn is-danger"
+                                                  onClick={() => onKillSession(task.id)}
+                                                  title="Stop CLI agent process"
+                                                >
+                                                  <Square size={10} />
+                                                  <span>Stop</span>
+                                                </button>
+                                              )}
+                                            </div>
+                                          }
+                                        >
+                                          <AgentTerminal
+                                            cmd={terminalSession.cmd}
+                                            args={terminalSession.args}
+                                            cwd={terminalSession.cwd}
+                                            taskId={task.id}
+                                            sessionId={String(terminalSession.session.taskId)}
+                                            onExit={(code) => onSessionExit?.(code)}
+                                          />
+                                        </ResizableTerminalContainer>
+                                      </div>
+                                    )}
+
+                                  {step.humanInputPrompt && step.status === 'running' && onHumanInputChoice && !pendingHumanInput && (
+                                    <div style={{ marginTop: '0.4rem' }}>
+                                      <HumanInputCard
+                                        prompt={step.humanInputPrompt}
+                                        onSubmit={onHumanInputChoice}
+                                      />
+                                    </div>
+                                  )}
+
+                                  {step.widgetType && renderMcpAppWidget(step.widgetType, step.widgetData)}
+                                </div>
+                              ))
+                            )}
+                          </div>
                         </div>
                       ) : (
-                        <div className="ai-card-hint">
-                          Mid-task build & verification steps will appear here as the agent works.
+                        /* Sub-view 2: Notes View (Always shows Manager AI Terminal if active/available + Notes editor) */
+                        <div className="notes-view-container" style={{ display: 'flex', flexDirection: 'column' }}>
+                          {/* Manager AI Activity & Steering Bridge in Notes view for non-power users */}
+                          {terminalSession && (
+                            <div style={{ padding: '0.5rem 0.65rem 0.35rem 0.65rem' }}>
+                              <CliAgentNotesBridge
+                                cmd={terminalSession.cmd}
+                                args={terminalSession.args}
+                                cwd={terminalSession.cwd}
+                                taskId={task.id}
+                                sessionId={String(terminalSession.session.taskId)}
+                                isActive={terminalSession.session.isActive}
+                                onExit={(code) => onSessionExit?.(code)}
+                                onRestartSession={onRestartSession ? () => onRestartSession(task) : undefined}
+                                onKillSession={onKillSession ? () => onKillSession(task.id) : undefined}
+                                onSwitchToSteps={() => setViewModeSection2('steps')}
+                              />
+                            </div>
+                          )}
+
+                          {isEditing ? (
+                            <div style={{ padding: '0.55rem 0.75rem' }}>
+                              <textarea
+                                ref={buildVerificationRef}
+                                className="obsidian-card-textarea"
+                                placeholder="Record mid-task progress, steps taken on the journey, architectural choices, and why..."
+                                value={buildVerificationText}
+                                onChange={(e) => handleFieldChange('buildAndVerification', e.target.value)}
+                                onKeyDown={(e) => handleMarkdownAutoWrap(e, (val) => handleFieldChange('buildAndVerification', val))}
+                                onFocus={() => setActiveFocusedRef(buildVerificationRef)}
+                                rows={4}
+                              />
+                            </div>
+                          ) : (
+                            <div className="brief-body" style={{ padding: '0.55rem 0.75rem' }}>
+                              {buildVerificationText ? (
+                                <div className="brief-markdown-render">
+                                  <MarkdownRenderer content={buildVerificationText} />
+                                </div>
+                              ) : (
+                                <div className="ai-card-hint">
+                                  {terminalSession
+                                    ? 'Task notes and journey documentation will appear here.'
+                                    : 'Mid-task build & verification steps will appear here as the agent works.'}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       )}
-                    </div>
-                  )}
                 </div>
               )}
             </div>
@@ -1922,6 +2021,21 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
           </div>
         </div>
       )}
+
+      {isMcpModalOpen && (
+        <TaskMcpToolsModal
+          isOpen={isMcpModalOpen}
+          onClose={() => setIsMcpModalOpen(false)}
+          task={task}
+          brief={brief}
+          mcpServers={_mcpServers}
+          selectedTools={activeTaskTools}
+          onSaveTools={(tools) => {
+            _onUpdateTaskMcpTools?.(task.id, tools);
+            setIsMcpModalOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 };
@@ -1936,6 +2050,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   swimLanes = [],
   selectedTaskId,
   runningTaskIds = [],
+  queuedTaskIds = [],
   onSelectTask,
   onSaveBrief,
   onLiveBriefChange,
@@ -1967,6 +2082,8 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   onCancelScheduleTask,
   isPanelOpen = true,
   onTogglePanel,
+  mcpServers = [],
+  onUpdateTaskMcpTools,
 }) => {
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
   const [schedulingTask, setSchedulingTask] = useState<TaskItem | null>(null);
@@ -2163,6 +2280,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                     (brief.id != null && selectedTaskId === brief.id));
 
                 const taskJob = scheduledJobs.find((j) => String(j.taskId) === String(effectiveTask.id) && j.status === 'pending');
+                const isQueued = queuedTaskIds ? queuedTaskIds.some((qid) => String(qid) === String(effectiveTask.id)) : false;
 
                 return (
                   <AiTaskCard
@@ -2171,6 +2289,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                     brief={brief}
                     isSelected={isSelected}
                     isWorking={isWorking}
+                    isQueued={isQueued}
                     terminalSession={terminalSession}
                     isExecuting={isExecuting}
                     executionSteps={taskExecutionSteps[effectiveTask.id] || taskExecutionSteps[String(effectiveTask.id)] || []}
@@ -2195,6 +2314,8 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                     onArchiveTask={onArchiveTask}
                     onRemoveAiTask={(targetId) => onRemoveAiTask?.(targetId)}
                     onPurgeTaskFromAi={(targetId) => onPurgeTaskFromAi?.(targetId)}
+                    mcpServers={mcpServers}
+                    onUpdateTaskMcpTools={onUpdateTaskMcpTools}
                   />
                 );
               })}

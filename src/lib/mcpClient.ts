@@ -4,6 +4,7 @@ import {
   type McpRootBoundary,
   type McpToolExecutionResult
 } from '../types';
+import { executeWorkspaceToolAction } from './workspaceMcp';
 
 /**
  * Call an MCP tool via the local MCP Host JSON-RPC / REST bridge
@@ -14,6 +15,10 @@ export async function callMcpTool(
   args: Record<string, any> = {},
   options?: { endpoint?: string; authHeader?: string }
 ): Promise<McpToolExecutionResult> {
+  // Direct execution for Ergo Workspace MCP tools
+  if (serverId === 'mcp-ergo-workspace' || toolName.startsWith('workspace_')) {
+    return executeWorkspaceToolAction(toolName, args);
+  }
   try {
     const res = await fetch('/api/mcp/tools/call', {
       method: 'POST',
@@ -204,16 +209,36 @@ export async function discoverRemoteMcpTools(
  * Sync and fetch latest tools list for an MCP server (Implements `tools/list`)
  */
 export async function syncMcpServerTools(server: MCPServer): Promise<MCPTool[]> {
-  // If bundled harness, verify tools with local host
-  if (server.serverType === 'bundled_harness' || server.transport === 'Local Stdio') {
-    return server.tools.map((t) => ({ ...t, serverId: server.id }));
+  try {
+    const res = await fetch('/api/mcp/tools/list', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        serverId: server.id,
+        endpoint: server.endpoint,
+        authHeader: server.authHeader
+      })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.tools) && data.tools.length > 0) {
+        return data.tools.map((t: any) => ({
+          ...t,
+          serverId: server.id,
+          autoApprove: server.tools.find((existing) => existing.name === t.name)?.autoApprove ?? Boolean(t.autoApprove)
+        }));
+      }
+    }
+  } catch (e) {
+    console.warn(`[MCP Client] Error calling tools/list for ${server.name} (${server.id}):`, e);
   }
 
-  // If remote server, query /api/mcp/remote/discover to pull current tools
-  if (server.endpoint) {
-    const res = await discoverRemoteMcpTools(server.endpoint, server.authHeader);
-    if (res.success && res.tools.length > 0) {
-      return res.tools.map((t) => ({
+  // Fallback to remote discovery if endpoint is present
+  if (server.endpoint && (server.endpoint.startsWith('http://') || server.endpoint.startsWith('https://'))) {
+    const disc = await discoverRemoteMcpTools(server.endpoint, server.authHeader);
+    if (disc.success && disc.tools.length > 0) {
+      return disc.tools.map((t) => ({
         ...t,
         serverId: server.id,
         autoApprove: server.tools.find((existing) => existing.name === t.name)?.autoApprove ?? t.autoApprove
@@ -224,106 +249,411 @@ export async function syncMcpServerTools(server: MCPServer): Promise<MCPTool[]> 
   return server.tools.map((t) => ({ ...t, serverId: server.id }));
 }
 
+export interface McpServerUpdateDiff {
+  serverId: string;
+  serverName: string;
+  hasChanges: boolean;
+  addedTools: string[];
+  removedTools: string[];
+  totalTools: number;
+  error?: string;
+}
+
+export interface McpCheckUpdatesResult {
+  updatedServers: MCPServer[];
+  hasChanges: boolean;
+  changes: McpServerUpdateDiff[];
+  summaryMessage?: string;
+}
+
 /**
- * Automatically analyze user prompt and brief to guess/suggest the most relevant MCP tools
+ * Routinely check for updates across all connected MCP servers by invoking `tools/list`.
+ * Detects new tools, removed tools, and schema updates so the AI and user stay up-to-date.
  */
-export function guessRelevantTools(prompt: string, availableTools: MCPTool[]): string[] {
-  const lower = prompt.toLowerCase();
+export async function checkAllMcpUpdates(servers: MCPServer[]): Promise<McpCheckUpdatesResult> {
+  const connected = servers.filter((s) => s.status === 'connected');
+  if (connected.length === 0) {
+    return { updatedServers: servers, hasChanges: false, changes: [] };
+  }
+
+  const payload = connected.map((s) => ({
+    id: s.id,
+    endpoint: s.endpoint,
+    authHeader: s.authHeader,
+    toolsCount: s.tools.length
+  }));
+
+  let serverResults: Record<string, { success: boolean; tools: any[]; hasChanges?: boolean; error?: string }> = {};
+
+  try {
+    const res = await fetch('/api/mcp/check-updates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ servers: payload })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.updates) serverResults = data.updates;
+    }
+  } catch (err) {
+    console.warn('[MCP Client] /api/mcp/check-updates request failed, falling back to sequential sync:', err);
+  }
+
+  const diffs: McpServerUpdateDiff[] = [];
+  let anyChange = false;
+
+  const nextServers = await Promise.all(
+    servers.map(async (server) => {
+      if (server.status !== 'connected') return server;
+
+      let freshTools: MCPTool[] | null = null;
+      const apiResult = serverResults[server.id];
+
+      if (apiResult && apiResult.success && Array.isArray(apiResult.tools)) {
+        freshTools = apiResult.tools.map((t: any) => ({
+          ...t,
+          serverId: server.id,
+          autoApprove: server.tools.find((e) => e.name === t.name)?.autoApprove ?? Boolean(t.autoApprove)
+        }));
+      } else {
+        // Fallback to direct sync
+        try {
+          freshTools = await syncMcpServerTools(server);
+        } catch {}
+      }
+
+      if (!freshTools || freshTools.length === 0) return server;
+
+      const oldNames = new Set(server.tools.map((t) => t.name));
+      const newNames = new Set(freshTools.map((t) => t.name));
+
+      const added = freshTools.filter((t) => !oldNames.has(t.name)).map((t) => t.name);
+      const removed = server.tools.filter((t) => !newNames.has(t.name)).map((t) => t.name);
+      const hasDiff = added.length > 0 || removed.length > 0;
+
+      if (hasDiff) {
+        anyChange = true;
+        diffs.push({
+          serverId: server.id,
+          serverName: server.name,
+          hasChanges: true,
+          addedTools: added,
+          removedTools: removed,
+          totalTools: freshTools.length
+        });
+        return {
+          ...server,
+          tools: freshTools,
+          lastSyncedAt: new Date().toISOString()
+        };
+      }
+
+      return {
+        ...server,
+        lastSyncedAt: new Date().toISOString()
+      };
+    })
+  );
+
+  let summaryMessage: string | undefined;
+  if (anyChange) {
+    const summaryParts = diffs.map((d) => {
+      const addedDesc = d.addedTools.length > 0 ? `+${d.addedTools.length} new tools (${d.addedTools.slice(0, 2).join(', ')}${d.addedTools.length > 2 ? '…' : ''})` : '';
+      const remDesc = d.removedTools.length > 0 ? `-${d.removedTools.length} removed` : '';
+      return `${d.serverName}: ${[addedDesc, remDesc].filter(Boolean).join(', ')}`;
+    });
+    summaryMessage = `MCP updates discovered: ${summaryParts.join(' • ')}`;
+  }
+
+  return {
+    updatedServers: nextServers,
+    hasChanges: anyChange,
+    changes: diffs,
+    summaryMessage
+  };
+}
+
+/**
+ * Starts a background routine update checker for connected MCP servers.
+ * Periodically calls `tools/list` on all connected servers to guarantee the AI and user
+ * always have the latest tools. Returns an unsubscribe/cleanup function.
+ */
+export function startMcpRoutineUpdateChecker(
+  getServers: () => MCPServer[],
+  onUpdate: (result: McpCheckUpdatesResult) => void,
+  intervalMs = 60000
+): () => void {
+  let isChecking = false;
+
+  const runCheck = async () => {
+    if (isChecking) return;
+    isChecking = true;
+    try {
+      const current = getServers();
+      const hasConnected = current.some((s) => s.status === 'connected');
+      if (hasConnected) {
+        const result = await checkAllMcpUpdates(current);
+        if (result.hasChanges) {
+          onUpdate(result);
+        }
+      }
+    } catch (e) {
+      console.warn('[MCP Routine Checker] Error checking MCP updates:', e);
+    } finally {
+      isChecking = false;
+    }
+  };
+
+  // Run on window focus / app return
+  const onFocus = () => {
+    runCheck();
+  };
+  window.addEventListener('focus', onFocus);
+
+  // Routine interval timer
+  const timer = setInterval(runCheck, intervalMs);
+
+  return () => {
+    clearInterval(timer);
+    window.removeEventListener('focus', onFocus);
+  };
+}
+
+/**
+ * Universal connect and authentication helper for any MCP server.
+ * Handles credential verification, triggers `tools/list`, and stores discovered tools.
+ */
+export async function authenticateAndConnectMcp(
+  server: MCPServer,
+  options: { endpoint?: string; authHeader?: string } = {}
+): Promise<{ success: boolean; updatedServer?: MCPServer; error?: string }> {
+  try {
+    const endpoint = options.endpoint || server.endpoint;
+    const authHeader = options.authHeader || server.authHeader;
+
+    const res = await fetch('/api/mcp/auth/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        serverId: server.id,
+        serverName: server.name,
+        endpoint,
+        authHeader
+      })
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      return {
+        success: false,
+        error: data.error || `Authentication failed (HTTP ${res.status})`
+      };
+    }
+
+    const discoveredTools: MCPTool[] = (data.tools || []).map((t: any, idx: number) => ({
+      id: t.id || `${server.id}_${t.name || idx}`,
+      name: t.name || `tool_${idx}`,
+      description: t.description || 'MCP Tool',
+      autoApprove: server.tools.find((e) => e.name === t.name)?.autoApprove ?? Boolean(t.autoApprove),
+      serverId: server.id,
+      inputSchema: t.inputSchema || t.schema
+    }));
+
+    const updatedServer: MCPServer = {
+      ...server,
+      status: 'connected',
+      endpoint: endpoint || server.endpoint,
+      authHeader: authHeader || server.authHeader,
+      authUsername: data.user?.login || server.authUsername,
+      lastSyncedAt: new Date().toISOString(),
+      tools: discoveredTools.length > 0 ? discoveredTools : server.tools,
+      error: undefined
+    };
+
+    return {
+      success: true,
+      updatedServer
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err.message || 'Network error authenticating MCP server'
+    };
+  }
+}
+
+export interface RelevantToolAnalysis {
+  selectedToolIds: string[];
+  reasons: Record<string, string>;
+  isAmbiguous: boolean;
+  clarificationMessage?: string;
+}
+
+/**
+ * Automatically analyze user prompt, task title, and brief to guess/suggest the most relevant MCP tools,
+ * returning both the selected IDs and human-readable reasoning for each choice.
+ */
+export function guessRelevantToolsWithDetails(
+  prompt: string,
+  availableTools: MCPTool[],
+  briefText?: string
+): RelevantToolAnalysis {
+  const combined = `${prompt} ${briefText || ''}`.toLowerCase();
   const selected: Set<string> = new Set();
+  const reasons: Record<string, string> = {};
 
   availableTools.forEach((tool) => {
     const tName = tool.name.toLowerCase();
-    const tDesc = tool.description.toLowerCase();
+    const tDesc = (tool.description || '').toLowerCase();
 
-    // Filesystem matching
+    // 1. Filesystem reading & editing
     if (
-      (lower.includes('file') || lower.includes('markdown') || lower.includes('read') || lower.includes('write') || lower.includes('disk') || lower.includes('config')) &&
-      (tName.includes('file') || tName.includes('directory') || tDesc.includes('file') || tDesc.includes('directory'))
+      (combined.includes('file') || combined.includes('read') || combined.includes('view') || combined.includes('inspect') || combined.includes('find') || combined.includes('search')) &&
+      (tName === 'read_file' || tName === 'search_files' || tName === 'get_file_info' || tName === 'list_directory')
     ) {
       selected.add(tool.id);
+      reasons[tool.id] = 'Relevant for inspecting files and directory structure mentioned in the task.';
     }
 
-    // Web Fetch matching
     if (
-      (lower.includes('fetch') || lower.includes('url') || lower.includes('web') || lower.includes('http') || lower.includes('api') || lower.includes('doc') || lower.includes('scrape')) &&
-      (tName.includes('fetch') || tName.includes('url'))
+      (combined.includes('write') || combined.includes('create file') || combined.includes('edit') || combined.includes('refactor') || combined.includes('code') || combined.includes('implement') || combined.includes('fix') || combined.includes('update file')) &&
+      (tName === 'write_file' || tName === 'edit_file' || tName === 'create_directory')
     ) {
       selected.add(tool.id);
+      reasons[tool.id] = 'Relevant for creating or modifying files for this task.';
     }
 
-    // Git matching
+    // 2. Shell / Command execution
     if (
-      (lower.includes('git') || lower.includes('commit') || lower.includes('branch') || lower.includes('diff') || lower.includes('repo')) &&
+      (combined.includes('terminal') || combined.includes('shell') || combined.includes('command') || combined.includes('run') || combined.includes('test') || combined.includes('script') || combined.includes('npm') || combined.includes('build') || combined.includes('compile') || combined.includes('lint')) &&
+      tName === 'run_command'
+    ) {
+      selected.add(tool.id);
+      reasons[tool.id] = 'Relevant for running tests, build commands, or shell scripts.';
+    }
+
+    // 3. Web Fetch
+    if (
+      (combined.includes('fetch') || combined.includes('url') || combined.includes('web') || combined.includes('http') || combined.includes('api') || combined.includes('doc') || combined.includes('scrape') || combined.includes('download')) &&
+      (tName === 'fetch_markdown' || tName === 'fetch_url')
+    ) {
+      selected.add(tool.id);
+      reasons[tool.id] = 'Relevant for fetching documentation, web URLs, or external API responses.';
+    }
+
+    // 4. Git Version Control
+    if (
+      (combined.includes('git') || combined.includes('commit') || combined.includes('branch') || combined.includes('diff') || combined.includes('repo') || combined.includes('repository')) &&
       tName.startsWith('git_')
     ) {
       selected.add(tool.id);
+      reasons[tool.id] = 'Relevant for version control, commit inspection, or repo diffs.';
     }
 
-    // GitHub matching
-    if (
-      (lower.includes('github') || lower.includes('pr') || lower.includes('pull request') || lower.includes('issue')) &&
-      tool.serverId === 'mcp-github'
-    ) {
-      selected.add(tool.id);
+    // 5. GitHub MCP Tools (Fine-grained)
+    if (tool.serverId === 'mcp-github' || tName.startsWith('gh_')) {
+      if ((combined.includes('issue') || combined.includes('bug report')) && (tName.includes('issue'))) {
+        selected.add(tool.id);
+        reasons[tool.id] = 'Directly matches issue management mentioned in the task.';
+      }
+      if ((combined.includes('pr') || combined.includes('pull request') || combined.includes('review') || combined.includes('merge')) && (tName.includes('pull_request') || tName.includes('pr'))) {
+        selected.add(tool.id);
+        reasons[tool.id] = 'Directly matches pull request review or creation.';
+      }
+      if ((combined.includes('repo') || combined.includes('github') || combined.includes('clone') || combined.includes('push')) && (tName.includes('push') || tName.includes('repository') || tName.includes('branch') || tName.includes('commit'))) {
+        selected.add(tool.id);
+        reasons[tool.id] = 'Relevant for GitHub repository and branch operations.';
+      }
+      if ((combined.includes('search') || combined.includes('codebase')) && (tName.includes('search_code') || tName.includes('search_repositories'))) {
+        selected.add(tool.id);
+        reasons[tool.id] = 'Relevant for searching GitHub repositories and code.';
+      }
     }
 
-    // Slack matching
+    // 6. Slack
     if (
-      (lower.includes('slack') || lower.includes('message') || lower.includes('channel') || lower.includes('notify') || lower.includes('broadcast')) &&
+      (combined.includes('slack') || combined.includes('channel') || combined.includes('message') || combined.includes('notify team') || combined.includes('broadcast')) &&
       tool.serverId === 'mcp-slack'
     ) {
       selected.add(tool.id);
+      reasons[tool.id] = 'Relevant for team messaging or Slack channel notifications.';
     }
 
-    // Notion matching
+    // 7. Google Calendar
     if (
-      (lower.includes('notion') || lower.includes('database') || lower.includes('wiki')) &&
-      tool.serverId === 'mcp-notion'
-    ) {
-      selected.add(tool.id);
-    }
-
-    // Google Calendar matching
-    if (
-      (lower.includes('calendar') || lower.includes('schedule') || lower.includes('meeting') || lower.includes('event')) &&
+      (combined.includes('calendar') || combined.includes('meeting') || combined.includes('schedule') || combined.includes('invite') || combined.includes('availability')) &&
       tool.serverId === 'mcp-gcal'
     ) {
       selected.add(tool.id);
+      reasons[tool.id] = 'Relevant for calendar event management and scheduling.';
     }
 
-    // Salesforce matching
+    // 8. Notion
     if (
-      (lower.includes('salesforce') || lower.includes('crm') || lower.includes('lead') || lower.includes('opportunity')) &&
+      (combined.includes('notion') || combined.includes('wiki') || combined.includes('database page') || combined.includes('notes')) &&
+      tool.serverId === 'mcp-notion'
+    ) {
+      selected.add(tool.id);
+      reasons[tool.id] = 'Relevant for Notion documentation and database pages.';
+    }
+
+    // 9. Salesforce
+    if (
+      (combined.includes('salesforce') || combined.includes('crm') || combined.includes('lead') || combined.includes('opportunity') || combined.includes('account')) &&
       tool.serverId === 'mcp-salesforce'
     ) {
       selected.add(tool.id);
+      reasons[tool.id] = 'Relevant for Salesforce CRM records.';
     }
 
-    // Zapier matching
+    // 10. Laya Local Decisions
     if (
-      (lower.includes('zap') || lower.includes('webhook') || lower.includes('automation')) &&
-      tool.serverId === 'mcp-zapier'
+      (combined.includes('classify') || combined.includes('triage') || combined.includes('score') || combined.includes('evaluate') || combined.includes('fast decision')) &&
+      tool.serverId === 'mcp-laya'
     ) {
       selected.add(tool.id);
+      reasons[tool.id] = 'Local System-1 micro-decision evaluation.';
     }
 
-    // Generic match on custom MCP tool name or description keyword overlap
-    const words = tName.split(/[_\s-]+/).filter((w) => w.length >= 3);
+    // Generic match on custom MCP tool name keyword overlap
+    const words = tName.split(/[_\s-]+/).concat(tDesc.split(/[_\s-]+/)).filter((w) => w.length >= 4);
     for (const w of words) {
-      if (lower.includes(w)) {
+      if (combined.includes(w) && !selected.has(tool.id)) {
         selected.add(tool.id);
+        reasons[tool.id] = `Matches keyword "${w}" in task prompt.`;
         break;
       }
     }
   });
 
-  // Default: if no specific tools matched, include read_file and fetch_markdown as versatile defaults
+  // Default: if no specific tools matched, include read_file as a safe baseline
   if (selected.size === 0) {
     const defaultTool = availableTools.find((t) => t.name === 'read_file');
-    if (defaultTool) selected.add(defaultTool.id);
+    if (defaultTool) {
+      selected.add(defaultTool.id);
+      reasons[defaultTool.id] = 'Safe default tool for reading workspace context.';
+    }
   }
 
-  return Array.from(selected);
+  // Detect ambiguity: prompt is very short or vague but multiple disconnected domains matched
+  const isAmbiguous = prompt.trim().split(/\s+/).length < 3 && selected.size > 4;
+  const clarificationMessage = isAmbiguous
+    ? `Task description is concise. Auto-suggested ${selected.size} tools across active MCPs. You can refine or toggle specific tools below.`
+    : undefined;
+
+  return {
+    selectedToolIds: Array.from(selected),
+    reasons,
+    isAmbiguous,
+    clarificationMessage
+  };
+}
+
+/**
+ * Backward-compatible helper returning string array of tool IDs.
+ */
+export function guessRelevantTools(prompt: string, availableTools: MCPTool[], briefText?: string): string[] {
+  return guessRelevantToolsWithDetails(prompt, availableTools, briefText).selectedToolIds;
 }
 
 export interface McpRuntimeConnection {

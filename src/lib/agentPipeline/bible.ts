@@ -302,7 +302,13 @@ export class BibleStore {
     out.push('| ID | Kind | Title | Status | Files | Depends on |');
     out.push('|---|---|---|---|---|---|');
     for (const p of this.pieces) {
-      const files = p.files.length > 0 ? p.files.map((f) => `\`${f}\``).join(', ') : '_read-only_';
+      const files = p.files.length > 0
+        ? p.files.map((f) => `\`${f}\``).join(', ')
+        : p.kind === 'then'
+          ? '_read-only (verification)_'
+          : this.sections.metadata.taskKind === 'coding'
+            ? '_read-write (workspace)_'
+            : '_read-only_';
       const deps = p.dependsOn.length > 0 ? p.dependsOn.join(', ') : '—';
       out.push(`| ${p.id} | ${p.kind} | ${p.title.replace(/\|/g, '\\|')} | ${p.status}${p.attempts > 1 ? ` (attempt ${p.attempts})` : ''} | ${files} | ${deps} |`);
     }

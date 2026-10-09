@@ -51,13 +51,45 @@ const TASK_KINDS: TaskKind[] = ['coding', 'writing', 'research', 'ops', 'data', 
 const OUTPUT_CONTRACT =
   'OUTPUT CONTRACT: return ONLY valid JSON (no markdown fences) with exactly these keys: ' +
   '"brief" (Gherkin scenarios as a single string), "goals" (numbered checklist string), "output_as" (string: exact destination paths and MCP tool used — do NOT instruct agents to edit AGENT_CONTEXT.md or TODO.md), ' +
-  '"requiredMcps" (array of connected MCP server names/ids actually needed — 0 to 2 typical), ' +
-  '"taskKind" (one of coding | writing | research | ops | data | other), ' +
+  '"requiredMcps" (array of connected MCP server names/ids actually needed — 0 to 2 typical; provision shell/process-execution tools or domain MCPs like Godot whenever headless execution, scripts, tests, or CLI commands are involved), ' +
+  '"taskKind" (one of coding | writing | research | ops | data | other — MUST be "coding" if the task contains verbs like write, script, scaffold, compile, or references languages/extensions like .py, .ts, .sh), ' +
   '"requiresHardener" (boolean: true for large coding/architectural tasks requiring independent QA proof; false for small/generic tasks or single-action MCP calls), ' +
   '"hardenerReason" (short string explaining why Hardener QA is required or skipped).';
 
+export function isExplicitCodeTask(text: string): boolean {
+  const t = text.toLowerCase();
+  // File extensions referencing code/scripts/markup/configs
+  if (/\.(py|ts|tsx|js|jsx|sh|bash|rs|go|c|cpp|h|hpp|rb|php|java|cs|gd|tscn|tres|html|css|json|yaml|yml|sql)\b/i.test(t)) return true;
+  // Code generation verbs/nouns
+  if (/\b(script|scripts|scaffold|scaffolding|compile|compiling|parser|function|class|method|endpoint|refactor|unit\s+test|integration\s+test)\b/i.test(t)) return true;
+  // Specific languages/runtimes/frameworks
+  if (/\b(python|typescript|javascript|bash|shell|golang|rust|c\+\+|godot|gdscript|node|react)\b/i.test(t)) return true;
+  // Code creation verbs
+  if (/\b(write|create|implement|build|scaffold)\s+(?:a\s+)?(?:python|typescript|javascript|bash|shell|node|script|program|module|plugin|handler|service|parser|code|test|class|function|api)\b/i.test(t)) return true;
+  return false;
+}
+
+export function normalizeTaskKind(val: any): TaskKind {
+  if (typeof val === 'string') {
+    const v = val.trim().toLowerCase();
+    if (v === 'code' || v === 'coding') return 'coding';
+    if (TASK_KINDS.includes(v as TaskKind)) return v as TaskKind;
+  }
+  return 'other';
+}
+
+export function requiresCliOrProcessTools(text: string): boolean {
+  const t = text.toLowerCase();
+  return (
+    /\b(cli|headless|terminal|shell|command|bash|run|exec|execute|script|test|verify|compile|export|flags?)\b/i.test(t) ||
+    /\b(python|node|npm|cargo|pytest|godot)\b/i.test(t) ||
+    /\.(py|sh|bash|js|ts)\b/i.test(t)
+  );
+}
+
 export function inferTaskKind(text: string): TaskKind {
   const t = text.toLowerCase();
+  if (isExplicitCodeTask(t)) return 'coding';
   if (/\b(code|coding|component|api|endpoint|function|class|test|bug|refactor|script|html|css|javascript|typescript|python|react|sql|schema|build|compile|lint|repo|git)\b/.test(t)) return 'coding';
   if (/\b(write|draft|article|pitch|outline|essay|blog|email|copy|document|documentation|readme|spec|proposal)\b/.test(t)) return 'writing';
   if (/\b(research|analy[sz]e|analysis|compare|investigate|survey|study|summari[sz]e|review literature)\b/.test(t)) return 'research';
@@ -182,13 +214,41 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
     }
   }
 
-  const rawKind = typeof parsed?.taskKind === 'string' ? parsed.taskKind.trim().toLowerCase() : '';
-  const taskKind: TaskKind = (layaTriage?.usedLaya && layaTriage.taskKind)
-    ? layaTriage.taskKind
-    : ((TASK_KINDS as string[]).includes(rawKind)
-      ? (rawKind as TaskKind)
-      : inferTaskKind(`${task.category} ${task.title} ${task.subtasks.map((s) => s.text).join(' ')} ${overviewDoc.output_as}`));
+  const combinedText = `${task.category} ${task.title} ${task.subtasks.map((s) => s.text).join(' ')} ${overviewDoc.output_as} ${overviewDoc.brief || ''}`;
+  let taskKind: TaskKind = normalizeTaskKind(parsed?.taskKind);
+  if (layaTriage?.usedLaya && layaTriage.taskKind) {
+    taskKind = normalizeTaskKind(layaTriage.taskKind);
+  }
+  if (!taskKind || taskKind === 'other') {
+    taskKind = inferTaskKind(combinedText);
+  }
+  // Enforce strict heuristic: if the task contains verbs like write, script, scaffold, compile, or references languages/extensions (.py, .ts, .sh), force Task Kind: coding
+  if (isExplicitCodeTask(combinedText)) {
+    taskKind = 'coding';
+  }
   overviewDoc.taskKind = taskKind;
+
+  // Dynamic Tool Provisioning: if headless CLI, shell, script execution, or domain runners (e.g. Godot) are required,
+  // ensure shell/process-execution tool and relevant domain MCP servers are provisioned alongside mcp-filesystem.
+  if (requiresCliOrProcessTools(combinedText)) {
+    for (const mcp of connectedMcps) {
+      if (mcp.status === 'connected') {
+        const idLower = mcp.id.toLowerCase();
+        const nameLower = mcp.name.toLowerCase();
+        const isGodotTask = combinedText.toLowerCase().includes('godot');
+        const isGodotServer = idLower.includes('godot') || nameLower.includes('godot');
+        const isShellOrProcessServer =
+          idLower.includes('shell') || idLower.includes('bash') || idLower.includes('terminal') || idLower.includes('command') ||
+          mcp.tools.some((t) => ['run_command', 'bash', 'terminal', 'exec', 'run_project', 'launch_editor'].includes(t.name.toLowerCase()));
+
+        if ((isGodotTask && isGodotServer) || isShellOrProcessServer) {
+          if (!requiredMcps.includes(mcp.id) && !requiredMcps.includes(mcp.name)) {
+            requiredMcps.push(mcp.id);
+          }
+        }
+      }
+    }
+  }
 
   const outputText = (overviewDoc.output_as || '').toLowerCase();
   const titleText = (task.title || '').toLowerCase();

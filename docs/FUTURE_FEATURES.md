@@ -3,26 +3,19 @@
         - but it should always tell the user what it added (and maybe the task is indicated with a 'review' tag or something)
         - this should happen primarily when it finds something along the way that's out of scope for its current task
         - make sure what's put in the human task list is always succinct, clear and easily readable - make sure what it stores in its vector DB is verbose enough to be useful for the AI
-    - **Autocomplete**
-        - pull from other tasks (using vector DB) to determine the most relevant suggestion
-        - autocomplete should not start if the user simply moved their cursor to another task, but hasn't started typing anything yet
-        - should have an immediate autocomplete (after 1 second of no input) for the current word being typed (after the user has typed 4+ chars without a space), and a delayed autocomplete for the rest of the user's sentence if the user pauses for 3+ seconds
-        - autocomplete should never start on an empty task
-            - subtasks it can, based on the rest of the task/subtasks, but after the 3+ second sentence-delay
-        - autocomplete should keybind to Tab by default - this should be configurable in settings
-        - should be able to be toggled on/off completely in settings
-    - **MCP**:
-        - MCP authentication when user clicks 'connect'
-        - after connection, the app needs to call `tools/list` and store all available tools for that particular MCP
-        - when user creates a task, if there's an MCP connected, show a list of tools from that MCP (use `tools/list` to get the tools) that the user can select to use for that task
-        - only use tools that are actually relevant to the task (ask for clarification if needed, but try to guess based on the task brief and list of tools)
-        - this also helps the AI know which relevant tools are available
-        - we should routinely check for updates. what happens if the MCP receives new updates that our AI doesn't know about because we haven't called `tools/list` again?
+    - ~~**Autocomplete**~~
+        - ~~pull from other tasks (using vector DB) to determine the most relevant suggestion~~
+        - ~~autocomplete should not start if the user simply moved their cursor to another task, but hasn't started typing anything yet~~
+        - ~~should have an immediate autocomplete (after 1 second of no input) for the current word being typed (after the user has typed 4+ chars without a space), and a delayed autocomplete for the rest of the user's sentence if the user pauses for 3+ seconds~~
+        - ~~autocomplete should never start on an empty task~~
+            - ~~subtasks it can, based on the rest of the task/subtasks, but after the 3+ second sentence-delay~~
+        - ~~autocomplete should keybind to Tab by default - this should be configurable in settings~~
+        - ~~should be able to be toggled on/off completely in settings~~
+        - ~~should use a very lightweight model for autocomplete, and read context selectively so autocomplete doesn't cost a ton to use~~
+            - ~~autocomplete should be as token-efficient as possible~~
     - rework the 'new task' button for using the AI to perform general tasks on the human workspace
         - create new task w/ subtasks
         - refine existing tasks (remove, replace, or edit wording)
-    - AI is NEVER allowed to delete things from the user's side, but they should ALWAYS keep their agent context side in parity w/ the user's side
-        - I.e. if a user deletes a task or subtask from the human side, or reorders tasks, the AI should also delete it from the agent context side as well, and reorder the tasks there as well
     - **CLI mode for coding agents**
         - connection to coding CLIs like Claude Code, Antigravity, Cursor, Codex, etc.
         - when the user clicks 'execute' on a task, it spawns a CLI agent that performs the task in a windowed terminal in the AI side
@@ -62,6 +55,7 @@
             - the AI should select the best model for the job by default, unless the user explicitly sets it
             - these effort-levels should be automatically created when the user sets up a new AI profile, and configurable from the advanced settings in the AI profile panel
             - we should use the same model throughout work tasks, so we can cache tokens
+    - can we index local files into the vector DB, so the AI can search through them to find relevant data?
 
 
 **Uncle Bob's Notes**:
@@ -127,12 +121,15 @@ Maybe the implementation looks something like the AI drafting its plan and build
     - given/when/then UI for tasks, which users can fill out themselves and can be accepted directly by the AI without it needing to build that piece of the gherkin
     - there could be a way to create flowcharts within the app, directly assigned to particular tasks
         - this should probably be in `mermaid` format, so it can be visually represented by the user but then sent straight to the AI
+    - how do we handle MCP token expirations?
+    - create a default TODO.md file that new projects clone when created
 
 
 
 **GO LIVE**:
 - working on the web
     - verify none of the local-first features now break when it's being hosted
-- get subscription connection working
+- ~~get subscription connection working~~
 - get MCP connectors working
+    - almost done...
 - ~~get scheduled tasks working~~

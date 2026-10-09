@@ -9,6 +9,7 @@
  */
 import { searchMemory, type SearchResult } from '../memory';
 import { callMcpTool } from '../mcpClient';
+import { formatSkillsForAiContext, syncSkillsToWorkspace } from '../skillsManager';
 import { type AssembledBaselineContext } from '../../types';
 import {
   GUIDELINE_EXCERPT_CHAR_CAP,
@@ -119,6 +120,15 @@ function buildBaselineMarkdown(
   } else {
     out.push('- **Subtasks**: (none)');
   }
+
+  const userSelectedTools = Array.from(new Set([
+    ...(task.mcpRequired || []),
+    ...(brief?.requiredMcps || []),
+    ...(brief?.selectedMcpTools || [])
+  ]));
+  if (userSelectedTools.length > 0) {
+    out.push(`- **Configured MCP Tools**: ${userSelectedTools.map((t) => `\`${t}\``).join(', ')} (explicitly selected for this task)`);
+  }
   out.push('');
 
   const existingBrief = cap(brief?.overview || brief?.brief, 1500);
@@ -180,6 +190,13 @@ function buildBaselineMarkdown(
   out.push('- **Connected MCP servers**:');
   if (servers.length > 0) out.push(...servers.map((l) => `  ${l}`));
   else out.push('  - (none connected)');
+
+  // 4. Global Workspace Skills & MCP Tool Instructions
+  const skillsContext = formatSkillsForAiContext();
+  if (skillsContext) {
+    out.push('', skillsContext);
+  }
+
   return out.join('\n').trimEnd() + '\n';
 }
 
@@ -194,9 +211,16 @@ export async function assembleTaskContext(ctx: PipelineContext): Promise<Baselin
     id: 'step-context',
     stage: 'context',
     title: 'Vector Memory: Assembling Baseline Context',
-    detail: 'Querying local vector store and project guidelines at 0 token cost…',
+    detail: 'Querying local vector store, syncing workspace skills, and reading guidelines…',
     status: 'running'
   });
+
+  // Sync active skills to codebase (.agents/skills/<id>/SKILL.md) when AI starts work
+  try {
+    await syncSkillsToWorkspace();
+  } catch (err) {
+    console.warn('[Ergo Context] Non-fatal: skills codebase sync failed:', err);
+  }
 
   // 1. Local Vector Memory semantic search (0 tokens)
   let memoryHits: SearchResult[] = [];

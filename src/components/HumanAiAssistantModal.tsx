@@ -3,6 +3,7 @@ import {
   type ProjectData,
   type AIProviderConfig,
   type MCPServer,
+  type MCPTool,
   type HumanAiIntent,
   type HumanAiAssistantResult
 } from '../types';
@@ -11,6 +12,8 @@ import { handleMarkdownAutoWrap } from '../lib/markdownEditorUtils';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { storageManager, DEFAULT_HUMAN_ASSISTANT_SKILL } from '../lib/storageManager';
 import { SUPPORTED_AI_PROVIDERS } from '../lib/aiProviders';
+import { guessRelevantToolsWithDetails, checkAllMcpUpdates } from '../lib/mcpClient';
+import { TaskMcpToolsModal } from './TaskMcpToolsModal';
 import {
   Sparkles,
   X,
@@ -20,7 +23,10 @@ import {
   Copy,
   CheckCheck,
   Layers,
-  CheckSquare
+  CheckSquare,
+  Wrench,
+  RefreshCw,
+  Plus
 } from 'lucide-react';
 
 interface HumanAiAssistantModalProps {
@@ -123,6 +129,66 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
     return mcpServers.filter((m) => m.status === 'connected');
   }, [mcpServers]);
 
+  const allAvailableTools = useMemo(() => {
+    const list: MCPTool[] = [];
+    connectedServers.forEach((server) => {
+      server.tools.forEach((t) => {
+        list.push({ ...t, serverId: server.id });
+      });
+    });
+    return list;
+  }, [connectedServers]);
+
+  const [selectedToolNames, setSelectedToolNames] = useState<Set<string>>(new Set());
+  const [hasUserCustomizedTools, setHasUserCustomizedTools] = useState(false);
+  const [isToolsModalOpen, setIsToolsModalOpen] = useState(false);
+  const [isSyncingTools, setIsSyncingTools] = useState(false);
+  const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
+
+  // Auto-guess relevant tools when prompt changes if user hasn't explicitly customized
+  const relevanceAnalysis = useMemo(() => {
+    return guessRelevantToolsWithDetails(prompt, allAvailableTools);
+  }, [prompt, allAvailableTools]);
+
+  useEffect(() => {
+    if (!hasUserCustomizedTools && allAvailableTools.length > 0) {
+      const suggested = new Set<string>();
+      relevanceAnalysis.selectedToolIds.forEach((id) => {
+        const tool = allAvailableTools.find((t) => t.id === id);
+        if (tool) suggested.add(tool.name);
+      });
+      setSelectedToolNames(suggested);
+    }
+  }, [prompt, relevanceAnalysis, hasUserCustomizedTools, allAvailableTools]);
+
+  const handleToggleTool = (toolName: string) => {
+    setHasUserCustomizedTools(true);
+    setSelectedToolNames((prev) => {
+      const next = new Set(prev);
+      if (next.has(toolName)) next.delete(toolName);
+      else next.add(toolName);
+      return next;
+    });
+  };
+
+  const handleQuickSyncTools = async () => {
+    setIsSyncingTools(true);
+    setSyncFeedback('Calling tools/list…');
+    try {
+      const res = await checkAllMcpUpdates(mcpServers);
+      if (res.hasChanges) {
+        setSyncFeedback(res.summaryMessage || 'Tools updated!');
+      } else {
+        setSyncFeedback('Tools are up to date.');
+      }
+    } catch {
+      setSyncFeedback('Tool sync completed.');
+    } finally {
+      setIsSyncingTools(false);
+      setTimeout(() => setSyncFeedback(null), 3000);
+    }
+  };
+
   // Resizing state - default depth reduced by 30% (285 -> 220)
   const [drawerHeight, setDrawerHeight] = useState<number>(220);
   const [isDragging, setIsDragging] = useState(false);
@@ -216,7 +282,10 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
 
   const handleApply = () => {
     if (assistantResult) {
-      onApplyAssistantResult(assistantResult, confirmDeletions);
+      onApplyAssistantResult({
+        ...assistantResult,
+        selectedMcpTools: Array.from(selectedToolNames)
+      }, confirmDeletions);
       setAssistantResult(null);
       setPrompt('');
       setDrawerHeight(baseDrawerHeightRef.current);
@@ -422,7 +491,167 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
             />
           </div>
 
+          {/* MCP Tools Selection & Suggestion Bar */}
+          {connectedServers.length > 0 && (
+            <div
+              style={{
+                marginBottom: '0.75rem',
+                padding: '0.55rem 0.75rem',
+                background: 'rgba(0, 0, 0, 0.22)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-md)'
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginBottom: '0.4rem',
+                  flexWrap: 'wrap',
+                  gap: '0.4rem'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                  <Wrench size={13} color="var(--accent-primary)" />
+                  <span style={{ fontSize: '0.76rem', fontWeight: 600, color: 'var(--text-bright)' }}>
+                    Tools for Created Task:
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '0.67rem',
+                      padding: '0.08rem 0.4rem',
+                      borderRadius: '10px',
+                      background: 'rgba(37, 99, 235, 0.15)',
+                      color: 'var(--accent-primary)',
+                      fontWeight: 600
+                    }}
+                  >
+                    {selectedToolNames.size} Enabled
+                  </span>
+                  {!hasUserCustomizedTools && relevanceAnalysis.selectedToolIds.length > 0 && (
+                    <span
+                      style={{
+                        fontSize: '0.65rem',
+                        color: 'var(--accent)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.2rem'
+                      }}
+                    >
+                      <Sparkles size={10} />
+                      Auto-Suggested from prompt
+                    </span>
+                  )}
+                  {syncFeedback && (
+                    <span style={{ fontSize: '0.68rem', color: 'var(--accent-cyan)' }}>
+                      • {syncFeedback}
+                    </span>
+                  )}
+                </div>
 
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <button
+                    type="button"
+                    onClick={handleQuickSyncTools}
+                    disabled={isSyncingTools}
+                    title="Run tools/list across connected MCPs"
+                    style={{
+                      fontSize: '0.7rem',
+                      padding: '0.2rem 0.45rem',
+                      borderRadius: '4px',
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border-subtle)',
+                      color: 'var(--text-muted)',
+                      cursor: isSyncingTools ? 'not-allowed' : 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.25rem'
+                    }}
+                  >
+                    <RefreshCw size={10} className={isSyncingTools ? 'animate-spin' : ''} />
+                    <span>Sync</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsToolsModalOpen(true)}
+                    style={{
+                      fontSize: '0.7rem',
+                      padding: '0.2rem 0.55rem',
+                      borderRadius: '4px',
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border-subtle)',
+                      color: 'var(--text-bright)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.25rem'
+                    }}
+                  >
+                    <Plus size={11} />
+                    <span>All Tools ({allAvailableTools.length})</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Tool Chips Preview */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', maxHeight: '68px', overflowY: 'auto' }}>
+                {allAvailableTools
+                  .filter((t) => selectedToolNames.has(t.name) || relevanceAnalysis.selectedToolIds.includes(t.id))
+                  .slice(0, 12)
+                  .map((tool) => {
+                    const isChecked = selectedToolNames.has(tool.name);
+                    const isSuggested = relevanceAnalysis.selectedToolIds.includes(tool.id);
+
+                    return (
+                      <button
+                        key={tool.id}
+                        type="button"
+                        onClick={() => handleToggleTool(tool.name)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.3rem',
+                          padding: '0.18rem 0.45rem',
+                          borderRadius: '4px',
+                          fontSize: '0.7rem',
+                          fontFamily: 'var(--font-mono)',
+                          background: isChecked ? 'rgba(37, 99, 235, 0.18)' : 'rgba(255, 255, 255, 0.04)',
+                          border: `1px solid ${isChecked ? 'rgba(37, 99, 235, 0.45)' : 'rgba(255, 255, 255, 0.08)'}`,
+                          color: isChecked ? '#93c5fd' : 'var(--text-muted)',
+                          cursor: 'pointer',
+                          transition: 'all 0.12s ease'
+                        }}
+                      >
+                        <span style={{ fontSize: '0.75rem', lineHeight: 1 }}>{isChecked ? '✓' : '+'}</span>
+                        <span>{tool.name}</span>
+                        {isSuggested && !isChecked && (
+                          <span style={{ fontSize: '0.6rem', color: 'var(--accent)' }}>✨</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                {allAvailableTools.length > 12 && (
+                  <button
+                    type="button"
+                    onClick={() => setIsToolsModalOpen(true)}
+                    style={{
+                      fontSize: '0.68rem',
+                      padding: '0.18rem 0.45rem',
+                      borderRadius: '4px',
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--text-dim)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    +{allAvailableTools.length - 12} more…
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Results Preview */}
           {assistantResult && (
@@ -560,6 +789,27 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
           )}
         </div>
       </div>
+
+      {isToolsModalOpen && (
+        <TaskMcpToolsModal
+          isOpen={isToolsModalOpen}
+          onClose={() => setIsToolsModalOpen(false)}
+          task={{
+            id: 'draft',
+            title: prompt.slice(0, 50) || 'New Draft Task',
+            category: 'Tasks',
+            status: 'not_started',
+            isDone: false,
+            subtasks: [],
+            mcpRequired: Array.from(selectedToolNames)
+          }}
+          mcpServers={mcpServers}
+          onSaveTools={(tools) => {
+            setHasUserCustomizedTools(true);
+            setSelectedToolNames(new Set(tools));
+          }}
+        />
+      )}
     </div>
   );
 };

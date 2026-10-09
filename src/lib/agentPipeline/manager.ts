@@ -13,7 +13,7 @@
  * Nothing volatile (timestamps, attempt numbers, run ids) is placed in the cached system blocks;
  * all of that goes into the first user message.
  */
-import { type PuzzlePiece, type PuzzlePieceKind, type TokenUsage } from '../../types';
+import { type PuzzlePiece, type PuzzlePieceKind, type TokenUsage, type TaskKind } from '../../types';
 import { parseJsonLoose } from '../llmClient';
 import { callMcpTool } from '../mcpClient';
 import {
@@ -55,6 +55,7 @@ const MANAGER_RULES = `EXECUTION RULES (harness-enforced)
 
 /** Fixed rules appended to the worker skill — byte-stable. */
 const WORKER_RULES = `EXECUTION RULES (harness-enforced)
+- MANDATORY TOOL USE: When creating or modifying code deliverables, you MUST invoke the write_file tool on the Filesystem MCP. Outputting code blocks in chat or markdown does NOT count as task completion. Deliverable files MUST physically exist on disk.
 - Writes outside your piece's file list, or to files locked by another piece, are rejected with an error that tells you why. Do not retry them; report the needed change in your summary.
 - Only paths inside the bible's Allowed Boundaries are writable.
 - Tools requiring approval (write_file, edit_file, run_command, git_commit) may pause for the user; a rejection is final for that call.
@@ -84,6 +85,7 @@ or if genuinely blocked:
 STATUS: FAILED — <reason>
 
 CRITICAL HARNESS RULES:
+- MANDATORY TOOL USE: When creating or modifying code deliverables, you MUST invoke the write_file tool on the Filesystem MCP. Outputting code blocks in chat or markdown does NOT count as task completion. Deliverable files MUST physically exist on disk.
 - You MUST call write_file to save your deliverable to disk. Do NOT merely describe the code in your response; write the complete file via write_file.
 - Only paths inside the bible's Allowed Boundaries are writable.
 - Write ONLY the requested deliverable. Do not create redundant duplicate files or edit workspace markdown documents.`;
@@ -121,12 +123,28 @@ export function isStraightforwardTask(bible: BibleStore): boolean {
   return false;
 }
 
+/** Ensures parent directory exists (mkdir -p) before writing deliverable file */
+export async function writeDeliverableFile(targetPath: string, content: string): Promise<any> {
+  const normalized = normalizePath(targetPath);
+  const lastSlash = normalized.lastIndexOf('/');
+  if (lastSlash > 0) {
+    const parentDir = normalized.slice(0, lastSlash);
+    try {
+      await callMcpTool('mcp-filesystem', 'create_directory', { path: parentDir });
+    } catch {}
+  }
+  return callMcpTool('mcp-filesystem', 'write_file', {
+    path: normalized,
+    content
+  });
+}
+
 export function extractTargetFilePaths(text: string): string[] {
   if (!text) return [];
-  const matches = text.match(/(?:projects\/[^\s`"'\\]+\.[a-z0-9]+|[^\s`"'\\]+\.(html|htm|jsx|tsx|vue|svelte|py|sh|ts|js|md|json|css|sql|txt|csv|tsv|yaml|yml))/gi);
+  const matches = text.match(/(?:(?:[a-zA-Z]:[\\/]|~?\/)[\w.-]+(?:[\\/][\w.-]+)*\.[a-z0-9]+|projects\/[^\s`"'\\]+\.[a-z0-9]+|[^\s`"'\\]+\.(html|htm|jsx|tsx|vue|svelte|py|sh|ts|js|md|json|css|sql|txt|csv|tsv|yaml|yml|gd|tscn|tres))/gi);
   if (!matches) return [];
   const unique = Array.from(new Set(matches.map(normalizePath)));
-  return unique.filter((p) => !p.endsWith('TODO.md') && !p.endsWith('AGENT_CONTEXT.md') && !p.endsWith('TASK_CONTEXT.md') && !p.endsWith('FILE_LOCKS.md'));
+  return unique.filter((p) => !p.endsWith('TODO.md') && !p.endsWith('AGENT_CONTEXT.md') && !p.endsWith('TASK_CONTEXT.md') && !p.endsWith('FILE_LOCKS.md') && !p.endsWith('RUNNING_JOBS.json') && !p.endsWith('JOBS.json'));
 }
 
 export function extractCodeBlocks(text: string): Array<{ lang: string; code: string }> {
@@ -240,7 +258,12 @@ function makePiece(partial: Partial<PuzzlePiece> & { id: string; kind: PuzzlePie
 }
 
 /** Validates the model's decomposition and applies the implicit given → when → then/edge ordering. */
-export function normalizePieces(raw: any, scenarioTitles: string[], startIndex = 1): PuzzlePiece[] {
+export function normalizePieces(
+  raw: any,
+  scenarioTitles: string[],
+  startIndex = 1,
+  options?: { taskKind?: TaskKind; targetFilePaths?: string[] }
+): PuzzlePiece[] {
   const list: any[] = Array.isArray(raw?.pieces) ? raw.pieces : Array.isArray(raw) ? raw : [];
   const pieces: PuzzlePiece[] = [];
   const idMap = new Map<string, string>();
@@ -285,6 +308,20 @@ export function normalizePieces(raw: any, scenarioTitles: string[], startIndex =
       return dep ? !dep.dependsOn.includes(p.id) : false;
     });
   }
+  // Ensure implementing pieces for coding tasks or tasks with target files are granted read-write access
+  const targetFiles = (options?.targetFilePaths || []).filter(Boolean);
+  const implPieces = pieces.filter((p) => p.kind !== 'then');
+  if (targetFiles.length > 0 && implPieces.length > 0) {
+    const hasAnyFiles = implPieces.some((p) => p.files.length > 0);
+    if (!hasAnyFiles) {
+      const whenPieces = implPieces.filter((p) => p.kind === 'when');
+      const targetPieces = whenPieces.length > 0 ? whenPieces : implPieces;
+      for (const p of targetPieces) {
+        p.files = [...targetFiles];
+      }
+    }
+  }
+
   // Only append a dedicated 'then' verification piece when there are multiple (2+) implementing pieces
   // that need cross-piece integration verification. For a single self-contained piece (e.g. 1 'when' piece),
   // the worker verifies its own deliverable, saving an entire redundant worker loop!
@@ -305,7 +342,7 @@ export function normalizePieces(raw: any, scenarioTitles: string[], startIndex =
   return pieces;
 }
 
-function fallbackPieces(scenarioTitles: string[], startIndex = 1): PuzzlePiece[] {
+function fallbackPieces(scenarioTitles: string[], startIndex = 1, targetFilePaths: string[] = []): PuzzlePiece[] {
   const a = `P${startIndex}`;
   return [
     makePiece({
@@ -315,7 +352,7 @@ function fallbackPieces(scenarioTitles: string[], startIndex = 1): PuzzlePiece[]
       instructions:
         'Implement everything the Gherkin scenarios in the bible require, writing output to the destination described under "Output Destination & Method". Inspect and verify your own work with commands and evidence before finishing.',
       scenarioRefs: scenarioTitles,
-      files: [],
+      files: targetFilePaths,
       dependsOn: []
     })
   ];
@@ -426,6 +463,7 @@ export async function runManager(
       `- Output destination: ${bible.sections.outputAs}\n` +
       `- Scenarios to cover (${scenarioTitles.length}): ${scenarioTitles.map((t) => `"${t}"`).join(', ') || '(cover the whole brief)'}\n` +
       `- Deliverable Goals checklist:\n${bible.sections.goals || '(complete all task requirements)'}\n` +
+      `- MANDATORY TOOL USE: When creating or modifying code deliverables, you MUST invoke the write_file tool on the Filesystem MCP. Outputting code blocks in chat or markdown does NOT count as task completion. Deliverable files MUST physically exist on disk.\n` +
       resumeNotice +
       (attempt > 1 && priorFailureDiagnostics
         ? `\n## Prior attempt failed QA — fix exactly these:\n${priorFailureDiagnostics}\n\n${bible.renderEventLog({ last: 15 })}\n`
@@ -463,7 +501,7 @@ export async function runManager(
     if (result.stopReason === 'no_tool_support') usedToolCalling = false;
 
     const parsedStatus = parseWorkerStatus(result.text);
-    const targetFilePaths = extractTargetFilePaths(bible.sections.outputAs);
+    const targetFilePaths = extractTargetFilePaths(bible.sections.outputAs + ' ' + (bible.sections.goals || ''));
 
     // Fallback: If no files were recorded as written, but target files were requested
     // and the model emitted code blocks in text, automatically save the deliverable.
@@ -478,7 +516,7 @@ export async function runManager(
           stableSystem: MANAGER_DIRECT_STABLE,
           sharedContext: managerContext,
           tools: directTools,
-          initialUserMessage: `The target deliverable ${targetFilePaths[0]} was NOT written to disk. Output the complete, functional source code for ${targetFilePaths[0]} now in a code block or by calling write_file.`,
+          initialUserMessage: `The target deliverable ${targetFilePaths[0]} was NOT written to disk. When creating or modifying code deliverables, you MUST invoke the write_file tool on the Filesystem MCP. Output the complete, functional source code for ${targetFilePaths[0]} now in a code block or by calling write_file.`,
           maxRounds: 2,
           maxTokens: 8000,
           onToolCalls: executor
@@ -492,10 +530,7 @@ export async function runManager(
         const ext = targetPath.split('.').pop()?.toLowerCase() || '';
         const bestBlock = blocks.find((b) => b.lang === ext || (ext === 'html' && (b.lang === 'html' || b.lang === 'htm' || b.code.includes('<html') || b.code.includes('<!DOCTYPE')))) || blocks[0];
         if (bestBlock && bestBlock.code) {
-          const writeRes = await callMcpTool('mcp-filesystem', 'write_file', {
-            path: targetPath,
-            content: bestBlock.code
-          });
+          const writeRes = await writeDeliverableFile(targetPath, bestBlock.code);
           if (writeRes.success) {
             createdFiles.add(normalizePath(targetPath));
             bible.appendEvent({
@@ -576,10 +611,7 @@ export async function runManager(
         const ext = targetPath.split('.').pop()?.toLowerCase() || '';
         const bestBlock = remBlocks.find((b) => b.lang === ext || (ext === 'html' && (b.lang === 'html' || b.lang === 'htm' || b.code.includes('<html') || b.code.includes('<!DOCTYPE')))) || remBlocks[0];
         if (bestBlock && bestBlock.code) {
-          const writeRes = await callMcpTool('mcp-filesystem', 'write_file', {
-            path: targetPath,
-            content: bestBlock.code
-          });
+          const writeRes = await writeDeliverableFile(targetPath, bestBlock.code);
           if (writeRes.success) {
             createdFiles.add(normalizePath(targetPath));
             bible.appendEvent({
@@ -629,7 +661,7 @@ export async function runManager(
       title: bible.sections.title,
       instructions: 'Direct execution by Manager',
       scenarioRefs: scenarioTitles,
-      files: Array.from(createdFiles),
+      files: Array.from(new Set([...Array.from(createdFiles), ...targetFilePaths])),
       dependsOn: []
     });
     directPiece.status = directOk ? 'done' : 'failed';
@@ -720,11 +752,12 @@ export async function runManager(
     if (result.stopReason === 'error') {
       bible.appendEvent({ actor: 'manager', kind: 'error', text: `Decomposition call failed: ${result.error}` });
     }
+    const targetFilePaths = extractTargetFilePaths(bible.sections.outputAs + ' ' + (bible.sections.goals || ''));
     const parsed = parseJsonLoose<any>(result.text);
-    pieces = parsed ? normalizePieces(parsed, scenarioTitles) : [];
+    pieces = parsed ? normalizePieces(parsed, scenarioTitles, 1, { taskKind: bible.sections.metadata.taskKind, targetFilePaths }) : [];
     decomposeNotes = typeof parsed?.notes === 'string' ? parsed.notes.trim() : '';
     if (pieces.length === 0) {
-      pieces = fallbackPieces(scenarioTitles);
+      pieces = fallbackPieces(scenarioTitles, 1, targetFilePaths);
       decomposeNotes = decomposeNotes || 'Decomposition JSON unusable — fell back to a single implementation piece plus verification.';
     }
   }
@@ -760,8 +793,13 @@ export async function runManager(
     lines.push('### Scenarios you must satisfy or verify', quoteScenarios(bible.sections.gherkin, piece.scenarioRefs), '');
     if (piece.files.length > 0) {
       lines.push('### Files you own (write scope)', ...piece.files.map((f) => `- ${f}`), '');
+    } else if (bible.sections.metadata.taskKind === 'coding' && piece.kind !== 'then') {
+      const allowedRoots = bible.sections.allowedRoots && bible.sections.allowedRoots.length > 0
+        ? bible.sections.allowedRoots.join(', ')
+        : 'workspace';
+      lines.push('### Files you own (write scope)', `- All files within Allowed Boundaries (${allowedRoots}) required for this deliverable`, '');
     } else {
-      lines.push('### Files you own', '- (none — this is a read-only piece; you may still run commands)', '');
+      lines.push('### Files you own', '- (none — this is a read-only verification piece; you may still run commands)', '');
     }
     if (lockedByOthers.length > 0) {
       lines.push('### Files locked by other pieces (read-only for you)', ...lockedByOthers.map((l) => `- ${l.file} (held by ${l.heldBy})`), '');
@@ -772,16 +810,28 @@ export async function runManager(
     lines.push(bible.renderEventLog({ last: 12 }));
     lines.push(
       '### Output contract',
+      'MANDATORY TOOL USE: When creating or modifying code deliverables, you MUST invoke the write_file tool on the Filesystem MCP. Outputting code blocks in chat or markdown does NOT count as task completion. Deliverable files MUST physically exist on disk.',
       'When finished (or proven blocked), stop calling tools and reply with a condensed summary of at most 150 words: what you changed (paths), how you verified it (commands/results), and anything the manager must know. Then the exact final line `STATUS: DONE` or `STATUS: FAILED — <reason>`.'
     );
     return lines.join('\n');
   };
 
   const executePieceOnce = async (piece: PuzzlePiece, onFirstResponse: () => void): Promise<{ ok: boolean; summary: string; error?: string }> => {
+    const targetFilePaths = extractTargetFilePaths(bible.sections.outputAs + ' ' + (bible.sections.goals || ''));
+    const effectiveWritePaths = piece.files.length > 0
+      ? piece.files
+      : (bible.sections.metadata.taskKind === 'coding' && piece.kind !== 'then' && targetFilePaths.length > 0)
+        ? targetFilePaths
+        : undefined;
+
     const executor = createToolExecutor({
       ctx,
       tools,
-      scope: { actorLabel: `worker ${piece.id}`, readOnly: false, allowedWritePaths: piece.files.length > 0 ? piece.files : undefined },
+      scope: {
+        actorLabel: `worker ${piece.id}`,
+        readOnly: piece.kind === 'then',
+        allowedWritePaths: effectiveWritePaths
+      },
       agentRole: 'worker',
       pieceId: piece.id,
       locks,
@@ -805,18 +855,16 @@ export async function runManager(
     addUsage(workerUsage, result.usage);
     if (result.stopReason === 'no_tool_support') usedToolCalling = false;
 
-    // Fallback: If worker owns files but none were written via tools, extract code blocks from text
-    if (piece.files.length > 0 && !piece.files.some((f) => createdFiles.has(normalizePath(f)))) {
+    // Fallback: If worker owns files or target files exist, but none were written via tools, extract code blocks from text
+    const pieceTargets = piece.files.length > 0 ? piece.files : (bible.sections.metadata.taskKind === 'coding' && piece.kind !== 'then' ? targetFilePaths : []);
+    if (pieceTargets.length > 0 && !pieceTargets.some((f) => createdFiles.has(normalizePath(f)))) {
       const blocks = extractCodeBlocks(result.text);
       if (blocks.length > 0) {
-        const targetPath = piece.files[0];
+        const targetPath = pieceTargets[0];
         const ext = targetPath.split('.').pop()?.toLowerCase() || '';
         const bestBlock = blocks.find((b) => b.lang === ext) || blocks[0];
         if (bestBlock && bestBlock.code) {
-          const writeRes = await callMcpTool('mcp-filesystem', 'write_file', {
-            path: targetPath,
-            content: bestBlock.code
-          });
+          const writeRes = await writeDeliverableFile(targetPath, bestBlock.code);
           if (writeRes.success) {
             createdFiles.add(normalizePath(targetPath));
             bible.appendEvent({

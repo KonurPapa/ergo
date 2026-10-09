@@ -12,6 +12,7 @@
  */
 import { type MCPServer } from '../../types';
 import { type JsonSchema, type ToolDefinition } from './contracts';
+import { WORKSPACE_MCP_SERVER } from '../workspaceMcp';
 
 const str = (description: string): JsonSchema => ({ type: 'string', description });
 const int = (description: string): JsonSchema => ({ type: 'integer', description });
@@ -180,28 +181,75 @@ export const ASK_HUMAN_TOOL: ToolDefinition = {
   autoApprove: true
 };
 
-function serverMatchesRequirement(server: MCPServer, requirement: string): boolean {
-  const req = requirement.trim().toLowerCase();
-  if (!req) return false;
-  if (server.id.toLowerCase() === req || server.name.toLowerCase() === req) return true;
-  return server.tools.some((t) => t.name.toLowerCase() === req);
-}
-
 /**
  * Builds the byte-stable tool list for a run.
- * Includes ask_human plus every tool of each CONNECTED server referenced by requiredMcps
- * (matched by server id, server name, or any of its tool names — case-insensitive).
+ * Supports tool-level precision filtering: if specific tools were selected for a task,
+ * ONLY those relevant tools are exposed to the AI (plus safe baseline read tools and ask_human).
+ * If a server was requested by name or ID, all its tools are included.
  */
 export function buildToolDefinitions(connectedMcps: MCPServer[], requiredMcps: string[]): ToolDefinition[] {
   const defs: ToolDefinition[] = [ASK_HUMAN_TOOL];
   const seen = new Set<string>([ASK_HUMAN_TOOL.name]);
-  const requirements = (requiredMcps || []).map((r) => (typeof r === 'string' ? r : String(r ?? '')));
+
+  // 1. Always include Ergo Workspace MCP tools globally for the AI
+  for (const tool of WORKSPACE_MCP_SERVER.tools) {
+    if (seen.has(tool.name)) continue;
+    seen.add(tool.name);
+    defs.push({
+      name: tool.name,
+      description: `[Ergo Workspace] ${tool.description}`,
+      inputSchema: tool.inputSchema || {
+        type: 'object',
+        properties: { args: { type: 'object', description: 'Tool arguments as a JSON object.' } },
+        required: []
+      },
+      serverId: WORKSPACE_MCP_SERVER.id,
+      serverName: WORKSPACE_MCP_SERVER.name,
+      readOnly: tool.name.startsWith('workspace_list') || tool.name.startsWith('workspace_read'),
+      autoApprove: Boolean(tool.autoApprove ?? true),
+      endpoint: undefined,
+      authHeader: undefined
+    });
+  }
+
+  // 2. Global MCP tools: all connected servers expose their tools globally to the AI workspace
+  const requirements = (requiredMcps || [])
+    .map((r) => (typeof r === 'string' ? r.trim().toLowerCase() : String(r ?? '').trim().toLowerCase()))
+    .filter(Boolean);
+
+  const explicitlyRequestedTools = new Set<string>();
+  const explicitlyRequestedServers = new Set<string>();
 
   for (const server of connectedMcps) {
     if (server.status !== 'connected') continue;
-    if (!requirements.some((r) => serverMatchesRequirement(server, r))) continue;
+    const sId = server.id.toLowerCase();
+    const sName = server.name.toLowerCase();
+
+    for (const req of requirements) {
+      if (sId === req || sName === req || (req.includes('filesystem') && sId.includes('filesystem')) || (req.includes('github') && sId.includes('github'))) {
+        explicitlyRequestedServers.add(server.id);
+      }
+      for (const t of server.tools) {
+        if (t.name.toLowerCase() === req || t.id.toLowerCase() === req) {
+          explicitlyRequestedTools.add(t.name.toLowerCase());
+        }
+      }
+    }
+  }
+
+  const hasSpecificToolFilter = explicitlyRequestedTools.size > 0;
+
+  for (const server of connectedMcps) {
+    if (server.status !== 'connected') continue;
+    const isWholeServerRequested = explicitlyRequestedServers.has(server.id);
+
     for (const tool of server.tools) {
       if (seen.has(tool.name)) continue;
+
+      if (hasSpecificToolFilter && !explicitlyRequestedTools.has(tool.name.toLowerCase()) && !isWholeServerRequested) {
+        continue;
+      }
+
       seen.add(tool.name);
       const spec = BUNDLED_TOOL_SPECS[tool.name];
       defs.push({

@@ -1017,6 +1017,15 @@ export function buildVerboseOverviewAndRequiredMcps(
           (m) => m.id.toLowerCase() === lower || m.name.toLowerCase() === lower || m.tools.some((t) => t.name.toLowerCase() === lower)
         );
       });
+    // Incorporate user-explicit tools if already configured on the task or brief
+    const userExplicitTools = [
+      ...(task.mcpRequired || []),
+      ...(brief?.requiredMcps || []),
+      ...(brief?.selectedMcpTools || [])
+    ];
+    if (userExplicitTools.length > 0) {
+      resolvedMcps = Array.from(new Set([...resolvedMcps, ...userExplicitTools]));
+    }
   }
 
   // If AI didn't specify or we need fallback resolution, intelligently inspect task intent
@@ -1025,6 +1034,8 @@ export function buildVerboseOverviewAndRequiredMcps(
     const hasFs = activeMcps.find((m) => m.id === 'mcp-filesystem' || m.name.toLowerCase().includes('filesystem'));
     const hasGit = activeMcps.find((m) => m.id === 'mcp-git' || m.name.toLowerCase().includes('git'));
     const hasFetch = activeMcps.find((m) => m.id === 'mcp-fetch' || m.name.toLowerCase().includes('fetch'));
+    const hasGodot = activeMcps.find((m) => m.id.toLowerCase().includes('godot') || m.name.toLowerCase().includes('godot'));
+    const hasShell = activeMcps.find((m) => m.id.toLowerCase().includes('shell') || m.id.toLowerCase().includes('bash') || m.id.toLowerCase().includes('terminal') || m.tools.some((t) => t.name === 'run_command'));
 
     if (textToScan.includes('git') || textToScan.includes('commit') || textToScan.includes('branch') || textToScan.includes('repository')) {
       if (hasGit && !resolvedMcps.includes(hasGit.name)) resolvedMcps.push(hasGit.name);
@@ -1032,7 +1043,13 @@ export function buildVerboseOverviewAndRequiredMcps(
     if (textToScan.includes('fetch') || textToScan.includes('url') || textToScan.includes('http') || textToScan.includes('api') || textToScan.includes('download')) {
       if (hasFetch && !resolvedMcps.includes(hasFetch.name)) resolvedMcps.push(hasFetch.name);
     }
-    if (textToScan.includes('file') || textToScan.includes('code') || textToScan.includes('component') || textToScan.includes('create') || textToScan.includes('write') || textToScan.includes('edit') || textToScan.includes('refactor') || textToScan.includes('implement')) {
+    if (textToScan.includes('godot')) {
+      if (hasGodot && !resolvedMcps.includes(hasGodot.name)) resolvedMcps.push(hasGodot.name);
+    }
+    if (textToScan.includes('cli') || textToScan.includes('headless') || textToScan.includes('terminal') || textToScan.includes('command') || textToScan.includes('script') || textToScan.includes('run') || textToScan.includes('test')) {
+      if (hasShell && !resolvedMcps.includes(hasShell.name)) resolvedMcps.push(hasShell.name);
+    }
+    if (textToScan.includes('file') || textToScan.includes('code') || textToScan.includes('component') || textToScan.includes('create') || textToScan.includes('write') || textToScan.includes('edit') || textToScan.includes('refactor') || textToScan.includes('implement') || textToScan.includes('script') || textToScan.includes('python')) {
       if (hasFs && !resolvedMcps.includes(hasFs.name)) resolvedMcps.push(hasFs.name);
     }
     // Default to Filesystem MCP if code/files are likely modified and available

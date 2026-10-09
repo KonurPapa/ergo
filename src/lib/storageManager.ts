@@ -385,6 +385,16 @@ export async function initializeFolderStructure(
     const defaultWorkspaceDir = await getOrCreateSubdir(projectsDir, 'default-workspace');
     const defaultProj = INITIAL_PROJECTS[0];
     await writeFileTextToDir(defaultWorkspaceDir, 'TODO.md', defaultProj.todoMarkdown);
+    const initialJobs = {
+      version: 1,
+      projectId: 'default-workspace',
+      updatedAt: new Date().toISOString(),
+      tasks: [],
+      runningJobs: [],
+      queuedTaskIds: [],
+      taskExecutionSteps: {}
+    };
+    await writeFileTextToDir(defaultWorkspaceDir, 'RUNNING_JOBS.json', JSON.stringify(initialJobs, null, 2));
   }
 
   return { settings, secrets };
@@ -996,6 +1006,12 @@ export class StorageManager {
               });
             }
 
+            const jobsRaw = (await readFileTextFromDir(projectDirHandle, 'RUNNING_JOBS.json')) || '';
+            let runningJobsDoc: any = null;
+            if (jobsRaw) {
+              try { runningJobsDoc = JSON.parse(jobsRaw); } catch {}
+            }
+
             projectList.push({
               id: name,
               name: name.replace(/[-_]/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
@@ -1004,6 +1020,7 @@ export class StorageManager {
               todoFilePath: `projects/${name}/TODO.md`,
               todoMarkdown: todoMd,
               agentContextMarkdown: agentMd,
+              runningJobsDoc,
               swimLanes,
               connectedMcps: ['mcp-filesystem', 'mcp-fetch', 'mcp-git', 'mcp-github', 'mcp-slack']
             });
@@ -1112,12 +1129,26 @@ export class StorageManager {
     todoContent: string,
     agentContextContent: string
   ): Promise<{ success: boolean; error?: string }> {
+    const initialJobs = JSON.stringify({
+      version: 1,
+      projectId: folderPath.split('/').pop() || 'project',
+      updatedAt: new Date().toISOString(),
+      tasks: [],
+      runningJobs: [],
+      queuedTaskIds: [],
+      taskExecutionSteps: {}
+    }, null, 2);
+
     // 1. Filesystem MCP tool write (Browser-Agnostic)
     try {
       await callMcpTool('mcp-filesystem', 'create_directory', { path: folderPath });
       await callMcpTool('mcp-filesystem', 'write_file', {
         path: `${folderPath}/TODO.md`,
         content: todoContent
+      });
+      await callMcpTool('mcp-filesystem', 'write_file', {
+        path: `${folderPath}/RUNNING_JOBS.json`,
+        content: initialJobs
       });
       return { success: true };
     } catch {}
@@ -1130,6 +1161,7 @@ export class StorageManager {
           currentDir = await getOrCreateSubdir(currentDir, part);
         }
         await writeFileTextToDir(currentDir, 'TODO.md', todoContent);
+        await writeFileTextToDir(currentDir, 'RUNNING_JOBS.json', initialJobs);
         return { success: true };
       } catch (err: any) {
         console.warn('[StorageManager] Error creating project directory via FSA:', err);

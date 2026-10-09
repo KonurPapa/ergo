@@ -136,13 +136,17 @@ export function createToolExecutor(opts: ToolExecutorOptions): (calls: ToolCallR
       if (scope.allowedWritePaths !== undefined) {
         const allowed = scope.allowedWritePaths;
         if (allowed.length === 0) {
-          return `${scope.actorLabel} owns no files, so "${call.name}" on "${target}" is not allowed. Describe the required change in your summary so the manager can assign it.`;
-        }
-        // A piece may also create the parent directories of files it owns.
-        const isAncestorOfOwned = call.name === 'create_directory' && allowed.some((p) => pathWithin(p, target) && !pathsRefer(p, target));
-        const ok = isAncestorOfOwned || allowed.some((p) => pathWithin(target, p));
-        if (!ok) {
-          return `"${target}" is outside your write scope. ${scope.actorLabel} may only modify: ${allowed.map((p) => `"${p}"`).join(', ')}. Read-only access to everything else is fine; report needed changes to other files in your summary.`;
+          if (scope.readOnly) {
+            return `${scope.actorLabel} owns no files and is in read-only mode, so "${call.name}" on "${target}" is not allowed. Describe the required change in your summary so the manager can assign it.`;
+          }
+          // If not in a read-only phase, allow writing within the allowed workspace boundaries
+        } else {
+          // A piece may also create the parent directories of files it owns.
+          const isAncestorOfOwned = call.name === 'create_directory' && allowed.some((p) => pathWithin(p, target) && !pathsRefer(p, target));
+          const ok = isAncestorOfOwned || allowed.some((p) => pathWithin(target, p));
+          if (!ok) {
+            return `"${target}" is outside your write scope. ${scope.actorLabel} may only modify: ${allowed.map((p) => `"${p}"`).join(', ')}. Read-only access to everything else is fine; report needed changes to other files in your summary.`;
+          }
         }
       }
       if (locks) {
@@ -209,6 +213,21 @@ export function createToolExecutor(opts: ToolExecutorOptions): (calls: ToolCallR
     let content = '';
     let isError = false;
     try {
+      // Ensure parent directory exists before creating or editing files (mkdir -p)
+      if (FILE_WRITING_TOOL_NAMES.has(call.name)) {
+        const target = extractTargetPath(call.name, args);
+        if (target) {
+          const normalized = target.replace(/\\/g, '/');
+          const lastSlash = normalized.lastIndexOf('/');
+          if (lastSlash > 0) {
+            const parentDir = normalized.slice(0, lastSlash);
+            try {
+              await callMcpTool('mcp-filesystem', 'create_directory', { path: parentDir });
+            } catch {}
+          }
+        }
+      }
+
       const result = await callMcpTool(def.serverId, call.name, args, {
         endpoint: def.endpoint,
         authHeader: def.authHeader

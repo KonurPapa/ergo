@@ -10,6 +10,7 @@ import {
   fetchDetectedCliAgents,
   type ProviderModel
 } from '../lib/aiProviders';
+import { CLI_AGENT_PRESETS, getDefaultCliPresetForProvider } from '../lib/cliAgents';
 import { AgentTerminal } from './AgentTerminal';
 import { ResizableTerminalContainer } from './ResizableTerminalContainer';
 import {
@@ -150,6 +151,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
   const [isDetectingCli, setIsDetectingCli] = useState(false);
   const [selectedCliId, setSelectedCliId] = useState<string>('antigravity');
   const [customCliCommand, setCustomCliCommand] = useState<string>('');
+  const [cliExtraArgs, setCliExtraArgs] = useState<string>('');
+  const [isCliCustomized, setIsCliCustomized] = useState<boolean>(false);
   const [cliExecutionMode, setCliExecutionMode] = useState<'interactive' | 'headless'>('interactive');
   const [cliTerminalState, setCliTerminalState] = useState<{
     isOpen: boolean;
@@ -218,19 +221,12 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     setOllamaModels([]);
     setIsOllamaConnected(false);
     setActiveTooltipRole(null);
-    const defaultCli = pId === 'openai'
-      ? 'codex'
-      : pId === 'gemini'
-        ? 'antigravity'
-        : pId === 'cursor'
-          ? 'cursor-cli'
-          : pId === 'grok'
-            ? 'grok-cli'
-            : pId === 'ollama'
-              ? 'aider'
-              : 'claude-code';
-    setSelectedCliId(defaultCli);
-    setCustomCliCommand('');
+    const defaultPresetId = getDefaultCliPresetForProvider(pId);
+    const defaultPreset = CLI_AGENT_PRESETS.find((p) => p.id === defaultPresetId);
+    setSelectedCliId(defaultPresetId);
+    setCustomCliCommand(defaultPreset?.command || '');
+    setCliExtraArgs(defaultPreset?.defaultArgs || '');
+    setIsCliCustomized(false);
     setCliExecutionMode('interactive');
   };
 
@@ -252,20 +248,19 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     const resolvedAuthMode: AuthMode = k.authMode || (k.provider === 'cli_subscription' || k.apiKey === 'cli_subscription_active' ? 'cli_subscription' : 'api_key');
     setAuthMode(resolvedProvider === 'ollama' ? 'api_key' : resolvedAuthMode);
 
-    const defaultCli = resolvedProvider === 'openai'
-      ? 'codex'
-      : resolvedProvider === 'gemini'
-        ? 'antigravity'
-        : resolvedProvider === 'cursor'
-          ? 'cursor-cli'
-          : resolvedProvider === 'grok'
-            ? 'grok-cli'
-            : resolvedProvider === 'ollama'
-              ? 'aider'
-              : 'claude-code';
-    setSelectedCliId(k.cliAgentId || defaultCli);
-    setCustomCliCommand(k.cliCustomCommand || '');
+    const defaultPresetId = getDefaultCliPresetForProvider(resolvedProvider);
+    const resolvedCliId = k.cliPresetId || k.cliAgentId || defaultPresetId;
+    const matchedPreset = CLI_AGENT_PRESETS.find((item) => item.id === resolvedCliId);
+    setSelectedCliId(resolvedCliId);
+    setCustomCliCommand(k.cliCustomCommand || matchedPreset?.command || '');
+    setCliExtraArgs(k.cliExtraArgs !== undefined ? k.cliExtraArgs : (matchedPreset?.defaultArgs || ''));
     setCliExecutionMode(k.cliExecutionMode || 'interactive');
+    setIsCliCustomized(Boolean(
+      (k.cliPresetId && k.cliPresetId !== defaultPresetId) ||
+      (k.cliAgentId && k.cliAgentId !== defaultPresetId) ||
+      (k.cliCustomCommand && k.cliCustomCommand !== matchedPreset?.command) ||
+      (k.cliExtraArgs !== undefined && k.cliExtraArgs !== (matchedPreset?.defaultArgs || ''))
+    ));
     setProviderId(resolvedProvider);
     const resolvedBaseUrl = k.baseUrl || p.defaultBaseUrl || '';
     setBaseUrl(resolvedBaseUrl);
@@ -435,18 +430,16 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     }
 
     // Default to Subscription for cloud providers, api_key for Ollama
+    const defaultPresetId = getDefaultCliPresetForProvider(pId);
+    const defaultPreset = CLI_AGENT_PRESETS.find((p) => p.id === defaultPresetId);
+    if (!isCliCustomized) {
+      setSelectedCliId(defaultPresetId);
+      setCustomCliCommand(defaultPreset?.command || '');
+      setCliExtraArgs(defaultPreset?.defaultArgs || '');
+    }
+
     if (pId !== 'ollama') {
       setAuthMode('cli_subscription');
-      const defaultCli = pId === 'openai'
-        ? 'codex'
-        : pId === 'gemini'
-          ? 'antigravity'
-          : pId === 'cursor'
-            ? 'cursor-cli'
-            : pId === 'grok'
-              ? 'grok-cli'
-              : 'claude-code';
-      setSelectedCliId(defaultCli);
       setIsDetectingCli(true);
       fetchDetectedCliAgents(customCliCommand)
         .then((res) => {
@@ -456,7 +449,6 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
         .catch(() => setIsDetectingCli(false));
     } else {
       setAuthMode('api_key');
-      setSelectedCliId('aider');
       setIsDetectingCli(true);
       fetchDetectedCliAgents(customCliCommand)
         .then((res) => {
@@ -633,10 +625,11 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
       provider: providerId,
       apiKey: authMode === 'cli_subscription' ? 'cli_subscription_active' : apiKey.trim(),
       baseUrl: baseUrl.trim(),
-      authMode: authMode,
-      cliAgentId: (authMode === 'cli_subscription' || providerId === 'ollama') ? selectedCliId : undefined,
-      cliCustomCommand: (authMode === 'cli_subscription' || providerId === 'ollama') ? customCliCommand.trim() || undefined : undefined,
-      cliExecutionMode: (authMode === 'cli_subscription' || providerId === 'ollama') ? cliExecutionMode : undefined,
+      cliAgentId: selectedCliId || undefined,
+      cliPresetId: selectedCliId || undefined,
+      cliCustomCommand: customCliCommand.trim() || undefined,
+      cliExtraArgs: cliExtraArgs.trim() || undefined,
+      cliExecutionMode: cliExecutionMode,
       summaryModel: finalRoleConfigs.summary?.model,
       generalModel: finalRoleConfigs.manager?.model,
       workerModel: finalRoleConfigs.worker?.model,
@@ -1650,7 +1643,21 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <Sliders size={15} color="var(--accent-cyan)" />
-                  <span>Advanced Settings: Execution Mode, Models & Keys</span>
+                  <span>Advanced Settings: CLI Agent, Execution Mode & Roles</span>
+                  {isCliCustomized && (
+                    <span
+                      style={{
+                        fontSize: '0.65rem',
+                        padding: '0.1rem 0.4rem',
+                        borderRadius: '4px',
+                        background: 'rgba(217, 119, 6, 0.2)',
+                        color: 'var(--accent-amber)',
+                        fontWeight: 700
+                      }}
+                    >
+                      Custom CLI
+                    </span>
+                  )}
                   {isMultiProvider && (
                     <span
                       style={{
@@ -1669,7 +1676,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   {!showAdvancedSettings && (
                     <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                      {AGENT_ROLES.map((r) => roleConfigs[r]?.model).filter(Boolean).slice(0, 3).join(' • ') + '...'}
+                      CLI: <code style={{ color: 'var(--accent-emerald)', fontFamily: 'monospace' }}>{customCliCommand || selectedCliId}</code>
                     </span>
                   )}
                   <ChevronDown
@@ -1696,6 +1703,212 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                     gap: '1.25rem'
                   }}
                 >
+                  {/* CLI Terminal Coding Agent Configuration */}
+                  <div
+                    style={{
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border-subtle)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '1rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.85rem'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Terminal size={15} color="var(--accent-emerald)" />
+                        <div>
+                          <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span>Terminal CLI Coding Agent (Execution)</span>
+                            <span
+                              style={{
+                                fontSize: '0.64rem',
+                                padding: '0.1rem 0.45rem',
+                                borderRadius: '4px',
+                                background: isCliCustomized ? 'rgba(6, 182, 212, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                                color: isCliCustomized ? 'var(--accent-cyan)' : 'var(--accent-emerald)',
+                                fontWeight: 700,
+                                border: `1px solid ${isCliCustomized ? 'rgba(6, 182, 212, 0.3)' : 'rgba(16, 185, 129, 0.3)'}`
+                              }}
+                            >
+                              {isCliCustomized ? 'Customized Override' : `Default for ${providerMeta.name}`}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                            When executing coding tasks, Ergo spins up this CLI agent inside an embedded terminal for manager & worker agents.
+                          </div>
+                        </div>
+                      </div>
+
+                      {isCliCustomized && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const defPresetId = getDefaultCliPresetForProvider(providerId);
+                            const defPreset = CLI_AGENT_PRESETS.find((p) => p.id === defPresetId);
+                            setSelectedCliId(defPresetId);
+                            setCustomCliCommand(defPreset?.command || '');
+                            setCliExtraArgs(defPreset?.defaultArgs || '');
+                            setIsCliCustomized(false);
+                          }}
+                          style={{
+                            background: 'rgba(255, 255, 255, 0.05)',
+                            border: '1px solid var(--border-subtle)',
+                            color: 'var(--text-muted)',
+                            borderRadius: 'var(--radius-sm)',
+                            padding: '0.2rem 0.55rem',
+                            fontSize: '0.7rem',
+                            cursor: 'pointer',
+                            fontWeight: 600
+                          }}
+                          title={`Reset to default CLI for ${providerMeta.name}`}
+                        >
+                          Reset to Default
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Presets Grid */}
+                    <div>
+                      <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.4rem', display: 'block' }}>
+                        CLI Agent Provider:
+                      </label>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '0.5rem' }}>
+                        {CLI_AGENT_PRESETS.map((preset) => {
+                          const isSelected = selectedCliId === preset.id;
+                          const isDefaultForCurrent = preset.id === getDefaultCliPresetForProvider(providerId);
+                          return (
+                            <div
+                              key={preset.id}
+                              onClick={() => {
+                                setSelectedCliId(preset.id);
+                                setCustomCliCommand(preset.command);
+                                setCliExtraArgs(preset.defaultArgs);
+                                setIsCliCustomized(!isDefaultForCurrent);
+                              }}
+                              style={{
+                                padding: '0.65rem 0.75rem',
+                                borderRadius: 'var(--radius-sm)',
+                                border: `1.5px solid ${isSelected ? preset.badgeColor : 'var(--border-subtle)'}`,
+                                background: isSelected ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.2)',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.25rem',
+                                transition: 'all 0.15s ease'
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <span style={{ fontWeight: 700, fontSize: '0.8rem', color: isSelected ? '#fff' : 'var(--text-main)' }}>
+                                  {preset.label}
+                                </span>
+                                <span
+                                  style={{
+                                    fontSize: '0.62rem',
+                                    padding: '0.08rem 0.35rem',
+                                    borderRadius: '3px',
+                                    background: `${preset.badgeColor}22`,
+                                    color: preset.badgeColor,
+                                    fontWeight: 700,
+                                    fontFamily: 'monospace'
+                                  }}
+                                >
+                                  {preset.command}
+                                </span>
+                              </div>
+                              <span style={{ fontSize: '0.69rem', color: 'var(--text-muted)', lineHeight: '1.3' }}>
+                                {preset.description}
+                              </span>
+                              {isDefaultForCurrent && (
+                                <span style={{ fontSize: '0.62rem', color: 'var(--accent-emerald)', fontWeight: 600, marginTop: '0.1rem' }}>
+                                  ★ Default for {providerMeta.name}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+
+                        {/* Custom Agent Option */}
+                        <div
+                          onClick={() => {
+                            setSelectedCliId('custom');
+                            setIsCliCustomized(true);
+                          }}
+                          style={{
+                            padding: '0.65rem 0.75rem',
+                            borderRadius: 'var(--radius-sm)',
+                            border: `1.5px solid ${selectedCliId === 'custom' ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
+                            background: selectedCliId === 'custom' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.2)',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.25rem',
+                            transition: 'all 0.15s ease'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <span style={{ fontWeight: 700, fontSize: '0.8rem', color: selectedCliId === 'custom' ? '#fff' : 'var(--text-main)' }}>
+                              Custom / Other CLI
+                            </span>
+                            <span
+                              style={{
+                                fontSize: '0.62rem',
+                                padding: '0.08rem 0.35rem',
+                                borderRadius: '3px',
+                                background: 'rgba(6, 182, 212, 0.15)',
+                                color: 'var(--accent-cyan)',
+                                fontWeight: 700,
+                                fontFamily: 'monospace'
+                              }}
+                            >
+                              custom
+                            </span>
+                          </div>
+                          <span style={{ fontSize: '0.69rem', color: 'var(--text-muted)', lineHeight: '1.3' }}>
+                            Point to your custom local binary, script wrapper, or environment runner.
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Command Executable & Extra Flags Inputs */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                      <div>
+                        <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.3rem', display: 'block' }}>
+                          CLI Executable / Command:
+                        </label>
+                        <input
+                          type="text"
+                          className="input-text"
+                          value={customCliCommand}
+                          onChange={(e) => {
+                            setCustomCliCommand(e.target.value);
+                            setIsCliCustomized(true);
+                          }}
+                          placeholder="e.g. claude, codex, agy, ./my-agent.sh"
+                          style={{ width: '100%', fontSize: '0.82rem', fontFamily: 'monospace' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.3rem', display: 'block' }}>
+                          Extra Command Flags & Arguments:
+                        </label>
+                        <input
+                          type="text"
+                          className="input-text"
+                          value={cliExtraArgs}
+                          onChange={(e) => {
+                            setCliExtraArgs(e.target.value);
+                            setIsCliCustomized(true);
+                          }}
+                          placeholder="e.g. --dangerously-skip-permissions, --verbose"
+                          style={{ width: '100%', fontSize: '0.82rem', fontFamily: 'monospace' }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Coding Tasks Execution Mode Selector */}
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
@@ -2271,13 +2484,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                 )}
                               </div>
                               <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                                {k.provider === 'ollama'
-                                  ? k.baseUrl || 'http://localhost:11434'
-                                  : (k.authMode === 'cli_subscription' || k.apiKey === 'cli_subscription_active')
-                                    ? `CLI: ${k.cliAgentId || 'claude-code'} (${k.cliExecutionMode || 'interactive'})`
-                                    : k.apiKey
-                                      ? `${k.apiKey.slice(0, 7)}...${k.apiKey.slice(-4)}`
-                                      : 'No Primary Key'}
+                                {`CLI: ${k.cliCustomCommand || k.cliPresetId || k.cliAgentId || (k.provider === 'openai' ? 'codex' : k.provider === 'gemini' ? 'agy' : k.provider === 'cursor' ? 'cursor' : k.provider === 'grok' ? 'grok' : k.provider === 'ollama' ? 'aider' : 'claude')}${k.cliExtraArgs ? ' ' + k.cliExtraArgs : ''} (${k.cliExecutionMode || 'interactive'})`}
+                                {k.authMode !== 'cli_subscription' && k.apiKey && k.apiKey !== 'cli_subscription_active' ? ` • Key: ${k.apiKey.slice(0, 7)}...${k.apiKey.slice(-4)}` : ''}
                               </span>
                             </div>
                           </div>

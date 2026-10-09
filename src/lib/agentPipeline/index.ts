@@ -29,7 +29,7 @@ import { getAllowedRoots } from '../mcpClient';
 import { DEFAULT_AGENT_PIPELINE_OPTIONS, type PipelineContext, emptyUsage, formatUsage, isAbortError, slugify } from './contracts';
 import { BibleStore, FileLockRegistry } from './bible';
 import { assembleTaskContext } from './context';
-import { runSummary } from './summary';
+import { runSummary, requiresCliOrProcessTools } from './summary';
 import { buildToolDefinitions } from './toolSchemas';
 import { runManager, isStraightforwardTask, type ManagerRunResult } from './manager';
 import { runCleaner } from './cleaner';
@@ -209,8 +209,34 @@ export async function executeTaskWithAi(
         : `Run ${runId} initialized (attempt policy: ${resolvedOptions.maxQaRetries} QA retr${resolvedOptions.maxQaRetries === 1 ? 'y' : 'ies'}, ${resolvedOptions.maxConcurrentAgents} concurrent worker(s)).`
     });
     await bible.persist();
-    // The filesystem harness is always available because deliverables land in files; everything else is filtered to what Summary required.
-    const requiredSet = Array.from(new Set([...summary.requiredMcps, 'mcp-filesystem']));
+    // The filesystem harness is always available because deliverables land in files;
+    // merge summary requirements with user-configured tools on the task or brief.
+    const userSelectedTools = [
+      ...(task.mcpRequired || []),
+      ...(brief?.requiredMcps || []),
+      ...(brief?.selectedMcpTools || [])
+    ];
+    const requiredSet = Array.from(new Set([...summary.requiredMcps, ...userSelectedTools, 'mcp-filesystem']));
+    const taskAndOutputText = `${task.title} ${task.subtasks.map((s) => s.text).join(' ')} ${summary.overviewDoc.output_as} ${summary.overviewDoc.brief || ''}`.toLowerCase();
+    if (requiresCliOrProcessTools(taskAndOutputText)) {
+      for (const mcp of connectedMcps) {
+        if (mcp.status === 'connected') {
+          const idLower = mcp.id.toLowerCase();
+          const nameLower = mcp.name.toLowerCase();
+          const isGodotTask = taskAndOutputText.includes('godot');
+          const isGodotServer = idLower.includes('godot') || nameLower.includes('godot');
+          const isShellOrProcessServer =
+            idLower.includes('shell') || idLower.includes('bash') || idLower.includes('terminal') || idLower.includes('command') ||
+            mcp.tools.some((t) => ['run_command', 'bash', 'terminal', 'exec', 'run_project', 'launch_editor'].includes(t.name.toLowerCase()));
+
+          if ((isGodotTask && isGodotServer) || isShellOrProcessServer) {
+            if (!requiredSet.includes(mcp.id) && !requiredSet.includes(mcp.name)) {
+              requiredSet.push(mcp.id);
+            }
+          }
+        }
+      }
+    }
     const tools = buildToolDefinitions(connectedMcps, requiredSet);
 
     console.log('%c[Ergo Agent Pipeline] ── Step 3: TASK_CONTEXT.md bible ──', 'color: #10b981; font-weight: bold; font-size: 13px;');

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { type ExecutionStep, type TokenUsage, type AssembledBaselineContext } from '../types';
+import { MarkdownRenderer } from './MarkdownRenderer';
 import { formatUsage } from '../lib/agentPipeline/contracts';
 import { openFileInIdeOrSystem } from '../lib/mcpClient';
 import {
@@ -128,9 +129,9 @@ export const BiblePreview: React.FC<{ markdown?: string; filePath?: string }> = 
         )}
       </div>
       {open && markdown && (
-        <pre style={{ margin: 0, padding: '0.5rem 0.75rem 0.75rem', background: 'transparent', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '0.72rem', whiteSpace: 'pre-wrap', lineHeight: '1.45', maxHeight: '420px', overflow: 'auto' }}>
-          {markdown}
-        </pre>
+        <div style={{ padding: '0.5rem 0.75rem 0.75rem', maxHeight: '420px', overflow: 'auto' }}>
+          <MarkdownRenderer content={markdown} />
+        </div>
       )}
     </div>
   );
@@ -347,23 +348,15 @@ export const BaselineContextPreview: React.FC<{
                       </span>
                     )}
                   </div>
-                  <pre
+                  <div
                     style={{
-                      margin: 0,
                       padding: '0.2rem 0',
-                      background: 'transparent',
-                      color: 'var(--text-muted)',
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: '0.71rem',
-                      whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-word',
-                      lineHeight: '1.45',
                       maxHeight: '180px',
                       overflow: 'auto'
                     }}
                   >
-                    {hit.text}
-                  </pre>
+                    <MarkdownRenderer content={hit.text} />
+                  </div>
                 </div>
               );
             })}
@@ -412,22 +405,14 @@ export const BaselineContextPreview: React.FC<{
                 >
                   {g.path}
                 </div>
-                <pre
+                <div
                   style={{
-                    margin: 0,
-                    padding: 0,
-                    background: 'transparent',
-                    color: 'var(--text-muted)',
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: '0.7rem',
-                    whiteSpace: 'pre-wrap',
-                    lineHeight: '1.4',
                     maxHeight: '140px',
                     overflow: 'auto'
                   }}
                 >
-                  {g.excerpt}
-                </pre>
+                  <MarkdownRenderer content={g.excerpt} />
+                </div>
               </div>
             ))}
           </div>

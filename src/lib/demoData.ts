@@ -74,7 +74,16 @@ Initial project structure initialized. All core links verified.`;
         filePath: todoFilePath,
         markdown: todoMd
       }
-    ]
+    ],
+    runningJobsDoc: {
+      version: 1,
+      projectId: id,
+      updatedAt: new Date().toISOString(),
+      tasks: [],
+      runningJobs: [],
+      queuedTaskIds: [],
+      taskExecutionSteps: {}
+    }
   };
 }
 
@@ -131,7 +140,16 @@ Initial project structure initialized. All core links verified.`,
     - Define project scope and task list
     - Verify zero-token context retrieval with vector memory`
       }
-    ]
+    ],
+    runningJobsDoc: {
+      version: 1,
+      projectId: 'default-workspace',
+      updatedAt: new Date().toISOString(),
+      tasks: [],
+      runningJobs: [],
+      queuedTaskIds: [],
+      taskExecutionSteps: {}
+    }
   }
 ];
 
@@ -144,10 +162,11 @@ export const INITIAL_MCP_SERVERS: MCPServer[] = [
     description: 'Local non-autoregressive System 1 decision engine for micro-decisions, tool routing, and classification at $0 token cost in ~30–75ms. Runs entirely on your CPU/GPU.',
     iconName: 'Zap',
     category: 'developer',
-    status: 'disconnected',
+    status: 'connected',
     transport: 'Local Stdio',
     endpoint: 'stdio://ergo-mcp-laya',
     serverType: 'bundled_harness',
+    lastSyncedAt: new Date().toISOString(),
     tools: [
       { id: 'laya_choice', name: 'laya_choice', description: 'Choose the best option among candidates (max 15-20 options per batch) with calibrated probability', autoApprove: true, serverId: 'mcp-laya' },
       { id: 'laya_score', name: 'laya_score', description: 'Evaluate deliverable quality or relevance with calibrated confidence score (0.0 to 1.0)', autoApprove: true, serverId: 'mcp-laya' },

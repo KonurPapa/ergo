@@ -137,6 +137,22 @@ async function ensureStorageInitialized(storageDir: string) {
       const defaultTodo = `# General TODOs:\n\n1. **Initial Task Setup:**\n   - Define project scope and task list\n`;
       await fs.writeFile(todoFile, defaultTodo, 'utf-8');
     }
+
+    const runningJobsFile = path.join(defaultWorkspaceDir, 'RUNNING_JOBS.json');
+    try {
+      await fs.access(runningJobsFile);
+    } catch {
+      const initialJobs = {
+        version: 1,
+        projectId: 'default-workspace',
+        updatedAt: new Date().toISOString(),
+        tasks: [],
+        runningJobs: [],
+        queuedTaskIds: [],
+        taskExecutionSteps: {}
+      };
+      await fs.writeFile(runningJobsFile, JSON.stringify(initialJobs, null, 2), 'utf-8');
+    }
   } catch (err) {
     console.warn('[Ergo Storage] Failed to initialize storage dir:', err);
   }
@@ -187,9 +203,14 @@ type BoundaryCheck = { ok: true; fullPath: string } | { ok: false; error: string
 async function resolveInsideAllowedRoots(rawPath: string, storageDir: string): Promise<BoundaryCheck> {
   let targetPath = (rawPath || '').trim();
   if (targetPath.startsWith('~')) targetPath = path.join(os.homedir(), targetPath.slice(1));
-  const fullPath = path.isAbsolute(targetPath) ? path.resolve(targetPath) : path.resolve(storageDir, targetPath || '.');
+  const fullPath = path.isAbsolute(targetPath)
+    ? path.resolve(targetPath)
+    : targetPath.startsWith('.agents')
+    ? path.resolve(process.cwd(), targetPath)
+    : path.resolve(storageDir, targetPath || '.');
   const allowedRoots = await loadAllowedRoots(storageDir);
-  const isAllowed = allowedRoots.some((root) => fullPath === root || fullPath.startsWith(root + path.sep));
+  const isAgentCustomization = fullPath.startsWith(path.resolve(process.cwd(), '.agents'));
+  const isAllowed = isAgentCustomization || allowedRoots.some((root) => fullPath === root || fullPath.startsWith(root + path.sep));
   if (!isAllowed) {
     return {
       ok: false,
@@ -236,6 +257,13 @@ async function runShellCommand(command: string, cwd: string, timeoutMs: number):
       });
     });
   });
+}
+
+/** Recursively ensures parent directory exists before writing deliverable (mkdir -p) */
+async function writeDeliverable(filePath: string, content: string): Promise<void> {
+  const dir = path.dirname(filePath);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(filePath, content, 'utf-8');
 }
 
 /**
@@ -706,8 +734,11 @@ function ergoFileSystemPlugin(): Plugin {
           const writtenFiles: string[] = [];
           const now = Date.now();
           for (const item of files) {
-            if (!item.filePath || typeof item.content !== 'string') continue;
-            const fullPath = path.resolve(storageDir, item.filePath);
+            const fullPath = path.isAbsolute(item.filePath)
+              ? path.resolve(item.filePath)
+              : item.filePath.startsWith('.agents')
+              ? path.resolve(process.cwd(), item.filePath)
+              : path.resolve(storageDir, item.filePath);
             await fs.mkdir(path.dirname(fullPath), { recursive: true });
             await fs.writeFile(fullPath, item.content, 'utf-8');
             writtenFiles.push(item.filePath);
@@ -876,10 +907,23 @@ function ergoFileSystemPlugin(): Plugin {
           const todoPath = path.join(targetDir, 'TODO.md');
           await fs.writeFile(todoPath, todoContent || '', 'utf-8');
 
+          const runningJobsPath = path.join(targetDir, 'RUNNING_JOBS.json');
+          const initialJobs = {
+            version: 1,
+            projectId: path.basename(folderPath),
+            updatedAt: new Date().toISOString(),
+            tasks: Array.isArray(body.initialTasks) ? body.initialTasks : [],
+            runningJobs: [],
+            queuedTaskIds: [],
+            taskExecutionSteps: {}
+          };
+          await fs.writeFile(runningJobsPath, JSON.stringify(initialJobs, null, 2), 'utf-8');
+
           return sendJson(res, 200, {
             success: true,
             folderPath,
             todoPath: path.relative(storageDir, todoPath),
+            runningJobsPath: path.relative(storageDir, runningJobsPath),
             createdAt: new Date().toISOString()
           });
         } catch (err: any) {
@@ -1050,6 +1094,7 @@ function ergoFileSystemPlugin(): Plugin {
             agentContextFilePath?: string;
             todoMarkdown: string;
             agentContextMarkdown: string;
+            runningJobsDoc?: any;
             swimLanes?: Array<{ id: string; title: string; filePath: string; markdown: string }>;
           }> = [];
 
@@ -1116,6 +1161,27 @@ function ergoFileSystemPlugin(): Plugin {
                 });
               }
 
+              // Read or create RUNNING_JOBS.json for persistent AI workspace task & job tracking
+              let runningJobsDoc: any = null;
+              const runningJobsPath = path.join(projectDir, 'RUNNING_JOBS.json');
+              try {
+                const jobsRaw = await fs.readFile(runningJobsPath, 'utf-8');
+                runningJobsDoc = JSON.parse(jobsRaw);
+              } catch {
+                runningJobsDoc = {
+                  version: 1,
+                  projectId: entry.name,
+                  updatedAt: new Date().toISOString(),
+                  tasks: [],
+                  runningJobs: [],
+                  queuedTaskIds: [],
+                  taskExecutionSteps: {}
+                };
+                try {
+                  await fs.writeFile(runningJobsPath, JSON.stringify(runningJobsDoc, null, 2), 'utf-8');
+                } catch {}
+              }
+
               projectList.push({
                 id: entry.name,
                 name: entry.name.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
@@ -1123,6 +1189,7 @@ function ergoFileSystemPlugin(): Plugin {
                 todoFilePath: `projects/${entry.name}/TODO.md`,
                 todoMarkdown: todoContent,
                 agentContextMarkdown: agentContent || '',
+                runningJobsDoc,
                 swimLanes
               });
             }
@@ -1530,6 +1597,382 @@ function ergoFileSystemPlugin(): Plugin {
         }
       }
 
+      // ── Universal MCP Tools List (tools/list) ──
+      if (url === '/api/mcp/tools/list' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const { serverId, endpoint, authHeader } = body;
+          if (!serverId && !endpoint) {
+            return sendJson(res, 400, { error: 'serverId or endpoint is required' });
+          }
+
+          // 1. GitHub MCP
+          if (serverId === 'mcp-github') {
+            let token = (authHeader || '').trim();
+            if (token.startsWith('Bearer ')) token = token.slice(7).trim();
+            if (token.startsWith('token ')) token = token.slice(6).trim();
+            if (!token) {
+              try {
+                const secretsPath = path.join(storageDir, 'config', 'secrets.json');
+                const rawSecrets = await fs.readFile(secretsPath, 'utf-8');
+                const parsed = JSON.parse(rawSecrets);
+                token = parsed.mcpSecrets?.['mcp-github']?.token || '';
+              } catch {}
+            }
+            if (!token) {
+              token = process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GITHUB_TOKEN || '';
+            }
+            if (!token) {
+              return sendJson(res, 401, { error: 'GitHub Personal Access Token required to list tools' });
+            }
+
+            try {
+              const rawTools = await githubMcpClient.listTools(token);
+              const tools = rawTools.map((t: any) => ({
+                id: `gh_${t.name}`,
+                name: t.name,
+                description: t.description,
+                autoApprove: t.name.startsWith('search_') || t.name.startsWith('list_') || t.name.startsWith('get_'),
+                serverId: 'mcp-github',
+                inputSchema: t.inputSchema
+              }));
+              return sendJson(res, 200, { success: true, serverId: 'mcp-github', tools });
+            } catch (err: any) {
+              return sendJson(res, 502, { error: `Failed to list GitHub MCP tools: ${err.message}` });
+            }
+          }
+
+          // 2. Bundled Harnesses (filesystem, fetch, git, laya)
+          if (serverId === 'mcp-filesystem') {
+            const tools = [
+              { id: 'fs_read_file', name: 'read_file', description: 'Read a file within allowed directory roots; supports offset/limit line paging for large files', autoApprove: true, serverId: 'mcp-filesystem' },
+              { id: 'fs_write_file', name: 'write_file', description: 'Create or overwrite a file on disk within allowed roots', autoApprove: false, serverId: 'mcp-filesystem' },
+              { id: 'fs_edit_file', name: 'edit_file', description: 'Replace an exact text span in an existing file (diff-style edit; cheaper than rewriting the whole file)', autoApprove: false, serverId: 'mcp-filesystem' },
+              { id: 'fs_list_directory', name: 'list_directory', description: 'List files and subdirectories inside an allowed path', autoApprove: true, serverId: 'mcp-filesystem' },
+              { id: 'fs_create_directory', name: 'create_directory', description: 'Create a new directory recursively', autoApprove: true, serverId: 'mcp-filesystem' },
+              { id: 'fs_search_files', name: 'search_files', description: 'Search files by filename substring and/or grep file contents with a regex (contentPattern)', autoApprove: true, serverId: 'mcp-filesystem' },
+              { id: 'fs_get_file_info', name: 'get_file_info', description: 'Retrieve file metadata (size, modified date, permissions)', autoApprove: true, serverId: 'mcp-filesystem' },
+              { id: 'fs_run_command', name: 'run_command', description: 'Run a shell command (tests, lint, build, scripts) inside an allowed folder; returns exit code, stdout and stderr', autoApprove: false, serverId: 'mcp-filesystem' }
+            ];
+            return sendJson(res, 200, { success: true, serverId: 'mcp-filesystem', tools });
+          }
+
+          if (serverId === 'mcp-fetch') {
+            const tools = [
+              { id: 'fetch_markdown', name: 'fetch_markdown', description: 'Fetch a web page or API and convert content to clean markdown for the AI', autoApprove: true, serverId: 'mcp-fetch' },
+              { id: 'fetch_url', name: 'fetch_url', description: 'Fetch raw HTTP response content and headers from a target URL', autoApprove: true, serverId: 'mcp-fetch' }
+            ];
+            return sendJson(res, 200, { success: true, serverId: 'mcp-fetch', tools });
+          }
+
+          if (serverId === 'mcp-git') {
+            const tools = [
+              { id: 'git_status', name: 'git_status', description: 'Show working tree status and modified files', autoApprove: true, serverId: 'mcp-git' },
+              { id: 'git_diff', name: 'git_diff', description: 'Show changes between commits or working tree', autoApprove: true, serverId: 'mcp-git' },
+              { id: 'git_log', name: 'git_log', description: 'Show commit history logs and author metadata', autoApprove: true, serverId: 'mcp-git' },
+              { id: 'git_commit', name: 'git_commit', description: 'Record changes to the repository with a commit message', autoApprove: false, serverId: 'mcp-git' }
+            ];
+            return sendJson(res, 200, { success: true, serverId: 'mcp-git', tools });
+          }
+
+          if (serverId === 'mcp-laya') {
+            const tools = [
+              { id: 'laya_choice', name: 'laya_choice', description: 'Choose the best option among candidates (max 15-20 options per batch) with calibrated probability', autoApprove: true, serverId: 'mcp-laya' },
+              { id: 'laya_score', name: 'laya_score', description: 'Evaluate deliverable quality or relevance with calibrated confidence score (0.0 to 1.0)', autoApprove: true, serverId: 'mcp-laya' },
+              { id: 'laya_noul', name: 'laya_noul', description: 'Evaluate binary yes/no decision propositions without generating tokens', autoApprove: true, serverId: 'mcp-laya' }
+            ];
+            return sendJson(res, 200, { success: true, serverId: 'mcp-laya', tools });
+          }
+
+          // 3. Remote HTTP/SSE MCP Endpoint
+          if (endpoint) {
+            let normalized = String(endpoint).trim();
+            if (!normalized.startsWith('http://') && !normalized.startsWith('https://')) {
+              normalized = `https://${normalized}`;
+            }
+
+            const reqHeaders: Record<string, string> = {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json, text/event-stream'
+            };
+            if (authHeader) {
+              reqHeaders['Authorization'] = authHeader.trim().startsWith('Bearer ') || authHeader.trim().startsWith('token ')
+                ? authHeader.trim()
+                : `Bearer ${authHeader.trim()}`;
+            }
+
+            const rpcPayload = {
+              jsonrpc: '2.0',
+              id: `tools-list-${Date.now()}`,
+              method: 'tools/list',
+              params: {}
+            };
+
+            const remoteRes = await fetch(normalized, {
+              method: 'POST',
+              headers: reqHeaders,
+              body: JSON.stringify(rpcPayload),
+              signal: AbortSignal.timeout(10_000)
+            });
+
+            if (!remoteRes.ok) {
+              return sendJson(res, remoteRes.status, {
+                error: `Remote MCP server returned HTTP ${remoteRes.status}`
+              });
+            }
+
+            const resData: any = await remoteRes.json().catch(() => ({}));
+            const rawTools = resData?.result?.tools || resData?.tools || (Array.isArray(resData) ? resData : []);
+            const tools = rawTools.map((t: any, idx: number) => ({
+              id: t.name ? `tool-${t.name}-${idx}` : `tool-${idx}`,
+              name: t.name || `tool_${idx}`,
+              description: t.description || 'Remote MCP Tool',
+              autoApprove: false,
+              serverId: serverId || 'custom-mcp',
+              inputSchema: t.inputSchema || t.schema || undefined
+            }));
+
+            return sendJson(res, 200, {
+              success: true,
+              serverId,
+              serverInfo: resData?.result?.serverInfo || resData?.serverInfo,
+              tools
+            });
+          }
+
+          return sendJson(res, 400, { error: `Unable to list tools for server "${serverId}". No handler or endpoint configured.` });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message || 'Error listing MCP tools' });
+        }
+      }
+
+      // ── Routine Updates Check for All Connected MCP Servers ──
+      if (url === '/api/mcp/check-updates' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const servers: Array<{ id: string; endpoint?: string; authHeader?: string; toolsCount?: number }> = Array.isArray(body.servers) ? body.servers : [];
+
+          const updates: Record<string, { success: boolean; tools: any[]; hasChanges?: boolean; error?: string }> = {};
+
+          await Promise.all(
+            servers.map(async (server) => {
+              try {
+                if (server.id === 'mcp-github') {
+                  const secretsPath = path.join(storageDir, 'config', 'secrets.json');
+                  let token = (server.authHeader || '').trim();
+                  if (!token) {
+                    try {
+                      const raw = await fs.readFile(secretsPath, 'utf-8');
+                      token = JSON.parse(raw).mcpSecrets?.['mcp-github']?.token || '';
+                    } catch {}
+                  }
+                  if (!token) token = process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GITHUB_TOKEN || '';
+                  if (!token) {
+                    updates[server.id] = { success: false, tools: [], error: 'Not authenticated' };
+                    return;
+                  }
+                  const rawTools = await githubMcpClient.listTools(token);
+                  const tools = rawTools.map((t: any) => ({
+                    id: `gh_${t.name}`,
+                    name: t.name,
+                    description: t.description,
+                    autoApprove: t.name.startsWith('search_') || t.name.startsWith('list_') || t.name.startsWith('get_'),
+                    serverId: 'mcp-github',
+                    inputSchema: t.inputSchema
+                  }));
+                  const hasChanges = server.toolsCount !== undefined && server.toolsCount !== tools.length;
+                  updates[server.id] = { success: true, tools, hasChanges };
+                  return;
+                }
+
+                if (server.id === 'mcp-filesystem' || server.id === 'mcp-fetch' || server.id === 'mcp-git' || server.id === 'mcp-laya') {
+                  // Bundled harness tool specs are deterministic
+                  updates[server.id] = { success: true, tools: [], hasChanges: false };
+                  return;
+                }
+
+                if (server.endpoint) {
+                  let normalized = server.endpoint.trim();
+                  if (!normalized.startsWith('http://') && !normalized.startsWith('https://')) {
+                    normalized = `https://${normalized}`;
+                  }
+                  const reqHeaders: Record<string, string> = {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json, text/event-stream'
+                  };
+                  if (server.authHeader) {
+                    reqHeaders['Authorization'] = server.authHeader.trim().startsWith('Bearer ') || server.authHeader.trim().startsWith('token ')
+                      ? server.authHeader.trim()
+                      : `Bearer ${server.authHeader.trim()}`;
+                  }
+                  const rpcPayload = { jsonrpc: '2.0', id: `check-${Date.now()}`, method: 'tools/list', params: {} };
+                  const remoteRes = await fetch(normalized, {
+                    method: 'POST',
+                    headers: reqHeaders,
+                    body: JSON.stringify(rpcPayload),
+                    signal: AbortSignal.timeout(8_000)
+                  });
+                  if (!remoteRes.ok) {
+                    updates[server.id] = { success: false, tools: [], error: `HTTP ${remoteRes.status}` };
+                    return;
+                  }
+                  const resData: any = await remoteRes.json().catch(() => ({}));
+                  const rawTools = resData?.result?.tools || resData?.tools || (Array.isArray(resData) ? resData : []);
+                  const tools = rawTools.map((t: any, idx: number) => ({
+                    id: t.name ? `tool-${t.name}-${idx}` : `tool-${idx}`,
+                    name: t.name || `tool_${idx}`,
+                    description: t.description || 'Remote MCP Tool',
+                    autoApprove: false,
+                    serverId: server.id,
+                    inputSchema: t.inputSchema || t.schema || undefined
+                  }));
+                  const hasChanges = server.toolsCount !== undefined && server.toolsCount !== tools.length;
+                  updates[server.id] = { success: true, tools, hasChanges };
+                  return;
+                }
+
+                updates[server.id] = { success: false, tools: [], error: 'Unknown server type' };
+              } catch (err: any) {
+                updates[server.id] = { success: false, tools: [], error: err.message };
+              }
+            })
+          );
+
+          return sendJson(res, 200, { success: true, updates });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message || 'Error checking MCP updates' });
+        }
+      }
+
+      // ── Generic MCP Connect & Authenticate ──
+      if (url === '/api/mcp/auth/connect' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const { serverId, endpoint, authHeader, serverName } = body;
+
+          if (!serverId) {
+            return sendJson(res, 400, { error: 'serverId is required' });
+          }
+
+          if (serverId === 'mcp-github') {
+            // Forward to GitHub connect logic
+            const token = (authHeader || '').trim();
+            if (!token) return sendJson(res, 400, { error: 'GitHub token required' });
+            const cleanToken = token.replace(/^Bearer\s+/i, '').replace(/^token\s+/i, '');
+            const userRes = await fetch('https://api.github.com/user', {
+              headers: { 'Authorization': `Bearer ${cleanToken}`, 'User-Agent': 'Ergo-MCP/1.0' },
+              signal: AbortSignal.timeout(10_000)
+            });
+            if (!userRes.ok) {
+              return sendJson(res, 401, { error: `GitHub auth failed (HTTP ${userRes.status})` });
+            }
+            const user: any = await userRes.json();
+            const rawTools = await githubMcpClient.listTools(cleanToken);
+            const tools = rawTools.map((t: any) => ({
+              id: `gh_${t.name}`,
+              name: t.name,
+              description: t.description,
+              autoApprove: t.name.startsWith('search_') || t.name.startsWith('list_') || t.name.startsWith('get_'),
+              serverId: 'mcp-github',
+              inputSchema: t.inputSchema
+            }));
+
+            // Persist to secrets
+            const secretsPath = path.join(storageDir, 'config', 'secrets.json');
+            let currentSecrets: any = { version: 1, updatedAt: new Date().toISOString(), userApiKeys: [], mcpSecrets: {} };
+            try {
+              currentSecrets = JSON.parse(await fs.readFile(secretsPath, 'utf-8'));
+            } catch {}
+            if (!currentSecrets.mcpSecrets) currentSecrets.mcpSecrets = {};
+            currentSecrets.mcpSecrets['mcp-github'] = {
+              token: cleanToken,
+              username: user.login,
+              name: user.name,
+              avatarUrl: user.avatar_url,
+              connectedAt: new Date().toISOString()
+            };
+            currentSecrets.updatedAt = new Date().toISOString();
+            await fs.writeFile(secretsPath, JSON.stringify(currentSecrets, null, 2), 'utf-8');
+
+            return sendJson(res, 200, { success: true, serverId: 'mcp-github', tools, user });
+          }
+
+          if (endpoint) {
+            let normalized = String(endpoint).trim();
+            if (!normalized.startsWith('http://') && !normalized.startsWith('https://')) {
+              normalized = `https://${normalized}`;
+            }
+
+            const reqHeaders: Record<string, string> = {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json, text/event-stream'
+            };
+            if (authHeader) {
+              reqHeaders['Authorization'] = authHeader.trim().startsWith('Bearer ') || authHeader.trim().startsWith('token ')
+                ? authHeader.trim()
+                : `Bearer ${authHeader.trim()}`;
+            }
+
+            const rpcPayload = { jsonrpc: '2.0', id: `auth-connect-${Date.now()}`, method: 'tools/list', params: {} };
+            const remoteRes = await fetch(normalized, {
+              method: 'POST',
+              headers: reqHeaders,
+              body: JSON.stringify(rpcPayload),
+              signal: AbortSignal.timeout(10_000)
+            });
+
+            if (remoteRes.status === 401 || remoteRes.status === 403) {
+              return sendJson(res, 401, { error: 'Authentication failed. Please verify credentials or token.' });
+            }
+            if (!remoteRes.ok) {
+              return sendJson(res, remoteRes.status, { error: `Server responded with status HTTP ${remoteRes.status}` });
+            }
+
+            const resData: any = await remoteRes.json().catch(() => ({}));
+            const rawTools = resData?.result?.tools || resData?.tools || (Array.isArray(resData) ? resData : []);
+            const tools = rawTools.map((t: any, idx: number) => ({
+              id: t.name ? `tool-${t.name}-${idx}` : `tool-${idx}`,
+              name: t.name || `tool_${idx}`,
+              description: t.description || 'Remote MCP Tool',
+              autoApprove: false,
+              serverId,
+              inputSchema: t.inputSchema || t.schema || undefined
+            }));
+
+            // Persist authHeader to secrets if provided
+            if (authHeader) {
+              try {
+                const secretsPath = path.join(storageDir, 'config', 'secrets.json');
+                let currentSecrets: any = { version: 1, updatedAt: new Date().toISOString(), userApiKeys: [], mcpSecrets: {} };
+                try {
+                  currentSecrets = JSON.parse(await fs.readFile(secretsPath, 'utf-8'));
+                } catch {}
+                if (!currentSecrets.mcpSecrets) currentSecrets.mcpSecrets = {};
+                currentSecrets.mcpSecrets[serverId] = {
+                  token: authHeader.trim(),
+                  endpoint: normalized,
+                  serverName: serverName || serverId,
+                  connectedAt: new Date().toISOString()
+                };
+                currentSecrets.updatedAt = new Date().toISOString();
+                await fs.writeFile(secretsPath, JSON.stringify(currentSecrets, null, 2), 'utf-8');
+              } catch {}
+            }
+
+            return sendJson(res, 200, {
+              success: true,
+              serverId,
+              serverInfo: resData?.result?.serverInfo || resData?.serverInfo,
+              tools
+            });
+          }
+
+          return sendJson(res, 400, { error: `Missing endpoint or unsupported serverId "${serverId}"` });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message || 'Error connecting MCP server' });
+        }
+      }
+
       if (url === '/api/mcp/tools/call' && req.method === 'POST') {
         try {
           const body = await parseJsonBody(req);
@@ -1608,8 +2051,7 @@ function ergoFileSystemPlugin(): Plugin {
 
             if (toolName === 'write_file') {
               const content = typeof args.content === 'string' ? args.content : '';
-              await fs.mkdir(path.dirname(fullPath), { recursive: true });
-              await fs.writeFile(fullPath, content, 'utf-8');
+              await writeDeliverable(fullPath, content);
               const now = Date.now();
               recentWrites.set(targetPath, now);
               recentWrites.set(fullPath, now);
@@ -1635,7 +2077,7 @@ function ergoFileSystemPlugin(): Plugin {
                 return sendJson(res, 409, { error: `old_string matches ${occurrences} places in ${targetPath}. Include more surrounding lines so it is unique, or pass replace_all: true to replace every occurrence.` });
               }
               const updated = replaceAll ? existing.split(oldString).join(newString) : existing.replace(oldString, newString);
-              await fs.writeFile(fullPath, updated, 'utf-8');
+              await writeDeliverable(fullPath, updated);
               const idx = updated.indexOf(newString);
               const previewStart = Math.max(0, idx - 100);
               const preview = updated.slice(previewStart, Math.min(updated.length, idx + newString.length + 100));
@@ -2691,10 +3133,104 @@ function ergoFileSystemPlugin(): Plugin {
 // Messages out: { type:'data', data }       (raw PTY output)
 //               { type:'exit', code }       (process exited)
 // ─────────────────────────────────────────────────────────────────────────────
+interface PtySessionState {
+  id: string;
+  taskId: string | number;
+  cmd: string;
+  args: string[];
+  cwd: string;
+  ptyProcess: any;
+  buffer: string[];
+  bufferLength: number;
+  maxBufferChars: number;
+  subscribers: Set<any>;
+  isActive: boolean;
+  exitCode: number | null;
+  startedAt: string;
+}
+
+const activePtySessions = new Map<string, PtySessionState>();
+
 function ergoPtyPlugin(): Plugin {
   return {
     name: 'ergo-pty',
     configureServer(server) {
+      // REST middleware for querying active background sessions and killing them
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
+        const url = req.url?.split('?')[0];
+        if (url === '/api/pty/sessions' && req.method === 'GET') {
+          const sessions = Array.from(activePtySessions.values()).map((s) => ({
+            id: s.id,
+            taskId: s.taskId,
+            cmd: s.cmd,
+            args: s.args,
+            cwd: s.cwd,
+            isActive: s.isActive,
+            exitCode: s.exitCode,
+            startedAt: s.startedAt,
+            hasSubscribers: s.subscribers.size > 0,
+          }));
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = 200;
+          return res.end(JSON.stringify({ success: true, sessions }));
+        }
+
+        if (url === '/api/pty/kill' && req.method === 'POST') {
+          let bodyText = '';
+          req.on('data', (chunk) => {
+            bodyText += chunk;
+          });
+          req.on('end', () => {
+            let body: any = {};
+            try {
+              body = JSON.parse(bodyText);
+            } catch {}
+            const targetId = String(body.taskId || body.sessionId || '');
+            const session = activePtySessions.get(targetId);
+            if (session) {
+              try {
+                if (typeof session.ptyProcess?.pid === 'number' && session.ptyProcess.pid > 0) {
+                  const pid = session.ptyProcess.pid;
+                  try {
+                    // Kill process group first to stop any child CLI processes (e.g. gemini-cli, node, bash)
+                    process.kill(-pid, 'SIGTERM');
+                  } catch {
+                    try {
+                      process.kill(pid, 'SIGTERM');
+                    } catch {}
+                  }
+                  // Also invoke ptyProcess.kill() with SIGKILL fallback
+                  try {
+                    session.ptyProcess.kill('SIGKILL');
+                  } catch {
+                    try {
+                      session.ptyProcess.kill();
+                    } catch {}
+                  }
+                  // Ensure process group is killed forcefully
+                  setTimeout(() => {
+                    try {
+                      process.kill(-pid, 'SIGKILL');
+                    } catch {}
+                  }, 200);
+                }
+              } catch {}
+              session.isActive = false;
+              activePtySessions.delete(targetId);
+              res.setHeader('Content-Type', 'application/json');
+              res.statusCode = 200;
+              return res.end(JSON.stringify({ success: true, killed: true }));
+            }
+            res.setHeader('Content-Type', 'application/json');
+            res.statusCode = 200;
+            return res.end(JSON.stringify({ success: true, killed: false }));
+          });
+          return;
+        }
+
+        next();
+      });
+
       // Defer WSS creation until the underlying http.Server is available
       server.httpServer?.once('listening', async () => {
         const { WebSocketServer } = await import('ws');
@@ -2712,22 +3248,13 @@ function ergoPtyPlugin(): Plugin {
         });
 
         wss.on('connection', (ws: any) => {
-          let ptyProcess: ReturnType<typeof pty.spawn> | null = null;
-
-          const safeKillPty = () => {
-            if (ptyProcess) {
-              try {
-                if (typeof ptyProcess.pid === 'number' && ptyProcess.pid > 0) {
-                  ptyProcess.kill();
-                }
-              } catch {}
-              ptyProcess = null;
-            }
-          };
+          let currentSessionKey: string | null = null;
 
           const send = (obj: Record<string, unknown>) => {
             if (ws.readyState === 1 /* OPEN */) {
-              ws.send(JSON.stringify(obj));
+              try {
+                ws.send(JSON.stringify(obj));
+              } catch {}
             }
           };
 
@@ -2740,7 +3267,32 @@ function ergoPtyPlugin(): Plugin {
             }
 
             if (msg.type === 'spawn') {
-              safeKillPty();
+              const sessionKey = String(msg.taskId || msg.sessionId || 'default');
+              currentSessionKey = sessionKey;
+
+              const existingSession = activePtySessions.get(sessionKey);
+              if (existingSession && existingSession.isActive && existingSession.ptyProcess) {
+                // Re-attach to the live, running background process!
+                existingSession.subscribers.add(ws);
+                console.log(`[Ergo PTY] Reattached to running persistent session [${sessionKey}] (pid ${existingSession.ptyProcess.pid})`);
+
+                if (typeof msg.cols === 'number' && typeof msg.rows === 'number') {
+                  try {
+                    existingSession.ptyProcess.resize(msg.cols, msg.rows);
+                  } catch {}
+                }
+
+                send({ type: 'ready', reattached: true, taskId: existingSession.taskId, sessionId: sessionKey });
+                if (existingSession.buffer.length > 0) {
+                  send({ type: 'replay', data: existingSession.buffer.join('') });
+                }
+                return;
+              }
+
+              // If an old inactive process was cached, remove it
+              if (existingSession && !existingSession.isActive) {
+                activePtySessions.delete(sessionKey);
+              }
 
               const cmd: string = msg.cmd || 'bash';
               const args: string[] = Array.isArray(msg.args) ? msg.args : [];
@@ -2755,10 +3307,10 @@ function ergoPtyPlugin(): Plugin {
               const cols: number = typeof msg.cols === 'number' && msg.cols > 0 ? msg.cols : 120;
               const rows: number = typeof msg.rows === 'number' && msg.rows > 0 ? msg.rows : 40;
 
-              console.log(`[Ergo PTY] Spawning: ${cmd} ${args.join(' ')} in ${cwd}`);
+              console.log(`[Ergo PTY] Spawning persistent session [${sessionKey}]: ${cmd} ${args.join(' ')} in ${cwd}`);
 
               try {
-                ptyProcess = pty.spawn(cmd, args, {
+                const proc = pty.spawn(cmd, args, {
                   name: 'xterm-256color',
                   cols,
                   rows,
@@ -2766,44 +3318,127 @@ function ergoPtyPlugin(): Plugin {
                   env: { ...process.env } as Record<string, string>,
                 });
 
-                ptyProcess.onData((data: string) => send({ type: 'data', data }));
-                ptyProcess.onExit(({ exitCode }: { exitCode: number }) => {
-                  console.log(`[Ergo PTY] Process exited with code ${exitCode}`);
-                  send({ type: 'exit', code: exitCode });
-                  ptyProcess = null;
+                const newSession: PtySessionState = {
+                  id: sessionKey,
+                  taskId: msg.taskId || sessionKey,
+                  cmd,
+                  args,
+                  cwd,
+                  ptyProcess: proc,
+                  buffer: [],
+                  bufferLength: 0,
+                  maxBufferChars: 200000,
+                  subscribers: new Set([ws]),
+                  isActive: true,
+                  exitCode: null,
+                  startedAt: new Date().toISOString(),
+                };
+                activePtySessions.set(sessionKey, newSession);
+
+                proc.onData((data: string) => {
+                  newSession.buffer.push(data);
+                  newSession.bufferLength += data.length;
+                  while (newSession.bufferLength > newSession.maxBufferChars && newSession.buffer.length > 1) {
+                    const removed = newSession.buffer.shift();
+                    if (removed) newSession.bufferLength -= removed.length;
+                  }
+                  for (const subscriber of newSession.subscribers) {
+                    if (subscriber.readyState === 1 /* OPEN */) {
+                      try {
+                        subscriber.send(JSON.stringify({ type: 'data', data }));
+                      } catch {}
+                    }
+                  }
                 });
 
-                send({ type: 'ready' });
+                proc.onExit(({ exitCode }: { exitCode: number }) => {
+                  console.log(`[Ergo PTY] Persistent session [${sessionKey}] exited with code ${exitCode}`);
+                  newSession.isActive = false;
+                  newSession.exitCode = exitCode;
+                  for (const subscriber of newSession.subscribers) {
+                    if (subscriber.readyState === 1 /* OPEN */) {
+                      try {
+                        subscriber.send(JSON.stringify({ type: 'exit', code: exitCode }));
+                      } catch {}
+                    }
+                  }
+                });
+
+                send({ type: 'ready', taskId: newSession.taskId, sessionId: sessionKey });
               } catch (err: any) {
-                console.error('[Ergo PTY] Spawn error:', err);
+                console.error(`[Ergo PTY] Spawn error for [${sessionKey}]:`, err);
                 send({ type: 'error', message: err.message });
               }
 
             } else if (msg.type === 'input') {
-              if (ptyProcess && typeof msg.data === 'string') {
-                ptyProcess.write(msg.data);
+              const sessionKey = currentSessionKey || String(msg.taskId || msg.sessionId || '');
+              const session = activePtySessions.get(sessionKey);
+              if (session?.ptyProcess && typeof msg.data === 'string') {
+                session.ptyProcess.write(msg.data);
               }
 
             } else if (msg.type === 'resize') {
-              if (ptyProcess && typeof msg.cols === 'number' && typeof msg.rows === 'number') {
-                try { ptyProcess.resize(msg.cols, msg.rows); } catch {}
+              const sessionKey = currentSessionKey || String(msg.taskId || msg.sessionId || '');
+              const session = activePtySessions.get(sessionKey);
+              if (session?.ptyProcess && typeof msg.cols === 'number' && typeof msg.rows === 'number') {
+                try {
+                  session.ptyProcess.resize(msg.cols, msg.rows);
+                } catch {}
               }
 
             } else if (msg.type === 'kill') {
-              safeKillPty();
+              const sessionKey = currentSessionKey || String(msg.taskId || msg.sessionId || '');
+              const session = activePtySessions.get(sessionKey);
+              if (session) {
+                try {
+                  if (typeof session.ptyProcess?.pid === 'number' && session.ptyProcess.pid > 0) {
+                    const pid = session.ptyProcess.pid;
+                    try {
+                      process.kill(-pid, 'SIGTERM');
+                    } catch {
+                      try {
+                        process.kill(pid, 'SIGTERM');
+                      } catch {}
+                    }
+                    try {
+                      session.ptyProcess.kill('SIGKILL');
+                    } catch {
+                      try {
+                        session.ptyProcess.kill();
+                      } catch {}
+                    }
+                    setTimeout(() => {
+                      try {
+                        process.kill(-pid, 'SIGKILL');
+                      } catch {}
+                    }, 200);
+                  }
+                } catch {}
+                session.isActive = false;
+                activePtySessions.delete(sessionKey);
+                console.log(`[Ergo PTY] Session [${sessionKey}] explicitly killed by user.`);
+              }
             }
           });
 
           ws.on('close', () => {
-            if (ptyProcess) {
-              console.log('[Ergo PTY] WebSocket closed — killing PTY process');
-              safeKillPty();
+            if (currentSessionKey) {
+              const session = activePtySessions.get(currentSessionKey);
+              if (session) {
+                session.subscribers.delete(ws);
+                console.log(`[Ergo PTY] WebSocket closed for session [${currentSessionKey}] — PTY process pid ${session.ptyProcess?.pid} keeps running in background`);
+              }
             }
           });
 
           ws.on('error', (err: Error) => {
             console.error('[Ergo PTY] WebSocket error:', err);
-            safeKillPty();
+            if (currentSessionKey) {
+              const session = activePtySessions.get(currentSessionKey);
+              if (session) {
+                session.subscribers.delete(ws);
+              }
+            }
           });
         });
 

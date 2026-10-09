@@ -430,13 +430,10 @@ export const Navbar: React.FC<NavbarProps> = ({
       {/* Right Header Actions */}
       <div className="header-actions">
         {/* Connected MCPs Trigger */}
-        <button className="btn btn-secondary" onClick={onOpenMcpHub} title="Configure Connections (MCPs, Folders, Coding Agents)">
+        <button className="btn btn-secondary" onClick={onOpenMcpHub} title="Configure Connections (MCPs, Tools & Skills, Folders)">
           <Unplug size={20} color="var(--accent-violet)" />
-          {/* <span>Connections</span> */}
-          <span className="badge badge-done" style={{ marginLeft: '-0.2rem', padding: '0.15rem 0.4rem' }}>
-            {/* {connectedCount > 0 ? `${connectedCount} MCP` : 'MCP Hub'} */}
-            {connectedCount > 0 ? 'Connections' : 'Add Connections'}
-          </span>
+          {/* {connectedCount > 0 ? `${connectedCount} MCP` : 'MCP Hub'} */}
+          {connectedCount > 0 ? 'Connections' : 'Add Connections'}
         </button>
 
         {/* Download & Preview Markdown Files Button */}

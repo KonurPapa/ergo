@@ -34,21 +34,9 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
         remarkPlugins={[remarkGfm]}
         components={{
           // Headings
-          h1: ({ children }) => (
-            <h1 className="md-h1">
-              <span className="md-heading-symbol">#</span> {children}
-            </h1>
-          ),
-          h2: ({ children }) => (
-            <h2 className="md-h2">
-              <span className="md-heading-symbol">##</span> {children}
-            </h2>
-          ),
-          h3: ({ children }) => (
-            <h3 className="md-h3">
-              <span className="md-heading-symbol">###</span> {children}
-            </h3>
-          ),
+          h1: ({ children }) => <h1 className="md-h1">{children}</h1>,
+          h2: ({ children }) => <h2 className="md-h2">{children}</h2>,
+          h3: ({ children }) => <h3 className="md-h3">{children}</h3>,
           h4: ({ children }) => <h4 className="md-h4">{children}</h4>,
 
           // Text formatting

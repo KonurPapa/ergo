@@ -20,8 +20,16 @@ import {
   type SwimLaneDoc,
   type AgentPipelineOptions,
   type TaskStatus,
-  type McpSecretEntry
+  type McpSecretEntry,
+  type RunningJobInfo,
+  type RunningJobsDoc
 } from './types';
+
+import {
+  createDefaultRunningJobsDoc,
+  parseRunningJobsDoc,
+  serializeRunningJobsDoc
+} from './lib/runningJobsStorage';
 
 import { INITIAL_PROJECTS, createNewProjectData, INITIAL_MCP_SERVERS } from './lib/demoData';
 import { GITHUB_MCP_TOOLS } from './lib/githubMcpTools';
@@ -47,6 +55,7 @@ import {
 } from './lib/memory';
 import { useAutosave } from './hooks/useAutosave';
 import { SUPPORTED_AI_PROVIDERS } from './lib/aiProviders';
+import { getEffectiveCliAgent, buildTaskCliPrompt, buildCliArgsForTask } from './lib/cliAgents';
 import { Navbar } from './components/Navbar';
 import { TaskPane } from './components/TaskPane';
 import { BriefPane } from './components/BriefPane';
@@ -59,6 +68,7 @@ import { FolderPickerModal } from './components/FolderPickerModal';
 import { OnboardingModal } from './components/OnboardingModal';
 import { ToastContainer, type ToastMessage } from './components/Toast';
 import { executeTaskWithAi, syncTaskOverviewWithAi } from './lib/ai';
+import { startMcpRoutineUpdateChecker } from './lib/mcpClient';
 import { DEFAULT_AGENT_PIPELINE_OPTIONS } from './lib/agentPipeline/contracts';
 import { formatOverviewDocToMarkdown } from './lib/agentPipeline/summary';
 import {
@@ -68,6 +78,8 @@ import {
   cancelScheduledJob,
   markJobCompleted
 } from './lib/taskScheduler';
+import { registerWorkspaceActionBridge } from './lib/workspaceMcp';
+import { syncSkillsToWorkspace } from './lib/skillsManager';
 
 /** Merge persisted (possibly partial / stale) pipeline settings over the defaults, ignoring undefined values. */
 function mergeAgentPipelineOptions(
@@ -158,9 +170,15 @@ export function App() {
                   return toolMatch ? { ...initTool, autoApprove: Boolean(toolMatch.autoApprove) } : initTool;
                 });
 
+            // Ensure bundled default connections (like Laya, Filesystem, Fetch, Git) default to connected if they were previously saved before being enabled by default
+            const resolvedStatus = (initServer.serverType === 'bundled_harness' && initServer.status === 'connected' && match.status === 'disconnected' && !localStorage.getItem('ergo_mcp_user_toggled_' + initServer.id))
+              ? 'connected'
+              : (match.status || initServer.status);
+
             return {
               ...initServer,
               ...match,
+              status: resolvedStatus,
               tools: mergedTools
             };
           }).concat(parsed.filter((s: MCPServer) => !INITIAL_MCP_SERVERS.some((init) => init.id === s.id)));
@@ -261,6 +279,15 @@ export function App() {
   // Track onboarding completion state
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState<boolean>(false);
 
+  // Autocomplete Settings state (persisted in config/settings.json and localStorage)
+  const [autocompleteSettings, setAutocompleteSettings] = useState<import('./types').AutocompleteSettings>(() => {
+    try {
+      const saved = localStorage.getItem('ergo_autocomplete_settings');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return { enabled: true, keybinding: 'Tab' };
+  });
+
   // Initialize Storage Layer on mount (IndexedDB handle & config loading)
   useEffect(() => {
     async function initStorage() {
@@ -314,6 +341,9 @@ export function App() {
             const persisted = res.settings.agentPipeline;
             setAgentPipelineOptions((prev) => mergeAgentPipelineOptions(prev, persisted));
           }
+          if (res.settings.autocomplete) {
+            setAutocompleteSettings(res.settings.autocomplete);
+          }
         }
 
         // Onboarding Check on Startup:
@@ -336,6 +366,10 @@ export function App() {
 
   // Sync settings (config/settings.json)
   useEffect(() => {
+    try {
+      localStorage.setItem('ergo_autocomplete_settings', JSON.stringify(autocompleteSettings));
+    } catch {}
+
     if (activeProjectId) {
       storageManager.saveSettings({
         version: 1,
@@ -346,10 +380,11 @@ export function App() {
         theme,
         hasCompletedOnboarding,
         agentPipeline: agentPipelineOptions,
+        autocomplete: autocompleteSettings,
         lastOpenedAt: new Date().toISOString()
       });
     }
-  }, [activeProjectId, activeKeyId, autosave.delaySec, autosave.isEnabled, theme, hasCompletedOnboarding, agentPipelineOptions]);
+  }, [activeProjectId, activeKeyId, autosave.delaySec, autosave.isEnabled, theme, hasCompletedOnboarding, agentPipelineOptions, autocompleteSettings]);
 
   // MCP Secrets State (config/secrets.json)
   const [mcpSecrets, setMcpSecrets] = useState<Record<string, McpSecretEntry>>({});
@@ -425,7 +460,7 @@ export function App() {
     };
   });
 
-  // Sync activeKeyId & userApiKeys to aiConfig
+  // Sync activeKeyId & userApiKeys to aiConfig and cliAgentConfig
   useEffect(() => {
     const activeKey = userApiKeys.find((k) => k.id === activeKeyId);
     if (activeKey) {
@@ -443,12 +478,20 @@ export function App() {
         providerKeys: activeKey.providerKeys || undefined,
         authMode: activeKey.authMode || (activeKey.apiKey === 'cli_subscription_active' ? 'cli_subscription' : 'api_key'),
         cliAgentId: activeKey.cliAgentId,
+        cliPresetId: activeKey.cliPresetId,
         cliCustomCommand: activeKey.cliCustomCommand,
+        cliExtraArgs: activeKey.cliExtraArgs,
         cliExecutionMode: activeKey.cliExecutionMode,
         apiKey: activeKey.apiKey,
         baseUrl: activeKey.baseUrl,
         isConnected: true
       });
+
+      // Synchronize CLI agent config to the effective agent for this profile
+      const effective = getEffectiveCliAgent(activeKey, cliAgentConfig);
+      if (effective) {
+        setCliAgentConfig(effective);
+      }
     } else {
       setAiConfig({
         provider: 'none',
@@ -478,6 +521,31 @@ export function App() {
     } catch {}
   }, [mcpServers]);
 
+  // Routine update checker for connected MCP servers (checks every 60s and on window focus)
+  const mcpServersRef = useRef(mcpServers);
+  useEffect(() => {
+    mcpServersRef.current = mcpServers;
+  }, [mcpServers]);
+
+  useEffect(() => {
+    const cleanup = startMcpRoutineUpdateChecker(
+      () => mcpServersRef.current,
+      (result) => {
+        if (result.hasChanges) {
+          setMcpServers(result.updatedServers);
+          showToast({
+            type: 'info',
+            title: 'MCP Tools Updated',
+            message: result.summaryMessage || 'New or updated tools were discovered from your connected MCP servers.',
+            duration: 5000
+          });
+        }
+      },
+      60000
+    );
+    return cleanup;
+  }, [showToast]);
+
   // Modal Open States
   const [isDraftModalOpen, setIsDraftModalOpen] = useState(false);
   const [isMcpHubOpen, setIsMcpHubOpen] = useState(false);
@@ -499,6 +567,24 @@ export function App() {
 
   // AbortController map — one controller per active execution (keyed by taskId)
   const abortControllersRef = useRef<Map<string | number, AbortController>>(new Map());
+
+  // Running Jobs & Queued Tasks State (Persisted in RUNNING_JOBS.json)
+  const [queuedTaskIds, setQueuedTaskIds] = useState<(string | number)[]>([]);
+  const [runningJobs, setRunningJobs] = useState<RunningJobInfo[]>([]);
+
+  const queuedTaskIdsRef = useRef<(string | number)[]>([]);
+  queuedTaskIdsRef.current = queuedTaskIds;
+
+  const runningJobsRef = useRef<RunningJobInfo[]>([]);
+  runningJobsRef.current = runningJobs;
+
+  const briefsRef = useRef<AgentContextItem[]>([]);
+  briefsRef.current = briefs;
+
+  const taskExecutionStepsRef = useRef<Record<string | number, ExecutionStep[]>>({});
+  taskExecutionStepsRef.current = taskExecutionSteps;
+
+  const stepSaveTimerRef = useRef<any>(null);
 
 
 
@@ -641,65 +727,6 @@ export function App() {
     setActiveKeyId(keyId);
   };
 
-  // Handlers for CLI Coding Agent Setups
-  const handleSaveCliAgentSetup = (setupData: Omit<CliAgentSetup, 'id'> & { id?: string }) => {
-    let savedId = setupData.id;
-    if (savedId) {
-      // Edit existing setup
-      setCliAgents((prev) =>
-        prev.map((a) => (a.id === savedId ? { ...a, ...setupData, id: savedId! } : a))
-      );
-    } else {
-      // Add new setup
-      savedId = `agent_${Date.now()}`;
-      const newSetup: CliAgentSetup = {
-        ...setupData,
-        id: savedId,
-        createdAt: new Date().toISOString()
-      };
-      setCliAgents((prev) => [...prev, newSetup]);
-    }
-    setActiveCliAgentId(savedId);
-  };
-
-  const handleDeleteCliAgentSetup = (id: string) => {
-    setCliAgents((prev) => prev.filter((a) => a.id !== id));
-    if (activeCliAgentId === id) {
-      const remaining = cliAgents.filter((a) => a.id !== id);
-      if (remaining.length > 0) {
-        setActiveCliAgentId(remaining[0].id);
-        setCliAgentConfig({
-          id: remaining[0].id,
-          name: remaining[0].name,
-          presetId: remaining[0].presetId,
-          command: remaining[0].command,
-          extraArgs: remaining[0].extraArgs,
-        });
-      } else {
-        setActiveCliAgentId(null);
-        setCliAgentConfig(null);
-      }
-    }
-  };
-
-  const handleSelectActiveCliAgent = (agentId: string | null) => {
-    setActiveCliAgentId(agentId);
-    if (agentId) {
-      const found = cliAgents.find((a) => a.id === agentId);
-      if (found) {
-        setCliAgentConfig({
-          id: found.id,
-          name: found.name,
-          presetId: found.presetId,
-          command: found.command,
-          extraArgs: found.extraArgs,
-        });
-      }
-    } else {
-      setCliAgentConfig(null);
-    }
-  };
-
   const handleOpenAiScreen = () => {
     setEditingKey(null);
     setIsAiScreenOpen(true);
@@ -776,7 +803,12 @@ export function App() {
           }];
 
       const agentPath = activeProject.agentContextFilePath || (activeProject.folderPath ? `${activeProject.folderPath}/AGENT_CONTEXT.md` : '');
-      const allPathsToRead = [...currentLanes.map((l) => l.filePath), ...(agentPath ? [agentPath] : [])];
+      const runningJobsPath = activeProject.folderPath ? `${activeProject.folderPath}/RUNNING_JOBS.json` : '';
+      const allPathsToRead = [
+        ...currentLanes.map((l) => l.filePath),
+        ...(agentPath ? [agentPath] : []),
+        ...(runningJobsPath ? [runningJobsPath] : [])
+      ];
 
       // Try reading latest live files directly from disk
       const diskFiles = await readFilesFromDisk(allPathsToRead);
@@ -801,6 +833,21 @@ export function App() {
           void storageManager.deleteFile(agentPath);
         } catch (migErr) {
           console.warn('[Ergo] Cleanup of legacy AGENT_CONTEXT.md:', migErr);
+        }
+      }
+
+      // Parse or initialize RUNNING_JOBS.json
+      let runningJobsDoc: RunningJobsDoc | null = null;
+      if (runningJobsPath && diskFiles[runningJobsPath] !== null && diskFiles[runningJobsPath] !== undefined) {
+        runningJobsDoc = parseRunningJobsDoc(diskFiles[runningJobsPath]!, activeProject.id);
+      } else if (activeProject.runningJobsDoc) {
+        runningJobsDoc = activeProject.runningJobsDoc;
+      }
+
+      if (!runningJobsDoc) {
+        runningJobsDoc = createDefaultRunningJobsDoc(activeProject.id);
+        if (runningJobsPath) {
+          writeFilesToDisk([{ filePath: runningJobsPath, content: serializeRunningJobsDoc(runningJobsDoc) }]);
         }
       }
 
@@ -847,14 +894,49 @@ export function App() {
         writeFilesToDisk(cleanedLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })));
       }
 
-      const parsedBriefsWithArchive = parseAgentContextWithArchive(activeProject.agentContextMarkdown || '');
-      const activeBriefs: AgentContextItem[] = parsedBriefsWithArchive.items;
+      const activeBriefs: AgentContextItem[] =
+        runningJobsDoc && Array.isArray(runningJobsDoc.tasks) && runningJobsDoc.tasks.length > 0
+          ? runningJobsDoc.tasks
+          : parseAgentContextWithArchive(activeProject.agentContextMarkdown || '').items;
 
       setTasks(allActiveTasks);
       setArchivedTasks([]);
       setHeaderComments(firstHeaderComments);
       setBriefs(activeBriefs);
       setArchivedBriefs([]);
+      setRunningJobs(runningJobsDoc.runningJobs || []);
+      setQueuedTaskIds(runningJobsDoc.queuedTaskIds || []);
+      if (runningJobsDoc.taskExecutionSteps && Object.keys(runningJobsDoc.taskExecutionSteps).length > 0) {
+        setTaskExecutionSteps(runningJobsDoc.taskExecutionSteps);
+      }
+
+      // Query active backend PTY sessions to reconnect any running terminal sessions
+      try {
+        const ptyRes = await fetch('/api/pty/sessions');
+        if (ptyRes.ok) {
+          const { sessions } = await ptyRes.json();
+          if (Array.isArray(sessions) && sessions.length > 0) {
+            const activeSessions: SpawnedSession[] = sessions.map((s: any) => ({
+              session: {
+                taskId: s.taskId || s.id,
+                taskTitle: s.taskTitle || `Task ${s.taskId || s.id}`,
+                isActive: true,
+                spawnedAt: new Date(s.createdAt || Date.now()).toISOString(),
+              },
+              cwd: s.cwd || activeProject.folderPath,
+              cmd: s.cmd || '',
+              args: s.args || [],
+            }));
+            setTerminalSessions((prev) => {
+              const existingTaskIds = new Set(activeSessions.map((as) => String(as.session.taskId)));
+              const retained = prev.filter((p) => !existingTaskIds.has(String(p.session.taskId)));
+              return [...retained, ...activeSessions];
+            });
+          }
+        }
+      } catch (ptyErr) {
+        console.warn('[Ergo] Failed to query active PTY sessions on load:', ptyErr);
+      }
 
       if (activeBriefs.length > 0) {
         void migrateAgentContextToMemory(
@@ -892,7 +974,8 @@ export function App() {
                 ...p,
                 todoMarkdown: primaryTodoMd,
                 agentContextMarkdown: '',
-                swimLanes: effectiveSwimLanes
+                swimLanes: effectiveSwimLanes,
+                runningJobsDoc: runningJobsDoc || p.runningJobsDoc,
               }
             : p
         )
@@ -926,6 +1009,27 @@ export function App() {
 
           const { projectId, fileType, content, relativePath } = data;
           if (!fileType || typeof content !== 'string') return;
+
+          // If RUNNING_JOBS.json was changed on disk, update the project runningJobsDoc and active briefs
+          if (relativePath?.endsWith('RUNNING_JOBS.json')) {
+            const parsedJobsDoc = parseRunningJobsDoc(content, projectId);
+            setProjects((prevProjects) =>
+              prevProjects.map((p) =>
+                p.id === projectId || p.folderPath === `projects/${projectId}`
+                  ? { ...p, runningJobsDoc: parsedJobsDoc }
+                  : p
+              )
+            );
+
+            const ap = activeProjectRef.current;
+            if (ap && (ap.id === projectId || ap.folderPath === `projects/${projectId}`)) {
+              if (Array.isArray(parsedJobsDoc.tasks)) setBriefs(parsedJobsDoc.tasks);
+              if (Array.isArray(parsedJobsDoc.runningJobs)) setRunningJobs(parsedJobsDoc.runningJobs);
+              if (Array.isArray(parsedJobsDoc.queuedTaskIds)) setQueuedTaskIds(parsedJobsDoc.queuedTaskIds);
+              if (parsedJobsDoc.taskExecutionSteps) setTaskExecutionSteps(parsedJobsDoc.taskExecutionSteps);
+            }
+            return;
+          }
 
           // Update projects state array for the changed project
           setProjects((prevProjects) =>
@@ -1072,20 +1176,39 @@ export function App() {
 
     const primaryTodoMd = updatedLanes[0]?.markdown || serializeTodoMarkdown(newTasks, headerComments);
 
+    // Save swimlane markdown files (e.g. TODO.md) and RUNNING_JOBS.json
+    const filesToSave = updatedLanes.map((l) => ({ filePath: l.filePath, content: l.markdown }));
+
+    const runningJobsPath = activeProject?.folderPath ? `${activeProject.folderPath}/RUNNING_JOBS.json` : '';
+    let currentRunningJobsDoc: RunningJobsDoc | undefined;
+    if (runningJobsPath) {
+      currentRunningJobsDoc = {
+        version: 1,
+        projectId: activeProjectId,
+        updatedAt: new Date().toISOString(),
+        tasks: newBriefs,
+        runningJobs: runningJobsRef.current,
+        queuedTaskIds: queuedTaskIdsRef.current,
+        taskExecutionSteps: taskExecutionStepsRef.current as Record<string, ExecutionStep[]>,
+      };
+      filesToSave.push({
+        filePath: runningJobsPath,
+        content: serializeRunningJobsDoc(currentRunningJobsDoc),
+      });
+    }
+
     setProjects((prev) =>
       prev.map((p) =>
         p.id === activeProjectId
           ? {
               ...p,
               todoMarkdown: primaryTodoMd,
-              swimLanes: updatedLanes
+              swimLanes: updatedLanes,
+              runningJobsDoc: currentRunningJobsDoc || p.runningJobsDoc,
             }
           : p
       )
     );
-
-    // Save only swimlane markdown files (e.g. TODO.md) — AGENT_CONTEXT.md is never written to disk
-    const filesToSave = updatedLanes.map((l) => ({ filePath: l.filePath, content: l.markdown }));
 
     if (immediateDiskSave) {
       autosave.saveImmediately(filesToSave);
@@ -1093,6 +1216,30 @@ export function App() {
       autosave.queueSave(filesToSave);
     }
   };
+
+  // Helper to persist RUNNING_JOBS.json directly when running jobs or queued states update
+  const persistRunningJobsDoc = useCallback((
+    jobsToPersist: RunningJobInfo[] = runningJobsRef.current,
+    queuedToPersist: (string | number)[] = queuedTaskIdsRef.current,
+    briefsToPersist: AgentContextItem[] = briefsRef.current,
+    stepsToPersist: Record<string | number, ExecutionStep[]> = taskExecutionStepsRef.current
+  ) => {
+    if (!activeProject?.folderPath) return;
+    const runningJobsPath = `${activeProject.folderPath}/RUNNING_JOBS.json`;
+    const doc: RunningJobsDoc = {
+      version: 1,
+      projectId: activeProjectId,
+      updatedAt: new Date().toISOString(),
+      tasks: briefsToPersist,
+      runningJobs: jobsToPersist,
+      queuedTaskIds: queuedToPersist,
+      taskExecutionSteps: stepsToPersist as Record<string, ExecutionStep[]>,
+    };
+    writeFilesToDisk([{ filePath: runningJobsPath, content: serializeRunningJobsDoc(doc) }]);
+    setProjects((prev) =>
+      prev.map((p) => (p.id === activeProjectId ? { ...p, runningJobsDoc: doc } : p))
+    );
+  }, [activeProject?.folderPath, activeProjectId]);
 
   // AI Assistant Undo Snapshot State (Supports Ctrl+Z for Human AI Assistant modifications)
   const [aiUndoSnapshot, setAiUndoSnapshot] = useState<{
@@ -1156,6 +1303,23 @@ export function App() {
       nextBriefs = parseAgentContextMarkdown(result.agentContextMarkdown);
     }
 
+    // Attach user-selected MCP tools to created/updated tasks and briefs
+    if (result.selectedMcpTools && result.selectedMcpTools.length > 0) {
+      const prevIds = new Set(tasks.map((t) => t.id));
+      nextTasks = nextTasks.map((t) => {
+        if (!prevIds.has(t.id) || !t.mcpRequired || t.mcpRequired.length === 0) {
+          return { ...t, mcpRequired: result.selectedMcpTools };
+        }
+        return t;
+      });
+      nextBriefs = nextBriefs.map((b) => {
+        if (!b.requiredMcps || b.requiredMcps.length === 0) {
+          return { ...b, requiredMcps: result.selectedMcpTools, selectedMcpTools: result.selectedMcpTools };
+        }
+        return b;
+      });
+    }
+
     // 3. Persist to state and disk immediately
     syncAndSaveProject(nextTasks, nextBriefs, true);
 
@@ -1210,6 +1374,8 @@ export function App() {
       brief: cleanText,
       built: '',
       validation: '',
+      requiredMcps: sourceTask?.mcpRequired,
+      selectedMcpTools: sourceTask?.mcpRequired,
     };
 
     // If a brief already exists for this exact sourceTaskId, update it instead of adding a duplicate
@@ -1247,8 +1413,27 @@ export function App() {
     });
   };
 
-  // Terminate a running agent execution for a given task ID
-  const handleTerminateAgent = useCallback((taskId: string | number) => {
+  // Handler for explicitly updating configured MCP tools on a specific task / brief
+  const handleUpdateTaskMcpTools = useCallback((taskId: string | number, toolNames: string[]) => {
+    const nextTasks = tasks.map((t) => (String(t.id) === String(taskId) ? { ...t, mcpRequired: toolNames } : t));
+    const nextBriefs = briefs.map((b) =>
+      String(b.sourceTaskId) === String(taskId) || String(b.id) === String(taskId)
+        ? { ...b, requiredMcps: toolNames, selectedMcpTools: toolNames }
+        : b
+    );
+    syncAndSaveProject(nextTasks, nextBriefs, true);
+    showToast({
+      type: 'success',
+      title: 'MCP Tools Updated',
+      message: toolNames.length === 0
+        ? 'Cleared MCP tool constraints for task.'
+        : `Assigned ${toolNames.length} MCP tool${toolNames.length === 1 ? '' : 's'} to this task.`,
+      duration: 3000
+    });
+  }, [tasks, briefs, syncAndSaveProject, showToast]);
+
+  // Terminate a running agent execution for a given task ID (in-place agent execution, tool loop, and embedded CLI session)
+  const handleTerminateAgent = useCallback(async (taskId: string | number) => {
     // 1. Abort controller (exact match or stringified match)
     let foundController: AbortController | undefined;
     for (const [key, ctrl] of abortControllersRef.current.entries()) {
@@ -1259,10 +1444,29 @@ export function App() {
       }
     }
     if (foundController) {
-      foundController.abort();
+      try {
+        foundController.abort();
+      } catch {}
     }
 
-    // 2. If there is any pending Ollama fallback waiting, resolve it to terminate immediately
+    // 2. If there is any pending permission request waiting for approval, reject it explicitly so it never resolves true
+    for (const [key, pending] of Object.entries(pendingPermissionsRef.current)) {
+      if (String(key) === String(taskId)) {
+        try {
+          pending.resolve(false);
+        } catch {}
+        delete pendingPermissionsRef.current[key];
+      }
+    }
+    for (const [key, pending] of Object.entries(pendingPermissions)) {
+      if (String(key) === String(taskId)) {
+        try {
+          pending.resolve(false);
+        } catch {}
+      }
+    }
+
+    // 3. If there is any pending Ollama fallback waiting, resolve it to terminate immediately
     for (const [key, pending] of Object.entries(pendingOllamaFallbacksRef.current)) {
       if (String(key) === String(taskId)) {
         try {
@@ -1272,10 +1476,65 @@ export function App() {
       }
     }
 
-    // 3. Clear executing task id
-    setExecutingTaskId((cur) => (cur !== null && String(cur) === String(taskId) ? null : cur));
+    // 4. If there is any pending human input waiting, reject/cancel it
+    for (const [key, pending] of Object.entries(pendingHumanInputsRef.current)) {
+      if (String(key) === String(taskId)) {
+        try {
+          pending.resolve('');
+        } catch {}
+        delete pendingHumanInputsRef.current[key];
+      }
+    }
 
-    // 4. Update task status from in_progress back to partly_done
+    // 5. Terminate server-side PTY process (CLI agent, node, gemini, etc.)
+    try {
+      fetch('/api/pty/kill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: String(taskId), sessionId: String(taskId) }),
+      }).catch((err) => console.warn('[Ergo] PTY kill fetch failed:', err));
+    } catch {}
+
+    // Mark active terminal session for this task as inactive
+    setTerminalSessions((prev) =>
+      prev.map((s) =>
+        String(s.session.taskId) === String(taskId)
+          ? { ...s, session: { ...s.session, isActive: false, exitCode: -1 } }
+          : s
+      )
+    );
+
+    // 6. Clear executing task id and remove from queue
+    setExecutingTaskId((cur) => (cur !== null && String(cur) === String(taskId) ? null : cur));
+    setQueuedTaskIds((prev) => prev.filter((id) => String(id) !== String(taskId)));
+    queuedTaskIdsRef.current = queuedTaskIdsRef.current.filter((id) => String(id) !== String(taskId));
+
+    // Update running job status to cancelled
+    setRunningJobs((prev) => {
+      const updated = prev.map((j) =>
+        String(j.taskId) === String(taskId)
+          ? { ...j, status: 'cancelled' as const, completedAt: new Date().toISOString() }
+          : j
+      );
+      runningJobsRef.current = updated;
+      persistRunningJobsDoc(updated, queuedTaskIdsRef.current, briefsRef.current, taskExecutionStepsRef.current);
+      return updated;
+    });
+
+    // Cancel running step in execution steps
+    setTaskExecutionSteps((prev) => {
+      const steps = prev[taskId] || prev[String(taskId)] || [];
+      const nextSteps = steps.map((s) =>
+        s.status === 'running'
+          ? { ...s, status: 'cancelled' as const, detail: 'Task execution terminated by user.' }
+          : s
+      );
+      const nextRecord = { ...prev, [taskId]: nextSteps };
+      taskExecutionStepsRef.current = nextRecord;
+      return nextRecord;
+    });
+
+    // 7. Update task status from in_progress back to partly_done
     setTasks((prevTasks) => {
       const updated = prevTasks.map((t) =>
         String(t.id) === String(taskId)
@@ -1293,7 +1552,7 @@ export function App() {
       return updated;
     });
 
-    // 5. Clean up pending UI prompts and toasts
+    // 8. Clean up pending UI prompts and toasts
     handleDismissToast(`perm-toast-${taskId}`);
     handleDismissToast(`ollama-toast-${taskId}`);
     setPendingOllamaFallbacks((prev) => {
@@ -1310,7 +1569,14 @@ export function App() {
       }
       return next;
     });
-  }, [briefs, handleDismissToast, syncAndSaveProject]);
+    setPendingHumanInputs((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(next)) {
+        if (String(k) === String(taskId)) delete next[k];
+      }
+      return next;
+    });
+  }, [briefs, handleDismissToast, pendingPermissions, syncAndSaveProject]);
 
   const handlePermissionChoice = (taskId: string | number, approved: boolean) => {
     handleDismissToast(`perm-toast-${taskId}`);
@@ -1429,9 +1695,11 @@ export function App() {
   const handleExecuteTask = async (task: TaskItem) => {
     setSelectedTaskId(task.id);
 
+    const activeKey = userApiKeys.find((k) => k.id === activeKeyId);
+    const effectiveCli = getEffectiveCliAgent(activeKey, cliAgentConfig);
+
     // If using in-place AI execution (no CLI agent configured), verify active AI configuration
-    if (!cliAgentConfig?.command) {
-      const activeKey = userApiKeys.find((k) => k.id === activeKeyId);
+    if (!effectiveCli?.command) {
       const pMeta = activeKey ? SUPPORTED_AI_PROVIDERS.find((p) => p.id === activeKey.provider) : undefined;
       const requiresKey = pMeta ? pMeta.requiresKey !== false : true;
       const isSubscription =
@@ -1456,7 +1724,13 @@ export function App() {
       }
     }
 
-    if (cliAgentConfig?.command) {
+    if (effectiveCli?.command) {
+      setExecutingTaskId(task.id);
+
+      // Remove from queued tasks
+      setQueuedTaskIds((prev) => prev.filter((id) => String(id) !== String(task.id)));
+      queuedTaskIdsRef.current = queuedTaskIdsRef.current.filter((id) => String(id) !== String(task.id));
+
       // Resolve working directory: use the project folder path or home
       const cwd = activeProject?.folderPath
         ? (storageManager as any).resolvedStoragePath
@@ -1464,9 +1738,96 @@ export function App() {
           : activeProject.folderPath
         : '~';
 
-      const args = cliAgentConfig.extraArgs
-        ? cliAgentConfig.extraArgs.split(/\s+/).filter(Boolean)
-        : [];
+      let currentBrief = briefs.find(
+        (b) =>
+          (b.sourceTaskId != null && String(b.sourceTaskId) === String(task.id)) ||
+          b.title.trim().toLowerCase() === task.title.trim().toLowerCase() ||
+          String(b.itemNumber) === String(task.id)
+      );
+
+      const existingOverviewText = (currentBrief?.overview || currentBrief?.brief || '').trim();
+      const hasValidOverview = Boolean(
+        existingOverviewText.length > 30 &&
+        !existingOverviewText.startsWith(`Overview for ${task.title}`) &&
+        existingOverviewText !== task.title.trim()
+      );
+
+      // If task does not yet have an Overview, synthesize it with AI first so Card 2 is populated
+      if (!hasValidOverview) {
+        const overviewSteps: ExecutionStep[] = [
+          {
+            id: `step-ctx-${task.id}-${Date.now()}`,
+            taskId: task.id,
+            time: new Date().toLocaleTimeString(),
+            stage: 'context',
+            title: 'Context Assembly & Task Spec',
+            detail: `Assembled task brief, acceptance criteria, and workspace context for "${task.title}".`,
+            status: 'success',
+          },
+          {
+            id: `step-overview-${task.id}-${Date.now()}`,
+            taskId: task.id,
+            time: new Date().toLocaleTimeString(),
+            stage: 'overview',
+            agentRole: 'summary',
+            title: 'Summary AI: Building Task Overview & Acceptance Criteria',
+            detail: `Synthesizing task overview, acceptance criteria, and workspace context for "${task.title}"...`,
+            status: 'running',
+          },
+        ];
+        setTaskExecutionSteps((prev) => ({
+          ...prev,
+          [task.id]: overviewSteps,
+        }));
+
+        try {
+          const syncedOverview = await syncTaskOverviewWithAi(
+            task,
+            existingOverviewText,
+            activeProject,
+            aiConfig,
+            mcpServers,
+            serializeTodoMarkdown(tasks, headerComments, archivedTasks),
+            serializeAgentContextMarkdown(briefs, archivedBriefs)
+          );
+
+          const updatedBrief: AgentContextItem = {
+            ...currentBrief,
+            id: currentBrief?.id || `brief_${task.id}`,
+            sourceTaskId: task.id,
+            sourceLaneId: task.swimLaneId || currentBrief?.sourceLaneId,
+            itemNumber: currentBrief?.itemNumber,
+            title: task.title,
+            status: 'in_progress',
+            overview: syncedOverview,
+            buildAndVerification: currentBrief?.buildAndVerification || currentBrief?.built || '',
+            completion: currentBrief?.completion || currentBrief?.validation || currentBrief?.humanReview || currentBrief?.followUps || '',
+            brief: syncedOverview,
+            built: currentBrief?.built || '',
+            validation: currentBrief?.validation || '',
+            humanReview: currentBrief?.humanReview || '',
+            followUps: currentBrief?.followUps || '',
+          };
+
+          const existingIdx = briefs.findIndex(
+            (b) =>
+              (b.id && b.id === updatedBrief.id) ||
+              (b.sourceTaskId && updatedBrief.sourceTaskId && b.sourceTaskId === updatedBrief.sourceTaskId) ||
+              b.title.trim().toLowerCase() === updatedBrief.title.trim().toLowerCase()
+          );
+          const nextBriefs = existingIdx !== -1
+            ? briefs.map((b, idx) => (idx === existingIdx ? updatedBrief : b))
+            : [...briefs, updatedBrief];
+
+          syncAndSaveProject(tasks, nextBriefs, false);
+          currentBrief = updatedBrief;
+        } catch (err) {
+          console.warn('[Ergo CLI Task] Overview generation error, continuing with fallback:', err);
+        }
+      }
+
+      const prompt = buildTaskCliPrompt(task, currentBrief);
+      const args = buildCliArgsForTask(effectiveCli.command, effectiveCli.extraArgs, prompt);
 
       // Create or reuse a session for this task
       const session: TerminalSession = {
@@ -1479,7 +1840,7 @@ export function App() {
       const spawned: SpawnedSession = {
         session,
         cwd,
-        cmd: cliAgentConfig.command,
+        cmd: effectiveCli.command,
         args,
       };
 
@@ -1491,6 +1852,67 @@ export function App() {
 
       setActiveTerminalTaskId(task.id);
 
+      // Register or update CLI job in running jobs
+      const newCliJob: RunningJobInfo = {
+        id: `job_cli_${task.id}_${Date.now()}`,
+        taskId: task.id,
+        taskTitle: task.title,
+        type: 'cli',
+        status: 'in_progress',
+        startedAt: new Date().toISOString(),
+        sessionId: String(task.id),
+        cmd: effectiveCli.command,
+        args,
+        cwd,
+      };
+
+      // Initialize workflow steps for the CLI agent
+      const initialCliSteps: ExecutionStep[] = [
+        {
+          id: `step-ctx-${task.id}-${Date.now()}`,
+          taskId: task.id,
+          time: new Date().toLocaleTimeString(),
+          stage: 'context',
+          title: 'Context Assembly & Task Spec',
+          detail: `Assembled task brief, acceptance criteria, and workspace context for "${task.title}".`,
+          status: 'success',
+        },
+        {
+          id: `step-overview-${task.id}-${Date.now()}`,
+          taskId: task.id,
+          time: new Date().toLocaleTimeString(),
+          stage: 'overview',
+          agentRole: 'summary',
+          title: 'Task Overview & Acceptance Spec',
+          detail: `Synthesized task overview, objectives, and acceptance criteria.`,
+          status: 'success',
+        },
+        {
+          id: `step-manager-${task.id}-${Date.now()}`,
+          taskId: task.id,
+          time: new Date().toLocaleTimeString(),
+          stage: 'execution',
+          agentRole: 'manager',
+          title: `Manager Agent Execution (${effectiveCli.name || effectiveCli.command})`,
+          detail: `Running command: \`${effectiveCli.command} ${args.slice(0, 2).join(' ')}...\` in \`${cwd}\`.\nTask prompt dispatched. Watching live manager agent execution...`,
+          status: 'running',
+        },
+      ];
+
+      setTaskExecutionSteps((prev) => {
+        const next = { ...prev, [task.id]: initialCliSteps };
+        taskExecutionStepsRef.current = next;
+        return next;
+      });
+
+      setRunningJobs((prev) => {
+        const filtered = prev.filter((j) => String(j.taskId) !== String(task.id));
+        const updated = [...filtered, newCliJob];
+        runningJobsRef.current = updated;
+        persistRunningJobsDoc(updated, queuedTaskIdsRef.current, briefsRef.current, taskExecutionStepsRef.current);
+        return updated;
+      });
+
       // Update task status to in_progress if not already done
       if (!task.isDone && task.status !== 'done') {
         const nextTasks = tasks.map((t) => (t.id === task.id ? { ...t, status: 'in_progress' as const } : t));
@@ -1499,6 +1921,28 @@ export function App() {
     } else {
       // In-Place AI Task Execution
       setExecutingTaskId(task.id);
+
+      // Remove from queued tasks
+      setQueuedTaskIds((prev) => prev.filter((id) => String(id) !== String(task.id)));
+      queuedTaskIdsRef.current = queuedTaskIdsRef.current.filter((id) => String(id) !== String(task.id));
+
+      // Register in-place job in running jobs
+      const newInPlaceJob: RunningJobInfo = {
+        id: `job_ai_${task.id}_${Date.now()}`,
+        taskId: task.id,
+        taskTitle: task.title,
+        type: 'in_place',
+        status: 'in_progress',
+        startedAt: new Date().toISOString(),
+      };
+
+      setRunningJobs((prev) => {
+        const filtered = prev.filter((j) => String(j.taskId) !== String(task.id));
+        const updated = [...filtered, newInPlaceJob];
+        runningJobsRef.current = updated;
+        persistRunningJobsDoc(updated, queuedTaskIdsRef.current, briefsRef.current, taskExecutionStepsRef.current);
+        return updated;
+      });
 
       const currentTask = tasks.find((t) => String(t.id) === String(task.id)) || task;
       const currentBrief = briefs.find(
@@ -1576,7 +2020,18 @@ export function App() {
                     : s
                 );
               }
-              return { ...prev, [task.id]: next };
+              const nextRecord = { ...prev, [task.id]: next };
+              taskExecutionStepsRef.current = nextRecord;
+
+              // Debounce persisting execution steps to RUNNING_JOBS.json
+              if (stepSaveTimerRef.current) {
+                clearTimeout(stepSaveTimerRef.current);
+              }
+              stepSaveTimerRef.current = setTimeout(() => {
+                persistRunningJobsDoc(undefined, undefined, undefined, nextRecord);
+              }, 600);
+
+              return nextRecord;
             });
 
             // If Summary AI finished with an overview document, populate the live brief immediately
@@ -1699,10 +2154,33 @@ export function App() {
         } else {
           nextBriefs = [...briefs, res.updatedBrief];
         }
+
+        // Update running job to completed
+        setRunningJobs((prev) => {
+          const updated = prev.map((j) =>
+            String(j.taskId) === String(task.id)
+              ? { ...j, status: 'completed' as const, completedAt: new Date().toISOString() }
+              : j
+          );
+          runningJobsRef.current = updated;
+          return updated;
+        });
+
         syncAndSaveProject(nextTasks, nextBriefs, true);
       } catch (err) {
         console.error('Task execution error:', err);
         const isAborted = (err as any)?.name === 'AbortError' || !!controller?.signal?.aborted;
+
+        // Update running job to cancelled or failed
+        setRunningJobs((prev) => {
+          const updated = prev.map((j) =>
+            String(j.taskId) === String(task.id)
+              ? { ...j, status: isAborted ? ('cancelled' as const) : ('failed' as const), completedAt: new Date().toISOString() }
+              : j
+          );
+          runningJobsRef.current = updated;
+          return updated;
+        });
         if (isAborted) {
           setTasks((prevTasks) => {
             const nextTasks = prevTasks.map((t) =>
@@ -1835,32 +2313,68 @@ export function App() {
         });
       }
     }
-  };
 
-  const handleKillSession = (taskId: string | number) => {
-    setTerminalSessions((prev) =>
-      prev.map((s) =>
-        String(s.session.taskId) === String(taskId)
-          ? { ...s, session: { ...s.session, isActive: false, exitCode: -1 } }
-          : s
-      )
-    );
-    setTasks((prevTasks) => {
-      const updated = prevTasks.map((t) =>
-        String(t.id) === String(taskId)
-          ? { ...t, status: 'partly_done' as TaskStatus, isDone: false }
-          : t
+    // Update execution steps
+    setTaskExecutionSteps((prev) => {
+      const existing = prev[taskId] || prev[String(taskId)] || [];
+      if (existing.length === 0) return prev;
+      const updated = existing.map((s) => {
+        if (s.agentRole === 'manager' || s.id.includes('step-manager-') || s.stage === 'execution') {
+          return {
+            ...s,
+            status: code === 0 ? ('success' as const) : ('error' as const),
+            detail:
+              code === 0
+                ? `${s.detail}\n\n✓ Manager agent completed task execution successfully (exit code 0).`
+                : `${s.detail}\n\n✗ CLI agent process terminated with exit code ${code}.`,
+          };
+        }
+        return s;
+      });
+
+      if (code === 0 && !updated.some((s) => s.stage === 'verify')) {
+        updated.push({
+          id: `step-verify-${taskId}-${Date.now()}`,
+          taskId,
+          time: new Date().toLocaleTimeString(),
+          stage: 'verify',
+          title: 'Verification & Task Completion',
+          detail: 'Task execution completed successfully with exit code 0. Status updated to Done.',
+          status: 'success',
+        });
+      }
+
+      taskExecutionStepsRef.current = {
+        ...taskExecutionStepsRef.current,
+        [taskId]: updated,
+      };
+      return {
+        ...prev,
+        [taskId]: updated,
+      };
+    });
+
+    setExecutingTaskId((prev) => (String(prev) === String(taskId) ? null : prev));
+
+    // Update running job status
+    setRunningJobs((prev) => {
+      const updated = prev.map((j) =>
+        String(j.taskId) === String(taskId)
+          ? {
+              ...j,
+              status: code === 0 ? ('completed' as const) : ('failed' as const),
+              completedAt: new Date().toISOString(),
+            }
+          : j
       );
-      const updatedBriefs = briefs.map((b) =>
-        (b.sourceTaskId != null && String(b.sourceTaskId) === String(taskId)) ||
-        (b.id != null && String(b.id) === String(taskId))
-          ? { ...b, status: 'partly_done' as TaskStatus }
-          : b
-      );
-      syncAndSaveProject(updated, updatedBriefs, true);
-      setBriefs(updatedBriefs);
+      runningJobsRef.current = updated;
+      persistRunningJobsDoc(updated, undefined, undefined, taskExecutionStepsRef.current);
       return updated;
     });
+  };
+
+  const handleKillSession = async (taskId: string | number) => {
+    await handleTerminateAgent(taskId);
   };
 
   // Immediate Save Brief Edits
@@ -1936,7 +2450,33 @@ export function App() {
 
     // Ensure AI Workspace panel is open so user sees the task execution cards
     setIsAiPanelOpen(true);
-    ensureBriefsForTasks(taskList, laneId, laneTitle);
+    const updatedBriefs = ensureBriefsForTasks(taskList, laneId, laneTitle);
+
+    const allIds = taskList.map((t) => t.id);
+    const initialQueued = allIds.slice(1);
+    setQueuedTaskIds(initialQueued);
+    queuedTaskIdsRef.current = initialQueued;
+
+    // Create or update initial runningJobs entries
+    const initialJobs: RunningJobInfo[] = taskList.map((t, idx) => ({
+      id: `job_${t.id}_${Date.now()}_${idx}`,
+      taskId: t.id,
+      taskTitle: t.title,
+      type: cliAgentConfig?.command ? 'cli' : 'in_place',
+      status: idx === 0 ? 'in_progress' : 'queued',
+      startedAt: new Date().toISOString(),
+      laneId,
+      laneTitle,
+    }));
+
+    setRunningJobs((prev) => {
+      const existingIds = new Set(initialJobs.map((j) => String(j.taskId)));
+      const filtered = prev.filter((j) => !existingIds.has(String(j.taskId)));
+      const combined = [...filtered, ...initialJobs];
+      runningJobsRef.current = combined;
+      persistRunningJobsDoc(combined, initialQueued, updatedBriefs, taskExecutionStepsRef.current);
+      return combined;
+    });
 
     showToast({
       type: 'info',
@@ -1947,6 +2487,24 @@ export function App() {
 
     for (let i = 0; i < taskList.length; i++) {
       const task = taskList[i];
+      const remainingQueued = allIds.slice(i + 1);
+      setQueuedTaskIds(remainingQueued);
+      queuedTaskIdsRef.current = remainingQueued;
+
+      // Update this job to in_progress if not already
+      setRunningJobs((prev) => {
+        const updated = prev.map((j) =>
+          String(j.taskId) === String(task.id)
+            ? { ...j, status: 'in_progress' as const }
+            : remainingQueued.map(String).includes(String(j.taskId))
+            ? { ...j, status: 'queued' as const }
+            : j
+        );
+        runningJobsRef.current = updated;
+        persistRunningJobsDoc(updated, remainingQueued, briefsRef.current, taskExecutionStepsRef.current);
+        return updated;
+      });
+
       // Check if user terminated everything
       try {
         await handleExecuteTask(task);
@@ -1954,6 +2512,10 @@ export function App() {
         console.error(`[Sequence] Error running task ${task.title}:`, err);
       }
     }
+
+    setQueuedTaskIds([]);
+    queuedTaskIdsRef.current = [];
+    persistRunningJobsDoc(undefined, [], undefined, undefined);
   };
 
   // Run tasks in parallel / concurrently (agentic mode)
@@ -1966,7 +2528,30 @@ export function App() {
 
     // Ensure AI Workspace panel is open so user sees all task execution cards
     setIsAiPanelOpen(true);
-    ensureBriefsForTasks(taskList, laneId, laneTitle);
+    const updatedBriefs = ensureBriefsForTasks(taskList, laneId, laneTitle);
+
+    setQueuedTaskIds([]);
+    queuedTaskIdsRef.current = [];
+
+    const parallelJobs: RunningJobInfo[] = taskList.map((t, idx) => ({
+      id: `job_parallel_${t.id}_${Date.now()}_${idx}`,
+      taskId: t.id,
+      taskTitle: t.title,
+      type: cliAgentConfig?.command ? 'cli' : 'in_place',
+      status: 'in_progress',
+      startedAt: new Date().toISOString(),
+      laneId,
+      laneTitle,
+    }));
+
+    setRunningJobs((prev) => {
+      const existingIds = new Set(parallelJobs.map((j) => String(j.taskId)));
+      const filtered = prev.filter((j) => !existingIds.has(String(j.taskId)));
+      const combined = [...filtered, ...parallelJobs];
+      runningJobsRef.current = combined;
+      persistRunningJobsDoc(combined, [], updatedBriefs, taskExecutionStepsRef.current);
+      return combined;
+    });
 
     showToast({
       type: 'info',
@@ -1978,6 +2563,8 @@ export function App() {
     await Promise.allSettled(
       taskList.map((task) => handleExecuteTask(task))
     );
+
+    persistRunningJobsDoc(undefined, [], undefined, undefined);
   };
 
 
@@ -2052,6 +2639,16 @@ export function App() {
           : null
       );
     }
+
+    // Clean up queued and running job records
+    setQueuedTaskIds((prev) => prev.filter((id) => String(id) !== String(taskIdToStore) && String(id) !== rawStr));
+    queuedTaskIdsRef.current = queuedTaskIdsRef.current.filter((id) => String(id) !== String(taskIdToStore) && String(id) !== rawStr);
+
+    setRunningJobs((prev) => {
+      const updated = prev.filter((j) => String(j.taskId) !== String(taskIdToStore) && String(j.taskId) !== rawStr);
+      runningJobsRef.current = updated;
+      return updated;
+    });
 
     // 4. Save clean workspace without AGENT_CONTEXT.md or <!-- ARCHIVE --> blocks
     syncAndSaveProject(nextActiveTasks, nextActiveBriefs, true);
@@ -2194,6 +2791,15 @@ export function App() {
           : null
       );
     }
+    setQueuedTaskIds((prev) => prev.filter((id) => String(id) !== String(targetId) && (!briefToRemove || String(id) !== String(briefToRemove.sourceTaskId))));
+    queuedTaskIdsRef.current = queuedTaskIdsRef.current.filter((id) => String(id) !== String(targetId) && (!briefToRemove || String(id) !== String(briefToRemove.sourceTaskId)));
+
+    setRunningJobs((prev) => {
+      const updated = prev.filter((j) => String(j.taskId) !== String(targetId) && (!briefToRemove || String(j.taskId) !== String(briefToRemove.sourceTaskId)));
+      runningJobsRef.current = updated;
+      return updated;
+    });
+
     setBriefs(nextBriefs);
     syncAndSaveProject(tasks, nextBriefs, true);
 
@@ -2239,6 +2845,16 @@ export function App() {
           : null
       );
     }
+
+    setQueuedTaskIds((prev) => prev.filter((id) => String(id) !== String(targetId) && (!briefToRemove || String(id) !== String(briefToRemove.sourceTaskId))));
+    queuedTaskIdsRef.current = queuedTaskIdsRef.current.filter((id) => String(id) !== String(targetId) && (!briefToRemove || String(id) !== String(briefToRemove.sourceTaskId)));
+
+    setRunningJobs((prev) => {
+      const updated = prev.filter((j) => String(j.taskId) !== String(targetId) && (!briefToRemove || String(j.taskId) !== String(briefToRemove.sourceTaskId)));
+      runningJobsRef.current = updated;
+      return updated;
+    });
+
     setBriefs(nextBriefs);
     syncAndSaveProject(tasks, nextBriefs, true);
 
@@ -2333,6 +2949,23 @@ export function App() {
         if (job.status !== 'pending') continue;
 
         const scheduledTime = new Date(job.scheduledTime).getTime();
+
+        // If the scheduled time is invalid, mark as cancelled and skip
+        if (isNaN(scheduledTime)) {
+          markJobCompleted(job.taskId);
+          setScheduledJobs(getScheduledJobs());
+          continue;
+        }
+
+        // If a one-off scheduled job is stale from a previous session (more than 1 hour overdue), mark it completed/cancelled
+        // rather than suddenly auto-launching tasks when the user opens or reloads the workspace.
+        if (!job.cronExpression && (now - scheduledTime) > 60 * 60 * 1000) {
+          console.log(`[TaskScheduler] Skipping stale overdue scheduled job ${job.id} for task "${job.taskTitle}" (due: ${job.scheduledTime})`);
+          markJobCompleted(job.taskId);
+          setScheduledJobs(getScheduledJobs());
+          continue;
+        }
+
         if (scheduledTime <= now) {
           // If task is currently already running, don't retrigger
           if (executingTaskIdRef.current !== null && String(executingTaskIdRef.current) === String(job.taskId)) {
@@ -2399,11 +3032,58 @@ export function App() {
       }
     };
 
-    // Run check immediately on mount and then every 10 seconds
+    // Run check on mount and then every 10 seconds
     checkScheduledJobs();
     const intervalId = setInterval(checkScheduledJobs, 10000);
     return () => clearInterval(intervalId);
   }, [tasks, briefs]);
+
+  // Register live Ergo Workspace Action Bridge for global AI MCP execution
+  useEffect(() => {
+    // Initial sync of workspace skills to disk (.agents/skills/<id>/SKILL.md)
+    syncSkillsToWorkspace().catch(() => {});
+
+    const unregister = registerWorkspaceActionBridge({
+      getState: () => ({
+        tasks: tasksRef.current || tasks,
+        briefs: briefsRef.current || briefs,
+        swimLanes: activeProject?.swimLanes && activeProject.swimLanes.length > 0
+          ? activeProject.swimLanes
+          : [
+              {
+                id: 'lane-default',
+                title: 'Human Workspace',
+                filePath: activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`,
+                markdown: activeProject?.todoMarkdown || ''
+              }
+            ],
+        mcpServers
+      }),
+      saveProject: (newTasks, newBriefs, newLanes) => {
+        syncAndSaveProject(newTasks, newBriefs, true, archivedTasks, archivedBriefs, newLanes);
+      },
+      executeAiTask: (taskId) => {
+        const found = (tasksRef.current || tasks).find((t) => String(t.id) === String(taskId));
+        if (found) {
+          handleExecuteTask(found);
+        }
+      },
+      runTasksSequence: (taskList, laneId, laneTitle) => {
+        handleRunTasksSequence(taskList, laneId, laneTitle);
+      },
+      runTasksParallel: (taskList, laneId, laneTitle) => {
+        handleRunTasksParallel(taskList, laneId, laneTitle);
+      },
+      scheduleTask: (taskId, iso, cron) => {
+        handleScheduleTask(taskId, iso, cron);
+      },
+      cancelScheduledTask: (taskId) => {
+        handleCancelScheduleTask(taskId);
+      }
+    });
+
+    return unregister;
+  }, [tasks, briefs, activeProject, mcpServers, archivedTasks, archivedBriefs]);
 
   // Unarchive Task Handler (Restores task from archive back to active workspace)
   const handleUnarchiveTask = (taskId: string | number) => {
@@ -2988,9 +3668,24 @@ export function App() {
           markdown: activeProject?.todoMarkdown || ''
         }];
 
-    autosave.saveImmediately(
-      currentLanes.map((l) => ({ filePath: l.filePath, content: l.markdown }))
-    );
+    const filesToSave = currentLanes.map((l) => ({ filePath: l.filePath, content: l.markdown }));
+    if (activeProject?.folderPath) {
+      const doc: RunningJobsDoc = {
+        version: 1,
+        projectId: activeProjectId,
+        updatedAt: new Date().toISOString(),
+        tasks: briefsRef.current,
+        runningJobs: runningJobsRef.current,
+        queuedTaskIds: queuedTaskIdsRef.current,
+        taskExecutionSteps: taskExecutionStepsRef.current as Record<string, ExecutionStep[]>,
+      };
+      filesToSave.push({
+        filePath: `${activeProject.folderPath}/RUNNING_JOBS.json`,
+        content: serializeRunningJobsDoc(doc),
+      });
+    }
+
+    autosave.saveImmediately(filesToSave);
   };
 
   // Clear Vector Memory for Active Project
@@ -3025,8 +3720,13 @@ export function App() {
     if (executingTaskId !== null && !ids.includes(executingTaskId)) {
       ids.push(executingTaskId);
     }
+    runningJobs.forEach((j) => {
+      if (j.status === 'in_progress' && !ids.includes(j.taskId)) {
+        ids.push(j.taskId);
+      }
+    });
     return ids;
-  }, [terminalSessions, executingTaskId]);
+  }, [terminalSessions, executingTaskId, runningJobs]);
 
   return (
     <div className="app-container">
@@ -3104,6 +3804,8 @@ export function App() {
               setIsAiPanelOpen(true);
               handleScheduleTask(id, iso, cron);
             }}
+            autocompleteSettings={autocompleteSettings}
+            onUpdateTaskMcpTools={handleUpdateTaskMcpTools}
           />
         </div>
 
@@ -3142,6 +3844,9 @@ export function App() {
             swimLanes={activeProject?.swimLanes}
             selectedTaskId={selectedTaskId}
             runningTaskIds={runningTaskIds}
+            queuedTaskIds={queuedTaskIds}
+            mcpServers={mcpServers}
+            onUpdateTaskMcpTools={handleUpdateTaskMcpTools}
             onSelectTask={(id) => setSelectedTaskId(id)}
             onSaveBrief={handleSaveBrief}
             onLiveBriefChange={handleLiveBriefChange}
@@ -3198,6 +3903,9 @@ export function App() {
         mcpServers={mcpServers}
         onToggleConnectServer={(serverId) =>
           setMcpServers((prev) => {
+            try {
+              localStorage.setItem('ergo_mcp_user_toggled_' + serverId, 'true');
+            } catch {}
             const next = prev.map((s) => {
               if (s.id !== serverId) return s;
               // Allow mcp-laya and external services to toggle
@@ -3245,13 +3953,6 @@ export function App() {
         onUpdateServer={(updatedServer) =>
           setMcpServers((prev) => prev.map((s) => (s.id === updatedServer.id ? updatedServer : s)))
         }
-        cliAgentConfig={cliAgentConfig}
-        onSaveCliAgent={(config) => setCliAgentConfig(config)}
-        cliAgents={cliAgents}
-        activeCliAgentId={activeCliAgentId}
-        onSaveCliAgentSetup={handleSaveCliAgentSetup}
-        onDeleteCliAgentSetup={handleDeleteCliAgentSetup}
-        onSelectActiveCliAgent={handleSelectActiveCliAgent}
       />
 
 
@@ -3299,6 +4000,8 @@ export function App() {
         onThemeChange={setTheme}
         agentPipelineOptions={agentPipelineOptions}
         onSetAgentPipelineOptions={setAgentPipelineOptions}
+        autocompleteSettings={autocompleteSettings}
+        onSetAutocompleteSettings={setAutocompleteSettings}
         onClearProjectMemory={handleClearActiveProjectMemory}
         onClearAllMemory={handleClearAllMemory}
       />

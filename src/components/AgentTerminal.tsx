@@ -7,6 +7,8 @@ export interface AgentTerminalProps {
   cmd: string;
   args?: string[];
   cwd: string;
+  taskId?: string | number;
+  sessionId?: string;
   onExit?: (code: number) => void;
   /** Called once the WS + PTY are ready */
   onReady?: () => void;
@@ -20,6 +22,8 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
   cmd,
   args = [],
   cwd,
+  taskId,
+  sessionId,
   onExit,
   onReady,
   onError,
@@ -140,7 +144,16 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
       const cols = term.cols > 0 ? term.cols : 120;
       const rows = term.rows > 0 ? term.rows : 40;
       try {
-        ws.send(JSON.stringify({ type: 'spawn', cmd, args: Array.isArray(args) ? args : [], cwd, cols, rows }));
+        ws.send(JSON.stringify({
+          type: 'spawn',
+          taskId,
+          sessionId: sessionId || (taskId ? String(taskId) : undefined),
+          cmd,
+          args: Array.isArray(args) ? args : [],
+          cwd,
+          cols,
+          rows
+        }));
       } catch (err) {
         console.error('[Ergo Terminal] Spawn send error:', err);
       }
@@ -155,7 +168,9 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
         return;
       }
 
-      if (msg.type === 'data') {
+      if (msg.type === 'replay') {
+        term.write(msg.data);
+      } else if (msg.type === 'data') {
         term.write(msg.data);
       } else if (msg.type === 'ready') {
         onReady?.();
@@ -177,7 +192,7 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
     // ── Forward keystrokes to PTY ─────────────────────────────────────────
     term.onData((data) => {
       if (isDisposed) return;
-      send({ type: 'input', data });
+      send({ type: 'input', taskId, sessionId: sessionId || taskId, data });
     });
 
     // ── Resize: notify PTY when the container changes size ───────────────
@@ -188,7 +203,7 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
           fitRef.current.fit();
           const cols = termRef.current.cols > 0 ? termRef.current.cols : 120;
           const rows = termRef.current.rows > 0 ? termRef.current.rows : 40;
-          send({ type: 'resize', cols, rows });
+          send({ type: 'resize', taskId, sessionId: sessionId || taskId, cols, rows });
         } catch {}
       }
     };
@@ -203,7 +218,7 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
       ro.disconnect();
       if (killOnUnmount && ws.readyState === WebSocket.OPEN) {
         try {
-          ws.send(JSON.stringify({ type: 'kill' }));
+          ws.send(JSON.stringify({ type: 'kill', taskId, sessionId: sessionId || taskId }));
         } catch {}
       }
       try {
@@ -216,7 +231,7 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
       fitRef.current = null;
       wsRef.current = null;
     };
-  }, [cmd, argsKey, cwd]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cmd, argsKey, cwd, taskId, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const isLightTheme = typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'light';
 

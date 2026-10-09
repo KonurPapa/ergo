@@ -2,9 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   type MCPServer,
   type McpRootBoundary,
-  type CliAgentConfig,
-  type CliAgentPreset,
-  type CliAgentSetup,
+  type WorkspaceSkill
 } from '../types';
 
 import {
@@ -15,9 +13,19 @@ import {
   discoverRemoteMcpTools,
   connectGithubMcp,
   disconnectGithubMcp,
-  getGithubMcpStatus
+  getGithubMcpStatus,
+  checkAllMcpUpdates
 } from '../lib/mcpClient';
 import { GITHUB_MCP_TOOLS } from '../lib/githubMcpTools';
+import { WORKSPACE_MCP_TOOLS } from '../lib/workspaceMcp';
+import {
+  getWorkspaceSkills,
+  addCustomSkill,
+  updateSkill,
+  deleteSkill,
+  toggleSkill,
+  syncSkillsToWorkspace
+} from '../lib/skillsManager';
 import {
   Unplug,
   Cpu,
@@ -39,12 +47,10 @@ import {
   FolderPlus,
   Trash2,
   Lock,
-  Terminal,
   Check,
   CheckCircle2,
   ExternalLink,
   Edit3,
-  Tag,
   AlertTriangle,
   RefreshCw,
   Activity,
@@ -54,7 +60,11 @@ import {
   EyeOff,
   Search,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  ChevronUp,
+  Sparkles,
+  Wrench,
+  FileCode
 } from 'lucide-react';
 
 interface McpHubModalProps {
@@ -66,57 +76,7 @@ interface McpHubModalProps {
   onAddCustomServer: (newServer: MCPServer) => void;
   onDeleteCustomServer?: (serverId: string) => void;
   onUpdateServer?: (server: MCPServer) => void;
-  /** Persist CLI agent config when user clicks Save */
-  cliAgentConfig: CliAgentConfig | null;
-  onSaveCliAgent: (config: CliAgentConfig | null) => void;
-  /** List of saved preconfigured CLI agent setups */
-  cliAgents?: CliAgentSetup[];
-  activeCliAgentId?: string | null;
-  onSaveCliAgentSetup?: (setup: Omit<CliAgentSetup, 'id'> & { id?: string }) => void;
-  onDeleteCliAgentSetup?: (id: string) => void;
-  onSelectActiveCliAgent?: (id: string | null) => void;
 }
-
-
-// ─── Known CLI Coding Agent presets ─────────────────────────────────────────
-const CLI_AGENT_PRESETS: CliAgentPreset[] = [
-  {
-    id: 'claude-code',
-    label: 'Claude Code',
-    command: 'claude',
-    defaultArgs: '',
-    docsUrl: 'https://docs.anthropic.com/claude/docs/claude-code',
-    description: "Anthropic's agentic coding assistant. Run `npm install -g @anthropic-ai/claude-code` to install.",
-    badgeColor: '#d97706',
-  },
-  {
-    id: 'antigravity',
-    label: 'Antigravity (agy)',
-    command: 'agy',
-    defaultArgs: '',
-    docsUrl: 'https://antigravity.dev',
-    description: "Google Deepmind's Advanced Agentic Coding assistant. Install via the Antigravity IDE.",
-    badgeColor: '#2563eb',
-  },
-  {
-    id: 'aider',
-    label: 'Aider',
-    command: 'aider',
-    defaultArgs: '--model gpt-4o',
-    docsUrl: 'https://aider.chat',
-    description: 'Open-source pair programming AI in the terminal. Install with `pip install aider-chat`.',
-    badgeColor: '#059669',
-  },
-  {
-    id: 'codex',
-    label: 'OpenAI Codex CLI',
-    command: 'codex',
-    defaultArgs: '',
-    docsUrl: 'https://github.com/openai/codex',
-    description: "OpenAI's CLI coding agent. Install with `npm install -g @openai/codex`.",
-    badgeColor: '#7c3aed',
-  },
-];
 
 function renderServerIcon(server: MCPServer, isConnected: boolean) {
   if (server.iconUrl) {
@@ -175,15 +135,114 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   onAddCustomServer,
   onDeleteCustomServer,
   onUpdateServer,
-  cliAgentConfig,
-  onSaveCliAgent,
-  cliAgents = [],
-  activeCliAgentId = null,
-  onSaveCliAgentSetup,
-  onDeleteCliAgentSetup,
-  onSelectActiveCliAgent,
 }) => {
-  const [activeTab, setActiveTab] = useState<'harnesses' | 'roots' | 'external' | 'cli'>('harnesses');
+  const [activeTab, setActiveTab] = useState<'harnesses' | 'tools-skills' | 'roots' | 'external'>('harnesses');
+
+  // Tools & Skills tab state
+  const [skills, setSkills] = useState<WorkspaceSkill[]>(() => getWorkspaceSkills());
+  const [skillsSubView, setSkillsSubView] = useState<'tools' | 'skills'>('tools');
+  const [toolsSearchQuery, setToolsSearchQuery] = useState('');
+  const [selectedToolsCategory, setSelectedToolsCategory] = useState<'all' | 'tasks' | 'lanes' | 'execution' | 'mcp'>('all');
+  const [expandedToolIds, setExpandedToolIds] = useState<Record<string, boolean>>({});
+  const [expandedSkillIds, setExpandedSkillIds] = useState<Record<string, boolean>>({});
+  const [isSkillModalOpen, setIsSkillModalOpen] = useState(false);
+  const [editingSkill, setEditingSkill] = useState<WorkspaceSkill | null>(null);
+  const [skillFormData, setSkillFormData] = useState({
+    name: '',
+    description: '',
+    rules: '',
+    instructions: '',
+    triggerKeywords: ''
+  });
+  const [skillsSyncSuccessMsg, setSkillsSyncSuccessMsg] = useState<string | null>(null);
+
+  const handleSyncSkillsNow = async () => {
+    try {
+      await syncSkillsToWorkspace(skills);
+      setSkillsSyncSuccessMsg(`Synced ${skills.length} skills to .agents/skills/ in workspace codebase.`);
+      setTimeout(() => setSkillsSyncSuccessMsg(null), 4000);
+    } catch {
+      setSkillsSyncSuccessMsg('Skills saved to workspace settings.');
+      setTimeout(() => setSkillsSyncSuccessMsg(null), 4000);
+    }
+  };
+
+  const handleToggleSkill = (skillId: string) => {
+    toggleSkill(skillId);
+    const updated = getWorkspaceSkills();
+    setSkills(updated);
+    syncSkillsToWorkspace(updated).catch(() => {});
+  };
+
+  const handleOpenAddSkill = () => {
+    setEditingSkill(null);
+    setSkillFormData({
+      name: '',
+      description: '',
+      rules: '',
+      instructions: '',
+      triggerKeywords: ''
+    });
+    setIsSkillModalOpen(true);
+  };
+
+  const handleOpenEditSkill = (skill: WorkspaceSkill) => {
+    setEditingSkill(skill);
+    setSkillFormData({
+      name: skill.name,
+      description: skill.description,
+      rules: skill.rules || '',
+      instructions: skill.instructions,
+      triggerKeywords: skill.triggerKeywords.join(', ')
+    });
+    setIsSkillModalOpen(true);
+  };
+
+  const handleDeleteCustomSkill = (skillId: string) => {
+    if (window.confirm('Are you sure you want to delete this custom skill?')) {
+      deleteSkill(skillId);
+      const updated = getWorkspaceSkills();
+      setSkills(updated);
+      syncSkillsToWorkspace(updated).catch(() => {});
+    }
+  };
+
+  const handleSaveSkillForm = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!skillFormData.name.trim() || !skillFormData.description.trim() || !skillFormData.instructions.trim()) {
+      return;
+    }
+
+    const triggers = skillFormData.triggerKeywords
+      .split(',')
+      .map((t) => t.trim().toLowerCase())
+      .filter(Boolean);
+
+    if (editingSkill) {
+      updateSkill(editingSkill.id, {
+        name: skillFormData.name.trim(),
+        description: skillFormData.description.trim(),
+        rules: skillFormData.rules.trim(),
+        instructions: skillFormData.instructions.trim(),
+        triggerKeywords: triggers
+      });
+    } else {
+      addCustomSkill({
+        name: skillFormData.name.trim(),
+        description: skillFormData.description.trim(),
+        rules: skillFormData.rules.trim(),
+        instructions: skillFormData.instructions.trim(),
+        triggerKeywords: triggers,
+        enabled: true
+      });
+    }
+
+    const updated = getWorkspaceSkills();
+    setSkills(updated);
+    syncSkillsToWorkspace(updated).catch(() => {});
+    setIsSkillModalOpen(false);
+    setEditingSkill(null);
+  };
 
   const [showAddForm, setShowAddForm] = useState(false);
   const [newServerName, setNewServerName] = useState('');
@@ -217,6 +276,31 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   const [genericAuthError, setGenericAuthError] = useState<string | null>(null);
   const [isGenericTesting, setIsGenericTesting] = useState(false);
 
+  // Routine update checking state
+  const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
+  const [updateStatusMsg, setUpdateStatusMsg] = useState<string | null>(null);
+
+  const handleCheckAllUpdates = async () => {
+    setIsCheckingUpdates(true);
+    setUpdateStatusMsg(null);
+    try {
+      const result = await checkAllMcpUpdates(mcpServers);
+      if (result.hasChanges) {
+        if (onUpdateServer) {
+          result.updatedServers.forEach((s) => onUpdateServer(s));
+        }
+        setUpdateStatusMsg(result.summaryMessage || 'Discovered new/updated MCP tools!');
+      } else {
+        setUpdateStatusMsg('All connected MCP tools are up-to-date.');
+      }
+    } catch (err: any) {
+      setUpdateStatusMsg('Failed to check updates: ' + (err.message || 'Network error'));
+    } finally {
+      setIsCheckingUpdates(false);
+      setTimeout(() => setUpdateStatusMsg(null), 5000);
+    }
+  };
+
   // Per-server tool search query
   const [toolSearchQueries, setToolSearchQueries] = useState<Record<string, string>>({});
 
@@ -229,15 +313,6 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
       [serverId]: !prev[serverId]
     }));
   };
-
-  // CLI agent local state
-  const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
-  const [cliAgentName, setCliAgentName] = useState('');
-  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(cliAgentConfig?.presetId ?? null);
-  const [cliCommand, setCliCommand] = useState(cliAgentConfig?.command ?? '');
-  const [cliExtraArgs, setCliExtraArgs] = useState(cliAgentConfig?.extraArgs ?? '');
-  const [cliSaved, setCliSaved] = useState(false);
-  const [agentPendingDelete, setAgentPendingDelete] = useState<CliAgentSetup | null>(null);
 
   // Laya local test latency state
   const [layaTestStatus, setLayaTestStatus] = useState<{
@@ -279,24 +354,6 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
     }
   };
 
-  const resetCliForm = () => {
-    setEditingAgentId(null);
-    setCliAgentName('');
-    setSelectedPresetId('claude-code');
-    setCliCommand('claude');
-    setCliExtraArgs('');
-    setCliSaved(false);
-  };
-
-  const loadAgentForEditing = (agent: CliAgentSetup) => {
-    setEditingAgentId(agent.id);
-    setCliAgentName(agent.name);
-    setSelectedPresetId(agent.presetId ?? (CLI_AGENT_PRESETS.some((p) => p.command === agent.command) ? CLI_AGENT_PRESETS.find((p) => p.command === agent.command)!.id : 'custom'));
-    setCliCommand(agent.command);
-    setCliExtraArgs(agent.extraArgs || '');
-    setCliSaved(false);
-  };
-
   useEffect(() => {
     if (isOpen) {
       getAllowedRoots().then(setRoots);
@@ -307,15 +364,8 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
           }
         })
         .catch(() => { });
-      if (!editingAgentId) {
-        setSelectedPresetId(cliAgentConfig?.presetId ?? (cliAgentConfig?.command ? (CLI_AGENT_PRESETS.find((p) => p.command === cliAgentConfig.command)?.id || 'custom') : null));
-        setCliAgentName(cliAgentConfig?.name ?? '');
-        setCliCommand(cliAgentConfig?.command ?? '');
-        setCliExtraArgs(cliAgentConfig?.extraArgs ?? '');
-        setCliSaved(false);
-      }
     }
-  }, [isOpen, cliAgentConfig]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -600,9 +650,47 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               </p>
             </div>
           </div>
-          <button className="btn btn-secondary" style={{ padding: '0.35rem 0.6rem' }} onClick={onClose}>
-            <X size={16} />
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            {updateStatusMsg && (
+              <span
+                style={{
+                  fontSize: '0.74rem',
+                  color: updateStatusMsg.includes('Failed') ? 'var(--accent-red)' : 'var(--accent-emerald)',
+                  fontWeight: 500,
+                  maxWidth: '320px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap'
+                }}
+                title={updateStatusMsg}
+              >
+                {updateStatusMsg}
+              </span>
+            )}
+            <button
+              className="btn btn-secondary"
+              style={{
+                padding: '0.35rem 0.65rem',
+                fontSize: '0.75rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                borderRadius: '6px',
+                border: '1px solid var(--border-subtle)',
+                background: isCheckingUpdates ? 'rgba(99, 102, 241, 0.12)' : undefined,
+                color: isCheckingUpdates ? 'var(--accent-primary)' : 'var(--text-muted)'
+              }}
+              onClick={handleCheckAllUpdates}
+              disabled={isCheckingUpdates}
+              title="Routinely query tools/list across connected MCP servers"
+            >
+              <RefreshCw size={13} style={{ animation: isCheckingUpdates ? 'spin 1s linear infinite' : 'none' }} />
+              <span>{isCheckingUpdates ? 'Checking...' : 'Check Updates'}</span>
+            </button>
+            <button className="btn btn-secondary" style={{ padding: '0.35rem 0.6rem' }} onClick={onClose}>
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
         {/* Tab Navigation */}
@@ -628,6 +716,31 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
             <span>Default Connections</span>
             <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: activeTab === 'harnesses' ? 'rgba(6, 182, 212, 0.18)' : 'rgba(255, 255, 255, 0.05)', color: activeTab === 'harnesses' ? 'var(--accent-cyan)' : 'var(--text-dim)', fontWeight: 700 }}>
               {bundledHarnesses.length}
+            </span>
+          </button>
+
+          <button
+            className={`tab-btn ${activeTab === 'tools-skills' ? 'active' : ''}`}
+            onClick={() => setActiveTab('tools-skills')}
+            style={{
+              padding: '0.75rem 1rem',
+              border: 'none',
+              borderBottom: activeTab === 'tools-skills' ? '2px solid #a855f7' : '2px solid transparent',
+              color: activeTab === 'tools-skills' ? '#fff' : 'var(--text-muted)',
+              fontWeight: 600,
+              fontSize: '0.84rem',
+              background: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <Sparkles size={14} color="#a855f7" />
+            <span>Tools & Skills</span>
+            <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: activeTab === 'tools-skills' ? 'rgba(168, 85, 247, 0.2)' : 'rgba(255, 255, 255, 0.05)', color: activeTab === 'tools-skills' ? '#c084fc' : 'var(--text-dim)', fontWeight: 700 }}>
+              {WORKSPACE_MCP_TOOLS.length} tools / {skills.length} skills
             </span>
           </button>
 
@@ -677,29 +790,6 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
             <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: activeTab === 'external' ? 'rgba(6, 182, 212, 0.18)' : 'rgba(255, 255, 255, 0.05)', color: activeTab === 'external' ? 'var(--accent-cyan)' : 'var(--text-dim)', fontWeight: 700 }}>
               {externalServers.length}
             </span>
-          </button>
-
-          <button
-            className={`tab-btn ${activeTab === 'cli' ? 'active' : ''}`}
-            onClick={() => setActiveTab('cli')}
-            style={{
-              padding: '0.75rem 1rem',
-              border: 'none',
-              borderBottom: activeTab === 'cli' ? '2px solid var(--accent-emerald)' : '2px solid transparent',
-              color: activeTab === 'cli' ? 'var(--accent-emerald)' : 'var(--text-muted)',
-              fontWeight: 600,
-              fontSize: '0.84rem',
-              background: 'none',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.45rem',
-              transition: 'all 0.15s ease'
-            }}
-          >
-            <Terminal size={14} />
-            <span>Coding Agents</span>
-            {cliAgentConfig && <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent-emerald)', display: 'inline-block' }} />}
           </button>
         </div>
 
@@ -902,6 +992,629 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               </div>
             </div>
           )}
+
+          {/* TAB: TOOLS & SKILLS */}
+          {activeTab === 'tools-skills' && (() => {
+            const getToolCategory = (name: string): 'tasks' | 'lanes' | 'execution' | 'mcp' => {
+              if (name.includes('task') && !name.includes('execute') && !name.includes('run') && !name.includes('schedule') && !name.includes('cancel') && !name.includes('move')) {
+                return 'tasks';
+              }
+              if (name.includes('swim_lane') || name.includes('move_task_lane')) {
+                return 'lanes';
+              }
+              if (name.includes('execute') || name.includes('run_') || name.includes('schedule') || name.includes('cancel') || name.includes('brief')) {
+                return 'execution';
+              }
+              return 'mcp';
+            };
+
+            const filteredWorkspaceTools = WORKSPACE_MCP_TOOLS.filter((t) => {
+              const cat = getToolCategory(t.name);
+              if (selectedToolsCategory !== 'all' && cat !== selectedToolsCategory) return false;
+              if (toolsSearchQuery.trim()) {
+                const q = toolsSearchQuery.toLowerCase();
+                return t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q);
+              }
+              return true;
+            });
+
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                {/* Header Card */}
+                <div
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.08) 0%, rgba(59, 130, 246, 0.04) 100%)',
+                    border: '1px solid rgba(168, 85, 247, 0.25)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '1rem 1.25rem',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: '1rem'
+                  }}
+                >
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem' }}>
+                      <Sparkles size={18} color="#c084fc" />
+                      <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#f3e8ff', margin: 0 }}>
+                        Ergo Workspace Actions & Global Skills
+                      </h3>
+                      <span style={{ fontSize: '0.68rem', fontWeight: 700, padding: '0.15rem 0.55rem', borderRadius: '12px', background: 'rgba(168, 85, 247, 0.2)', color: '#d8b4fe', border: '1px solid rgba(168, 85, 247, 0.4)' }}>
+                        Global AI Engine
+                      </span>
+                    </div>
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0, maxWidth: '680px', lineHeight: 1.45 }}>
+                      Built-in Ergo MCP tools enable the internal AI agent to interact directly with tasks, swim lanes, and executions.
+                      Global skills define autonomous agent behaviors and are automatically synced to <code style={{ color: '#c084fc' }}>.agents/skills/</code> in your workspace.
+                    </p>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={handleSyncSkillsNow}
+                      style={{
+                        fontSize: '0.78rem',
+                        padding: '0.45rem 0.85rem',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.45rem',
+                        borderColor: 'rgba(168, 85, 247, 0.35)',
+                        color: '#e9d5ff'
+                      }}
+                      title="Write skill files to .agents/skills/ in the project folder"
+                    >
+                      <Folder size={14} color="#c084fc" />
+                      <span>Sync Codebase (.agents/skills/)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={handleOpenAddSkill}
+                      style={{
+                        fontSize: '0.78rem',
+                        padding: '0.45rem 0.85rem',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.45rem',
+                        background: 'linear-gradient(135deg, #9333ea 0%, #7c3aed 100%)',
+                        borderColor: '#a855f7'
+                      }}
+                    >
+                      <Plus size={14} />
+                      <span>New Custom Skill</span>
+                    </button>
+                  </div>
+                </div>
+
+                {skillsSyncSuccessMsg && (
+                  <div
+                    style={{
+                      background: 'rgba(16, 185, 129, 0.12)',
+                      border: '1px solid rgba(16, 185, 129, 0.35)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '0.55rem 0.85rem',
+                      color: '#6ee7b7',
+                      fontSize: '0.78rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem'
+                    }}
+                  >
+                    <CheckCircle2 size={15} />
+                    <span>{skillsSyncSuccessMsg}</span>
+                  </div>
+                )}
+
+                {/* Sub-view switcher pills */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.75rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => setSkillsSubView('tools')}
+                    style={{
+                      padding: '0.4rem 0.9rem',
+                      borderRadius: '20px',
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      border: '1px solid',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      transition: 'all 0.15s ease',
+                      background: skillsSubView === 'tools' ? 'rgba(168, 85, 247, 0.2)' : 'rgba(255, 255, 255, 0.04)',
+                      borderColor: skillsSubView === 'tools' ? '#a855f7' : 'var(--border-subtle)',
+                      color: skillsSubView === 'tools' ? '#f3e8ff' : 'var(--text-muted)'
+                    }}
+                  >
+                    <Wrench size={13} color={skillsSubView === 'tools' ? '#c084fc' : 'currentColor'} />
+                    <span>Ergo Workspace MCP Tools ({WORKSPACE_MCP_TOOLS.length})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSkillsSubView('skills')}
+                    style={{
+                      padding: '0.4rem 0.9rem',
+                      borderRadius: '20px',
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      border: '1px solid',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      transition: 'all 0.15s ease',
+                      background: skillsSubView === 'skills' ? 'rgba(168, 85, 247, 0.2)' : 'rgba(255, 255, 255, 0.04)',
+                      borderColor: skillsSubView === 'skills' ? '#a855f7' : 'var(--border-subtle)',
+                      color: skillsSubView === 'skills' ? '#f3e8ff' : 'var(--text-muted)'
+                    }}
+                  >
+                    <Sparkles size={13} color={skillsSubView === 'skills' ? '#c084fc' : 'currentColor'} />
+                    <span>Global Rules & Skills ({skills.length})</span>
+                  </button>
+                </div>
+
+                {/* ── SUB-VIEW A: WORKSPACE MCP TOOLS ── */}
+                {skillsSubView === 'tools' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    {/* Category Filter Pills & Search */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                        {[
+                          { id: 'all', label: `All Actions (${WORKSPACE_MCP_TOOLS.length})` },
+                          { id: 'tasks', label: 'Tasks & Subtasks (6)' },
+                          { id: 'lanes', label: 'Swim Lanes & Routing (5)' },
+                          { id: 'execution', label: 'Executions & Scheduler (7)' },
+                          { id: 'mcp', label: 'External MCP Inspector (3)' }
+                        ].map((cat) => (
+                          <button
+                            key={cat.id}
+                            type="button"
+                            onClick={() => setSelectedToolsCategory(cat.id as any)}
+                            style={{
+                              padding: '0.25rem 0.65rem',
+                              borderRadius: '6px',
+                              fontSize: '0.74rem',
+                              fontWeight: 600,
+                              border: '1px solid',
+                              cursor: 'pointer',
+                              background: selectedToolsCategory === cat.id ? 'rgba(168, 85, 247, 0.18)' : 'rgba(255, 255, 255, 0.03)',
+                              borderColor: selectedToolsCategory === cat.id ? 'rgba(168, 85, 247, 0.45)' : 'var(--border-subtle)',
+                              color: selectedToolsCategory === cat.id ? '#e9d5ff' : 'var(--text-muted)'
+                            }}
+                          >
+                            {cat.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div style={{ position: 'relative', width: '240px' }}>
+                        <Search size={13} style={{ position: 'absolute', left: '0.65rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
+                        <input
+                          type="text"
+                          className="input-text"
+                          placeholder="Filter tools..."
+                          value={toolsSearchQuery}
+                          onChange={(e) => setToolsSearchQuery(e.target.value)}
+                          style={{ paddingLeft: '2rem', paddingRight: '0.5rem', height: '28px', fontSize: '0.74rem', width: '100%' }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Security Notice */}
+                    <div
+                      style={{
+                        background: 'rgba(59, 130, 246, 0.06)',
+                        border: '1px solid rgba(59, 130, 246, 0.22)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '0.65rem 0.95rem',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '0.65rem',
+                        fontSize: '0.76rem',
+                        color: '#93c5fd',
+                        lineHeight: 1.45
+                      }}
+                    >
+                      <Shield size={16} color="#60a5fa" style={{ flexShrink: 0, marginTop: '2px' }} />
+                      <div>
+                        <strong style={{ color: '#dbeafe' }}>Manual Security Policy:</strong> External MCP server connections, API tokens, tool permissions, and removal are strictly manual and human-controlled in the <em>External Apps</em> tab. The AI workspace can inspect available external tools via <code>workspace_read_mcp_tools</code>, but cannot modify permissions or remove servers.
+                      </div>
+                    </div>
+
+                    {/* Tools Grid */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+                      {filteredWorkspaceTools.map((tool) => {
+                        const isExpanded = !!expandedToolIds[tool.name];
+                        const category = getToolCategory(tool.name);
+                        const schemaProps = (tool.inputSchema as any)?.properties || {};
+                        const requiredFields: string[] = (tool.inputSchema as any)?.required || [];
+                        const propKeys = Object.keys(schemaProps);
+
+                        const categoryBadges: Record<string, { label: string; color: string; bg: string }> = {
+                          tasks: { label: 'Task CRUD', color: '#93c5fd', bg: 'rgba(59, 130, 246, 0.12)' },
+                          lanes: { label: 'Swim Lanes', color: '#67e8f9', bg: 'rgba(6, 182, 212, 0.12)' },
+                          execution: { label: 'AI Execution', color: '#6ee7b7', bg: 'rgba(16, 185, 129, 0.12)' },
+                          mcp: { label: 'MCP Reader', color: '#c4b5fd', bg: 'rgba(139, 92, 246, 0.12)' }
+                        };
+
+                        const badge = categoryBadges[category] || categoryBadges.tasks;
+
+                        return (
+                          <div
+                            key={tool.name}
+                            style={{
+                              background: '#15181e',
+                              border: '1px solid rgba(255, 255, 255, 0.07)',
+                              borderRadius: 'var(--radius-sm)',
+                              padding: '0.75rem 1rem',
+                              transition: 'all 0.15s ease'
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                                <span
+                                  style={{
+                                    fontFamily: 'var(--font-mono, monospace)',
+                                    fontSize: '0.82rem',
+                                    fontWeight: 700,
+                                    color: '#f8fafc',
+                                    background: 'rgba(255, 255, 255, 0.05)',
+                                    padding: '0.2rem 0.55rem',
+                                    borderRadius: '4px',
+                                    border: '1px solid rgba(255, 255, 255, 0.1)'
+                                  }}
+                                >
+                                  {tool.name}
+                                </span>
+
+                                <span
+                                  style={{
+                                    fontSize: '0.66rem',
+                                    fontWeight: 700,
+                                    padding: '0.12rem 0.45rem',
+                                    borderRadius: '10px',
+                                    background: badge.bg,
+                                    color: badge.color
+                                  }}
+                                >
+                                  {badge.label}
+                                </span>
+
+                                <span
+                                  style={{
+                                    fontSize: '0.66rem',
+                                    fontWeight: 600,
+                                    padding: '0.12rem 0.45rem',
+                                    borderRadius: '10px',
+                                    background: 'rgba(16, 185, 129, 0.12)',
+                                    color: '#34d399'
+                                  }}
+                                >
+                                  Global
+                                </span>
+                              </div>
+
+                              <button
+                                type="button"
+                                className="btn btn-secondary"
+                                onClick={() =>
+                                  setExpandedToolIds((prev) => ({
+                                    ...prev,
+                                    [tool.name]: !prev[tool.name]
+                                  }))
+                                }
+                                style={{
+                                  padding: '0.2rem 0.55rem',
+                                  fontSize: '0.7rem',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.35rem'
+                                }}
+                              >
+                                <span>{propKeys.length} {propKeys.length === 1 ? 'param' : 'params'}</span>
+                                {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                              </button>
+                            </div>
+
+                            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: 1.45 }}>
+                              {tool.description}
+                            </div>
+
+                            {isExpanded && (
+                              <div
+                                style={{
+                                  marginTop: '0.75rem',
+                                  paddingTop: '0.65rem',
+                                  borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '0.45rem'
+                                }}
+                              >
+                                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                  Parameters & Schema
+                                </div>
+                                {propKeys.length === 0 ? (
+                                  <span style={{ fontSize: '0.74rem', color: 'var(--text-dim)', fontStyle: 'italic' }}>
+                                    No required parameters.
+                                  </span>
+                                ) : (
+                                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.45rem' }}>
+                                    {propKeys.map((pk) => {
+                                      const prop = schemaProps[pk] || {};
+                                      const isReq = requiredFields.includes(pk);
+                                      return (
+                                        <div
+                                          key={pk}
+                                          style={{
+                                            background: 'rgba(0, 0, 0, 0.25)',
+                                            border: '1px solid rgba(255, 255, 255, 0.05)',
+                                            borderRadius: '4px',
+                                            padding: '0.4rem 0.6rem',
+                                            fontSize: '0.72rem'
+                                          }}
+                                        >
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.2rem' }}>
+                                            <code style={{ color: '#38bdf8', fontWeight: 700 }}>{pk}</code>
+                                            <span style={{ color: 'var(--text-dim)', fontSize: '0.66rem' }}>
+                                              ({prop.type || 'string'})
+                                            </span>
+                                            {isReq && (
+                                              <span style={{ color: '#f87171', fontSize: '0.64rem', fontWeight: 700 }}>
+                                                required
+                                              </span>
+                                            )}
+                                          </div>
+                                          <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', lineHeight: 1.35 }}>
+                                            {prop.description || 'No description.'}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* ── SUB-VIEW B: GLOBAL RULES & SKILLS ── */}
+                {skillsSubView === 'skills' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div
+                      style={{
+                        background: 'rgba(255, 255, 255, 0.02)',
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '0.75rem 1rem',
+                        fontSize: '0.78rem',
+                        color: 'var(--text-muted)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        flexWrap: 'wrap',
+                        gap: '0.75rem'
+                      }}
+                    >
+                      <span>
+                        Skills guide the AI with specialized workflows, rules, and triggers. Active skills are automatically written to <code style={{ color: '#c084fc' }}>.agents/skills/</code> when work begins.
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={handleOpenAddSkill}
+                        style={{ fontSize: '0.74rem', padding: '0.3rem 0.65rem' }}
+                      >
+                        <Plus size={12} />
+                        <span>Create New Skill</span>
+                      </button>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      {skills.map((skill) => {
+                        const isExpanded = !!expandedSkillIds[skill.id];
+                        return (
+                          <div
+                            key={skill.id}
+                            style={{
+                              background: '#15181e',
+                              border: skill.enabled ? '1px solid rgba(168, 85, 247, 0.35)' : '1px solid rgba(255, 255, 255, 0.07)',
+                              borderRadius: 'var(--radius-sm)',
+                              padding: '0.85rem 1.15rem',
+                              transition: 'all 0.15s ease'
+                            }}
+                          >
+                            {/* Header row */}
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.65rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                                <Sparkles size={16} color={skill.enabled ? '#c084fc' : 'var(--text-dim)'} />
+                                <span style={{ fontSize: '0.88rem', fontWeight: 700, color: '#f8fafc' }}>
+                                  {skill.name}
+                                </span>
+                                <span
+                                  style={{
+                                    fontSize: '0.66rem',
+                                    fontFamily: 'var(--font-mono, monospace)',
+                                    color: 'var(--text-dim)',
+                                    background: 'rgba(255, 255, 255, 0.04)',
+                                    padding: '0.1rem 0.4rem',
+                                    borderRadius: '4px'
+                                  }}
+                                >
+                                  {skill.id}
+                                </span>
+                                {skill.isBuiltIn ? (
+                                  <span style={{ fontSize: '0.65rem', fontWeight: 700, padding: '0.1rem 0.45rem', borderRadius: '10px', background: 'rgba(6, 182, 212, 0.15)', color: '#22d3ee' }}>
+                                    Built-in
+                                  </span>
+                                ) : (
+                                  <span style={{ fontSize: '0.65rem', fontWeight: 700, padding: '0.1rem 0.45rem', borderRadius: '10px', background: 'rgba(168, 85, 247, 0.15)', color: '#d8b4fe' }}>
+                                    Custom
+                                  </span>
+                                )}
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                                {/* Toggle switch */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleSkill(skill.id)}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.4rem',
+                                    padding: '0.25rem 0.65rem',
+                                    borderRadius: '16px',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    border: '1px solid',
+                                    background: skill.enabled ? 'rgba(16, 185, 129, 0.18)' : 'rgba(255, 255, 255, 0.04)',
+                                    borderColor: skill.enabled ? 'rgba(16, 185, 129, 0.4)' : 'var(--border-subtle)',
+                                    color: skill.enabled ? '#34d399' : 'var(--text-muted)'
+                                  }}
+                                >
+                                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: skill.enabled ? '#10b981' : 'var(--text-dim)' }} />
+                                  <span>{skill.enabled ? 'Active' : 'Disabled'}</span>
+                                </button>
+
+                                {!skill.isBuiltIn && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary"
+                                      onClick={() => handleOpenEditSkill(skill)}
+                                      style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+                                      title="Edit custom skill"
+                                    >
+                                      <Edit3 size={11} />
+                                      <span>Edit</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary"
+                                      onClick={() => handleDeleteCustomSkill(skill.id)}
+                                      style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', color: '#f87171' }}
+                                      title="Delete custom skill"
+                                    >
+                                      <Trash2 size={11} />
+                                      <span>Delete</span>
+                                    </button>
+                                  </>
+                                )}
+
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary"
+                                  onClick={() =>
+                                    setExpandedSkillIds((prev) => ({
+                                      ...prev,
+                                      [skill.id]: !prev[skill.id]
+                                    }))
+                                  }
+                                  style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+                                >
+                                  <span>{isExpanded ? 'Hide Details' : 'View Instructions'}</span>
+                                  {isExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                                </button>
+                              </div>
+                            </div>
+
+                            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.45rem', lineHeight: 1.45 }}>
+                              {skill.description}
+                            </div>
+
+                            {/* Trigger Keywords */}
+                            {skill.triggerKeywords && skill.triggerKeywords.length > 0 && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+                                <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontWeight: 600 }}>Triggers:</span>
+                                {skill.triggerKeywords.map((kw) => (
+                                  <span
+                                    key={kw}
+                                    style={{
+                                      fontSize: '0.68rem',
+                                      padding: '0.1rem 0.45rem',
+                                      borderRadius: '4px',
+                                      background: 'rgba(168, 85, 247, 0.1)',
+                                      color: '#d8b4fe',
+                                      border: '1px solid rgba(168, 85, 247, 0.25)',
+                                      fontFamily: 'var(--font-mono, monospace)'
+                                    }}
+                                  >
+                                    #{kw}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            {isExpanded && (
+                              <div
+                                style={{
+                                  marginTop: '0.75rem',
+                                  paddingTop: '0.75rem',
+                                  borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '0.65rem'
+                                }}
+                              >
+                                {skill.rules && (
+                                  <div>
+                                    <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.25rem' }}>
+                                      Rules & Constraints
+                                    </div>
+                                    <div style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(245, 158, 11, 0.2)', borderRadius: '4px', padding: '0.5rem 0.75rem', fontSize: '0.74rem', color: '#fef3c7', lineHeight: 1.45 }}>
+                                      {skill.rules}
+                                    </div>
+                                  </div>
+                                )}
+
+                                <div>
+                                  <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.25rem' }}>
+                                    Instructions & Workflow
+                                  </div>
+                                  <pre
+                                    style={{
+                                      background: 'rgba(0,0,0,0.35)',
+                                      border: '1px solid rgba(255, 255, 255, 0.05)',
+                                      borderRadius: '4px',
+                                      padding: '0.65rem 0.75rem',
+                                      fontSize: '0.72rem',
+                                      color: '#e2e8f0',
+                                      whiteSpace: 'pre-wrap',
+                                      fontFamily: 'var(--font-mono, monospace)',
+                                      margin: 0,
+                                      lineHeight: 1.45
+                                    }}
+                                  >
+                                    {skill.instructions}
+                                  </pre>
+                                </div>
+
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.68rem', color: 'var(--text-dim)' }}>
+                                  <FileCode size={12} />
+                                  <span>Codebase file: <code>{skill.filePath || `.agents/skills/${skill.id.replace(/^skill-/, '')}/SKILL.md`}</code></span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* TAB 2: SAFE DIRECTORY ROOTS */}
           {activeTab === 'roots' && (
@@ -1380,567 +2093,6 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
             </div>
           )}
 
-          {/* TAB 4: CLI CODING AGENTS */}
-          {activeTab === 'cli' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              {/* Explainer */}
-              {/* <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '0.85rem 1rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
-                  <Terminal size={15} color="var(--accent-emerald)" />
-                  <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff' }}>Coding Agent Execution</span>
-                </div>
-                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: '1.5' }}>
-                  When you execute a coding task, a coding agent runs in its own embedded terminal.
-                </p>
-              </div> */}
-
-              {/* Form Card: Add / Edit CLI Agent Setup */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '-0.5rem' }}>
-                <h4
-                  style={{
-                    fontSize: '0.85rem',
-                    fontWeight: 700,
-                    color: 'var(--text-muted)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.05em',
-                    margin: 0
-                  }}
-                >
-                  {editingAgentId ? 'Edit Coding Agent Setup' : 'Configure & Save Coding Agent'}
-                </h4>
-                {editingAgentId && (
-                  <button
-                    type="button"
-                    onClick={() => resetCliForm()}
-                    style={{
-                      background: 'rgba(244, 63, 94, 0.1)',
-                      border: '1px solid rgba(244, 63, 94, 0.3)',
-                      color: 'var(--accent-rose)',
-                      borderRadius: 'var(--radius-sm)',
-                      padding: '0.2rem 0.6rem',
-                      fontSize: '0.75rem',
-                      cursor: 'pointer',
-                      fontWeight: 600
-                    }}
-                  >
-                    Cancel Edit
-                  </button>
-                )}
-              </div>
-
-              <div
-                style={{
-                  background: 'var(--bg-card)',
-                  border: editingAgentId ? '1.5px solid var(--accent-cyan)' : '1px solid var(--border-subtle)',
-                  borderRadius: 'var(--radius-md)',
-                  padding: '1.25rem',
-                  boxShadow: editingAgentId ? '0 0 16px rgba(6, 182, 212, 0.15)' : 'var(--shadow-card)',
-                  transition: 'all 0.2s ease',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '1rem'
-                }}
-              >
-                {/* Preset cards selection */}
-                <div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '0.75rem' }}>
-                    {CLI_AGENT_PRESETS.map((preset) => {
-                      const isSelected = selectedPresetId === preset.id;
-                      return (
-                        <button
-                          key={preset.id}
-                          type="button"
-                          onClick={() => {
-                            setSelectedPresetId(preset.id);
-                            setCliCommand(preset.command);
-                            setCliExtraArgs(preset.defaultArgs);
-                            if (!cliAgentName || CLI_AGENT_PRESETS.some((p) => p.label === cliAgentName) || cliAgentName === 'Custom Agent') {
-                              setCliAgentName(preset.label);
-                            }
-                            setCliSaved(false);
-                          }}
-                          style={{
-                            textAlign: 'left',
-                            background: isSelected ? 'rgba(99, 102, 241, 0.12)' : 'var(--btn-secondary-bg)',
-                            border: `1.5px solid ${isSelected ? 'var(--accent-primary)' : 'var(--btn-secondary-border)'}`,
-                            borderRadius: 'var(--radius-md)',
-                            padding: '0.75rem 0.85rem',
-                            cursor: 'pointer',
-                            transition: 'all 0.15s ease',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '0.35rem'
-                          }}
-                        >
-                          {isSelected && (
-                            <span style={{ position: 'absolute', top: '0.65rem', right: '0.65rem' }}>
-                              <Check size={14} color="var(--accent-cyan)" />
-                            </span>
-                          )}
-                          <div style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff', marginBottom: '0.25rem' }}>{preset.label}</div>
-                          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent-cyan)', marginBottom: '0.4rem' }}>{preset.command}{preset.defaultArgs ? ' ' + preset.defaultArgs : ''}</div>
-                          <p style={{ fontSize: '0.77rem', color: 'var(--text-muted)', lineHeight: '1.4', margin: 0 }}>{preset.description}</p>
-                          <a
-                            href={preset.docsUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', marginTop: '0.6rem', fontSize: '0.72rem', color: 'var(--accent-primary)', textDecoration: 'none' }}
-                          >
-                            <ExternalLink size={10} /> Docs
-                          </a>
-                        </button>
-                      );
-                    })}
-
-                    {/* Custom Command Card */}
-                    {(() => {
-                      const isCustomSelected = selectedPresetId === 'custom' || (!selectedPresetId && !!cliCommand.trim());
-                      return (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedPresetId('custom');
-                            if (selectedPresetId && selectedPresetId !== 'custom') {
-                              setCliCommand('');
-                              setCliExtraArgs('');
-                            }
-                            if (!cliAgentName || CLI_AGENT_PRESETS.some((p) => p.label === cliAgentName)) {
-                              setCliAgentName('Custom Agent');
-                            }
-                            setCliSaved(false);
-                          }}
-                          style={{
-                            textAlign: 'left',
-                            background: isCustomSelected ? 'rgba(16, 185, 129, 0.08)' : 'var(--bg-card)',
-                            border: `1px dashed ${isCustomSelected ? 'var(--accent-emerald)' : 'var(--border-subtle)'}`,
-                            borderRadius: 'var(--radius-md)',
-                            padding: '0.85rem 1rem',
-                            cursor: 'pointer',
-                            transition: 'all 0.15s ease',
-                            position: 'relative',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            justifyContent: 'space-between'
-                          }}
-                        >
-                          {isCustomSelected && (
-                            <span style={{ position: 'absolute', top: '0.65rem', right: '0.65rem' }}>
-                              <Check size={14} color="var(--accent-emerald)" />
-                            </span>
-                          )}
-                          <div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem' }}>
-                              <Code size={14} color={isCustomSelected ? "var(--accent-emerald)" : "var(--text-muted)"} />
-                              <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff' }}>Custom Command</span>
-                            </div>
-                            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent-emerald)', marginBottom: '0.4rem' }}>
-                              {cliCommand.trim() ? `${cliCommand}${cliExtraArgs.trim() ? ' ' + cliExtraArgs.trim() : ''}` : 'your-own-agent'}
-                            </div>
-                            <p style={{ fontSize: '0.77rem', color: 'var(--text-muted)', lineHeight: '1.4', margin: 0 }}>
-                              Run any custom terminal command, CLI agent (e.g. goose, cline, cursor-agent), or custom shell script.
-                            </p>
-                          </div>
-                          <div style={{ marginTop: '0.6rem', fontSize: '0.72rem', color: isCustomSelected ? 'var(--accent-emerald)' : 'var(--text-dim)', fontWeight: 600 }}>
-                            {isCustomSelected ? 'Custom active' : 'Click to configure'}
-                          </div>
-                        </button>
-                      );
-                    })()}
-                  </div>
-                </div>
-
-                {/* Setup Name / Label */}
-                <div className="input-group" style={{ margin: 0 }}>
-                  <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
-                    <Tag size={13} color="var(--accent-cyan)" />
-                    <span style={{ fontWeight: 600, color: '#e2e8f0' }}>Configuration Label</span>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>(Name to identify this agent setup)</span>
-                  </label>
-                  <input
-                    type="text"
-                    className="input-text"
-                    placeholder="e.g. Claude Code (Production), Aider Local, Custom Goose Agent..."
-                    value={cliAgentName}
-                    onChange={(e) => { setCliAgentName(e.target.value); setCliSaved(false); }}
-                  />
-                </div>
-
-                {/* Command & Flags Inputs */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
-                  <div>
-                    <label className="input-label">
-                      Shell Command <span style={{ color: 'var(--accent-rose)' }}>*</span>
-                    </label>
-                    <input
-                      type="text"
-                      className="input-text"
-                      placeholder="e.g. claude, agy, aider, goose, ./run-agent.sh"
-                      value={cliCommand}
-                      onChange={(e) => {
-                        setCliCommand(e.target.value);
-                        if (selectedPresetId && selectedPresetId !== 'custom') {
-                          const matching = CLI_AGENT_PRESETS.find((p) => p.command === e.target.value.trim());
-                          if (!matching) {
-                            setSelectedPresetId(null);
-                          }
-                        }
-                        setCliSaved(false);
-                      }}
-                    />
-                  </div>
-                  <div>
-                    <label className="input-label">Extra Flags / Arguments (optional)</label>
-                    <input
-                      type="text"
-                      className="input-text"
-                      placeholder="e.g. --model gpt-4o --verbose"
-                      value={cliExtraArgs}
-                      onChange={(e) => { setCliExtraArgs(e.target.value); setCliSaved(false); }}
-                    />
-                  </div>
-                </div>
-
-                {/* Actions */}
-                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginTop: '0.25rem' }}>
-                  <button
-                    className="btn btn-primary"
-                    disabled={!cliCommand.trim()}
-                    onClick={() => {
-                      const finalName = cliAgentName.trim() || (selectedPresetId ? (CLI_AGENT_PRESETS.find((p) => p.id === selectedPresetId)?.label || 'Custom Agent') : 'Custom Agent');
-                      const resolvedPresetId = selectedPresetId ? (selectedPresetId === 'custom' ? undefined : selectedPresetId) : undefined;
-
-                      // Save to saved list if onSaveCliAgentSetup is provided
-                      if (onSaveCliAgentSetup) {
-                        onSaveCliAgentSetup({
-                          id: editingAgentId || undefined,
-                          name: finalName,
-                          presetId: resolvedPresetId,
-                          command: cliCommand.trim(),
-                          extraArgs: cliExtraArgs.trim(),
-                        });
-                      }
-
-                      // Also set as active config
-                      const config: CliAgentConfig = {
-                        id: editingAgentId || undefined,
-                        name: finalName,
-                        presetId: resolvedPresetId,
-                        command: cliCommand.trim(),
-                        extraArgs: cliExtraArgs.trim(),
-                      };
-                      onSaveCliAgent(config);
-                      setCliSaved(true);
-                      setEditingAgentId(null);
-                    }}
-                  >
-                    <Check size={14} />
-                    <span>{editingAgentId ? 'Update Agent Setup' : 'Save Agent Setup'}</span>
-                  </button>
-                  {editingAgentId ? (
-                    <button
-                      className="btn btn-secondary"
-                      onClick={() => resetCliForm()}
-                    >
-                      Cancel
-                    </button>
-                  ) : (
-                    cliAgentConfig && (
-                      <button
-                        className="btn btn-secondary"
-                        style={{ color: 'var(--accent-rose)', fontSize: '0.8rem' }}
-                        onClick={() => {
-                          onSaveCliAgent(null);
-                          if (onSelectActiveCliAgent) onSelectActiveCliAgent(null);
-                          setCliCommand('');
-                          setCliExtraArgs('');
-                          setCliAgentName('');
-                          setSelectedPresetId(null);
-                          setCliSaved(false);
-                        }}
-                      >
-                        Deactivate Agent
-                      </button>
-                    )
-                  )}
-                  {cliSaved && (
-                    <span style={{ fontSize: '0.82rem', color: 'var(--accent-emerald)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                      <CheckCircle2 size={14} /> Saved & Activated
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Card 2: Saved Configured Coding Agents List */}
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                  <h4
-                    style={{
-                      fontSize: '0.85rem',
-                      fontWeight: 700,
-                      color: 'var(--text-muted)',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.05em',
-                      margin: 0
-                    }}
-                  >
-                    Configured Coding Agents ({cliAgents.length})
-                  </h4>
-                  {cliAgents.length > 0 && (
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                      Click 'Set Active' to choose which agent runs on task execution
-                    </span>
-                  )}
-                </div>
-
-                {cliAgents.length === 0 ? (
-                  <div
-                    style={{
-                      padding: '1.5rem',
-                      textAlign: 'center',
-                      background: 'var(--bg-dark)',
-                      border: '1px dashed var(--border-subtle)',
-                      borderRadius: 'var(--radius-md)'
-                    }}
-                  >
-                    <Terminal size={28} color="var(--text-muted)" style={{ margin: '0 auto 0.5rem auto', opacity: 0.6 }} />
-                    <p style={{ fontSize: '0.84rem', color: '#fff', fontWeight: 600, margin: '0 0 0.25rem 0' }}>
-                      No coding agent setups saved yet
-                    </p>
-                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: 0 }}>
-                      Configure Claude Code, Antigravity (agy), Aider, Codex, or your own custom terminal command above and click Save.
-                    </p>
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-                    {cliAgents.map((agent) => {
-                      const isActive = activeCliAgentId === agent.id || (!activeCliAgentId && cliAgentConfig?.command === agent.command && (cliAgentConfig?.extraArgs || '') === (agent.extraArgs || ''));
-                      const isCurrentlyEditing = agent.id === editingAgentId;
-                      const preset = CLI_AGENT_PRESETS.find((p) => p.id === agent.presetId || p.command === agent.command);
-
-                      return (
-                        <div
-                          key={agent.id}
-                          style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '0.6rem',
-                            padding: '0.85rem 1rem',
-                            background: 'var(--bg-card)',
-                            border: `1.5px solid ${isCurrentlyEditing
-                              ? 'var(--accent-cyan)'
-                              : isActive
-                                ? 'var(--accent-emerald)'
-                                : 'var(--border-subtle)'
-                              }`,
-                            borderRadius: 'var(--radius-md)',
-                            boxShadow: isActive ? '0 0 10px rgba(16, 185, 129, 0.12)' : 'var(--shadow-card)',
-                            transition: 'all 0.15s ease'
-                          }}
-                        >
-                          {/* Top Row: Preset icon/name, Name, Active Badge & Action Buttons */}
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                              <div
-                                style={{
-                                  width: 28,
-                                  height: 28,
-                                  borderRadius: '6px',
-                                  background: preset ? (preset.badgeColor ? `${preset.badgeColor}22` : 'rgba(6, 182, 212, 0.15)') : 'rgba(16, 185, 129, 0.15)',
-                                  border: `1px solid ${preset?.badgeColor || 'var(--accent-emerald)'}`,
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  flexShrink: 0
-                                }}
-                              >
-                                <Terminal size={14} color={preset?.badgeColor || 'var(--accent-emerald)'} />
-                              </div>
-                              <div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                                  <span style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-bright)' }}>{agent.name}</span>
-                                  <span
-                                    className="badge"
-                                    style={{
-                                      fontSize: '0.65rem',
-                                      padding: '0.1rem 0.4rem',
-                                      background: 'var(--btn-secondary-bg)',
-                                      color: 'var(--text-muted)',
-                                      borderColor: 'var(--btn-secondary-border)'
-                                    }}
-                                  >
-                                    {preset?.label || 'Custom'}
-                                  </span>
-                                  {isActive && (
-                                    <span
-                                      className="badge badge-done"
-                                      style={{
-                                        fontSize: '0.65rem',
-                                        padding: '0.1rem 0.4rem',
-                                        background: 'rgba(16, 185, 129, 0.15)',
-                                        color: 'var(--accent-emerald)',
-                                        borderColor: 'rgba(16, 185, 129, 0.3)'
-                                      }}
-                                    >
-                                      Active Agent
-                                    </span>
-                                  )}
-                                </div>
-                                <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.76rem', color: 'var(--accent-cyan)', marginTop: '0.15rem' }}>
-                                  {agent.command} {agent.extraArgs ? <span style={{ color: 'var(--text-muted)' }}>{agent.extraArgs}</span> : null}
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Actions on this setup */}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                              {!isActive && (
-                                <button
-                                  type="button"
-                                  className="btn btn-secondary"
-                                  style={{ fontSize: '0.74rem', padding: '0.25rem 0.6rem' }}
-                                  onClick={() => {
-                                    if (onSelectActiveCliAgent) {
-                                      onSelectActiveCliAgent(agent.id);
-                                    }
-                                    onSaveCliAgent({
-                                      id: agent.id,
-                                      name: agent.name,
-                                      presetId: agent.presetId,
-                                      command: agent.command,
-                                      extraArgs: agent.extraArgs,
-                                    });
-                                  }}
-                                >
-                                  Set Active
-                                </button>
-                              )}
-
-                              <button
-                                type="button"
-                                className="btn btn-secondary"
-                                style={{
-                                  fontSize: '0.74rem',
-                                  padding: '0.25rem 0.6rem',
-                                  background: isCurrentlyEditing ? 'rgba(6, 182, 212, 0.15)' : undefined,
-                                  borderColor: isCurrentlyEditing ? 'var(--accent-cyan)' : undefined,
-                                  color: isCurrentlyEditing ? 'var(--accent-cyan)' : undefined
-                                }}
-                                onClick={() => loadAgentForEditing(agent)}
-                                title="Edit this setup"
-                              >
-                                <Edit3 size={12} />
-                                <span>Edit</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                className="btn btn-secondary"
-                                style={{
-                                  fontSize: '0.74rem',
-                                  padding: '0.25rem 0.5rem',
-                                  color: 'var(--accent-rose)',
-                                  borderColor: 'rgba(244, 63, 94, 0.2)'
-                                }}
-                                onClick={() => setAgentPendingDelete(agent)}
-                                title="Delete this setup"
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Delete Agent Setup Confirmation Modal */}
-              {agentPendingDelete && (
-                <div
-                  style={{
-                    position: 'fixed',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    background: 'rgba(0, 0, 0, 0.75)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    zIndex: 10000,
-                    backdropFilter: 'blur(3px)'
-                  }}
-                  onClick={() => setAgentPendingDelete(null)}
-                >
-                  <div
-                    style={{
-                      background: 'var(--bg-card)',
-                      border: '1px solid var(--border-subtle)',
-                      borderRadius: 'var(--radius-md)',
-                      padding: '1.5rem',
-                      maxWidth: '420px',
-                      width: '90%',
-                      boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '1rem'
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                      <div
-                        style={{
-                          width: '32px',
-                          height: '32px',
-                          borderRadius: '8px',
-                          background: 'rgba(244, 63, 94, 0.15)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          color: 'var(--accent-rose)'
-                        }}
-                      >
-                        <AlertTriangle size={18} />
-                      </div>
-                      <h4 style={{ margin: 0, fontSize: '1rem', color: '#fff', fontWeight: 700 }}>
-                        Delete Agent Setup?
-                      </h4>
-                    </div>
-                    <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--text-muted)', lineHeight: '1.45' }}>
-                      Are you sure you want to delete <strong style={{ color: '#fff' }}>{agentPendingDelete.name}</strong> ({agentPendingDelete.command})? This cannot be undone.
-                    </p>
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', marginTop: '0.25rem' }}>
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        onClick={() => setAgentPendingDelete(null)}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        style={{ background: 'var(--accent-rose)', borderColor: 'var(--accent-rose)' }}
-                        onClick={() => {
-                          if (onDeleteCliAgentSetup) {
-                            onDeleteCliAgentSetup(agentPendingDelete.id);
-                          }
-                          if (editingAgentId === agentPendingDelete.id) {
-                            resetCliForm();
-                          }
-                          setAgentPendingDelete(null);
-                        }}
-                      >
-                        Delete Setup
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
         </div>
 
         <div className="modal-footer">
@@ -2260,6 +2412,150 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                 </button>
                 <button type="submit" className="btn btn-primary" disabled={!genericEndpointInput.trim() || isGenericTesting}>
                   {isGenericTesting ? 'Connecting…' : 'Connect & Discover'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── CREATE / EDIT SKILL MODAL ── */}
+      {isSkillModalOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.7)',
+            backdropFilter: 'blur(3px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '1rem'
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsSkillModalOpen(false);
+          }}
+        >
+          <div
+            style={{
+              background: '#12141a',
+              border: '1px solid rgba(168, 85, 247, 0.35)',
+              borderRadius: 'var(--radius-md)',
+              width: '100%',
+              maxWidth: '620px',
+              padding: '1.25rem 1.5rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '1rem',
+              boxShadow: '0 20px 45px rgba(0,0,0,0.6)'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Sparkles size={18} color="#c084fc" />
+                <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#f3e8ff', margin: 0 }}>
+                  {editingSkill ? `Edit Skill: ${editingSkill.name}` : 'Create Custom Workspace Skill'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ padding: '0.25rem 0.5rem' }}
+                onClick={() => setIsSkillModalOpen(false)}
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveSkillForm} style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.76rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                  Skill Name *
+                </label>
+                <input
+                  type="text"
+                  className="input-text"
+                  placeholder="e.g. Code Review & Verification"
+                  value={skillFormData.name}
+                  onChange={(e) => setSkillFormData((prev) => ({ ...prev, name: e.target.value }))}
+                  required
+                  style={{ width: '100%', fontSize: '0.82rem' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.76rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                  Description *
+                </label>
+                <input
+                  type="text"
+                  className="input-text"
+                  placeholder="e.g. Review code changes against project safety guidelines and run tests"
+                  value={skillFormData.description}
+                  onChange={(e) => setSkillFormData((prev) => ({ ...prev, description: e.target.value }))}
+                  required
+                  style={{ width: '100%', fontSize: '0.82rem' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.76rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                  Rules & Constraints
+                </label>
+                <input
+                  type="text"
+                  className="input-text"
+                  placeholder="e.g. Never delete user files without explicit human confirmation. Always check tests pass."
+                  value={skillFormData.rules}
+                  onChange={(e) => setSkillFormData((prev) => ({ ...prev, rules: e.target.value }))}
+                  style={{ width: '100%', fontSize: '0.82rem' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.76rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                  Workflow Instructions for AI *
+                </label>
+                <textarea
+                  className="input-text"
+                  placeholder={`1. Call workspace_list_swim_lanes() to inspect active columns.\n2. When tasks complete, call workspace_update_task({ taskId, status: 'done', isDone: true }).`}
+                  value={skillFormData.instructions}
+                  onChange={(e) => setSkillFormData((prev) => ({ ...prev, instructions: e.target.value }))}
+                  required
+                  rows={5}
+                  style={{ width: '100%', fontSize: '0.78rem', fontFamily: 'var(--font-mono, monospace)', resize: 'vertical' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.76rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                  Trigger Keywords (comma separated)
+                </label>
+                <input
+                  type="text"
+                  className="input-text"
+                  placeholder="e.g. code review, verify, test run, safety check"
+                  value={skillFormData.triggerKeywords}
+                  onChange={(e) => setSkillFormData((prev) => ({ ...prev, triggerKeywords: e.target.value }))}
+                  style={{ width: '100%', fontSize: '0.82rem' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem', marginTop: '0.5rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setIsSkillModalOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  style={{ background: 'linear-gradient(135deg, #9333ea 0%, #7c3aed 100%)', borderColor: '#a855f7' }}
+                >
+                  {editingSkill ? 'Save Changes' : 'Create & Sync Skill'}
                 </button>
               </div>
             </form>

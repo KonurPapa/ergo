@@ -13,6 +13,7 @@ import {
 } from '../types';
 import { executeTaskWithAi } from '../lib/ai';
 import { StepStatusIcon, StepUsageBadge, PieceChip, BiblePreview, BaselineContextPreview } from './ExecutionStepExtras';
+import { MarkdownRenderer } from './MarkdownRenderer';
 import { Play, X, CheckCircle2, Send, Layers, Code, ShieldAlert, ShieldCheck, HelpCircle, Cloud, Square } from 'lucide-react';
 
 interface ExecutionModalProps {
@@ -349,7 +350,7 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
                   </span>
                 </div>
 
-                <div className="step-detail" style={{ whiteSpace: 'pre-wrap' }}>{step.detail}</div>
+                <div className="step-detail"><MarkdownRenderer content={step.detail} /></div>
                 {step.baselineContext && <BaselineContextPreview baselineContext={step.baselineContext} defaultOpen={true} />}
                 <BiblePreview markdown={step.bibleMarkdown} filePath={step.bibleMarkdown ? step.bibleFilePath : undefined} />
 

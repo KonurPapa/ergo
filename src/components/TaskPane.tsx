@@ -23,6 +23,7 @@ import { HumanAiAssistantModal } from './HumanAiAssistantModal';
 import { ArchivedTasksModal } from './ArchivedTasksModal';
 import { BatchRunModal } from './BatchRunModal';
 import { ScheduleTaskModal } from './ScheduleTaskModal';
+import { getAutocompleteSuggestion } from '../lib/autocompleteService';
 
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state';
@@ -520,6 +521,8 @@ interface SwimLaneColumnProps {
   mcpServers?: MCPServer[];
   onApplyAssistantResult?: (result: HumanAiAssistantResult, confirmedDeletions: boolean) => void;
   onAssistantHeightChange?: (height: number) => void;
+  autocompleteSettings?: import('../types').AutocompleteSettings;
+  onConfigureMcpTools?: (task: TaskItemType) => void;
 }
 
 const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
@@ -556,7 +559,12 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   mcpServers = [],
   onApplyAssistantResult,
   onAssistantHeightChange,
+  autocompleteSettings = { enabled: true, keybinding: 'Tab' },
+  onConfigureMcpTools,
 }) => {
+  const onConfigureMcpToolsRef = useRef(onConfigureMcpTools);
+  onConfigureMcpToolsRef.current = onConfigureMcpTools;
+
   const selectedTaskIdRef = useRef(selectedTaskId);
   selectedTaskIdRef.current = selectedTaskId;
 
@@ -881,6 +889,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                         container.appendChild(runningPill);
                       }
 
+
                       // Run Task button
                       const addBtn = document.createElement('button');
                       addBtn.className = 'card-action-btn card-add-task-btn card-add-subtask-btn';
@@ -1111,6 +1120,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                           dropdownEl.appendChild(archiveItem);
                         }
 
+
                         menuWrapper.appendChild(dropdownEl);
 
                         setTimeout(() => {
@@ -1323,6 +1333,114 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
     },
   });
 
+  // Autocomplete ref tracking & ProseMirror extension
+  const autocompleteSettingsRef = useRef(autocompleteSettings);
+  autocompleteSettingsRef.current = autocompleteSettings;
+  const aiConfigRef = useRef(aiConfig);
+  aiConfigRef.current = aiConfig;
+  const projectRef = useRef(project);
+  projectRef.current = project;
+
+  // Active ghost suggestion state
+  const activeSuggestionRef = useRef<{
+    pos: number;
+    text: string;
+  } | null>(null);
+
+  const wordTimerRef = useRef<any>(null);
+  const sentenceTimerRef = useRef<any>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const lastKeyTypedTimeRef = useRef<number>(0);
+
+  const clearAutocompleteTimers = () => {
+    if (wordTimerRef.current) clearTimeout(wordTimerRef.current);
+    if (sentenceTimerRef.current) clearTimeout(sentenceTimerRef.current);
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+  };
+
+  const TaskAutocompleteExtension = Extension.create({
+    name: `taskAutocomplete_${lane.id}`,
+    addProseMirrorPlugins() {
+      const autocompletePluginKey = new PluginKey(`taskAutocompletePlugin_${lane.id}`);
+      return [
+        new Plugin({
+          key: autocompletePluginKey,
+          props: {
+            handleKeyDown(view, event) {
+              const currentSettings = autocompleteSettingsRef.current;
+              if (!currentSettings || !currentSettings.enabled) {
+                return false;
+              }
+
+              const targetKey = currentSettings.keybinding || 'Tab';
+              const suggestion = activeSuggestionRef.current;
+
+              // Check if user hit the configured acceptance key (Tab, ArrowRight, or Enter)
+              if (suggestion && suggestion.text && (event.key === targetKey)) {
+                // Confirm cursor is right at the suggestion position
+                const { from, empty } = view.state.selection;
+                if (empty && from === suggestion.pos) {
+                  event.preventDefault();
+                  event.stopPropagation();
+
+                  // Insert completion text at cursor
+                  const tr = view.state.tr.insertText(suggestion.text, suggestion.pos);
+                  activeSuggestionRef.current = null;
+                  view.dispatch(tr);
+                  return true;
+                }
+              }
+
+              // Any other key dismisses the current suggestion if it doesn't match
+              if (event.key === 'Escape') {
+                if (activeSuggestionRef.current) {
+                  activeSuggestionRef.current = null;
+                  view.dispatch(view.state.tr);
+                  return true;
+                }
+              }
+
+              return false;
+            },
+            decorations(state) {
+              const suggestion = activeSuggestionRef.current;
+              if (!suggestion || !suggestion.text) {
+                return DecorationSet.empty;
+              }
+
+              // Verify suggestion is still within doc bounds
+              if (suggestion.pos > state.doc.content.size) {
+                return DecorationSet.empty;
+              }
+
+              const widget = Decoration.widget(
+                suggestion.pos,
+                () => {
+                  const span = document.createElement('span');
+                  span.className = 'ergo-autocomplete-ghost';
+                  span.textContent = suggestion.text;
+
+                  const badge = document.createElement('span');
+                  badge.className = 'ergo-autocomplete-badge';
+                  badge.textContent = autocompleteSettingsRef.current?.keybinding || 'Tab';
+                  span.appendChild(badge);
+
+                  return span;
+                },
+                { side: 1 }
+              );
+
+              return DecorationSet.create(state.doc, [widget]);
+            },
+          },
+        }),
+      ];
+    },
+  });
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -1363,6 +1481,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       CustomListKeymapExtension,
       TaskCheckboxDecorationExtension,
       AutoSurroundExtension,
+      TaskAutocompleteExtension,
     ],
     content: stripHeaderComments(lane.markdown),
     editorProps: {
@@ -1422,9 +1541,172 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       const storage = (currentEditor as unknown as WithMarkdownStorage).storage;
       const markdown = storage.markdown.getMarkdown();
       onMarkdownChange(lane.id, markdown);
+
+      // ── Task Autocomplete Scheduling ──
+      clearAutocompleteTimers();
+      lastKeyTypedTimeRef.current = Date.now();
+
+      // If autocomplete is globally disabled, skip
+      if (!autocompleteSettingsRef.current?.enabled) {
+        if (activeSuggestionRef.current) {
+          activeSuggestionRef.current = null;
+          currentEditor.view.dispatch(currentEditor.view.state.tr);
+        }
+        return;
+      }
+
+      // Check current cursor state & line
+      const { state } = currentEditor;
+      const { selection } = state;
+      if (!selection.empty) {
+        if (activeSuggestionRef.current) {
+          activeSuggestionRef.current = null;
+          currentEditor.view.dispatch(state.tr);
+        }
+        return;
+      }
+
+      const { $from } = selection;
+      const parentNode = $from.parent;
+      if (!parentNode || !parentNode.isTextblock) return;
+
+      const lineText = parentNode.textContent;
+      const offsetInLine = $from.parentOffset;
+      const prefixText = lineText.slice(0, offsetInLine);
+
+      // Determine if inside a top-level task or subtask
+      let isTaskItem = false;
+      let isSubtask = false;
+      let parentTaskTitle: string | undefined = undefined;
+
+      for (let depth = $from.depth; depth > 0; depth--) {
+        const node = $from.node(depth);
+        if (node.type.name === 'listItem') {
+          const grandParent = depth >= 2 ? $from.node(depth - 2) : null;
+          if (grandParent && grandParent.type.name === 'listItem') {
+            isSubtask = true;
+            // Get parent task text
+            parentTaskTitle = grandParent.child(0)?.textContent?.trim();
+          } else {
+            isTaskItem = true;
+          }
+          break;
+        }
+      }
+
+      // "autocomplete should never start on an empty task"
+      // "subtasks it can, based on the rest of the task/subtasks, but after the 3+ second sentence-delay"
+      if (!isTaskItem && !isSubtask) {
+        if (activeSuggestionRef.current) {
+          activeSuggestionRef.current = null;
+          currentEditor.view.dispatch(state.tr);
+        }
+        return;
+      }
+
+      if (isTaskItem && !prefixText.trim()) {
+        if (activeSuggestionRef.current) {
+          activeSuggestionRef.current = null;
+          currentEditor.view.dispatch(state.tr);
+        }
+        return;
+      }
+
+      const currentPos = $from.pos;
+      const lastWordMatch = prefixText.match(/([a-zA-Z0-9_\-]+)$/);
+      const lastWord = lastWordMatch ? lastWordMatch[1] : '';
+      const canDoWordCompletion = isTaskItem && lastWord.length >= 4;
+
+      // 1. Immediate word autocomplete (after 1 second of no input, if 4+ chars without space)
+      if (canDoWordCompletion) {
+        wordTimerRef.current = setTimeout(async () => {
+          if (!currentEditor || currentEditor.isDestroyed) return;
+          const { selection: sel } = currentEditor.state;
+          if (sel.from !== currentPos) return;
+
+          const controller = new AbortController();
+          abortControllerRef.current = controller;
+
+          try {
+            const suggestion = await getAutocompleteSuggestion(
+              {
+                fullLineText: lineText,
+                prefixText,
+                isSubtask: false,
+                parentTaskTitle,
+                projectId: projectRef.current?.id,
+                mode: 'word',
+              },
+              aiConfigRef.current,
+              controller.signal
+            );
+
+            if (suggestion && !currentEditor.isDestroyed && currentEditor.state.selection.from === currentPos) {
+              activeSuggestionRef.current = {
+                pos: currentPos,
+                text: suggestion,
+              };
+              currentEditor.view.dispatch(currentEditor.view.state.tr);
+            }
+          } catch (err) {
+            console.warn('[Autocomplete] Word completion error:', err);
+          }
+        }, 1000);
+      }
+
+      // 2. Delayed sentence autocomplete (after 3+ seconds of no input)
+      // Allowed on tasks with text or on empty subtasks with parentTask context
+      const canDoSentenceCompletion = (isTaskItem && prefixText.trim().length > 0) || (isSubtask);
+      if (canDoSentenceCompletion) {
+        sentenceTimerRef.current = setTimeout(async () => {
+          if (!currentEditor || currentEditor.isDestroyed) return;
+          const { selection: sel } = currentEditor.state;
+          if (sel.from !== currentPos) return;
+
+          const controller = new AbortController();
+          abortControllerRef.current = controller;
+
+          try {
+            const suggestion = await getAutocompleteSuggestion(
+              {
+                fullLineText: lineText,
+                prefixText,
+                isSubtask,
+                parentTaskTitle,
+                projectId: projectRef.current?.id,
+                mode: 'sentence',
+              },
+              aiConfigRef.current,
+              controller.signal
+            );
+
+            if (suggestion && !currentEditor.isDestroyed && currentEditor.state.selection.from === currentPos) {
+              activeSuggestionRef.current = {
+                pos: currentPos,
+                text: suggestion,
+              };
+              currentEditor.view.dispatch(currentEditor.view.state.tr);
+            }
+          } catch (err) {
+            console.warn('[Autocomplete] Sentence completion error:', err);
+          }
+        }, 3000);
+      }
     },
     onSelectionUpdate: ({ editor: currentEditor }) => {
       updateSelectionTooltip(currentEditor);
+
+      // "autocomplete should not start if the user simply moved their cursor to another task, but hasn't started typing anything yet"
+      // If cursor moved away from where the suggestion was offered, clear it and cancel pending timers
+      if (activeSuggestionRef.current && currentEditor) {
+        const { from } = currentEditor.state.selection;
+        if (from !== activeSuggestionRef.current.pos) {
+          activeSuggestionRef.current = null;
+          currentEditor.view.dispatch(currentEditor.view.state.tr);
+        }
+      }
+      clearAutocompleteTimers();
+
       if (onSelectTaskRef.current && currentEditor) {
         const { from } = currentEditor.state.selection;
         const itemIndex = getTaskIndexAtPos(currentEditor.state.doc, from);
@@ -1438,6 +1720,10 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       }
     },
     onBlur: () => {
+      clearAutocompleteTimers();
+      if (activeSuggestionRef.current) {
+        activeSuggestionRef.current = null;
+      }
       setTimeout(() => {
         const activeEl = document.activeElement;
         if (!activeEl?.classList.contains('selection-run-tooltip') && !activeEl?.closest('.selection-run-tooltip')) {
@@ -2088,6 +2374,8 @@ interface TaskPaneProps {
   onRunTasksSequence?: (tasks: TaskItemType[], laneId: string, laneTitle: string) => void;
   onRunTasksParallel?: (tasks: TaskItemType[], laneId: string, laneTitle: string) => void;
   onScheduleTask?: (taskId: string | number, scheduledIso: string, cronExpr?: string) => void;
+  autocompleteSettings?: import('../types').AutocompleteSettings;
+  onUpdateTaskMcpTools?: (taskId: string | number, toolNames: string[]) => void;
 }
 
 export const TaskPane: React.FC<TaskPaneProps> = ({
@@ -2120,6 +2408,8 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   onRunTasksSequence,
   onRunTasksParallel,
   onScheduleTask,
+  autocompleteSettings = { enabled: true, keybinding: 'Tab' },
+  onUpdateTaskMcpTools: _onUpdateTaskMcpTools,
 }) => {
   const [showStyles, setShowStyles] = useState(false);
   const [assistantDrawerHeight, setAssistantDrawerHeight] = useState<number>(0);
@@ -2272,6 +2562,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
               mcpServers={mcpServers}
               onApplyAssistantResult={onApplyAssistantResult}
               onAssistantHeightChange={setAssistantDrawerHeight}
+              autocompleteSettings={autocompleteSettings}
             />
             {effectiveSwimLanes.length > 1 && idx < effectiveSwimLanes.length - 1 && (
               <div
@@ -2298,6 +2589,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
         onDeleteArchivedTask={onDeleteArchivedTask}
         onRestoreMemoryAsTask={onRestoreMemoryAsTask}
       />
+
     </div>
   );
 };

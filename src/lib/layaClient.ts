@@ -15,6 +15,7 @@
 
 import { type MCPServer, type TaskKind, type TaskItem } from '../types';
 import { callMcpTool } from './mcpClient';
+import { isExplicitCodeTask, requiresCliOrProcessTools } from './agentPipeline/summary';
 
 export interface LayaChoiceResult {
   choice: string;
@@ -215,15 +216,23 @@ export async function performSummaryTriageWithLaya(params: {
   try {
     const taskText = `Title: ${task.title}\nCategory: ${task.category}\nSubtasks:\n${task.subtasks.map((s) => `- ${s.text}`).join('\n')}\n\nContext excerpt:\n${baselineMarkdown.slice(0, 1000)}`;
 
-    // 1. TaskKind Decision (6 options <= 15 limit)
-    const taskKindOptions: TaskKind[] = ['coding', 'writing', 'research', 'ops', 'data', 'other'];
-    const kindRes = await callLayaChoiceRaw(
-      `Classify the primary discipline of this software/user task into exactly one category:\n\n${taskText}`,
-      taskKindOptions
-    );
-    const taskKind: TaskKind = (kindRes?.choice && taskKindOptions.includes(kindRes.choice as TaskKind))
-      ? (kindRes.choice as TaskKind)
-      : 'coding';
+    // 1. TaskKind Decision (enforce coding if task description contains verbs like write/script/scaffold/compile or code extensions)
+    let taskKind: TaskKind = 'coding';
+    let kindConfidence = 0.95;
+    if (isExplicitCodeTask(taskText)) {
+      taskKind = 'coding';
+      kindConfidence = 0.95;
+    } else {
+      const taskKindOptions: TaskKind[] = ['coding', 'writing', 'research', 'ops', 'data', 'other'];
+      const kindRes = await callLayaChoiceRaw(
+        `Classify the primary discipline of this software/user task into exactly one category:\n\n${taskText}`,
+        taskKindOptions
+      );
+      taskKind = (kindRes?.choice && taskKindOptions.includes(kindRes.choice as TaskKind))
+        ? (kindRes.choice as TaskKind)
+        : 'coding';
+      kindConfidence = kindRes?.confidence ?? 0.85;
+    }
 
     // 2. Straightforward / Single-deliverable decision
     const straightforwardRes = await callLayaBoolean(
@@ -245,6 +254,26 @@ export async function performSummaryTriageWithLaya(params: {
     // Filesystem is always required as the baseline storage harness
     if (!requiredMcps.includes('mcp-filesystem') && activeServers.some((s) => s.id === 'mcp-filesystem')) {
       requiredMcps.push('mcp-filesystem');
+    }
+    // Dynamic Tool Provisioning: if headless CLI, shell, script execution, or domain runners (e.g. Godot) are required,
+    // ensure shell/process-execution tool and relevant domain MCP servers are provisioned alongside mcp-filesystem.
+    if (requiresCliOrProcessTools(taskText)) {
+      for (const s of activeServers) {
+        const idLower = s.id.toLowerCase();
+        const labelLower = s.label.toLowerCase();
+        const descLower = (s.description || '').toLowerCase();
+        const isGodotTask = taskText.toLowerCase().includes('godot');
+        const isGodotServer = idLower.includes('godot') || labelLower.includes('godot');
+        const isShellOrProcessServer =
+          idLower.includes('shell') || idLower.includes('bash') || idLower.includes('terminal') || idLower.includes('command') ||
+          descLower.includes('run_command') || descLower.includes('shell command');
+
+        if ((isGodotTask && isGodotServer) || isShellOrProcessServer) {
+          if (!requiredMcps.includes(s.id)) {
+            requiredMcps.push(s.id);
+          }
+        }
+      }
     }
     // Filter out mcp-laya from the execution tools passed to workers (Laya is an internal decision engine)
     requiredMcps = requiredMcps.filter((id) => id !== 'mcp-laya');
@@ -270,7 +299,7 @@ export async function performSummaryTriageWithLaya(params: {
       requiredMcps,
       requiresHardener,
       hardenerReason,
-      confidence: kindRes?.confidence ?? 0.85,
+      confidence: kindConfidence,
       usedLaya: true
     };
   } catch (err) {

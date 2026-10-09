@@ -50,6 +50,8 @@ interface SettingsModalProps {
   onSetAgentPipelineOptions: (next: AgentPipelineOptions) => void;
   onClearProjectMemory?: () => Promise<number>;
   onClearAllMemory?: () => Promise<number>;
+  autocompleteSettings?: import('../types').AutocompleteSettings;
+  onSetAutocompleteSettings?: (next: import('../types').AutocompleteSettings) => void;
 }
 
 /** Bounds for the numeric pipeline knobs (kept in sync with the helper text below). */
@@ -113,7 +115,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   agentPipelineOptions,
   onSetAgentPipelineOptions,
   onClearProjectMemory,
-  onClearAllMemory
+  onClearAllMemory,
+  autocompleteSettings = { enabled: true, keybinding: 'Tab' },
+  onSetAutocompleteSettings
 }) => {
   const [isScanning, setIsScanning] = useState(false);
   const [storagePathInput, setStoragePathInput] = useState(
@@ -844,6 +848,77 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <span>{isClearingAllMemory ? 'Resetting…' : 'Reset Entire Vector DB'}</span>
               </button>
             </div>
+          </div>
+
+          {/* Section: Task Autocomplete Settings */}
+          <div
+            style={{
+              background: 'rgba(255, 255, 255, 0.025)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: '8px',
+              padding: '1.1rem'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', marginBottom: '0.8rem' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <Sparkles size={16} color="var(--accent-cyan)" />
+                  <span style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--text-bright)' }}>AI & Vector Autocomplete</span>
+                  <span
+                    className={`badge ${autocompleteSettings.enabled ? 'badge-done' : ''}`}
+                    style={{
+                      fontSize: '0.65rem',
+                      padding: '0.1rem 0.4rem',
+                      background: autocompleteSettings.enabled ? undefined : 'rgba(255,255,255,0.06)',
+                      color: autocompleteSettings.enabled ? undefined : 'var(--text-muted)'
+                    }}
+                  >
+                    {autocompleteSettings.enabled ? 'ENABLED' : 'DISABLED'}
+                  </span>
+                </div>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: '1.45' }}>
+                  Provides inline suggestions pulled from vector memory & lightweight models. Immediate completion after 1s for words (4+ chars), and delayed completion after 3s for full sentences.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className={`toggle-switch-btn ${autocompleteSettings.enabled ? 'is-active' : ''}`}
+                onClick={() => onSetAutocompleteSettings?.({ ...autocompleteSettings, enabled: !autocompleteSettings.enabled })}
+                aria-label="Toggle autocomplete"
+                style={{ flexShrink: 0, marginTop: '0.2rem' }}
+              >
+                <div className="toggle-switch-thumb" />
+              </button>
+            </div>
+
+            {autocompleteSettings.enabled && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginTop: '0.8rem', paddingTop: '0.8rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 500 }}>Accept Keybinding:</span>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  {(['Tab', 'ArrowRight', 'Enter'] as const).map((key) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => onSetAutocompleteSettings?.({ ...autocompleteSettings, keybinding: key })}
+                      style={{
+                        padding: '0.25rem 0.65rem',
+                        fontSize: '0.75rem',
+                        fontFamily: 'var(--font-mono)',
+                        borderRadius: '4px',
+                        border: '1px solid',
+                        borderColor: autocompleteSettings.keybinding === key ? 'var(--accent-cyan)' : 'var(--border-subtle)',
+                        background: autocompleteSettings.keybinding === key ? 'rgba(6, 182, 212, 0.15)' : 'rgba(0,0,0,0.2)',
+                        color: autocompleteSettings.keybinding === key ? 'var(--accent-cyan)' : 'var(--text-muted)',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {key}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Section 5: Target File Paths & Status */}
