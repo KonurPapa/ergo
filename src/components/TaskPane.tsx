@@ -301,45 +301,10 @@ const CustomListKeymapExtension = Extension.create({
   name: 'customListKeymap',
   addKeyboardShortcuts() {
     return {
-      Enter: ({ editor }) => {
-        if (!editor.isActive('orderedList') && !editor.isActive('bulletList')) {
-          const { state } = editor;
-          const { selection } = state;
-          const { $from } = selection;
-          const currentLineText = $from.parent.textContent;
-          const wasHeading = $from.parent.type.name === 'heading';
-
-          if (/^\d+\.\s*/.test(currentLineText.trim())) {
-            const res = editor.chain().focus().toggleOrderedList().unsetMark('strike').run();
-            if (res) {
-              const tr = editor.state.tr;
-              tr.setStoredMarks([]);
-              editor.view.dispatch(tr);
-              return true;
-            }
-          }
-
-          const res = editor.chain().focus().toggleOrderedList().unsetMark('strike').run();
-          if (res) {
-            if (wasHeading) {
-              editor.chain().setNode('paragraph').run();
-            }
-            const tr = editor.state.tr;
-            tr.setStoredMarks([]);
-            const { $from: newFrom } = tr.selection;
-            const parent = newFrom.parent;
-            if (parent && editor.state.schema.marks.strike) {
-              const startPos = newFrom.start();
-              const endPos = newFrom.end();
-              if (endPos > startPos) {
-                tr.removeMark(startPos, endPos, editor.state.schema.marks.strike);
-              }
-            }
-            editor.view.dispatch(tr);
-            return true;
-          }
-        }
-
+      Enter: () => {
+        // Allow default ProseMirror / StarterKit list behaviors:
+        // - In regular paragraphs or headings, Enter creates a normal new line / paragraph.
+        // - In list items, Enter creates a new list item; pressing Enter on an empty list item lifts out back to a regular paragraph.
         return false;
       },
       Tab: ({ editor }) => {
@@ -420,37 +385,76 @@ const CustomListKeymapExtension = Extension.create({
               (parent.type.name === 'orderedList' || parent.type.name === 'bulletList') &&
               (depth < 2 || $from.node(depth - 2)?.type.name !== 'listItem');
 
-            if (isTopLevelCard) {
-              const cardStartPos = $from.start(depth);
+            let isCardEmpty = true;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            node.forEach((child: any) => {
+              if (child.textContent.trim() !== '') {
+                isCardEmpty = false;
+              }
+              if (child.type.name === 'bulletList' || child.type.name === 'orderedList') {
+                isCardEmpty = false;
+              }
+            });
+
+            if (isCardEmpty) {
+              // Lift empty list item back into a paragraph, or remove if empty list
+              if (editor.can().liftListItem('listItem')) {
+                return editor.chain().focus().liftListItem('listItem').run();
+              }
               const cardBeforePos = $from.before(depth);
               const cardAfterPos = $from.after(depth);
+              const tr = state.tr;
+              tr.delete(cardBeforePos, cardAfterPos);
+              const targetPos = Math.max(0, Math.min(cardBeforePos, tr.doc.content.size));
+              tr.setSelection(Selection.near(tr.doc.resolve(targetPos)));
+              view.dispatch(tr);
+              return true;
+            }
 
-              let isCardEmpty = true;
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              node.forEach((child: any) => {
-                if (child.textContent.trim() !== '') {
-                  isCardEmpty = false;
-                }
-                if (child.type.name === 'bulletList' || child.type.name === 'orderedList') {
-                  isCardEmpty = false;
-                }
-              });
-
-              if (isCardEmpty) {
-                const tr = state.tr;
-                tr.delete(cardBeforePos, cardAfterPos);
-                const targetPos = Math.max(1, Math.min(cardBeforePos, tr.doc.content.size - 1));
-                tr.setSelection(Selection.near(tr.doc.resolve(targetPos)));
-                view.dispatch(tr);
-                return true;
-              }
-
+            if (isTopLevelCard) {
+              const cardStartPos = $from.start(depth);
               if ($from.pos === cardStartPos) {
                 const indexInParent = $from.index(depth - 1);
                 if (indexInParent > 0) {
                   return true;
                 }
               }
+            }
+            break;
+          }
+        }
+        return false;
+      },
+      Delete: ({ editor }) => {
+        const { state, view } = editor;
+        const { selection } = state;
+        const { $from, empty } = selection;
+
+        if (!empty) return false;
+
+        for (let depth = $from.depth; depth > 0; depth--) {
+          const node = $from.node(depth);
+          if (node.type.name === 'listItem') {
+            let isCardEmpty = true;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            node.forEach((child: any) => {
+              if (child.textContent.trim() !== '') {
+                isCardEmpty = false;
+              }
+              if (child.type.name === 'bulletList' || child.type.name === 'orderedList') {
+                isCardEmpty = false;
+              }
+            });
+
+            if (isCardEmpty) {
+              const cardBeforePos = $from.before(depth);
+              const cardAfterPos = $from.after(depth);
+              const tr = state.tr;
+              tr.delete(cardBeforePos, cardAfterPos);
+              const targetPos = Math.max(0, Math.min(cardBeforePos, tr.doc.content.size));
+              tr.setSelection(Selection.near(tr.doc.resolve(targetPos)));
+              view.dispatch(tr);
+              return true;
             }
             break;
           }

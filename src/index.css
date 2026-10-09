@@ -188,7 +188,7 @@
   /* Typography */
   --text: #e4e4e7;
   --text-main: #e4e4e7;
-  --text-subtask: #d4d4d8;
+  --text-subtask: #b6b6ba;
   --text-muted: #7f7f88;
   --text-dim: #52525b;
   --text-bright: #fafafa;
@@ -840,7 +840,7 @@ body {
 .tiptap-editor-root .tiptap {
   flex: 1;
   min-height: 100%;
-  padding: 0.85rem 1rem 3rem;
+  padding: 0.25rem 0.5rem 2rem;
   outline: none;
   color: var(--text-main);
   font-family: var(--font-sans);
@@ -991,12 +991,12 @@ body {
 .tiptap-editor-root .tiptap ol,
 .tiptap-editor-root .tiptap ul:not(li ul) {
   padding-left: 0;
-  margin: 0.25rem 0 1.25rem;
+  margin: 0.15rem 0 0.5rem;
   list-style-type: none;
   counter-reset: card-counter;
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 0.0rem;
 }
 
 .tiptap-editor-root .tiptap>h1,

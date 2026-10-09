@@ -123,6 +123,9 @@ Maybe the implementation looks something like the AI drafting its plan and build
         - this should probably be in `mermaid` format, so it can be visually represented by the user but then sent straight to the AI
     - how do we handle MCP token expirations?
     - create a default TODO.md file that new projects clone when created
+    - the last-used project needs to be the one that restores when the user returns to the page again / reloads
+    - the AI profile and project need ot be synced, so that if the user last used a different AI profile on a different project, switchign projects automatically switches to the last AI profile as well
+    - the AI should only check off tasks as completed if it successfully gets to the end, not if the user stops a task partway through
 
 
 
