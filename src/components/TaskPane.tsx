@@ -19,6 +19,7 @@ import Typography from '@tiptap/extension-typography';
 import { Markdown } from 'tiptap-markdown';
 import { stripHeaderComments, parseSwimLaneMarkdown } from '../lib/parser';
 import { storageManager } from '../lib/storageManager';
+import { bridgeClient } from '../lib/bridgeClient';
 import { HumanAiAssistantModal } from './HumanAiAssistantModal';
 import { ArchivedTasksModal } from './ArchivedTasksModal';
 import { BatchRunModal } from './BatchRunModal';
@@ -1507,7 +1508,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
               storageManager.saveMediaFile(folderPath, file).then((relPath) => {
                 if (!view || view.isDestroyed) return;
                 const src = relPath
-                  ? `/api/media/${relPath}`
+                  ? bridgeClient.getApiUrl(`/api/media/${relPath}`)
                   : URL.createObjectURL(file); // fallback: blob URL (in-memory only)
                 const { state, dispatch } = view;
                 const imageNode = state.schema.nodes.image?.create({ src, alt: file.name || 'Pasted screenshot' });
@@ -1881,7 +1882,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         storageManager.saveMediaFile(folderPath, file).then((relPath) => {
           if (!capturedEditor || capturedEditor.isDestroyed) return;
           const src = relPath
-            ? `/api/media/${relPath}`
+            ? bridgeClient.getApiUrl(`/api/media/${relPath}`)
             : URL.createObjectURL(file);
           capturedEditor.chain().focus().setImage({ src, alt: file.name || 'Attached screenshot' }).run();
         }).catch(() => {
@@ -1908,7 +1909,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
     <div
       className={`swimlane-column ${totalLanes > 1 ? 'is-multi-lane' : 'is-single-lane'} ${isActive ? 'is-active-lane' : ''}`}
       onClick={() => onActivate()}
-      style={totalLanes > 1 && width ? { width, minWidth: '260px', flex: `0 0 ${width}` } : undefined}
+      style={width ? { width, minWidth: '260px', flex: `0 0 ${width}` } : undefined}
     >
       {/* Column Header */}
       <div className="swimlane-column-header">
@@ -2530,12 +2531,12 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
 
       {/* ── Swim Lanes Container ── */}
       <div className={`swimlanes-wrapper ${effectiveSwimLanes.length > 1 ? 'is-multi-column' : 'is-single-column'}`}>
-        {effectiveSwimLanes.map((lane, idx) => (
+        {effectiveSwimLanes.map((lane) => (
           <React.Fragment key={lane.id}>
             <SwimLaneColumn
               lane={lane}
               totalLanes={effectiveSwimLanes.length}
-              width={effectiveSwimLanes.length > 1 ? (laneWidths[lane.id] ? `${laneWidths[lane.id]}px` : 'calc(100vw / 3)') : undefined}
+              width={laneWidths[lane.id] ? `${laneWidths[lane.id]}px` : (effectiveSwimLanes.length > 1 ? 'calc(100vw / 3)' : undefined)}
               isActive={lane.id === activeSwimLaneId}
               onActivate={() => setActiveSwimLaneId(lane.id)}
               selectedTaskId={selectedTaskId}
@@ -2568,15 +2569,14 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
               onAssistantHeightChange={setAssistantDrawerHeight}
               autocompleteSettings={autocompleteSettings}
             />
-            {effectiveSwimLanes.length > 1 && idx < effectiveSwimLanes.length - 1 && (
-              <div
-                className={`swimlane-resizer-handle ${resizingRef.current?.laneId === lane.id ? 'is-active' : ''}`}
-                onMouseDown={(e) => handleStartResize(e, lane.id)}
-                title="Drag to resize swim lane width"
-              >
-                <div className="swimlane-resizer-line" />
-              </div>
-            )}
+            {/* Resizer & grab bar divider at the right edge of swim lane */}
+            <div
+              className={`swimlane-resizer-handle ${resizingRef.current?.laneId === lane.id ? 'is-active' : ''}`}
+              onMouseDown={(e) => handleStartResize(e, lane.id)}
+              title="Drag to resize swim lane width"
+            >
+              <div className="swimlane-resizer-line" />
+            </div>
           </React.Fragment>
         ))}
       </div>

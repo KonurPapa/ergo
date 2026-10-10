@@ -153,6 +153,8 @@ Maybe the implementation looks something like the AI drafting its plan and build
             - pastes directly into the markdown file so formatting can apply directly
         - Delete (Ctrl+Delete)
         - Select All (Ctrl+A)
+    - instead of each stage being a dropdown card, it should be a series of tabs horizontally below the token usage card that open one by one as execution progresses through each stage
+    - instead of the human swim lanes being giant cards, they should be directly against the background, with vertical lines between swim lanes
 
 
 

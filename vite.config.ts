@@ -2889,7 +2889,14 @@ function ergoFileSystemPlugin(): Plugin {
             const hasGeminiDir = fsSync.existsSync(geminiConfigDir) || fsSync.existsSync(userConfigDir);
             if (hasGeminiDir) {
               isAuthenticated = true;
-              message = 'Antigravity CLI (agy) is authenticated with your Google account.';
+              try {
+                const accountsFile = path.join(geminiConfigDir, 'google_accounts.json');
+                if (fsSync.existsSync(accountsFile)) {
+                  const accData = JSON.parse(await fs.readFile(accountsFile, 'utf-8'));
+                  userEmail = accData?.active || accData?.current || null;
+                }
+              } catch {}
+              message = userEmail ? `Authenticated with Google as ${userEmail}` : 'Antigravity CLI (agy) is authenticated with your Google account.';
             } else {
               const pingRes = await runShellCommand(`${resolvedCmd} --version`, storageDir, 5000);
               if (pingRes.exitCode === 0) {
@@ -2904,7 +2911,25 @@ function ergoFileSystemPlugin(): Plugin {
             const codexConfig = path.join(os.homedir(), '.codex');
             if (fsSync.existsSync(codexConfig)) {
               isAuthenticated = true;
-              message = 'Codex authenticated';
+              try {
+                const authJsonPath = path.join(codexConfig, 'auth.json');
+                if (fsSync.existsSync(authJsonPath)) {
+                  const authData = JSON.parse(await fs.readFile(authJsonPath, 'utf-8'));
+                  const idTok = authData?.tokens?.id_token;
+                  if (idTok && typeof idTok === 'string') {
+                    const parts = idTok.split('.');
+                    if (parts.length >= 2) {
+                      const payload = Buffer.from(parts[1], 'base64').toString('utf-8');
+                      const parsedPayload = JSON.parse(payload);
+                      userEmail = parsedPayload?.email || parsedPayload?.name || parsedPayload?.preferred_username || null;
+                    }
+                  }
+                  if (!userEmail && authData?.tokens?.account_id) {
+                    userEmail = authData.tokens.account_id;
+                  }
+                }
+              } catch {}
+              message = userEmail ? `Authenticated with OpenAI as ${userEmail}` : 'Codex authenticated';
             } else {
               const pingRes = await runShellCommand('codex --version', storageDir, 5000);
               if (pingRes.exitCode === 0) {
@@ -3103,6 +3128,44 @@ function ergoFileSystemPlugin(): Plugin {
             output: '',
             error: err.message || 'Server error during login initialization'
           });
+        }
+      }
+
+      // Reset CLI authentication for a given provider
+      if (url === '/api/cli/reset-auth' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const { cli = 'claude' } = body;
+
+          if (cli === 'codex') {
+            const codexAuth = path.join(os.homedir(), '.codex', 'auth.json');
+            if (fsSync.existsSync(codexAuth)) {
+              await fs.unlink(codexAuth).catch(() => {});
+            }
+          } else if (cli === 'antigravity' || cli === 'agy' || cli === 'gemini') {
+            const geminiAccounts = path.join(os.homedir(), '.gemini', 'google_accounts.json');
+            const geminiOauth = path.join(os.homedir(), '.gemini', 'oauth_creds.json');
+            if (fsSync.existsSync(geminiAccounts)) await fs.unlink(geminiAccounts).catch(() => {});
+            if (fsSync.existsSync(geminiOauth)) await fs.unlink(geminiOauth).catch(() => {});
+          } else if (cli === 'claude') {
+            const claudeCreds = path.join(os.homedir(), '.claude', '.credentials.json');
+            if (fsSync.existsSync(claudeCreds)) await fs.unlink(claudeCreds).catch(() => {});
+            const claudeConfig = path.join(os.homedir(), '.claude.json');
+            if (fsSync.existsSync(claudeConfig)) {
+              try {
+                const text = await fs.readFile(claudeConfig, 'utf-8');
+                const parsed = JSON.parse(text);
+                delete parsed.oauthAccount;
+                delete parsed.sessionKey;
+                delete parsed.primaryApiKey;
+                await fs.writeFile(claudeConfig, JSON.stringify(parsed, null, 2), 'utf-8');
+              } catch {}
+            }
+          }
+
+          return sendJson(res, 200, { success: true, message: `Authentication for ${cli} reset.` });
+        } catch (err: any) {
+          return sendJson(res, 500, { success: false, error: err.message });
         }
       }
 

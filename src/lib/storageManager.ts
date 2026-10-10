@@ -7,6 +7,7 @@ import {
 } from '../types';
 import { INITIAL_PROJECTS } from './demoData';
 import { callMcpTool } from './mcpClient';
+import { bridgeClient } from './bridgeClient';
 import summaryAgentSkillRaw from '../../docs/skills/summary-agent/SKILL.md?raw';
 import managerAgentSkillRaw from '../../docs/skills/manager-agent/SKILL.md?raw';
 import workerAgentSkillRaw from '../../docs/skills/worker-agent/SKILL.md?raw';
@@ -427,6 +428,10 @@ export class StorageManager {
     return this.folderMetadata;
   }
 
+  private apiFetch(endpoint: string, init?: RequestInit): Promise<Response> {
+    return fetch(bridgeClient.getApiUrl(endpoint), init);
+  }
+
   /**
    * Fetch current storage directory configuration (~/.ergo default)
    */
@@ -437,7 +442,7 @@ export class StorageManager {
     homeDir: string;
   }> {
     try {
-      const res = await fetch('/api/storage/config');
+      const res = await this.apiFetch('/api/storage/config');
       if (res.ok) {
         return await res.json();
       }
@@ -463,7 +468,7 @@ export class StorageManager {
   }> {
     try {
       localStorage.setItem('ergo_storage_directory', newPath);
-      const res = await fetch('/api/storage/config', {
+      const res = await this.apiFetch('/api/storage/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: newPath })
@@ -690,7 +695,7 @@ export class StorageManager {
 
     // Try Vite Server API
     try {
-      const res = await fetch('/api/config/read', {
+      const res = await this.apiFetch('/api/config/read', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'settings' })
@@ -742,7 +747,7 @@ export class StorageManager {
 
     // Also write to server API fallback
     try {
-      const res = await fetch('/api/config/write', {
+      const res = await this.apiFetch('/api/config/write', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'settings', data: settings })
@@ -777,7 +782,7 @@ export class StorageManager {
 
     // Try Vite Server API
     try {
-      const res = await fetch('/api/config/read', {
+      const res = await this.apiFetch('/api/config/read', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'secrets' })
@@ -847,7 +852,7 @@ export class StorageManager {
 
     // Also write to server API fallback
     try {
-      const res = await fetch('/api/config/write', {
+      const res = await this.apiFetch('/api/config/write', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'secrets', data: payload })
@@ -863,7 +868,7 @@ export class StorageManager {
    */
   public async loadSkillDoc(skillName = 'human-assistant'): Promise<string | null> {
     try {
-      const res = await fetch('/api/skills/read', {
+      const res = await this.apiFetch('/api/skills/read', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ skillName })
@@ -949,7 +954,7 @@ export class StorageManager {
 
     let saved = false;
     try {
-      const res = await fetch('/api/skills/write', {
+      const res = await this.apiFetch('/api/skills/write', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ skillName, content })
@@ -1037,7 +1042,7 @@ export class StorageManager {
 
     // Try Vite Server API /api/projects/list
     try {
-      const res = await fetch('/api/projects/list');
+      const res = await this.apiFetch('/api/projects/list');
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.projects) && data.projects.length > 0) {
@@ -1106,7 +1111,7 @@ export class StorageManager {
 
     // Fallback to server API /api/files/write
     try {
-      const res = await fetch('/api/files/write', {
+      const res = await this.apiFetch('/api/files/write', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ files })
@@ -1170,7 +1175,7 @@ export class StorageManager {
 
     // Fallback to Server API /api/projects/create
     try {
-      const res = await fetch('/api/projects/create', {
+      const res = await this.apiFetch('/api/projects/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ folderPath, todoContent, agentContextContent })
@@ -1209,7 +1214,7 @@ export class StorageManager {
 
     // 1. Server API first — correctly decodes base64 to binary Buffer before writing
     try {
-      const res = await fetch('/api/files/write-binary', {
+      const res = await this.apiFetch('/api/files/write-binary', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filePath: relPath, base64Content }),
@@ -1248,7 +1253,7 @@ export class StorageManager {
     let deleted = false;
     // Server API
     try {
-      const res = await fetch('/api/files/delete', {
+      const res = await this.apiFetch('/api/files/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filePaths: [relPath] }),
@@ -1300,7 +1305,7 @@ export class StorageManager {
     // List files currently in the media folder
     let mediaFiles: string[] = [];
     try {
-      const res = await fetch('/api/media/list', {
+      const res = await this.apiFetch('/api/media/list', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ folderPath: mediaFolderRelPath }),

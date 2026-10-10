@@ -16,6 +16,7 @@ import {
   Command,
   Loader2,
 } from 'lucide-react';
+import { bridgeClient } from '../lib/bridgeClient';
 
 export interface CliPromptOption {
   key: string;
@@ -400,7 +401,7 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
   // Connect WebSocket to /api/pty
   useEffect(() => {
     let isDisposed = false;
-    const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/api/pty`;
+    const wsUrl = bridgeClient.getWsUrl('/api/pty');
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 

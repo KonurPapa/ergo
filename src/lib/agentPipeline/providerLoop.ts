@@ -24,6 +24,7 @@ import {
   emptyUsage,
   throwIfAborted
 } from './contracts';
+import { bridgeClient } from '../bridgeClient';
 import { toAnthropicTools, toGeminiTools, toOpenAiTools } from './toolSchemas';
 import { type TokenUsage } from '../../types';
 
@@ -678,7 +679,7 @@ async function runCliSubscription(req: ToolLoopRequest, tools: ToolDefinition[],
       else if (binary === 'grok') cliEnv['XAI_API_KEY'] = req.apiKey.trim();
     }
 
-    const res = await fetch('/api/cli/execute', {
+    const res = await fetch(bridgeClient.getApiUrl('/api/cli/execute'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

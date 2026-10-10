@@ -1,4 +1,5 @@
 import { type AIProviderConfig } from '../types';
+import { bridgeClient } from './bridgeClient';
 
 /**
  * Generic API call handler for Bring-Your-Own-AI providers (OpenAI, Anthropic, Gemini, Ollama)
@@ -226,7 +227,7 @@ export async function callAiEngine(
       if (config.providerKeys.grok?.apiKey) env['XAI_API_KEY'] = config.providerKeys.grok.apiKey.trim();
     }
 
-    const res = await fetch('/api/cli/execute', {
+    const res = await fetch(bridgeClient.getApiUrl('/api/cli/execute'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

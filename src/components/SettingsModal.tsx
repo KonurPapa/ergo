@@ -25,9 +25,11 @@ import {
   Sparkles,
   FlaskConical,
   Database,
-  Trash2
+  Trash2,
+  Laptop
 } from 'lucide-react';
 import { getChunkCount } from '../lib/memory';
+import { bridgeClient, type BridgeStatus } from '../lib/bridgeClient';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -129,6 +131,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [totalChunkCount, setTotalChunkCount] = useState<number | null>(null);
   const [isClearingProjectMemory, setIsClearingProjectMemory] = useState(false);
   const [isClearingAllMemory, setIsClearingAllMemory] = useState(false);
+  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>(() => bridgeClient.getStatus());
+  const [bridgeUrlInput, setBridgeUrlInput] = useState<string>(() => bridgeClient.getBridgeUrl() || 'http://localhost:5173');
+  const [isTestingBridge, setIsTestingBridge] = useState(false);
+  const [bridgeNotice, setBridgeNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  React.useEffect(() => {
+    const unsub = bridgeClient.subscribe((status) => {
+      setBridgeStatus(status);
+    });
+    return unsub;
+  }, []);
+
+  const handleTestBridge = async () => {
+    setIsTestingBridge(true);
+    setBridgeNotice(null);
+    try {
+      const res = await bridgeClient.checkConnection(bridgeUrlInput.trim());
+      if (res.success) {
+        setBridgeNotice({ type: 'success', text: `Connected successfully to ${bridgeUrlInput.trim()}` });
+      } else {
+        setBridgeNotice({ type: 'error', text: res.error || 'Connection failed' });
+      }
+    } finally {
+      setIsTestingBridge(false);
+    }
+  };
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -509,6 +537,80 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <span>projects/</span>
                 <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>(Task Lists & Context Briefs)</span>
               </div>
+            </div>
+
+            {/* Local Device Bridge Configuration */}
+            <div
+              style={{
+                marginTop: '0.85rem',
+                paddingTop: '0.85rem',
+                borderTop: '1px solid var(--border-subtle)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.5rem'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                  <Laptop size={15} color="var(--accent-primary)" />
+                  <span style={{ fontSize: '0.86rem', fontWeight: 600, color: 'var(--text-bright)' }}>
+                    Local Device Bridge
+                  </span>
+                  <span
+                    className={`badge ${bridgeStatus.isConnected ? 'badge-done' : ''}`}
+                    style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem' }}
+                  >
+                    {bridgeStatus.isConnected ? 'CONNECTED' : 'DISCONNECTED'}
+                  </span>
+                </div>
+
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
+                  {bridgeStatus.lastHeartbeat
+                    ? `Last ping: ${new Date(bridgeStatus.lastHeartbeat).toLocaleTimeString()}`
+                    : 'No pings yet'}
+                </div>
+              </div>
+
+              <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: '1.4' }}>
+                Enables this web app to interact with your local computer, stream terminal PTY sessions, and read/write your <code>~/.ergo</code> folders.
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.2rem' }}>
+                <input
+                  type="text"
+                  className="input-text"
+                  value={bridgeUrlInput}
+                  onChange={(e) => setBridgeUrlInput(e.target.value)}
+                  placeholder="http://localhost:5173"
+                  style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ fontSize: '0.78rem', padding: '0.35rem 0.75rem', whiteSpace: 'nowrap' }}
+                  onClick={handleTestBridge}
+                  disabled={isTestingBridge}
+                >
+                  <RefreshCw size={12} className={isTestingBridge ? 'spin-animate' : ''} />
+                  <span>{isTestingBridge ? 'Connecting...' : 'Test Connection'}</span>
+                </button>
+              </div>
+
+              {bridgeNotice && (
+                <div
+                  style={{
+                    fontSize: '0.75rem',
+                    color: bridgeNotice.type === 'success' ? 'var(--accent-emerald)' : '#f87171',
+                    marginTop: '0.2rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.35rem'
+                  }}
+                >
+                  {bridgeNotice.type === 'success' ? <Check size={13} /> : <AlertCircle size={13} />}
+                  <span>{bridgeNotice.text}</span>
+                </div>
+              )}
             </div>
           </div>
 

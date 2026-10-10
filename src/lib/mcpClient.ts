@@ -5,6 +5,11 @@ import {
   type McpToolExecutionResult
 } from '../types';
 import { executeWorkspaceToolAction } from './workspaceMcp';
+import { bridgeClient } from './bridgeClient';
+
+function apiFetch(endpoint: string, init?: RequestInit): Promise<Response> {
+  return fetch(bridgeClient.getApiUrl(endpoint), init);
+}
 
 /**
  * Call an MCP tool via the local MCP Host JSON-RPC / REST bridge
@@ -20,7 +25,7 @@ export async function callMcpTool(
     return executeWorkspaceToolAction(toolName, args);
   }
   try {
-    const res = await fetch('/api/mcp/tools/call', {
+    const res = await apiFetch('/api/mcp/tools/call', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -62,7 +67,7 @@ export async function openFileInIdeOrSystem(
   line?: number
 ): Promise<{ success: boolean; opened?: boolean; methodUsed?: string; resolvedPath?: string; error?: string }> {
   try {
-    const res = await fetch('/api/files/open', {
+    const res = await apiFetch('/api/files/open', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filePath, line, openInIde: true })
@@ -83,7 +88,7 @@ export async function openFileInIdeOrSystem(
  */
 export async function getAllowedRoots(): Promise<McpRootBoundary[]> {
   try {
-    const res = await fetch('/api/mcp/roots');
+    const res = await apiFetch('/api/mcp/roots');
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.roots)) return data.roots;
@@ -108,7 +113,7 @@ export async function getAllowedRoots(): Promise<McpRootBoundary[]> {
 export async function saveAllowedRoots(roots: McpRootBoundary[]): Promise<boolean> {
   try {
     localStorage.setItem('ergo_mcp_roots', JSON.stringify(roots));
-    const res = await fetch('/api/mcp/roots', {
+    const res = await apiFetch('/api/mcp/roots', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ roots })
@@ -167,7 +172,7 @@ export async function discoverRemoteMcpTools(
   authRequired?: boolean;
 }> {
   try {
-    const res = await fetch('/api/mcp/remote/discover', {
+    const res = await apiFetch('/api/mcp/remote/discover', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ endpoint, authHeader })
@@ -210,7 +215,7 @@ export async function discoverRemoteMcpTools(
  */
 export async function syncMcpServerTools(server: MCPServer): Promise<MCPTool[]> {
   try {
-    const res = await fetch('/api/mcp/tools/list', {
+    const res = await apiFetch('/api/mcp/tools/list', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -286,7 +291,7 @@ export async function checkAllMcpUpdates(servers: MCPServer[]): Promise<McpCheck
   let serverResults: Record<string, { success: boolean; tools: any[]; hasChanges?: boolean; error?: string }> = {};
 
   try {
-    const res = await fetch('/api/mcp/check-updates', {
+    const res = await apiFetch('/api/mcp/check-updates', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ servers: payload })
@@ -431,7 +436,7 @@ export async function authenticateAndConnectMcp(
     const endpoint = options.endpoint || server.endpoint;
     const authHeader = options.authHeader || server.authHeader;
 
-    const res = await fetch('/api/mcp/auth/connect', {
+    const res = await apiFetch('/api/mcp/auth/connect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -772,7 +777,7 @@ export async function getGithubMcpStatus(): Promise<{
   connectedAt?: string;
 }> {
   try {
-    const res = await fetch('/api/mcp/github/status');
+    const res = await apiFetch('/api/mcp/github/status');
     if (res.ok) {
       return await res.json();
     }
@@ -790,7 +795,7 @@ export async function connectGithubMcp(token: string): Promise<{
   error?: string;
 }> {
   try {
-    const res = await fetch('/api/mcp/github/connect', {
+    const res = await apiFetch('/api/mcp/github/connect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: token.trim() })
@@ -820,7 +825,7 @@ export async function connectGithubMcp(token: string): Promise<{
  */
 export async function disconnectGithubMcp(): Promise<{ success: boolean; error?: string }> {
   try {
-    const res = await fetch('/api/mcp/github/disconnect', { method: 'POST' });
+    const res = await apiFetch('/api/mcp/github/disconnect', { method: 'POST' });
     const data = await res.json();
     return { success: Boolean(data?.success) };
   } catch (err: any) {

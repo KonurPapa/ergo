@@ -1,4 +1,5 @@
 import { type AIProviderId, type AgentRole, type ProviderCredentials, type CliDetectedAgent, type CliExecutionResult } from '../types';
+import { bridgeClient } from './bridgeClient';
 
 export interface ProviderModel {
   id: string;
@@ -344,8 +345,8 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
 
 export async function fetchDetectedCliAgents(customCommand?: string): Promise<{ agents: CliDetectedAgent[]; custom: CliDetectedAgent | null }> {
   try {
-    const url = customCommand ? `/api/cli/detect?customCommand=${encodeURIComponent(customCommand)}` : '/api/cli/detect';
-    const res = await fetch(url);
+    const relUrl = customCommand ? `/api/cli/detect?customCommand=${encodeURIComponent(customCommand)}` : '/api/cli/detect';
+    const res = await fetch(bridgeClient.getApiUrl(relUrl));
     if (!res.ok) {
       return { agents: [], custom: null };
     }
@@ -366,7 +367,7 @@ export async function executeCliHeadless(options: {
   timeoutMs?: number;
   env?: Record<string, string>;
 }): Promise<CliExecutionResult> {
-  const res = await fetch('/api/cli/execute', {
+  const res = await fetch(bridgeClient.getApiUrl('/api/cli/execute'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(options)
@@ -388,7 +389,7 @@ export interface CliAuthStatus {
 
 export async function fetchCliAuthStatus(cli = 'claude'): Promise<CliAuthStatus> {
   try {
-    const res = await fetch(`/api/cli/auth-status?cli=${encodeURIComponent(cli)}`);
+    const res = await fetch(bridgeClient.getApiUrl(`/api/cli/auth-status?cli=${encodeURIComponent(cli)}`));
     if (!res.ok) {
       return { cli, isInstalled: false, isAuthenticated: false, userEmail: null, message: `HTTP ${res.status}` };
     }
@@ -400,7 +401,7 @@ export async function fetchCliAuthStatus(cli = 'claude'): Promise<CliAuthStatus>
 
 export async function installCli(cli = 'claude'): Promise<{ success: boolean; output: string; error?: string }> {
   try {
-    const res = await fetch('/api/cli/install', {
+    const res = await fetch(bridgeClient.getApiUrl('/api/cli/install'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cli })
@@ -415,9 +416,23 @@ export async function installCli(cli = 'claude'): Promise<{ success: boolean; ou
   }
 }
 
+export async function resetCliAuth(cli = 'claude'): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    const res = await fetch(bridgeClient.getApiUrl('/api/cli/reset-auth'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cli })
+    });
+    const data = await res.json();
+    return data;
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Failed to reset credentials' };
+  }
+}
+
 export async function triggerCliLogin(cli = 'claude'): Promise<{ success: boolean; authUrl: string | null; output: string; pid?: number; error?: string }> {
   try {
-    const res = await fetch('/api/cli/login', {
+    const res = await fetch(bridgeClient.getApiUrl('/api/cli/login'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cli })

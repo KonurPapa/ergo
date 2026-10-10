@@ -1,4 +1,5 @@
 import { storageManager } from './storageManager';
+import { bridgeClient } from './bridgeClient';
 
 export interface DiskWriteResult {
   success: boolean;
@@ -57,7 +58,7 @@ export async function readFilesFromDisk(
   filePaths: string[]
 ): Promise<Record<string, string | null>> {
   try {
-    const res = await fetch('/api/files/read', {
+    const res = await fetch(bridgeClient.getApiUrl('/api/files/read'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

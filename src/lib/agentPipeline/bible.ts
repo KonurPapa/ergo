@@ -22,6 +22,7 @@ import {
   type TaskKind
 } from '../../types';
 import { slugify } from './contracts';
+import { bridgeClient } from '../bridgeClient';
 
 /** Normalizes a path for comparisons: trims, unifies separators, strips ./ and trailing slashes. */
 export function normalizePath(p: string): string {
@@ -151,7 +152,7 @@ export function buildBibleSections(args: {
 
 async function writeStorageFile(filePath: string, content: string): Promise<void> {
   try {
-    const res = await fetch('/api/files/write', {
+    const res = await fetch(bridgeClient.getApiUrl('/api/files/write'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ files: [{ filePath, content }] })

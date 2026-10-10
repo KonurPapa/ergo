@@ -80,6 +80,8 @@ import {
 } from './lib/taskScheduler';
 import { registerWorkspaceActionBridge } from './lib/workspaceMcp';
 import { syncSkillsToWorkspace } from './lib/skillsManager';
+import { bridgeClient, type BridgeStatus } from './lib/bridgeClient';
+import { AlertTriangle, RefreshCw } from 'lucide-react';
 
 /** Merge persisted (possibly partial / stale) pipeline settings over the defaults, ignoring undefined values. */
 function mergeAgentPipelineOptions(
@@ -158,17 +160,17 @@ export function App() {
             if (!match) return initServer;
             const mergedTools = (match.tools && match.tools.length >= initServer.tools.length)
               ? match.tools.map((mt: any) => {
-                  const initTool = initServer.tools.find((it) => it.name === mt.name);
-                  return {
-                    ...initTool,
-                    ...mt,
-                    inputSchema: mt.inputSchema || initTool?.inputSchema
-                  };
-                })
+                const initTool = initServer.tools.find((it) => it.name === mt.name);
+                return {
+                  ...initTool,
+                  ...mt,
+                  inputSchema: mt.inputSchema || initTool?.inputSchema
+                };
+              })
               : initServer.tools.map((initTool) => {
-                  const toolMatch = match.tools?.find((t: any) => t.id === initTool.id || t.name === initTool.name);
-                  return toolMatch ? { ...initTool, autoApprove: Boolean(toolMatch.autoApprove) } : initTool;
-                });
+                const toolMatch = match.tools?.find((t: any) => t.id === initTool.id || t.name === initTool.name);
+                return toolMatch ? { ...initTool, autoApprove: Boolean(toolMatch.autoApprove) } : initTool;
+              });
 
             // Ensure bundled default connections (like Laya, Filesystem, Fetch, Git) default to connected if they were previously saved before being enabled by default
             const resolvedStatus = (initServer.serverType === 'bundled_harness' && initServer.status === 'connected' && match.status === 'disconnected' && !localStorage.getItem('ergo_mcp_user_toggled_' + initServer.id))
@@ -183,7 +185,7 @@ export function App() {
             };
           }).concat(parsed.filter((s: MCPServer) => !INITIAL_MCP_SERVERS.some((init) => init.id === s.id)));
         }
-      } catch {}
+      } catch { }
     }
     return INITIAL_MCP_SERVERS;
   });
@@ -195,7 +197,7 @@ export function App() {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) return parsed;
-      } catch {}
+      } catch { }
     }
     // Migration check: check for legacy credentialsMap
     const legacyCreds = localStorage.getItem('ergo_ai_credentials');
@@ -218,7 +220,7 @@ export function App() {
           }
         });
         if (migrated.length > 0) return migrated;
-      } catch {}
+      } catch { }
     }
     return [];
   });
@@ -273,7 +275,7 @@ export function App() {
     document.documentElement.setAttribute('data-theme', theme);
     try {
       localStorage.setItem('ergo_theme', theme);
-    } catch {}
+    } catch { }
   }, [theme]);
 
   // Track onboarding completion state
@@ -284,7 +286,7 @@ export function App() {
     try {
       const saved = localStorage.getItem('ergo_autocomplete_settings');
       if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch { }
     return { enabled: true, keybinding: 'Tab' };
   });
 
@@ -368,7 +370,7 @@ export function App() {
   useEffect(() => {
     try {
       localStorage.setItem('ergo_autocomplete_settings', JSON.stringify(autocompleteSettings));
-    } catch {}
+    } catch { }
 
     if (activeProjectId) {
       storageManager.saveSettings({
@@ -394,12 +396,12 @@ export function App() {
       if (sec?.mcpSecrets) {
         setMcpSecrets(sec.mcpSecrets);
       }
-    }).catch(() => {});
+    }).catch(() => { });
   }, []);
 
   // Sync GitHub MCP status on startup
   useEffect(() => {
-    fetch('/api/mcp/github/status')
+    fetch(bridgeClient.getApiUrl('/api/mcp/github/status'))
       .then((res) => res.json())
       .then((data) => {
         if (data && data.configured) {
@@ -416,7 +418,7 @@ export function App() {
           );
         }
       })
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   // Sync secrets (config/secrets.json)
@@ -518,7 +520,7 @@ export function App() {
   useEffect(() => {
     try {
       localStorage.setItem('ergo_mcp_servers', JSON.stringify(mcpServers));
-    } catch {}
+    } catch { }
   }, [mcpServers]);
 
   // Routine update checker for connected MCP servers (checks every 60s and on window focus)
@@ -743,10 +745,55 @@ export function App() {
       const next = !prev;
       try {
         localStorage.setItem('ergo_ai_panel_open', String(next));
-      } catch {}
+      } catch { }
       return next;
     });
   }, []);
+
+  // Local Device Bridge State & Auto-Reconnect
+  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>(() => bridgeClient.getStatus());
+  const [isReconnectingBridge, setIsReconnectingBridge] = useState(false);
+
+  useEffect(() => {
+    // Start background heartbeat to detect and keep bridge connection alive
+    bridgeClient.startHeartbeat(10000);
+    const unsub = bridgeClient.subscribe((status) => {
+      setBridgeStatus(status);
+    });
+    return () => {
+      unsub();
+      bridgeClient.stopHeartbeat();
+    };
+  }, []);
+
+  const handleManualReconnectBridge = useCallback(async () => {
+    setIsReconnectingBridge(true);
+    try {
+      const res = await bridgeClient.checkConnection();
+      if (res.success) {
+        showToast({
+          type: 'success',
+          title: 'Device Bridge Connected',
+          message: `Connected to local environment at ${bridgeClient.getBridgeUrl()}`,
+          duration: 3500
+        });
+        // Rescan projects on reconnect
+        const scanned = await storageManager.scanProjects();
+        if (scanned.length > 0) {
+          setProjects(scanned);
+        }
+      } else {
+        showToast({
+          type: 'error',
+          title: 'Connection Failed',
+          message: res.error || 'Could not reach local Ergo bridge. Ensure npm run dev is running locally.',
+          duration: 5000
+        });
+      }
+    } finally {
+      setIsReconnectingBridge(false);
+    }
+  }, [showToast]);
 
   // Resizable Split Pane State (default: 2/3 for Human lanes, 1/3 for AI workspace)
   const [splitWidth, setSplitWidth] = useState<number>(66.667); // percentage
@@ -796,11 +843,11 @@ export function App() {
       const currentLanes: SwimLaneDoc[] = activeProject.swimLanes && activeProject.swimLanes.length > 0
         ? activeProject.swimLanes
         : [{
-            id: 'lane-default',
-            title: 'Human Workspace',
-            filePath: activeProject.todoFilePath || `${activeProject.folderPath}/TODO.md`,
-            markdown: activeProject.todoMarkdown || ''
-          }];
+          id: 'lane-default',
+          title: 'Human Workspace',
+          filePath: activeProject.todoFilePath || `${activeProject.folderPath}/TODO.md`,
+          markdown: activeProject.todoMarkdown || ''
+        }];
 
       const agentPath = activeProject.agentContextFilePath || (activeProject.folderPath ? `${activeProject.folderPath}/AGENT_CONTEXT.md` : '');
       const runningJobsPath = activeProject.folderPath ? `${activeProject.folderPath}/RUNNING_JOBS.json` : '';
@@ -904,29 +951,42 @@ export function App() {
       setHeaderComments(firstHeaderComments);
       setBriefs(activeBriefs);
       setArchivedBriefs([]);
-      setRunningJobs(runningJobsDoc.runningJobs || []);
+      setRunningJobs(
+        (runningJobsDoc.runningJobs || []).map((j) =>
+          j.status === 'in_progress' ? { ...j, status: 'cancelled' as const } : j
+        )
+      );
       setQueuedTaskIds(runningJobsDoc.queuedTaskIds || []);
       if (runningJobsDoc.taskExecutionSteps && Object.keys(runningJobsDoc.taskExecutionSteps).length > 0) {
         setTaskExecutionSteps(runningJobsDoc.taskExecutionSteps);
       }
 
-      // Query active backend PTY sessions to reconnect any running terminal sessions
+      // Query active backend PTY sessions to reconnect any running terminal sessions for the active project
       try {
-        const ptyRes = await fetch('/api/pty/sessions');
+        const ptyRes = await fetch(bridgeClient.getApiUrl('/api/pty/sessions'));
         if (ptyRes.ok) {
           const { sessions } = await ptyRes.json();
           if (Array.isArray(sessions) && sessions.length > 0) {
-            const activeSessions: SpawnedSession[] = sessions.map((s: any) => ({
-              session: {
-                taskId: s.taskId || s.id,
-                taskTitle: s.taskTitle || `Task ${s.taskId || s.id}`,
-                isActive: true,
-                spawnedAt: new Date(s.createdAt || Date.now()).toISOString(),
-              },
-              cwd: s.cwd || activeProject.folderPath,
-              cmd: s.cmd || '',
-              args: s.args || [],
-            }));
+            // Only reconnect sessions whose taskId matches an active task or brief in this project
+            const projectTaskIds = new Set([
+              ...allActiveTasks.map((t) => String(t.id)),
+              ...activeBriefs.map((b) => String(b.sourceTaskId || b.id || b.itemNumber)),
+            ]);
+
+            const activeSessions: SpawnedSession[] = sessions
+              .filter((s: any) => projectTaskIds.has(String(s.taskId || s.id)))
+              .map((s: any) => ({
+                session: {
+                  taskId: s.taskId || s.id,
+                  taskTitle: s.taskTitle || `Task ${s.taskId || s.id}`,
+                  isActive: true,
+                  spawnedAt: new Date(s.createdAt || Date.now()).toISOString(),
+                },
+                cwd: s.cwd || activeProject.folderPath,
+                cmd: s.cmd || '',
+                args: s.args || [],
+              }));
+
             setTerminalSessions((prev) => {
               const existingTaskIds = new Set(activeSessions.map((as) => String(as.session.taskId)));
               const retained = prev.filter((p) => !existingTaskIds.has(String(p.session.taskId)));
@@ -953,9 +1013,9 @@ export function App() {
         const defaultId = firstBrief.sourceTaskId || firstBrief.id || firstBrief.itemNumber || null;
         setSelectedTaskId((prev) =>
           prev !== null &&
-          activeBriefs.some(
-            (b) => b.id === prev || b.sourceTaskId === prev || b.itemNumber === prev
-          )
+            activeBriefs.some(
+              (b) => b.id === prev || b.sourceTaskId === prev || b.itemNumber === prev
+            )
             ? prev
             : defaultId
         );
@@ -971,12 +1031,12 @@ export function App() {
         prev.map((p) =>
           p.id === activeProjectId
             ? {
-                ...p,
-                todoMarkdown: primaryTodoMd,
-                agentContextMarkdown: '',
-                swimLanes: effectiveSwimLanes,
-                runningJobsDoc: runningJobsDoc || p.runningJobsDoc,
-              }
+              ...p,
+              todoMarkdown: primaryTodoMd,
+              agentContextMarkdown: '',
+              swimLanes: effectiveSwimLanes,
+              runningJobsDoc: runningJobsDoc || p.runningJobsDoc,
+            }
             : p
         )
       );
@@ -1000,7 +1060,7 @@ export function App() {
     let eventSource: EventSource | null = null;
 
     try {
-      eventSource = new EventSource('/api/files/events');
+      eventSource = new EventSource(bridgeClient.getApiUrl('/api/files/events'));
 
       eventSource.onmessage = (event) => {
         try {
@@ -1076,11 +1136,11 @@ export function App() {
               const currentLanes: SwimLaneDoc[] = ap.swimLanes && ap.swimLanes.length > 0
                 ? ap.swimLanes
                 : [{
-                    id: 'lane-default',
-                    title: 'Human Workspace',
-                    filePath: ap.todoFilePath || `${ap.folderPath}/TODO.md`,
-                    markdown: ap.todoMarkdown || ''
-                  }];
+                  id: 'lane-default',
+                  title: 'Human Workspace',
+                  filePath: ap.todoFilePath || `${ap.folderPath}/TODO.md`,
+                  markdown: ap.todoMarkdown || ''
+                }];
 
               const updatedLanes = currentLanes.map((l) =>
                 l.filePath === relativePath ? { ...l, markdown: content } : l
@@ -1116,8 +1176,8 @@ export function App() {
         eventSource.close();
       }
     };
-  // Empty dep array: EventSource is created once and stays alive for the component lifetime.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Empty dep array: EventSource is created once and stays alive for the component lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Save projects to localStorage on change
@@ -1142,11 +1202,11 @@ export function App() {
     const effectiveLanes: SwimLaneDoc[] = currentSwimLanes && currentSwimLanes.length > 0
       ? currentSwimLanes
       : [{
-          id: 'lane-default',
-          title: 'Human Workspace',
-          filePath: activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`,
-          markdown: activeProject?.todoMarkdown || ''
-        }];
+        id: 'lane-default',
+        title: 'Human Workspace',
+        filePath: activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`,
+        markdown: activeProject?.todoMarkdown || ''
+      }];
 
     const firstLaneId = effectiveLanes[0]?.id || 'lane-default';
 
@@ -1164,7 +1224,7 @@ export function App() {
           if (parsed.headerComments) {
             laneHeader = parsed.headerComments;
           }
-        } catch {}
+        } catch { }
       }
 
       const serialized = serializeTodoMarkdown(laneActive, laneHeader);
@@ -1201,11 +1261,11 @@ export function App() {
       prev.map((p) =>
         p.id === activeProjectId
           ? {
-              ...p,
-              todoMarkdown: primaryTodoMd,
-              swimLanes: updatedLanes,
-              runningJobsDoc: currentRunningJobsDoc || p.runningJobsDoc,
-            }
+            ...p,
+            todoMarkdown: primaryTodoMd,
+            swimLanes: updatedLanes,
+            runningJobsDoc: currentRunningJobsDoc || p.runningJobsDoc,
+          }
           : p
       )
     );
@@ -1298,7 +1358,7 @@ export function App() {
         setHeaderComments(parsedTodo.headerComments);
       }
     }
-    
+
     if (result.agentContextMarkdown) {
       nextBriefs = parseAgentContextMarkdown(result.agentContextMarkdown);
     }
@@ -1381,10 +1441,10 @@ export function App() {
     // If a brief already exists for this exact sourceTaskId, update it instead of adding a duplicate
     const existingIndex = sourceTask?.id
       ? briefs.findIndex(
-          (b) =>
-            (b.sourceTaskId != null && b.sourceTaskId === sourceTask.id) ||
-            b.title.trim().toLowerCase() === sourceTask.title.trim().toLowerCase()
-        )
+        (b) =>
+          (b.sourceTaskId != null && b.sourceTaskId === sourceTask.id) ||
+          b.title.trim().toLowerCase() === sourceTask.title.trim().toLowerCase()
+      )
       : -1;
 
     let nextBriefs: AgentContextItem[];
@@ -1446,7 +1506,7 @@ export function App() {
     if (foundController) {
       try {
         foundController.abort();
-      } catch {}
+      } catch { }
     }
 
     // 2. If there is any pending permission request waiting for approval, reject it explicitly so it never resolves true
@@ -1454,7 +1514,7 @@ export function App() {
       if (String(key) === String(taskId)) {
         try {
           pending.resolve(false);
-        } catch {}
+        } catch { }
         delete pendingPermissionsRef.current[key];
       }
     }
@@ -1462,7 +1522,7 @@ export function App() {
       if (String(key) === String(taskId)) {
         try {
           pending.resolve(false);
-        } catch {}
+        } catch { }
       }
     }
 
@@ -1471,7 +1531,7 @@ export function App() {
       if (String(key) === String(taskId)) {
         try {
           pending.resolve('terminate');
-        } catch {}
+        } catch { }
         delete pendingOllamaFallbacksRef.current[key];
       }
     }
@@ -1481,19 +1541,19 @@ export function App() {
       if (String(key) === String(taskId)) {
         try {
           pending.resolve('');
-        } catch {}
+        } catch { }
         delete pendingHumanInputsRef.current[key];
       }
     }
 
     // 5. Terminate server-side PTY process (CLI agent, node, gemini, etc.)
     try {
-      fetch('/api/pty/kill', {
+      fetch(bridgeClient.getApiUrl('/api/pty/kill'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taskId: String(taskId), sessionId: String(taskId) }),
       }).catch((err) => console.warn('[Ergo] PTY kill fetch failed:', err));
-    } catch {}
+    } catch { }
 
     // Mark active terminal session for this task as inactive
     setTerminalSessions((prev) =>
@@ -1543,7 +1603,7 @@ export function App() {
       );
       const updatedBriefs = briefs.map((b) =>
         (b.sourceTaskId != null && String(b.sourceTaskId) === String(taskId)) ||
-        (b.id != null && String(b.id) === String(taskId))
+          (b.id != null && String(b.id) === String(taskId))
           ? { ...b, status: 'partly_done' as TaskStatus }
           : b
       );
@@ -1879,12 +1939,12 @@ export function App() {
 
       // Ensure any lingering background PTY process for this task is cleanly killed
       try {
-        fetch('/api/pty/kill', {
+        fetch(bridgeClient.getApiUrl('/api/pty/kill'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ taskId: String(task.id), sessionId: String(task.id) }),
-        }).catch(() => {});
-      } catch {}
+        }).catch(() => { });
+      } catch { }
 
       // Create or reuse a session for this task
       const session: TerminalSession = {
@@ -2101,8 +2161,8 @@ export function App() {
                 setBriefs((prevBriefs) =>
                   prevBriefs.map((b) =>
                     (b.sourceTaskId != null && b.sourceTaskId === task.id) ||
-                    b.title.trim().toLowerCase() === task.title.trim().toLowerCase() ||
-                    b.itemNumber === task.id
+                      b.title.trim().toLowerCase() === task.title.trim().toLowerCase() ||
+                      b.itemNumber === task.id
                       ? { ...b, overview: generatedMarkdown || b.overview, brief: gherkinText || b.brief }
                       : b
                   )
@@ -2249,7 +2309,7 @@ export function App() {
             );
             const nextBriefs = briefs.map((b) =>
               (b.sourceTaskId != null && String(b.sourceTaskId) === String(task.id)) ||
-              (b.id != null && String(b.id) === String(task.id))
+                (b.id != null && String(b.id) === String(task.id))
                 ? { ...b, status: 'partly_done' as TaskStatus }
                 : b
             );
@@ -2327,22 +2387,22 @@ export function App() {
 
         const updatedBrief: AgentContextItem = existingBrief
           ? {
-              ...existingBrief,
-              overview: existingBrief.overview || '',
-              buildAndVerification: existingBrief.buildAndVerification || '',
-              status: 'done',
-              completion: completionText,
-              validation: completionText,
-            }
+            ...existingBrief,
+            overview: existingBrief.overview || '',
+            buildAndVerification: existingBrief.buildAndVerification || '',
+            status: 'done',
+            completion: completionText,
+            validation: completionText,
+          }
           : {
-              id: `brief_${taskId}`,
-              sourceTaskId: taskId,
-              title: task.title,
-              status: 'done',
-              overview: `Task (${task.title})`,
-              buildAndVerification: `Executed in CLI agent terminal.`,
-              completion: completionText,
-            };
+            id: `brief_${taskId}`,
+            sourceTaskId: taskId,
+            title: task.title,
+            status: 'done',
+            overview: `Task (${task.title})`,
+            buildAndVerification: `Executed in CLI agent terminal.`,
+            completion: completionText,
+          };
 
         const existingIdx = briefs.findIndex(
           (b) =>
@@ -2420,10 +2480,10 @@ export function App() {
       const updated = prev.map((j) =>
         String(j.taskId) === String(taskId)
           ? {
-              ...j,
-              status: code === 0 ? ('completed' as const) : ('failed' as const),
-              completedAt: new Date().toISOString(),
-            }
+            ...j,
+            status: code === 0 ? ('completed' as const) : ('failed' as const),
+            completedAt: new Date().toISOString(),
+          }
           : j
       );
       runningJobsRef.current = updated;
@@ -2556,8 +2616,8 @@ export function App() {
           String(j.taskId) === String(task.id)
             ? { ...j, status: 'in_progress' as const }
             : remainingQueued.map(String).includes(String(j.taskId))
-            ? { ...j, status: 'queued' as const }
-            : j
+              ? { ...j, status: 'queued' as const }
+              : j
         );
         runningJobsRef.current = updated;
         persistRunningJobsDoc(updated, remainingQueued, briefsRef.current, taskExecutionStepsRef.current);
@@ -2694,8 +2754,8 @@ export function App() {
         nextActiveTasks.length > 0
           ? nextActiveTasks[0].id
           : nextActiveBriefs.length > 0
-          ? nextActiveBriefs[0].sourceTaskId || nextActiveBriefs[0].id || nextActiveBriefs[0].itemNumber || null
-          : null
+            ? nextActiveBriefs[0].sourceTaskId || nextActiveBriefs[0].id || nextActiveBriefs[0].itemNumber || null
+            : null
       );
     }
 
@@ -3100,7 +3160,7 @@ export function App() {
   // Register live Ergo Workspace Action Bridge for global AI MCP execution
   useEffect(() => {
     // Initial sync of workspace skills to disk (.agents/skills/<id>/SKILL.md)
-    syncSkillsToWorkspace().catch(() => {});
+    syncSkillsToWorkspace().catch(() => { });
 
     const unregister = registerWorkspaceActionBridge({
       getState: () => ({
@@ -3109,13 +3169,13 @@ export function App() {
         swimLanes: activeProject?.swimLanes && activeProject.swimLanes.length > 0
           ? activeProject.swimLanes
           : [
-              {
-                id: 'lane-default',
-                title: 'Human Workspace',
-                filePath: activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`,
-                markdown: activeProject?.todoMarkdown || ''
-              }
-            ],
+            {
+              id: 'lane-default',
+              title: 'Human Workspace',
+              filePath: activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`,
+              markdown: activeProject?.todoMarkdown || ''
+            }
+          ],
         mcpServers
       }),
       saveProject: (newTasks, newBriefs, newLanes) => {
@@ -3180,15 +3240,15 @@ export function App() {
 
     const nextActiveBriefs = matchingArchivedBrief
       ? [
-          ...briefs,
-          {
-            ...matchingArchivedBrief,
-            isArchived: false,
-            id: `brief_${restoredId}`,
-            sourceTaskId: restoredId,
-            sourceLaneId: restoredLaneId,
-          },
-        ]
+        ...briefs,
+        {
+          ...matchingArchivedBrief,
+          isArchived: false,
+          id: `brief_${restoredId}`,
+          sourceTaskId: restoredId,
+          sourceLaneId: restoredLaneId,
+        },
+      ]
       : briefs;
 
     setSelectedTaskId(restoredId);
@@ -3227,8 +3287,8 @@ export function App() {
   const handleSaveArchivedBrief = (updatedBrief: AgentContextItem) => {
     const nextArchivedBriefs = archivedBriefs.map((b) =>
       (b.id && b.id === updatedBrief.id) ||
-      (b.sourceTaskId && updatedBrief.sourceTaskId && b.sourceTaskId === updatedBrief.sourceTaskId) ||
-      b.title.trim().toLowerCase() === updatedBrief.title.trim().toLowerCase()
+        (b.sourceTaskId && updatedBrief.sourceTaskId && b.sourceTaskId === updatedBrief.sourceTaskId) ||
+        b.title.trim().toLowerCase() === updatedBrief.title.trim().toLowerCase()
         ? updatedBrief
         : b
     );
@@ -3301,11 +3361,11 @@ export function App() {
     const currentLanes: SwimLaneDoc[] = activeProject.swimLanes && activeProject.swimLanes.length > 0
       ? activeProject.swimLanes
       : [{
-          id: 'lane-default',
-          title: 'Human Workspace',
-          filePath: activeProject.todoFilePath || `${activeProject.folderPath}/TODO.md`,
-          markdown: activeProject.todoMarkdown || ''
-        }];
+        id: 'lane-default',
+        title: 'Human Workspace',
+        filePath: activeProject.todoFilePath || `${activeProject.folderPath}/TODO.md`,
+        markdown: activeProject.todoMarkdown || ''
+      }];
 
     const updatedLanes = currentLanes.map((lane) =>
       lane.id === laneId ? { ...lane, markdown: newBodyMd } : lane
@@ -3339,10 +3399,10 @@ export function App() {
       prev.map((p) =>
         p.id === activeProjectId
           ? {
-              ...p,
-              todoMarkdown: primaryTodoMd,
-              swimLanes: updatedLanes
-            }
+            ...p,
+            todoMarkdown: primaryTodoMd,
+            swimLanes: updatedLanes
+          }
           : p
       )
     );
@@ -3360,7 +3420,7 @@ export function App() {
       const allMarkdowns = updatedLanes.map((l) => l.markdown);
       clearTimeout((window as any).__ergoMediaCleanupTimer);
       (window as any).__ergoMediaCleanupTimer = setTimeout(() => {
-        storageManager.cleanupOrphanedMedia(folderPath, allMarkdowns).catch(() => {});
+        storageManager.cleanupOrphanedMedia(folderPath, allMarkdowns).catch(() => { });
       }, 1500);
     }
   };
@@ -3372,11 +3432,11 @@ export function App() {
     const currentLanes: SwimLaneDoc[] = activeProject.swimLanes && activeProject.swimLanes.length > 0
       ? activeProject.swimLanes
       : [{
-          id: 'lane-default',
-          title: 'Human Workspace',
-          filePath: activeProject.todoFilePath || `${activeProject.folderPath}/TODO.md`,
-          markdown: activeProject.todoMarkdown || ''
-        }];
+        id: 'lane-default',
+        title: 'Human Workspace',
+        filePath: activeProject.todoFilePath || `${activeProject.folderPath}/TODO.md`,
+        markdown: activeProject.todoMarkdown || ''
+      }];
 
     const nextIndex = currentLanes.length + 1;
     const title = `Swim Lane ${nextIndex}`;
@@ -3430,10 +3490,10 @@ export function App() {
       prev.map((p) =>
         p.id === activeProjectId
           ? {
-              ...p,
-              todoMarkdown: primaryTodoMd,
-              swimLanes: nextLanes
-            }
+            ...p,
+            todoMarkdown: primaryTodoMd,
+            swimLanes: nextLanes
+          }
           : p
       )
     );
@@ -3457,11 +3517,11 @@ export function App() {
     const currentLanes: SwimLaneDoc[] = activeProject.swimLanes && activeProject.swimLanes.length > 0
       ? activeProject.swimLanes
       : [{
-          id: 'lane-default',
-          title: 'Human Workspace',
-          filePath: activeProject.todoFilePath || `${activeProject.folderPath}/TODO.md`,
-          markdown: activeProject.todoMarkdown || ''
-        }];
+        id: 'lane-default',
+        title: 'Human Workspace',
+        filePath: activeProject.todoFilePath || `${activeProject.folderPath}/TODO.md`,
+        markdown: activeProject.todoMarkdown || ''
+      }];
 
     const targetLane = currentLanes.find((l) => l.id === laneId);
     if (!targetLane) return;
@@ -3507,7 +3567,7 @@ export function App() {
 
     if (oldFilePath !== newFilePath) {
       // Call rename API to move old file to new file on disk
-      fetch('/api/files/rename', {
+      fetch(bridgeClient.getApiUrl('/api/files/rename'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -3538,11 +3598,11 @@ export function App() {
     const currentLanes: SwimLaneDoc[] = activeProject.swimLanes && activeProject.swimLanes.length > 0
       ? activeProject.swimLanes
       : [{
-          id: 'lane-default',
-          title: 'Human Workspace',
-          filePath: activeProject.todoFilePath || `${activeProject.folderPath}/TODO.md`,
-          markdown: activeProject.todoMarkdown || ''
-        }];
+        id: 'lane-default',
+        title: 'Human Workspace',
+        filePath: activeProject.todoFilePath || `${activeProject.folderPath}/TODO.md`,
+        markdown: activeProject.todoMarkdown || ''
+      }];
 
     if (currentLanes.length <= 1) {
       showToast({
@@ -3583,10 +3643,10 @@ export function App() {
       prev.map((p) =>
         p.id === activeProjectId
           ? {
-              ...p,
-              todoMarkdown: primaryTodoMd,
-              swimLanes: nextLanes
-            }
+            ...p,
+            todoMarkdown: primaryTodoMd,
+            swimLanes: nextLanes
+          }
           : p
       )
     );
@@ -3597,7 +3657,7 @@ export function App() {
 
     // Delete the removed swim lane markdown file from disk so it does not recreate on reload
     if (removedLane && removedLane.filePath) {
-      fetch('/api/files/delete', {
+      fetch(bridgeClient.getApiUrl('/api/files/delete'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filePaths: [removedLane.filePath] }),
@@ -3620,11 +3680,11 @@ export function App() {
       : (activeProject?.swimLanes && activeProject.swimLanes.length > 0
         ? activeProject.swimLanes
         : [{
-            id: 'lane-default',
-            title: 'Human Workspace',
-            filePath: activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`,
-            markdown: newTodoMd
-          }]);
+          id: 'lane-default',
+          title: 'Human Workspace',
+          filePath: activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`,
+          markdown: newTodoMd
+        }]);
 
     let allActiveTasks: TaskItem[] = [];
     let allArchivedTasks: TaskItem[] = [];
@@ -3653,11 +3713,11 @@ export function App() {
       prev.map((p) =>
         p.id === activeProjectId
           ? {
-              ...p,
-              todoMarkdown: currentLanes[0]?.markdown || newTodoMd,
-              agentContextMarkdown: newAgentContextMd,
-              swimLanes: currentLanes
-            }
+            ...p,
+            todoMarkdown: currentLanes[0]?.markdown || newTodoMd,
+            agentContextMarkdown: newAgentContextMd,
+            swimLanes: currentLanes
+          }
           : p
       )
     );
@@ -3674,11 +3734,11 @@ export function App() {
     const currentLanes: SwimLaneDoc[] = activeProject.swimLanes && activeProject.swimLanes.length > 0
       ? activeProject.swimLanes
       : [{
-          id: 'lane-default',
-          title: 'Human Workspace',
-          filePath: `${folderSlug}_TODO.md`,
-          markdown: activeProject.todoMarkdown
-        }];
+        id: 'lane-default',
+        title: 'Human Workspace',
+        filePath: `${folderSlug}_TODO.md`,
+        markdown: activeProject.todoMarkdown
+      }];
 
     currentLanes.forEach((lane, idx) => {
       setTimeout(() => {
@@ -3721,11 +3781,11 @@ export function App() {
     const currentLanes: SwimLaneDoc[] = activeProject?.swimLanes && activeProject.swimLanes.length > 0
       ? activeProject.swimLanes
       : [{
-          id: 'lane-default',
-          title: 'Human Workspace',
-          filePath: activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`,
-          markdown: activeProject?.todoMarkdown || ''
-        }];
+        id: 'lane-default',
+        title: 'Human Workspace',
+        filePath: activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`,
+        markdown: activeProject?.todoMarkdown || ''
+      }];
 
     const filesToSave = currentLanes.map((l) => ({ filePath: l.filePath, content: l.markdown }));
     if (activeProject?.folderPath) {
@@ -3770,22 +3830,27 @@ export function App() {
   };
 
   const runningTaskIds = useMemo(() => {
+    const validTaskIds = new Set<string>([
+      ...tasks.map((t) => String(t.id)),
+      ...briefs.map((b) => String(b.sourceTaskId || b.id || b.itemNumber)),
+    ]);
+
     const ids: (string | number)[] = [];
     terminalSessions.forEach((s) => {
-      if (s.session.isActive && !ids.includes(s.session.taskId)) {
+      if (s.session.isActive && validTaskIds.has(String(s.session.taskId)) && !ids.includes(s.session.taskId)) {
         ids.push(s.session.taskId);
       }
     });
-    if (executingTaskId !== null && !ids.includes(executingTaskId)) {
+    if (executingTaskId !== null && validTaskIds.has(String(executingTaskId)) && !ids.includes(executingTaskId)) {
       ids.push(executingTaskId);
     }
     runningJobs.forEach((j) => {
-      if (j.status === 'in_progress' && !ids.includes(j.taskId)) {
+      if (j.status === 'in_progress' && validTaskIds.has(String(j.taskId)) && !ids.includes(j.taskId)) {
         ids.push(j.taskId);
       }
     });
     return ids;
-  }, [terminalSessions, executingTaskId, runningJobs]);
+  }, [tasks, briefs, terminalSessions, executingTaskId, runningJobs]);
 
   return (
     <div className="app-container">
@@ -3814,6 +3879,69 @@ export function App() {
         onToggleAiPanel={handleToggleAiPanel}
         runningAiTaskCount={runningTaskIds.length}
       />
+
+      {/* Disconnected Bridge Notification Banner for Hosted Web Environments */}
+      {bridgeClient.isHostedWeb() && !bridgeStatus.isConnected && (
+        <div
+          style={{
+            background: 'linear-gradient(90deg, rgba(234, 179, 8, 0.16) 0%, rgba(245, 158, 11, 0.12) 100%)',
+            borderBottom: '1px solid rgba(234, 179, 8, 0.35)',
+            padding: '0.45rem 1.25rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '1rem',
+            zIndex: 40,
+            fontSize: '0.8rem',
+            color: 'var(--text-bright)'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+            <div
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: '6px',
+                background: 'rgba(234, 179, 8, 0.25)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#eab308'
+              }}
+            >
+              <AlertTriangle size={13} />
+            </div>
+            <span>
+              <strong>Local Device Bridge Disconnected.</strong> Reconnect to access your local <code>~/.ergo</code> folders and run autonomous agents (Claude Code, Antigravity, etc.).
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <button
+              type="button"
+              onClick={handleManualReconnectBridge}
+              disabled={isReconnectingBridge}
+              style={{
+                background: '#eab308',
+                color: '#000000',
+                fontWeight: 700,
+                fontSize: '0.74rem',
+                border: 'none',
+                borderRadius: '6px',
+                padding: '0.35rem 0.75rem',
+                cursor: isReconnectingBridge ? 'wait' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                boxShadow: '0 2px 8px rgba(234, 179, 8, 0.3)'
+              }}
+            >
+              <RefreshCw size={12} className={isReconnectingBridge ? 'spin-animate' : ''} />
+              <span>{isReconnectingBridge ? 'Connecting...' : 'Reconnect Device'}</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main Dual-Pane Workspace */}
       <div
@@ -3873,7 +4001,7 @@ export function App() {
           <div
             className={`resize-divider ${isDragging ? 'active' : ''}`}
             onMouseDown={handleMouseDown}
-            title="Drag to resize AI Workspace panel width"
+            title="Drag to resize AI Workspace"
           >
             <div className="resize-handle-bar" />
           </div>
@@ -3964,7 +4092,7 @@ export function App() {
           setMcpServers((prev) => {
             try {
               localStorage.setItem('ergo_mcp_user_toggled_' + serverId, 'true');
-            } catch {}
+            } catch { }
             const next = prev.map((s) => {
               if (s.id !== serverId) return s;
               // Allow mcp-laya and external services to toggle
@@ -3979,8 +4107,8 @@ export function App() {
                   type: isNowConnected ? 'success' : 'info',
                   title: isNowConnected ? 'Laya Local Engine Connected' : 'Laya Local Engine Disconnected',
                   message: isNowConnected
-                    ? 'Active ($0 cost): High-speed micro-decisions and task triage will run locally on your machine.'
-                    : 'Off: Agent pipeline has reverted to standard generative LLM triage.',
+                    ? 'Active: Task triage will run locally on your machine.'
+                    : 'Off: Agents will revert to AI-only triage.',
                   duration: 4000
                 });
               } else {
@@ -4000,9 +4128,9 @@ export function App() {
             prev.map((s) =>
               s.id === serverId
                 ? {
-                    ...s,
-                    tools: s.tools.map((t) => (t.id === toolId ? { ...t, autoApprove: !t.autoApprove } : t))
-                  }
+                  ...s,
+                  tools: s.tools.map((t) => (t.id === toolId ? { ...t, autoApprove: !t.autoApprove } : t))
+                }
                 : s
             )
           )

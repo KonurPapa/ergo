@@ -11,6 +11,7 @@ import { searchMemory, type SearchResult } from '../memory';
 import { callMcpTool } from '../mcpClient';
 import { formatSkillsForAiContext, syncSkillsToWorkspace } from '../skillsManager';
 import { type AssembledBaselineContext } from '../../types';
+import { bridgeClient } from '../bridgeClient';
 import {
   GUIDELINE_EXCERPT_CHAR_CAP,
   type PipelineContext,
@@ -47,7 +48,7 @@ async function readGuidelineFiles(ctx: PipelineContext): Promise<GuidelineDoc[]>
   // (a) Project folder (relative to the storage root)
   const projectPaths = GUIDELINE_FILENAMES.map((f) => `${ctx.project.folderPath}/${f}`);
   try {
-    const res = await fetch('/api/files/read', {
+    const res = await fetch(bridgeClient.getApiUrl('/api/files/read'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filePaths: projectPaths })

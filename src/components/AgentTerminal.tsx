@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useCallback } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { bridgeClient } from '../lib/bridgeClient';
 import '@xterm/xterm/css/xterm.css';
 
 export interface AgentTerminalProps {
@@ -133,7 +134,7 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
     fitRef.current = fitAddon;
 
     // ── Open WebSocket to Vite PTY plugin ────────────────────────────────
-    const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/api/pty`;
+    const wsUrl = bridgeClient.getWsUrl('/api/pty');
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 

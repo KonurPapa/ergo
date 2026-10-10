@@ -840,7 +840,7 @@ body {
 .tiptap-editor-root .tiptap {
   flex: 1;
   min-height: 100%;
-  padding: 0.25rem 0.5rem 2rem;
+  padding: 0.85rem 1.15rem 2rem;
   outline: none;
   color: var(--text-main);
   font-family: var(--font-sans);
@@ -4821,45 +4821,51 @@ body {
   border-radius: 2px;
 }
 
-/* Resizable Divider Bar */
+/* Resizable Divider Bar between Human & AI Workspace */
 .workspace-body.is-dragging {
   user-select: none;
   cursor: col-resize;
 }
 
 .resize-divider {
-  width: 10px;
+  width: 9px;
   cursor: col-resize;
+  position: relative;
+  z-index: 25;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: transparent;
-  border: none;
-  z-index: 20;
-  transition: background 0.15s ease;
   user-select: none;
   flex-shrink: 0;
-  margin: 0 -3px;
+  height: 100%;
+  background: transparent;
+  border: none;
+  margin: 0 -4px;
+  transition: background 0.15s ease;
 }
 
 .resize-divider:hover,
 .resize-divider.active {
-  background: rgba(99, 102, 241, 0.2);
+  background: rgba(168, 85, 247, 0.12);
 }
 
 .resize-handle-bar {
-  width: 3px;
-  height: 36px;
-  background: rgba(255, 255, 255, 0.25);
-  border-radius: 3px;
+  width: 1px;
+  height: 100%;
+  background: var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 0;
   transition: all 0.15s ease;
+}
+
+[data-theme="light"] .resize-handle-bar {
+  background: var(--border-subtle, #e2e8f0);
 }
 
 .resize-divider:hover .resize-handle-bar,
 .resize-divider.active .resize-handle-bar {
-  background: #fff;
-  height: 48px;
-  box-shadow: 0 0 8px var(--accent-cyan);
+  background: #a855f7;
+  box-shadow: 0 0 6px rgba(168, 85, 247, 0.6);
+  width: 2px;
 }
 
 /* Custom Dropdown & Header Control Formatting */
@@ -6904,9 +6910,9 @@ body {
   overflow-x: auto;
   overflow-y: hidden;
   scroll-behavior: smooth;
-  background: var(--bg, #12141a);
-  padding: 0.55rem;
-  gap: 0.55rem;
+  background: var(--pane-left-bg, var(--bg, #12141a));
+  padding: 0;
+  gap: 0;
 }
 
 .swimlanes-wrapper::-webkit-scrollbar {
@@ -6931,12 +6937,12 @@ body {
   flex-direction: column;
   height: 100%;
   position: relative;
-  background: var(--bg-pane, #181b22);
-  border: 1px solid var(--border, #27272a);
-  border-radius: var(--radius-lg, 12px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
   overflow: hidden;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color 0.15s ease;
 }
 
 .swimlane-column.is-single-lane {
@@ -6953,24 +6959,23 @@ body {
 
 /* Highlighted / Active Swim Lane styling */
 .swimlane-column.is-active-lane {
-  border-color: rgba(0, 212, 146, 0.45);
-  box-shadow: 0 0 0 1px rgba(0, 212, 146, 0.2), 0 4px 20px rgba(0, 0, 0, 0.35);
+  box-shadow: none;
   z-index: 2;
 }
 
 [data-theme="dark"] .swimlane-column.is-active-lane {
-  border-color: rgba(0, 212, 146, 0.45);
-  box-shadow: 0 0 0 1px rgba(0, 212, 146, 0.2), 0 4px 20px rgba(0, 0, 0, 0.35);
+  box-shadow: none;
 }
 
 [data-theme="light"] .swimlanes-wrapper {
-  background: var(--bg-darkest, #f4f6f9);
+  background: var(--pane-left-bg, var(--bg-darkest, #f4f6f9));
 }
 
 [data-theme="light"] .swimlane-column {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 [data-theme="light"] .swimlane-column-header {
@@ -7237,10 +7242,10 @@ body {
   flex-direction: column;
 }
 
-/* Swim Lane Draggable Resizer Handle */
+/* Swim Lane Draggable Resizer & Muted Vertical Divider */
 .swimlane-resizer-handle {
-  width: 8px;
-  margin-left: -4px;
+  width: 9px;
+  margin-left: -5px;
   margin-right: -4px;
   cursor: col-resize;
   position: relative;
@@ -7256,22 +7261,25 @@ body {
 
 .swimlane-resizer-handle:hover,
 .swimlane-resizer-handle.is-active {
-  background: rgba(99, 102, 241, 0.15);
+  background: rgba(99, 102, 241, 0.1);
 }
 
 .swimlane-resizer-line {
-  width: 2px;
-  height: 32px;
-  border-radius: 9999px;
-  background: rgba(255, 255, 255, 0.15);
+  width: 1px;
+  height: 100%;
+  background: var(--border-subtle, rgba(255, 255, 255, 0.08));
   transition: all 0.15s ease;
+}
+
+[data-theme="light"] .swimlane-resizer-line {
+  background: var(--border-subtle, #e2e8f0);
 }
 
 .swimlane-resizer-handle:hover .swimlane-resizer-line,
 .swimlane-resizer-handle.is-active .swimlane-resizer-line {
   background: var(--accent-cyan);
-  box-shadow: 0 0 8px rgba(6, 182, 212, 0.6);
-  width: 2.5px;
+  box-shadow: 0 0 6px rgba(6, 182, 212, 0.5);
+  width: 2px;
 }
 
 /* ── Human Workspace Header Menu & Dropdown ────────────────── */
@@ -7526,4 +7534,63 @@ body {
   border: 1px solid rgba(6, 182, 212, 0.28);
   color: var(--accent-cyan);
   opacity: 0.85;
+}
+
+/* ── Welcome Modal Intro Animations ────────────────────── */
+@keyframes welcomeSplashLogo {
+  0% {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+
+  40% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+
+  70% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes welcomeSlideUpToTop {
+  0% {
+    transform: translateY(60px);
+    opacity: 0.85;
+  }
+
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes welcomeContentFadeIn {
+  0% {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes welcomePulseGlow {
+
+  0%,
+  100% {
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.2), 0 0 40px rgba(0, 212, 146, 0.1);
+  }
+
+  50% {
+    box-shadow: 0 0 35px rgba(99, 102, 241, 0.4), 0 0 60px rgba(0, 212, 146, 0.25);
+  }
 }
