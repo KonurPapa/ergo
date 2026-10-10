@@ -47,8 +47,7 @@ class BridgeClient {
       if (savedUrl) {
         this.bridgeUrl = savedUrl.replace(/\/+$/, '');
       } else {
-        // If hosted on web, default to http://localhost:5173
-        // If currently on localhost:5173, empty string / origin works natively
+        // Default to http://localhost:5173 for hosted web apps
         this.bridgeUrl = this.isHostedWeb() ? DEFAULT_BRIDGE_URL : window.location.origin;
       }
     }
@@ -61,7 +60,7 @@ class BridgeClient {
   public isHostedWeb(): boolean {
     if (typeof window === 'undefined') return false;
     const host = window.location.hostname;
-    return host !== 'localhost' && host !== '127.0.0.1' && host !== '0.0.0.0';
+    return host !== 'localhost' && host !== '127.0.0.1' && host !== '0.0.0.0' && host !== '::1';
   }
 
   /**
@@ -88,11 +87,11 @@ class BridgeClient {
    */
   public getApiUrl(endpoint: string): string {
     const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-    // If on localhost already, keep relative /api/...
+    // If running on localhost directly, relative /api/... is preferred and works natively
     if (!this.isHostedWeb()) {
       return cleanEndpoint;
     }
-    // On hosted web, route to configured local bridge (e.g. http://localhost:5173/api/...)
+    // On hosted web, route to configured local bridge daemon (e.g. http://localhost:5173/api/...)
     return `${this.bridgeUrl}${cleanEndpoint}`;
   }
 
@@ -156,51 +155,68 @@ class BridgeClient {
    * Check connection to the local bridge.
    */
   public async checkConnection(targetUrl?: string): Promise<{ success: boolean; error?: string }> {
-    const testUrl = (targetUrl || this.bridgeUrl).replace(/\/+$/, '');
     this.isChecking = true;
     this.notify();
 
-    const endpoint = !this.isHostedWeb() && !targetUrl
-      ? '/api/storage/config'
-      : `${testUrl}/api/storage/config`;
+    const candidateUrls = targetUrl
+      ? [targetUrl.replace(/\/+$/, '')]
+      : this.isHostedWeb()
+        ? Array.from(new Set([
+            this.bridgeUrl.replace(/\/+$/, ''),
+            'http://localhost:5173',
+            'http://127.0.0.1:5173',
+            'http://localhost:3000',
+            'http://127.0.0.1:3000'
+          ]))
+        : [this.bridgeUrl.replace(/\/+$/, '')];
 
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000);
+    let lastErrorMessage: string | null = null;
 
-      const res = await fetch(endpoint, {
-        method: 'GET',
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
+    for (const testUrl of candidateUrls) {
+      const endpoint = !this.isHostedWeb() && !targetUrl
+        ? '/api/storage/config'
+        : `${testUrl}/api/storage/config`;
 
-      if (res.ok) {
-        const data = await res.json().catch(() => ({}));
-        this.isConnected = true;
-        this.isChecking = false;
-        this.lastError = null;
-        this.lastCheckedAt = new Date().toISOString();
-        if (data.resolvedPath) this.storageDir = data.resolvedPath;
-        if (data.homeDir) this.homeDir = data.homeDir;
-        if (targetUrl) this.setBridgeUrl(targetUrl);
-        try {
-          localStorage.setItem(STORAGE_KEY_AUTO_CONNECT, 'true');
-        } catch {}
-        this.notify();
-        return { success: true };
-      } else {
-        throw new Error(`Device bridge returned HTTP ${res.status}`);
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+        const res = await fetch(endpoint, {
+          method: 'GET',
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+          const data = await res.json().catch(() => ({}));
+          this.isConnected = true;
+          this.isChecking = false;
+          this.lastError = null;
+          this.lastCheckedAt = new Date().toISOString();
+          if (data.resolvedPath) this.storageDir = data.resolvedPath;
+          if (data.homeDir) this.homeDir = data.homeDir;
+          this.setBridgeUrl(testUrl);
+          try {
+            localStorage.setItem(STORAGE_KEY_AUTO_CONNECT, 'true');
+          } catch {}
+          this.notify();
+          return { success: true };
+        } else {
+          lastErrorMessage = `Device bridge at ${testUrl} returned HTTP ${res.status}`;
+        }
+      } catch (err: any) {
+        lastErrorMessage = err.name === 'AbortError'
+          ? 'Connection timed out. Make sure Ergo is running locally on your device.'
+          : (err.message || 'Unable to reach local bridge');
       }
-    } catch (err: any) {
-      this.isConnected = false;
-      this.isChecking = false;
-      this.lastError = err.name === 'AbortError'
-        ? 'Connection timed out. Make sure Ergo is running locally on your device.'
-        : (err.message || 'Unable to reach local bridge');
-      this.lastCheckedAt = new Date().toISOString();
-      this.notify();
-      return { success: false, error: this.lastError || undefined };
     }
+
+    this.isConnected = false;
+    this.isChecking = false;
+    this.lastError = lastErrorMessage || 'Unable to reach local bridge';
+    this.lastCheckedAt = new Date().toISOString();
+    this.notify();
+    return { success: false, error: this.lastError || undefined };
   }
 
   /**

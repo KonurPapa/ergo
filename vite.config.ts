@@ -634,6 +634,9 @@ async function runCliProcess(options: {
 function sendJson(res: ServerResponse, statusCode: number, data: any) {
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
   res.end(JSON.stringify(data));
 }
 
@@ -734,6 +737,19 @@ function ergoFileSystemPlugin(): Plugin {
     setupProjectWatcher(storageDir);
 
     server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: Function) => {
+      // Set CORS headers for all requests (supporting hosted web app connecting to local daemon)
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+      if (req.headers['access-control-request-private-network']) {
+        res.setHeader('Access-Control-Allow-Private-Network', 'true');
+      }
+
+      if (req.method === 'OPTIONS') {
+        res.statusCode = 204;
+        return res.end();
+      }
+
       const url = req.url?.split('?')[0];
       const storageDir = getActiveStorageDir();
 
@@ -3601,4 +3617,13 @@ function ergoPtyPlugin(): Plugin {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), ergoFileSystemPlugin(), ergoPtyPlugin()],
+  server: {
+    cors: true,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+      'Access-Control-Allow-Private-Network': 'true'
+    }
+  }
 });
