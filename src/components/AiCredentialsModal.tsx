@@ -68,7 +68,8 @@ const ROLE_ICONS: Record<AgentRole, React.ReactNode> = {
   worker: <Cpu size={14} color="var(--accent-primary)" />,
   cleaner: <Wrench size={14} color="var(--accent-emerald)" />,
   hardener: <ShieldAlert size={14} color="var(--accent-rose)" />,
-  logger: <FileText size={14} color="var(--accent-cyan)" />
+  logger: <FileText size={14} color="var(--accent-cyan)" />,
+  autocomplete: <Zap size={14} color="var(--accent-amber)" />
 };
 
 function getScoreBadgeStyle(score: number): { bg: string; color: string; border: string } {
@@ -284,6 +285,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
         else if (role === 'cleaner') legacyModel = k.cleanerModel || '';
         else if (role === 'hardener') legacyModel = k.hardenerModel || k.generalModel || k.model || '';
         else if (role === 'logger') legacyModel = k.loggerModel || '';
+        else if (role === 'autocomplete') legacyModel = k.autocompleteModel || '';
 
         loadedRoles[role] = {
           provider: k.provider,
@@ -636,6 +638,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
       cleanerModel: finalRoleConfigs.cleaner?.model,
       hardenerModel: finalRoleConfigs.hardener?.model,
       loggerModel: finalRoleConfigs.logger?.model,
+      autocompleteModel: finalRoleConfigs.autocomplete?.model,
       roleConfigs: finalRoleConfigs,
       providerKeys: finalProviderKeys,
       model: authMode === 'cli_subscription' ? selectedCliId : finalRoleConfigs.manager?.model,

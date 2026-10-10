@@ -23,6 +23,7 @@ import { bridgeClient } from '../lib/bridgeClient';
 import { HumanAiAssistantModal } from './HumanAiAssistantModal';
 import { ArchivedTasksModal } from './ArchivedTasksModal';
 import { BatchRunModal } from './BatchRunModal';
+import { BetaFeature, useBeta } from '../context/BetaContext';
 import { ScheduleTaskModal } from './ScheduleTaskModal';
 import { getAutocompleteSuggestion } from '../lib/autocompleteService';
 
@@ -588,6 +589,10 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   const onCreateTaskFromSelectionRef = useRef(onCreateTaskFromSelection);
   onCreateTaskFromSelectionRef.current = onCreateTaskFromSelection;
 
+  const { isBetaEnabled } = useBeta();
+  const isBetaEnabledRef = useRef(isBetaEnabled);
+  isBetaEnabledRef.current = isBetaEnabled;
+
   // Run-task menu modal state (batch sequence/parallel + schedule)
   const [batchModal, setBatchModal] = useState<{
     mode: 'sequence' | 'parallel';
@@ -686,6 +691,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
               if (!strikeMarkType) return DecorationSet.empty;
 
               let orderedItemCounter = 0;
+              let subtaskCounter = 0;
 
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               doc.descendants((node: any, pos: number) => {
@@ -837,7 +843,11 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                       container.appendChild(checkbox);
                       return container;
                     },
-                    { side: -1, stopEvent: () => true }
+                    {
+                      side: -1,
+                      stopEvent: () => true,
+                      key: `${lane.id}|pcb|${cardTaskId}|${isParentChecked}|${isCardRunning}|${isNeedsInput}`,
+                    }
                   );
                   decorations.push(parentCheckboxWidget);
 
@@ -873,7 +883,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
 
                         return btn;
                       },
-                      { side: -1, stopEvent: () => true }
+                      { side: -1, stopEvent: () => true, key: `${lane.id}|chev|${cardKey}|${isCollapsed}` }
                     );
                     decorations.push(chevronWidget);
                   }
@@ -881,7 +891,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                   // 4. Add Top-Right Card Actions Widget (+ Subtask, Archive)
                   const cardActionsWidget = Decoration.widget(
                     pos + 1,
-                    (view) => {
+                    (view, getPos) => {
                       const container = document.createElement('div');
                       container.className = 'card-actions-wrapper';
                       container.setAttribute('contenteditable', 'false');
@@ -915,18 +925,20 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
 
                       const getTaskContextText = () => {
                         let taskContextText = '';
-                        if (matchedTask) {
-                          taskContextText = matchedTask.title;
-                          if (matchedTask.subtasks && matchedTask.subtasks.length > 0) {
-                            taskContextText += '\n' + matchedTask.subtasks.map((st) => `- ${st.text}`).join('\n');
+                        const currentTask = laneTasksRef.current[orderedItemCounter - 1] || matchedTask;
+                        if (currentTask) {
+                          taskContextText = currentTask.title;
+                          if (currentTask.subtasks && currentTask.subtasks.length > 0) {
+                            taskContextText += '\n' + currentTask.subtasks.map((st) => `- ${st.text}`).join('\n');
                           }
                         }
                         if (!taskContextText) {
-                          try {
-                            taskContextText = view.state.doc.textBetween(pos, pos + node.nodeSize, '\n').trim();
-                          } catch {
-                            taskContextText = node.textContent.trim();
+                          const currentPos = typeof getPos === 'function' ? getPos() : null;
+                          if (currentPos != null) {
+                            const liveNode = view.state.doc.nodeAt(currentPos - 1);
+                            if (liveNode) return liveNode.textContent.trim();
                           }
+                          taskContextText = node.textContent.trim();
                         }
                         return taskContextText;
                       };
@@ -973,34 +985,36 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                               }
                             },
                           },
-                          {
-                            label: 'Tasks in sequence...',
-                            tip: 'Run this and X number of following tasks in this list in order',
-                            icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="10" y1="6" x2="21" y2="6"></line><line x1="10" y1="12" x2="21" y2="12"></line><line x1="10" y1="18" x2="21" y2="18"></line><path d="M4 6h1v4"></path><path d="M4 10h2"></path><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"></path></svg>`,
-                            action: () => {
-                              if (!matchedTask) return;
-                              const idx = laneTasksRef.current.findIndex((t) => t.id === matchedTask.id);
-                              setBatchModalRef.current({
-                                mode: 'sequence',
-                                task: matchedTask,
-                                remaining: idx >= 0 ? laneTasksRef.current.slice(idx + 1) : [],
-                              });
+                          ...(isBetaEnabledRef.current ? [
+                            {
+                              label: 'Tasks in sequence...',
+                              tip: 'Run this and X number of following tasks in this list in order',
+                              icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="10" y1="6" x2="21" y2="6"></line><line x1="10" y1="12" x2="21" y2="12"></line><line x1="10" y1="18" x2="21" y2="18"></line><path d="M4 6h1v4"></path><path d="M4 10h2"></path><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"></path></svg>`,
+                              action: () => {
+                                if (!matchedTask) return;
+                                const idx = laneTasksRef.current.findIndex((t) => t.id === matchedTask.id);
+                                setBatchModalRef.current({
+                                  mode: 'sequence',
+                                  task: matchedTask,
+                                  remaining: idx >= 0 ? laneTasksRef.current.slice(idx + 1) : [],
+                                });
+                              },
                             },
-                          },
-                          {
-                            label: 'Tasks in parallel...',
-                            tip: 'Run this and X number of following tasks in this list at once',
-                            icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="12" r="2.5"></circle><circle cx="18" cy="6" r="2"></circle><circle cx="18" cy="12" r="2"></circle><circle cx="18" cy="18" r="2"></circle><path d="M8.5 12h7.5"></path><path d="M8.5 11c3 0 5-3.5 7.5-4.5"></path><path d="M8.5 13c3 0 5 3.5 7.5 4.5"></path></svg>`,
-                            action: () => {
-                              if (!matchedTask) return;
-                              const idx = laneTasksRef.current.findIndex((t) => t.id === matchedTask.id);
-                              setBatchModalRef.current({
-                                mode: 'parallel',
-                                task: matchedTask,
-                                remaining: idx >= 0 ? laneTasksRef.current.slice(idx + 1) : [],
-                              });
+                            {
+                              label: 'Tasks in parallel...',
+                              tip: 'Run this and X number of following tasks in this list at once',
+                              icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="12" r="2.5"></circle><circle cx="18" cy="6" r="2"></circle><circle cx="18" cy="12" r="2"></circle><circle cx="18" cy="18" r="2"></circle><path d="M8.5 12h7.5"></path><path d="M8.5 11c3 0 5-3.5 7.5-4.5"></path><path d="M8.5 13c3 0 5 3.5 7.5 4.5"></path></svg>`,
+                              action: () => {
+                                if (!matchedTask) return;
+                                const idx = laneTasksRef.current.findIndex((t) => t.id === matchedTask.id);
+                                setBatchModalRef.current({
+                                  mode: 'parallel',
+                                  task: matchedTask,
+                                  remaining: idx >= 0 ? laneTasksRef.current.slice(idx + 1) : [],
+                                });
+                              },
                             },
-                          },
+                          ] : []),
                           {
                             label: 'Schedule task...',
                             tip: 'Set this task to run on a schedule',
@@ -1117,7 +1131,20 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                             collapsedCardsState.delete(cardKey);
 
                             if (onArchiveTaskRef.current) {
-                              const liveTitle = firstBlockNode?.textContent?.trim() || '';
+                              let liveTitle = '';
+                              const currentPos = typeof getPos === 'function' ? getPos() : null;
+                              if (currentPos != null) {
+                                const liveNode = view.state.doc.nodeAt(currentPos - 1);
+                                if (liveNode) {
+                                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                  liveNode.forEach((child: any) => {
+                                    if (!liveTitle && child.type.name !== 'bulletList' && child.type.name !== 'orderedList') {
+                                      liveTitle = child.textContent?.trim() || '';
+                                    }
+                                  });
+                                }
+                              }
+                              if (!liveTitle) liveTitle = firstBlockNode?.textContent?.trim() || '';
                               onArchiveTaskRef.current(liveTitle);
                             }
                           });
@@ -1140,7 +1167,11 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
 
                       return container;
                     },
-                    { side: 1, stopEvent: () => true }
+                    {
+                      side: 1,
+                      stopEvent: () => true,
+                      key: `${lane.id}|act|${cardKey}|${isCardRunning}`,
+                    }
                   );
                   decorations.push(cardActionsWidget);
 
@@ -1243,7 +1274,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                         container.appendChild(checkbox);
                         return container;
                       },
-                      { side: -1, stopEvent: () => true }
+                      { side: -1, stopEvent: () => true, key: `${lane.id}|scb|${++subtaskCounter}|${isSubChecked}|${isHumanReviewSubtask}` }
                     );
                     decorations.push(subtaskCheckboxWidget);
                   }
@@ -1254,7 +1285,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
               const cursor = state.selection.from;
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               doc.descendants((node: any, pos: number) => {
-                if (node.isText && node.text) {
+                if (node.isText && node.text && node.text.includes('\\')) {
                   const text = node.text;
                   const escapeRegex = /\\([*~_`#[\]()>+\-.!])/g;
                   let match: RegExpExecArray | null;
@@ -1350,16 +1381,17 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   const activeSuggestionRef = useRef<{
     pos: number;
     text: string;
+    replacementRange: 'suffix' | 'line';
+    fromPos: number;
+    toPos: number;
   } | null>(null);
 
-  const wordTimerRef = useRef<any>(null);
-  const sentenceTimerRef = useRef<any>(null);
+  const autocompleteTimerRef = useRef<any>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const lastKeyTypedTimeRef = useRef<number>(0);
 
   const clearAutocompleteTimers = () => {
-    if (wordTimerRef.current) clearTimeout(wordTimerRef.current);
-    if (sentenceTimerRef.current) clearTimeout(sentenceTimerRef.current);
+    if (autocompleteTimerRef.current) clearTimeout(autocompleteTimerRef.current);
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
@@ -1391,8 +1423,19 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                   event.preventDefault();
                   event.stopPropagation();
 
-                  // Insert completion text at cursor
-                  const tr = view.state.tr.insertText(suggestion.text, suggestion.pos);
+                  let tr = view.state.tr;
+                  if (suggestion.replacementRange === 'line') {
+                    // Replace the entire task/subtask line with the improved version
+                    tr = tr.replaceWith(
+                      suggestion.fromPos,
+                      suggestion.toPos,
+                      view.state.schema.text(suggestion.text)
+                    );
+                  } else {
+                    // Suffix insertion at cursor pos
+                    tr = tr.insertText(suggestion.text, suggestion.pos);
+                  }
+
                   activeSuggestionRef.current = null;
                   view.dispatch(tr);
                   return true;
@@ -1426,7 +1469,12 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                 () => {
                   const span = document.createElement('span');
                   span.className = 'ergo-autocomplete-ghost';
-                  span.textContent = suggestion.text;
+                  
+                  // For whole-line rewrite vs suffix
+                  const displayText = suggestion.replacementRange === 'line'
+                    ? ` → ${suggestion.text}`
+                    : suggestion.text;
+                  span.textContent = displayText;
 
                   const badge = document.createElement('span');
                   badge.className = 'ergo-autocomplete-badge';
@@ -1435,7 +1483,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
 
                   return span;
                 },
-                { side: 1 }
+                { side: 1, key: 'autocomplete_ghost' }
               );
 
               return DecorationSet.create(state.doc, [widget]);
@@ -1445,6 +1493,50 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       ];
     },
   });
+
+  const onMarkdownChangeRef = useRef(onMarkdownChange);
+  onMarkdownChangeRef.current = onMarkdownChange;
+  const markdownDebounceTimerRef = useRef<any>(null);
+  const editorInstanceRef = useRef<any>(null);
+
+  const flushMarkdownChange = useCallback(() => {
+    if (markdownDebounceTimerRef.current) {
+      clearTimeout(markdownDebounceTimerRef.current);
+      markdownDebounceTimerRef.current = null;
+    }
+    const currentEd = editorInstanceRef.current;
+    if (currentEd && !currentEd.isDestroyed) {
+      const storage = (currentEd as unknown as WithMarkdownStorage).storage;
+      const md = storage?.markdown?.getMarkdown();
+      if (typeof md === 'string') {
+        onMarkdownChangeRef.current(lane.id, md);
+      }
+    }
+  }, [lane.id]);
+
+  useEffect(() => {
+    return () => {
+      flushMarkdownChange();
+    };
+  }, [flushMarkdownChange]);
+
+  const scheduleMarkdownChange = useCallback(() => {
+    if (markdownDebounceTimerRef.current) {
+      clearTimeout(markdownDebounceTimerRef.current);
+    }
+    // Debounce markdown serialization, AST parsing, and autosave until 800ms of user typing idle
+    markdownDebounceTimerRef.current = setTimeout(() => {
+      markdownDebounceTimerRef.current = null;
+      const currentEd = editorInstanceRef.current;
+      if (currentEd && !currentEd.isDestroyed) {
+        const storage = (currentEd as unknown as WithMarkdownStorage).storage;
+        const md = storage?.markdown?.getMarkdown();
+        if (typeof md === 'string') {
+          onMarkdownChangeRef.current(lane.id, md);
+        }
+      }
+    }, 800);
+  }, [lane.id]);
 
   const editor = useEditor({
     extensions: [
@@ -1543,9 +1635,8 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       onActivate();
     },
     onUpdate: ({ editor: currentEditor }) => {
-      const storage = (currentEditor as unknown as WithMarkdownStorage).storage;
-      const markdown = storage.markdown.getMarkdown();
-      onMarkdownChange(lane.id, markdown);
+      editorInstanceRef.current = currentEditor;
+      scheduleMarkdownChange();
 
       // ── Task Autocomplete Scheduling ──
       clearAutocompleteTimers();
@@ -1580,7 +1671,6 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       const prefixText = lineText.slice(0, offsetInLine);
 
       // Determine if inside a top-level task or subtask
-      let isTaskItem = false;
       let isSubtask = false;
       let parentTaskTitle: string | undefined = undefined;
 
@@ -1592,24 +1682,20 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
             isSubtask = true;
             // Get parent task text
             parentTaskTitle = grandParent.child(0)?.textContent?.trim();
-          } else {
-            isTaskItem = true;
           }
           break;
         }
       }
 
-      // "autocomplete should never start on an empty task"
-      // "subtasks it can, based on the rest of the task/subtasks, but after the 3+ second sentence-delay"
-      if (!isTaskItem && !isSubtask) {
-        if (activeSuggestionRef.current) {
-          activeSuggestionRef.current = null;
-          currentEditor.view.dispatch(state.tr);
-        }
-        return;
-      }
+      // Autocomplete trigger strict lockdown:
+      // 1. Task or subtask must NOT be empty.
+      // 2. Cursor must be immediately preceded by a space character ' ' (user stopped typing on a space).
+      // If user ends on a word, period, or anything other than ' ', autocomplete must NOT fire.
+      const taskText = lineText.trim();
+      const hasContent = taskText.length > 0;
+      const isPrecededBySpace = prefixText.endsWith(' ');
 
-      if (isTaskItem && !prefixText.trim()) {
+      if (!hasContent || !isPrecededBySpace) {
         if (activeSuggestionRef.current) {
           activeSuggestionRef.current = null;
           currentEditor.view.dispatch(state.tr);
@@ -1618,91 +1704,52 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       }
 
       const currentPos = $from.pos;
-      const lastWordMatch = prefixText.match(/([a-zA-Z0-9_\-]+)$/);
-      const lastWord = lastWordMatch ? lastWordMatch[1] : '';
-      const canDoWordCompletion = isTaskItem && lastWord.length >= 4;
+      const fromPos = $from.start();
+      const toPos = $from.end();
+      const suffixText = lineText.slice(offsetInLine);
 
-      // 1. Immediate word autocomplete (after 1 second of no input, if 4+ chars without space)
-      if (canDoWordCompletion) {
-        wordTimerRef.current = setTimeout(async () => {
-          if (!currentEditor || currentEditor.isDestroyed) return;
-          const { selection: sel } = currentEditor.state;
-          if (sel.from !== currentPos) return;
+      // Autocomplete debounce: fires when user stops typing for ~600ms on a space character
+      autocompleteTimerRef.current = setTimeout(async () => {
+        if (!currentEditor || currentEditor.isDestroyed) return;
+        const { selection: sel } = currentEditor.state;
+        if (sel.from !== currentPos) return;
 
-          const controller = new AbortController();
-          abortControllerRef.current = controller;
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
 
-          try {
-            const suggestion = await getAutocompleteSuggestion(
-              {
-                fullLineText: lineText,
-                prefixText,
-                isSubtask: false,
-                parentTaskTitle,
-                projectId: projectRef.current?.id,
-                mode: 'word',
-              },
-              aiConfigRef.current,
-              controller.signal
-            );
+        try {
+          const suggestion = await getAutocompleteSuggestion(
+            {
+              taskText: lineText,
+              prefixText,
+              suffixText,
+              isSubtask,
+              parentTaskTitle,
+              projectId: projectRef.current?.id,
+            },
+            aiConfigRef.current,
+            controller.signal
+          );
 
-            if (suggestion && !currentEditor.isDestroyed && currentEditor.state.selection.from === currentPos) {
-              activeSuggestionRef.current = {
-                pos: currentPos,
-                text: suggestion,
-              };
-              currentEditor.view.dispatch(currentEditor.view.state.tr);
-            }
-          } catch (err) {
-            console.warn('[Autocomplete] Word completion error:', err);
+          if (suggestion && !currentEditor.isDestroyed && currentEditor.state.selection.from === currentPos) {
+            activeSuggestionRef.current = {
+              pos: currentPos,
+              text: suggestion.text,
+              replacementRange: suggestion.replacementRange,
+              fromPos,
+              toPos,
+            };
+            currentEditor.view.dispatch(currentEditor.view.state.tr);
           }
-        }, 1000);
-      }
-
-      // 2. Delayed sentence autocomplete (after 3+ seconds of no input)
-      // Allowed on tasks with text or on empty subtasks with parentTask context
-      const canDoSentenceCompletion = (isTaskItem && prefixText.trim().length > 0) || (isSubtask);
-      if (canDoSentenceCompletion) {
-        sentenceTimerRef.current = setTimeout(async () => {
-          if (!currentEditor || currentEditor.isDestroyed) return;
-          const { selection: sel } = currentEditor.state;
-          if (sel.from !== currentPos) return;
-
-          const controller = new AbortController();
-          abortControllerRef.current = controller;
-
-          try {
-            const suggestion = await getAutocompleteSuggestion(
-              {
-                fullLineText: lineText,
-                prefixText,
-                isSubtask,
-                parentTaskTitle,
-                projectId: projectRef.current?.id,
-                mode: 'sentence',
-              },
-              aiConfigRef.current,
-              controller.signal
-            );
-
-            if (suggestion && !currentEditor.isDestroyed && currentEditor.state.selection.from === currentPos) {
-              activeSuggestionRef.current = {
-                pos: currentPos,
-                text: suggestion,
-              };
-              currentEditor.view.dispatch(currentEditor.view.state.tr);
-            }
-          } catch (err) {
-            console.warn('[Autocomplete] Sentence completion error:', err);
-          }
-        }, 3000);
-      }
+        } catch (err) {
+          console.warn('[Autocomplete] Completion error:', err);
+        }
+      }, 600);
     },
     onSelectionUpdate: ({ editor: currentEditor }) => {
       updateSelectionTooltip(currentEditor);
 
-      // "autocomplete should not start if the user simply moved their cursor to another task, but hasn't started typing anything yet"
-      // If cursor moved away from where the suggestion was offered, clear it and cancel pending timers
+      // Autocomplete should not start if the user simply moved their cursor to another task
       if (activeSuggestionRef.current && currentEditor) {
         const { from } = currentEditor.state.selection;
         if (from !== activeSuggestionRef.current.pos) {
@@ -1725,6 +1772,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       }
     },
     onBlur: () => {
+      flushMarkdownChange();
       clearAutocompleteTimers();
       if (activeSuggestionRef.current) {
         activeSuggestionRef.current = null;
@@ -2140,32 +2188,34 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         />
       )}
 
-      {/* ── Action Buttons Footer at bottom of selected lane only ── */}
+      {/* ── Action Buttons Footer at bottom of selected lane only (Gated behind Beta features toggle) ── */}
       {isActive && (
-        <div className="swimlane-footer">
-          <button
-            type="button"
-            className="new-card-btn"
-            onClick={() => {
-              if (editor) {
-                editor.commands.focus();
-                handleAddNewCard(editor);
-              }
-            }}
-          >
-            <Plus size={15} />
-            <span>New Task</span>
-          </button>
-          <button
-            type="button"
-            className={`new-task-btn ai-assistant-footer-btn ${isAssistantOpen ? 'active' : ''}`}
-            onClick={isAssistantOpen ? onCloseAssistant : onOpenAssistant}
-            title={isAssistantOpen ? 'Close Task Assistant' : 'Activate Task Assistant: Task mode or Architect mode'}
-          >
-            {isAssistantOpen ? <ChevronDown size={15} /> : <Sparkles size={15} />}
-            <span>{isAssistantOpen ? 'Hide Assistant' : 'Task Assistant'}</span>
-          </button>
-        </div>
+        <BetaFeature>
+          <div className="swimlane-footer">
+            <button
+              type="button"
+              className="new-card-btn"
+              onClick={() => {
+                if (editor) {
+                  editor.commands.focus();
+                  handleAddNewCard(editor);
+                }
+              }}
+            >
+              <Plus size={15} />
+              <span>New Task</span>
+            </button>
+            <button
+              type="button"
+              className={`new-task-btn ai-assistant-footer-btn ${isAssistantOpen ? 'active' : ''}`}
+              onClick={isAssistantOpen ? onCloseAssistant : onOpenAssistant}
+              title={isAssistantOpen ? 'Close Task Assistant' : 'Activate Task Assistant: Task mode or Architect mode'}
+            >
+              {isAssistantOpen ? <ChevronDown size={15} /> : <Sparkles size={15} />}
+              <span>{isAssistantOpen ? 'Hide Assistant' : 'Task Assistant'}</span>
+            </button>
+          </div>
+        </BetaFeature>
       )}
 
       {/* Swim Lane Delete Confirmation Modal */}

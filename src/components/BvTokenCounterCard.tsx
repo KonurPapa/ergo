@@ -31,7 +31,8 @@ export function extractTaskTokenSummary(
     worker: emptyUsage(),
     cleaner: emptyUsage(),
     hardener: emptyUsage(),
-    logger: emptyUsage()
+    logger: emptyUsage(),
+    autocomplete: emptyUsage()
   };
 
   let totalUsage = emptyUsage();
@@ -120,7 +121,8 @@ export function extractTaskTokenSummary(
     worker: { usage: roleMap.worker, total: roleMap.worker.inputTokens + roleMap.worker.outputTokens },
     cleaner: { usage: roleMap.cleaner, total: roleMap.cleaner.inputTokens + roleMap.cleaner.outputTokens },
     hardener: { usage: roleMap.hardener, total: roleMap.hardener.inputTokens + roleMap.hardener.outputTokens },
-    logger: { usage: roleMap.logger, total: roleMap.logger.inputTokens + roleMap.logger.outputTokens }
+    logger: { usage: roleMap.logger, total: roleMap.logger.inputTokens + roleMap.logger.outputTokens },
+    autocomplete: { usage: roleMap.autocomplete, total: roleMap.autocomplete.inputTokens + roleMap.autocomplete.outputTokens }
   };
 
   const totalTokens = totalUsage.inputTokens + totalUsage.outputTokens;
@@ -171,7 +173,8 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
     worker: { label: 'Workers', color: '#34d399', bg: 'rgba(52, 211, 153, 0.08)', border: 'rgba(52, 211, 153, 0.2)' },
     cleaner: { label: 'Cleaner', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.08)', border: 'rgba(251, 113, 133, 0.2)' },
     hardener: { label: 'QA Hardener', color: '#c084fc', bg: 'rgba(192, 132, 252, 0.08)', border: 'rgba(192, 132, 252, 0.2)' },
-    logger: { label: 'Logger', color: '#94a3b8', bg: 'rgba(148, 163, 184, 0.08)', border: 'rgba(148, 163, 184, 0.2)' }
+    logger: { label: 'Logger', color: '#94a3b8', bg: 'rgba(148, 163, 184, 0.08)', border: 'rgba(148, 163, 184, 0.2)' },
+    autocomplete: { label: 'Autocomplete', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.08)', border: 'rgba(56, 189, 248, 0.2)' }
   };
 
   // If task is not started and has no usage yet, display blank card with hint

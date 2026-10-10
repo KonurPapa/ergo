@@ -26,10 +26,12 @@ import {
   FlaskConical,
   Database,
   Trash2,
-  Laptop
+  Laptop,
+  Beaker
 } from 'lucide-react';
 import { getChunkCount } from '../lib/memory';
 import { bridgeClient, type BridgeStatus } from '../lib/bridgeClient';
+import { useBeta } from '../context/BetaContext';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -133,6 +135,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isClearingAllMemory, setIsClearingAllMemory] = useState(false);
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>(() => bridgeClient.getStatus());
   const [bridgeUrlInput, setBridgeUrlInput] = useState<string>(() => bridgeClient.getBridgeUrl() || 'http://localhost:5173');
+  const { isBetaEnabled, setIsBetaEnabled } = useBeta();
   const [isTestingBridge, setIsTestingBridge] = useState(false);
   const [bridgeNotice, setBridgeNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -1021,6 +1024,51 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Section: Experimental & Beta Features */}
+          <div
+            style={{
+              background: isBetaEnabled ? 'rgba(234, 179, 8, 0.04)' : 'rgba(255, 255, 255, 0.025)',
+              border: isBetaEnabled ? '1px solid rgba(234, 179, 8, 0.28)' : '1px solid var(--border-subtle)',
+              borderRadius: '8px',
+              padding: '1.1rem',
+              transition: 'border-color 0.2s ease, background 0.2s ease'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <Beaker size={16} color="var(--accent-amber)" />
+                  <span style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--text-bright)' }}>Enable Beta features</span>
+                  <span
+                    className={`badge ${isBetaEnabled ? 'badge-done' : ''}`}
+                    style={{
+                      fontSize: '0.65rem',
+                      padding: '0.1rem 0.4rem',
+                      background: isBetaEnabled ? 'rgba(234, 179, 8, 0.2)' : 'rgba(255, 255, 255, 0.06)',
+                      color: isBetaEnabled ? '#fbbf24' : 'var(--text-muted)',
+                      border: isBetaEnabled ? '1px solid rgba(234, 179, 8, 0.4)' : undefined
+                    }}
+                  >
+                    {isBetaEnabled ? 'BETA ACTIVE' : 'OFF'}
+                  </span>
+                </div>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: '1.45' }}>
+                  Unlock experimental capabilities and preview upcoming tools before they are enabled by default. Early-access features (like the human workspace action tray) will be visible across the app while active.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className={`toggle-switch-btn ${isBetaEnabled ? 'is-active' : ''}`}
+                onClick={() => setIsBetaEnabled(!isBetaEnabled)}
+                aria-label="Enable Beta features"
+                style={{ flexShrink: 0, marginTop: '0.2rem' }}
+              >
+                <div className="toggle-switch-thumb" />
+              </button>
+            </div>
           </div>
 
           {/* Section 5: Target File Paths & Status */}

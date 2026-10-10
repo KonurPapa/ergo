@@ -25,7 +25,8 @@ export const AGENT_ROLES: AgentRole[] = [
   'worker',
   'cleaner',
   'hardener',
-  'logger'
+  'logger',
+  'autocomplete'
 ];
 
 export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
@@ -129,6 +130,23 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
       cursor: 'cursor-agent',
       ollama: 'llama3.2',
       cli_subscription: 'claude-code'
+    }
+  },
+  autocomplete: {
+    role: 'autocomplete',
+    name: 'Inline Autocomplete',
+    score: 2.5,
+    scoreLabel: '2.5 / 10 (Ultra-Fast / Low Latency)',
+    tier: 'light',
+    description: 'Real-time VS Code style ghost text suggestions and typo/grammar completions. Requires sub-second, cheap, lightweight models.',
+    defaultModels: {
+      openai: 'gpt-5-mini',
+      anthropic: 'claude-3-5-haiku-20241022',
+      gemini: 'gemini-3.8-flash-low',
+      grok: 'grok-3-mini',
+      cursor: 'cursor-agent',
+      ollama: 'llama3.2',
+      cli_subscription: 'antigravity'
     }
   }
 };
@@ -239,6 +257,9 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     keyPlaceholder: 'AIzaSy...',
     keyDocUrl: 'https://aistudio.google.com/app/apikey',
     models: [
+      { id: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash (Low)', description: 'Ultra-fast low latency frontier model (ideal for inline autocomplete)', tier: 'light', contextWindow: 1000000 },
+      { id: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash (Medium)', description: 'Balanced speed and intelligence frontier flash model', tier: 'standard', contextWindow: 1000000 },
+      { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)', description: 'Full reasoning effort frontier Flash model', tier: 'standard', contextWindow: 1000000 },
       { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', description: 'Next-gen flagship hybrid reasoning and ultra-fast generation', tier: 'standard', contextWindow: 1000000 },
       { id: 'gemini-3.7-pro', name: 'Gemini 3.7 Pro', description: 'Deep reasoning, agentic coding and complex logic', tier: 'advanced', contextWindow: 2000000 },
       { id: 'gemini-3.7-flash-thinking', name: 'Gemini 3.7 Flash Thinking', description: 'Explicit thinking process with adjustable budget', tier: 'reasoning', contextWindow: 1000000 },

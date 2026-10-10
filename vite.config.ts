@@ -468,6 +468,8 @@ async function runCliProcess(options: {
   customArgs?: string[];
   timeoutMs?: number;
   env?: Record<string, string>;
+  model?: string;
+  req?: any;
 }): Promise<{ exitCode: number; stdout: string; stderr: string; timedOut: boolean; durationMs: number }> {
   const { spawn } = await import('node:child_process');
   const started = Date.now();
@@ -499,6 +501,9 @@ async function runCliProcess(options: {
     if (!args.includes('--dangerously-skip-permissions')) {
       args.push('--dangerously-skip-permissions');
     }
+    if (options.model && !args.includes('--model')) {
+      args.push('--model', options.model);
+    }
     if (anthropicKey && !args.includes('--settings')) {
       args.push('--settings', '{"apiKeyHelper":""}');
     }
@@ -512,6 +517,9 @@ async function runCliProcess(options: {
       args.push('--message', combinedPrompt);
       passedPromptInArgs = true;
     }
+    if (options.model && !args.includes('--model') && !args.includes('-m')) {
+      args.push('--model', options.model);
+    }
     if (!args.includes('--no-git')) {
       args.push('--no-git');
     }
@@ -522,6 +530,9 @@ async function runCliProcess(options: {
     if (!args.includes('exec')) {
       args.unshift('exec');
     }
+    if (options.model && !args.includes('--model') && !args.includes('-m')) {
+      args.push('--model', options.model);
+    }
     if (combinedPrompt.length < 8000) {
       args.push(combinedPrompt);
       passedPromptInArgs = true;
@@ -529,6 +540,15 @@ async function runCliProcess(options: {
   } else if (cliBase.includes('agy')) {
     if (!args.includes('--dangerously-skip-permissions')) {
       args.push('--dangerously-skip-permissions');
+    }
+    if (!args.includes('--disable-slash-commands')) {
+      args.push('--disable-slash-commands');
+    }
+    if (!args.includes('--effort')) {
+      args.push('--effort', 'low');
+    }
+    if (options.model && !args.includes('--model') && !args.includes('-m')) {
+      args.push('--model', options.model);
     }
     if (!args.includes('-p') && !args.includes('--print') && !args.some((a) => a.startsWith('-p=') || a.startsWith('--print='))) {
       args.push('-p', combinedPrompt);
@@ -578,6 +598,14 @@ async function runCliProcess(options: {
         },
         stdio: ['pipe', 'pipe', 'pipe']
       });
+
+      if (options.req) {
+        options.req.on('close', () => {
+          if (proc && !proc.killed) {
+            try { proc.kill('SIGTERM'); } catch {}
+          }
+        });
+      }
 
       proc.stdout?.on('data', (chunk: Buffer) => {
         stdout += chunk.toString('utf-8');
@@ -2802,7 +2830,7 @@ function ergoFileSystemPlugin(): Plugin {
       if (url === '/api/cli/execute' && req.method === 'POST') {
         try {
           const body = await parseJsonBody(req);
-          const { cli = 'claude', prompt, systemPrompt, cwd, args, timeoutMs, env } = body;
+          const { cli = 'claude', prompt, systemPrompt, cwd, args, timeoutMs, env, model } = body;
 
           if (!prompt || typeof prompt !== 'string') {
             return sendJson(res, 400, { error: 'prompt is required and must be a string' });
@@ -2820,7 +2848,9 @@ function ergoFileSystemPlugin(): Plugin {
             cwd: executionCwd,
             customArgs: args,
             timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : 180_000,
-            env
+            env,
+            model,
+            req
           });
 
           return sendJson(res, 200, {

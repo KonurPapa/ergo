@@ -8,14 +8,16 @@ export async function callAiEngine(
   prompt: string,
   systemPrompt: string,
   config: AIProviderConfig,
-  taskType: 'summary' | 'general' = 'general',
+  taskType: 'summary' | 'general' | 'autocomplete' = 'general',
   responseFormat: 'text' | 'json' = taskType === 'summary' ? 'json' : 'text',
   signal?: AbortSignal
 ): Promise<string> {
   const { provider, apiKey, baseUrl } = config;
-  const targetModel = taskType === 'summary'
-    ? (config.summaryModel || config.generalModel || config.model)
-    : (config.generalModel || config.model);
+  const targetModel = taskType === 'autocomplete'
+    ? (config.autocompleteModel || config.generalModel || config.model)
+    : taskType === 'summary'
+      ? (config.summaryModel || config.generalModel || config.model)
+      : (config.generalModel || config.model);
 
   if (provider === 'openai') {
     if (!apiKey) throw new Error('OpenAI API key missing.');
@@ -234,8 +236,9 @@ export async function callAiEngine(
         cli: binary,
         prompt,
         systemPrompt,
+        model: targetModel,
         responseFormat,
-        timeoutMs: 60_000,
+        timeoutMs: taskType === 'autocomplete' ? 12_000 : 60_000,
         env
       }),
       signal

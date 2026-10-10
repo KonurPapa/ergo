@@ -230,6 +230,7 @@ export interface AIProviderConfig {
   cleanerModel?: string;
   hardenerModel?: string;
   loggerModel?: string;
+  autocompleteModel?: string;
   /** Per-role routing overrides: customize which provider and model runs each execution agent */
   roleConfigs?: Partial<Record<AgentRole, AgentModelConfig>>;
   /** Provider-specific credentials dictionary for multi-provider profiles */
@@ -257,6 +258,7 @@ export interface ProviderCredentials {
   cleanerModel?: string;
   hardenerModel?: string;
   loggerModel?: string;
+  autocompleteModel?: string;
   roleConfigs?: Partial<Record<AgentRole, AgentModelConfig>>;
   providerKeys?: Partial<Record<AIProviderId, { apiKey?: string; baseUrl?: string }>>;
   isConnected?: boolean;
@@ -284,6 +286,7 @@ export interface UserApiKey {
   cleanerModel?: string;
   hardenerModel?: string;
   loggerModel?: string;
+  autocompleteModel?: string;
   /** Per-role routing overrides: customize which provider and model runs each execution agent */
   roleConfigs?: Partial<Record<AgentRole, AgentModelConfig>>;
   /** Provider-specific credentials dictionary for multi-provider profiles */
@@ -486,7 +489,7 @@ export type ExecutionStage =
   | 'done'
   | 'terminating';
 
-export type AgentRole = 'summary' | 'manager' | 'worker' | 'cleaner' | 'hardener' | 'logger';
+export type AgentRole = 'summary' | 'manager' | 'worker' | 'cleaner' | 'hardener' | 'logger' | 'autocomplete';
 
 /** Token accounting for a single LLM call or an aggregate across calls. */
 export interface TokenUsage {

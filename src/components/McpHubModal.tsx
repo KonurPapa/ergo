@@ -64,7 +64,9 @@ import {
   ChevronUp,
   Sparkles,
   Wrench,
-  FileCode
+  FileCode,
+  HelpCircle,
+  Copy
 } from 'lucide-react';
 
 interface McpHubModalProps {
@@ -126,6 +128,117 @@ function renderServerIcon(server: MCPServer, isConnected: boolean) {
   }
 }
 
+interface McpSetupGuide {
+  title: string;
+  badge: string;
+  description: string;
+  docsUrl: string;
+  docsLabel: string;
+  defaultEndpoint?: string;
+  endpointPlaceholder: string;
+  tokenLabel: string;
+  tokenPlaceholder: string;
+  tokenHelpText: string;
+  quickRunCommand?: string;
+  setupSteps: string[];
+}
+
+const MCP_EXTERNAL_SETUP_GUIDES: Record<string, McpSetupGuide> = {
+  'mcp-gcal': {
+    title: 'Google Calendar MCP Setup',
+    badge: 'Official Google Calendar Server',
+    description: 'Connect Google Calendar using an MCP SSE or HTTP bridge server. You can run the official local bridge with npx or point to your hosted endpoint.',
+    docsUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/gdrive',
+    docsLabel: 'View Setup Guide ↗',
+    defaultEndpoint: 'http://localhost:3000/sse',
+    endpointPlaceholder: 'http://localhost:3000/sse or https://your-bridge.domain/sse',
+    tokenLabel: 'Google OAuth Client Secret or Bearer Token',
+    tokenPlaceholder: 'Leave blank if local bridge already authenticated via browser OAuth',
+    tokenHelpText: 'If running locally with the official MCP bridge, browser OAuth logs you in automatically. Credentials remain safe on your device.',
+    quickRunCommand: 'npx -y @modelcontextprotocol/server-google-calendar',
+    setupSteps: [
+      'Option A (Recommended): Run the local MCP bridge with: npx -y @modelcontextprotocol/server-google-calendar',
+      'Option B (Hosted): Deploy an SSE MCP bridge and paste its URL below.',
+      'Sign in once with your Google Account when prompted in the browser.',
+      'Click "Fill Recommended Default" below to auto-fill http://localhost:3000/sse and click Connect.'
+    ]
+  },
+  'mcp-slack': {
+    title: 'Slack MCP Setup',
+    badge: 'Slack Bot & Channels',
+    description: 'Allow Ergo to post project updates, compose message drafts, and read announcements from your Slack workspace.',
+    docsUrl: 'https://api.slack.com/apps',
+    docsLabel: 'Slack App Console ↗',
+    defaultEndpoint: 'http://localhost:3001/sse',
+    endpointPlaceholder: 'http://localhost:3001/sse or https://mcp.your-slack-bot.com/sse',
+    tokenLabel: 'Bot User OAuth Token (xoxb-...)',
+    tokenPlaceholder: 'xoxb-xxxxxxxxxxxx-xxxxxxxxxxxx-xxxxxxxxxxxxxxxx',
+    tokenHelpText: 'Generate a Bot User OAuth Token in your Slack App under "OAuth & Permissions". Must have channels:read, chat:write scopes.',
+    quickRunCommand: 'npx -y @modelcontextprotocol/server-slack',
+    setupSteps: [
+      'Create or select an app at api.slack.com/apps.',
+      'Add chat:write and channels:read scopes under OAuth & Permissions.',
+      'Install to workspace and copy the "Bot User OAuth Token" (starts with xoxb-).',
+      'Paste the token below and connect via your local or remote SSE server.'
+    ]
+  },
+  'mcp-notion': {
+    title: 'Notion MCP Setup',
+    badge: 'Notion Workspace API',
+    description: 'Index Notion pages, sync database tables, and draft roadmap briefs directly from Ergo AI agents.',
+    docsUrl: 'https://www.notion.so/my-integrations',
+    docsLabel: 'Notion Integrations ↗',
+    defaultEndpoint: 'http://localhost:3002/sse',
+    endpointPlaceholder: 'http://localhost:3002/sse or https://mcp.your-domain.com/sse',
+    tokenLabel: 'Internal Integration Secret (ntn_... or secret_...)',
+    tokenPlaceholder: 'ntn_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+    tokenHelpText: 'Create an integration at notion.so/my-integrations and grant access to pages/databases you want Ergo to reach.',
+    quickRunCommand: 'npx -y @modelcontextprotocol/server-notion',
+    setupSteps: [
+      'Visit notion.so/my-integrations and click "+ New integration".',
+      'Copy your "Internal Integration Secret".',
+      'In Notion, open the page or database you want to share, click "..." -> "Connect to" -> select your integration.',
+      'Enter the bridge endpoint and token below, then click Connect.'
+    ]
+  },
+  'mcp-salesforce': {
+    title: 'Salesforce MCP Setup',
+    badge: 'Salesforce CRM Connected App',
+    description: 'Query CRM accounts, leads, deals, and opportunities using the Model Context Protocol Salesforce bridge.',
+    docsUrl: 'https://help.salesforce.com/s/articleView?id=sf.connected_app_overview.htm',
+    docsLabel: 'Salesforce Setup Guide ↗',
+    defaultEndpoint: 'http://localhost:3003/sse',
+    endpointPlaceholder: 'http://localhost:3003/sse or https://salesforce-mcp.company.internal/sse',
+    tokenLabel: 'Access Token or Connected App Secret',
+    tokenPlaceholder: 'Paste Salesforce OAuth Access Token or API Token',
+    tokenHelpText: 'Obtain an Access Token or API Token from your Salesforce Connected App under Setup -> App Manager.',
+    setupSteps: [
+      'Log into Salesforce Setup and navigate to App Manager -> New Connected App.',
+      'Enable OAuth Settings with API / Web access permissions.',
+      'Deploy the Salesforce MCP bridge with your Connected App credentials.',
+      'Enter your bridge endpoint URL below to sync CRM tools.'
+    ]
+  },
+  'mcp-zapier': {
+    title: 'Zapier MCP Setup',
+    badge: '5,000+ App Actions via Zapier',
+    description: 'Execute thousands of third-party actions with Zapier AI Actions & MCP server.',
+    docsUrl: 'https://actions.zapier.com/',
+    docsLabel: 'Zapier Actions Console ↗',
+    defaultEndpoint: 'https://actions.zapier.com/mcp/sse',
+    endpointPlaceholder: 'https://actions.zapier.com/mcp/sse',
+    tokenLabel: 'Zapier API Key / Personal Access Key',
+    tokenPlaceholder: 'ak_xxxxxxxxxxxxxxxxxxxxxxxx',
+    tokenHelpText: 'Get your Zapier AI Actions API key from actions.zapier.com and configure the actions you want available to AI.',
+    setupSteps: [
+      'Visit actions.zapier.com and sign in with your Zapier account.',
+      'Create and configure enabled actions (e.g., Send Gmail, Create Linear Issue, etc.).',
+      'Copy your API Key and paste it into the token field below.',
+      'Endpoint is prefilled to https://actions.zapier.com/mcp/sse. Click Connect.'
+    ]
+  }
+};
+
 export const McpHubModal: React.FC<McpHubModalProps> = ({
   isOpen,
   onClose,
@@ -171,7 +284,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
     toggleSkill(skillId);
     const updated = getWorkspaceSkills();
     setSkills(updated);
-    syncSkillsToWorkspace(updated).catch(() => {});
+    syncSkillsToWorkspace(updated).catch(() => { });
   };
 
   const handleOpenAddSkill = () => {
@@ -203,7 +316,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
       deleteSkill(skillId);
       const updated = getWorkspaceSkills();
       setSkills(updated);
-      syncSkillsToWorkspace(updated).catch(() => {});
+      syncSkillsToWorkspace(updated).catch(() => { });
     }
   };
 
@@ -239,7 +352,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
 
     const updated = getWorkspaceSkills();
     setSkills(updated);
-    syncSkillsToWorkspace(updated).catch(() => {});
+    syncSkillsToWorkspace(updated).catch(() => { });
     setIsSkillModalOpen(false);
     setEditingSkill(null);
   };
@@ -275,6 +388,9 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   const [genericTokenInput, setGenericTokenInput] = useState('');
   const [genericAuthError, setGenericAuthError] = useState<string | null>(null);
   const [isGenericTesting, setIsGenericTesting] = useState(false);
+  const [showGenericToken, setShowGenericToken] = useState(false);
+  const [isMcpGuideExpanded, setIsMcpGuideExpanded] = useState(false);
+  const [copiedSnippet, setCopiedSnippet] = useState(false);
 
   // Routine update checking state
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
@@ -552,10 +668,14 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
     }
 
     // Prompt user for credentials / endpoint URL
+    const guide = MCP_EXTERNAL_SETUP_GUIDES[server.id];
     setSelectedExternalModalServer(server);
-    setGenericEndpointInput(server.endpoint || '');
+    setGenericEndpointInput(server.endpoint || guide?.defaultEndpoint || '');
     setGenericTokenInput(server.authHeader || '');
     setGenericAuthError(null);
+    setShowGenericToken(false);
+    setIsMcpGuideExpanded(false);
+    setCopiedSnippet(false);
   };
 
   const handleConnectGithub = async (e?: React.FormEvent) => {
@@ -1756,12 +1876,12 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       <Globe size={16} color="var(--accent-cyan)" />
                       <h4 style={{ fontSize: '0.88rem', fontWeight: 700, color: '#fff', margin: 0 }}>
-                        Connect Custom MCP Endpoint
+                        Connect Other MCP
                       </h4>
                     </div>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                    {/* <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
                       Non-technical? Just paste your MCP URL below and click Connect
-                    </span>
+                    </span> */}
                   </div>
 
                   <div>
@@ -2300,124 +2420,396 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
         </div>
       )}
 
-      {/* Generic External Server Modal */}
-      {selectedExternalModalServer && (
-        <div
-          className="modal-overlay"
-          style={{ zIndex: 1100, backgroundColor: 'rgba(0,0,0,0.78)', backdropFilter: 'blur(4px)' }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !isGenericTesting) setSelectedExternalModalServer(null);
-          }}
-        >
+      {/* Generic & Preset External Server Modal */}
+      {selectedExternalModalServer && (() => {
+        const guide = MCP_EXTERNAL_SETUP_GUIDES[selectedExternalModalServer.id];
+        const isPreset = Boolean(guide);
+
+        return (
           <div
-            className="modal-content"
-            style={{
-              maxWidth: '540px',
-              padding: '1.75rem',
-              borderRadius: 'var(--radius-lg)',
-              border: '1px solid rgba(255,255,255,0.14)',
-              boxShadow: '0 25px 60px rgba(0,0,0,0.6)'
+            className="modal-overlay"
+            style={{ zIndex: 1100, backgroundColor: 'rgba(0,0,0,0.78)', backdropFilter: 'blur(4px)' }}
+            onClick={(e) => {
+              if (e.target === e.currentTarget && !isGenericTesting) setSelectedExternalModalServer(null);
             }}
-            onClick={(e) => e.stopPropagation()}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                {renderServerIcon(selectedExternalModalServer, false)}
-                <div>
-                  <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: '#fff' }}>
-                    Connect {selectedExternalModalServer.name}
-                  </h3>
-                  <p style={{ margin: '0.15rem 0 0', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                    Provide endpoint URL or credentials to connect
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedExternalModalServer(null)}
-                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                if (!genericEndpointInput.trim()) {
-                  setGenericAuthError('Endpoint URL is required');
-                  return;
-                }
-                setIsGenericTesting(true);
-                setGenericAuthError(null);
-                const disc = await discoverRemoteMcpTools(genericEndpointInput, genericTokenInput);
-                if (disc.success && disc.tools.length > 0 && onUpdateServer) {
-                  onUpdateServer({
-                    ...selectedExternalModalServer,
-                    status: 'connected',
-                    endpoint: genericEndpointInput.trim(),
-                    authHeader: genericTokenInput.trim() || undefined,
-                    tools: disc.tools.map((t) => ({ ...t, serverId: selectedExternalModalServer.id })),
-                    lastSyncedAt: new Date().toISOString(),
-                    error: undefined
-                  });
-                  setSelectedExternalModalServer(null);
-                } else {
-                  setGenericAuthError(disc.error || 'Failed to connect and discover tools at this endpoint');
-                }
-                setIsGenericTesting(false);
+            <div
+              className="modal-content"
+              style={{
+                maxWidth: '580px',
+                padding: '1.75rem',
+                borderRadius: 'var(--radius-lg)',
+                border: '1px solid rgba(255,255,255,0.14)',
+                boxShadow: '0 25px 60px rgba(0,0,0,0.6)',
+                maxHeight: '90vh',
+                overflowY: 'auto'
               }}
+              onClick={(e) => e.stopPropagation()}
             >
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
-                  MCP Server Endpoint URL <span style={{ color: 'var(--accent-rose)' }}>*</span>
-                </label>
-                <input
-                  type="text"
-                  className="input-text"
-                  placeholder="https://mcp.your-service.com/sse or http://localhost:3000/sse"
-                  value={genericEndpointInput}
-                  onChange={(e) => {
-                    setGenericEndpointInput(e.target.value);
-                    setGenericAuthError(null);
+              {/* Header */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  {renderServerIcon(selectedExternalModalServer, false)}
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: '#fff' }}>
+                        Connect {selectedExternalModalServer.name}
+                      </h3>
+                      {isPreset && (
+                        <span
+                          style={{
+                            fontSize: '0.68rem',
+                            fontWeight: 600,
+                            padding: '0.15rem 0.5rem',
+                            borderRadius: '9999px',
+                            background: 'rgba(56, 189, 248, 0.12)',
+                            color: 'var(--accent-cyan)',
+                            border: '1px solid rgba(56, 189, 248, 0.25)'
+                          }}
+                        >
+                          MCP Bridge
+                        </span>
+                      )}
+                    </div>
+                    <p style={{ margin: '0.15rem 0 0', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                      {guide ? guide.description : 'Connect via a Model Context Protocol SSE or HTTP bridge endpoint.'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedExternalModalServer(null)}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '0.25rem' }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Service Quick Setup Banner with Direct Link */}
+              {guide && (
+                <div
+                  style={{
+                    background: 'rgba(56, 189, 248, 0.07)',
+                    border: '1px solid rgba(56, 189, 248, 0.22)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '0.85rem 1rem',
+                    marginBottom: '1.25rem'
                   }}
-                  style={{ width: '100%', fontSize: '0.82rem' }}
-                />
-              </div>
+                >
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.75rem' }}>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem' }}>
+                        <Sparkles size={14} color="var(--accent-cyan)" />
+                        <span style={{ fontWeight: 600, fontSize: '0.82rem', color: 'var(--accent-cyan)' }}>
+                          {guide.title}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>
+                        Need credentials or docs for {selectedExternalModalServer.name}? Open the setup guide or developer console.
+                      </div>
+                    </div>
+                    <a
+                      href={guide.docsUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn btn-secondary"
+                      style={{
+                        fontSize: '0.75rem',
+                        whiteSpace: 'nowrap',
+                        gap: '0.35rem',
+                        flexShrink: 0,
+                        color: 'var(--accent-cyan)',
+                        borderColor: 'rgba(56, 189, 248, 0.35)',
+                        padding: '0.35rem 0.65rem'
+                      }}
+                    >
+                      <ExternalLink size={13} />
+                      <span>{guide.docsLabel}</span>
+                    </a>
+                  </div>
 
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
-                  API Key / Bot Token <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(optional)</span>
-                </label>
-                <input
-                  type="password"
-                  className="input-text"
-                  placeholder="Leave empty if not required"
-                  value={genericTokenInput}
-                  onChange={(e) => setGenericTokenInput(e.target.value)}
-                  style={{ width: '100%', fontSize: '0.82rem' }}
-                />
-              </div>
-
-              {genericAuthError && (
-                <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 'var(--radius-sm)', padding: '0.6rem 0.8rem', color: '#f87171', fontSize: '0.76rem', display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-                  <AlertTriangle size={15} style={{ flexShrink: 0 }} />
-                  <span>{genericAuthError}</span>
+                  {guide.quickRunCommand && (
+                    <div
+                      style={{
+                        marginTop: '0.65rem',
+                        padding: '0.45rem 0.6rem',
+                        background: 'rgba(0, 0, 0, 0.35)',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid rgba(255, 255, 255, 0.08)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.5rem'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', overflow: 'hidden' }}>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Run Local:</span>
+                        <code style={{ fontSize: '0.72rem', color: 'var(--accent-amber)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
+                          {guide.quickRunCommand}
+                        </code>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(guide.quickRunCommand || '');
+                          setCopiedSnippet(true);
+                          setTimeout(() => setCopiedSnippet(false), 2000);
+                        }}
+                        className="btn btn-secondary"
+                        style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem', gap: '0.25rem', height: 'auto', flexShrink: 0 }}
+                        title="Copy command"
+                      >
+                        {copiedSnippet ? <Check size={11} color="var(--accent-emerald)" /> : <Copy size={11} />}
+                        <span>{copiedSnippet ? 'Copied' : 'Copy'}</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem', marginTop: '1.25rem' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setSelectedExternalModalServer(null)}>
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary" disabled={!genericEndpointInput.trim() || isGenericTesting}>
-                  {isGenericTesting ? 'Connecting…' : 'Connect & Discover'}
-                </button>
-              </div>
-            </form>
+              {/* Form */}
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!genericEndpointInput.trim()) {
+                    setGenericAuthError('Endpoint URL is required');
+                    return;
+                  }
+                  setIsGenericTesting(true);
+                  setGenericAuthError(null);
+                  try {
+                    const disc = await discoverRemoteMcpTools(genericEndpointInput, genericTokenInput);
+                    if (disc.success && onUpdateServer) {
+                      const toolsToSet = disc.tools.length > 0
+                        ? disc.tools.map((t) => ({ ...t, serverId: selectedExternalModalServer.id }))
+                        : selectedExternalModalServer.tools;
+
+                      onUpdateServer({
+                        ...selectedExternalModalServer,
+                        status: 'connected',
+                        endpoint: genericEndpointInput.trim(),
+                        authHeader: genericTokenInput.trim() || undefined,
+                        tools: toolsToSet,
+                        lastSyncedAt: new Date().toISOString(),
+                        error: undefined
+                      });
+                      setSelectedExternalModalServer(null);
+                    } else {
+                      setGenericAuthError(disc.error || 'Failed to connect and discover tools at this endpoint. Ensure your MCP bridge server is running.');
+                    }
+                  } catch (err: any) {
+                    setGenericAuthError(err?.message || 'Network error reaching MCP endpoint.');
+                  } finally {
+                    setIsGenericTesting(false);
+                  }
+                }}
+              >
+                {/* Endpoint Field */}
+                <div style={{ marginBottom: '1.1rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                    <label style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                      MCP Server Endpoint URL <span style={{ color: 'var(--accent-rose)' }}>*</span>
+                    </label>
+                    {guide?.defaultEndpoint && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setGenericEndpointInput(guide.defaultEndpoint || '');
+                          setGenericAuthError(null);
+                        }}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: 'var(--accent-cyan)',
+                          fontSize: '0.72rem',
+                          cursor: 'pointer',
+                          padding: 0,
+                          textDecoration: 'underline'
+                        }}
+                      >
+                        Fill Recommended Default ({guide.defaultEndpoint})
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    className="input-text"
+                    placeholder={guide?.endpointPlaceholder || 'https://mcp.your-service.com/sse or http://localhost:3000/sse'}
+                    value={genericEndpointInput}
+                    onChange={(e) => {
+                      setGenericEndpointInput(e.target.value);
+                      setGenericAuthError(null);
+                    }}
+                    style={{ width: '100%', fontSize: '0.82rem', fontFamily: 'var(--font-mono)' }}
+                  />
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.35rem' }}>
+                    The Server-Sent Events (SSE) or HTTP stream exposed by your local or cloud MCP server.
+                  </div>
+                </div>
+
+                {/* API Key / Bot Token Field */}
+                <div style={{ marginBottom: '1.1rem' }}>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                    {guide ? guide.tokenLabel : 'API Key / Bearer Token'}{' '}
+                    <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(optional)</span>
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      type={showGenericToken ? 'text' : 'password'}
+                      className="input-text"
+                      placeholder={guide?.tokenPlaceholder || 'Leave empty if not required'}
+                      value={genericTokenInput}
+                      onChange={(e) => setGenericTokenInput(e.target.value)}
+                      style={{ width: '100%', fontSize: '0.82rem', fontFamily: 'var(--font-mono)', paddingRight: '2.5rem' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowGenericToken(!showGenericToken)}
+                      style={{
+                        position: 'absolute',
+                        right: '0.65rem',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--text-muted)',
+                        cursor: 'pointer',
+                        padding: 0
+                      }}
+                    >
+                      {showGenericToken ? <EyeOff size={15} /> : <Eye size={15} />}
+                    </button>
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.35rem' }}>
+                    {guide ? guide.tokenHelpText : 'Passed securely in the Authorization header. Kept local to your browser/workspace.'}
+                  </div>
+                </div>
+
+                {/* Educational Accordion: "New to MCP? How does this work?" */}
+                <div
+                  style={{
+                    border: '1px solid rgba(255, 255, 255, 0.08)',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'rgba(255, 255, 255, 0.02)',
+                    marginBottom: '1.25rem',
+                    overflow: 'hidden'
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setIsMcpGuideExpanded(!isMcpGuideExpanded)}
+                    style={{
+                      width: '100%',
+                      background: 'none',
+                      border: 'none',
+                      padding: '0.65rem 0.85rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      color: 'var(--text-muted)',
+                      cursor: 'pointer',
+                      fontSize: '0.76rem',
+                      fontWeight: 600
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                      <HelpCircle size={14} color="var(--accent-cyan)" />
+                      <span>New to MCP? How to connect {selectedExternalModalServer.name}</span>
+                    </div>
+                    {isMcpGuideExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  </button>
+
+                  {isMcpGuideExpanded && (
+                    <div
+                      style={{
+                        padding: '0.75rem 0.85rem 0.95rem',
+                        borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+                        background: 'rgba(0, 0, 0, 0.2)',
+                        fontSize: '0.75rem',
+                        lineHeight: 1.5,
+                        color: 'var(--text-muted)'
+                      }}
+                    >
+                      <div style={{ marginBottom: '0.6rem' }}>
+                        <strong style={{ color: '#fff' }}>What is an MCP Server?</strong>
+                        <p style={{ margin: '0.2rem 0 0.5rem', color: 'var(--text-dim)' }}>
+                          MCP (Model Context Protocol) is an open standard that allows AI assistants like Ergo to safely talk to external tools (Google Calendar, Slack, Notion, databases) on your behalf.
+                        </p>
+                      </div>
+
+                      {guide?.setupSteps && (
+                        <div style={{ marginBottom: '0.6rem' }}>
+                          <strong style={{ color: '#fff' }}>Step-by-Step Instructions:</strong>
+                          <ol style={{ margin: '0.3rem 0 0.5rem', paddingLeft: '1.2rem', color: 'var(--text-muted)' }}>
+                            {guide.setupSteps.map((step, idx) => (
+                              <li key={idx} style={{ marginBottom: '0.25rem' }}>{step}</li>
+                            ))}
+                          </ol>
+                        </div>
+                      )}
+
+                      <div style={{ background: 'rgba(56, 189, 248, 0.05)', borderRadius: 'var(--radius-sm)', padding: '0.5rem 0.7rem', border: '1px solid rgba(56, 189, 248, 0.15)' }}>
+                        <span style={{ color: 'var(--accent-cyan)', fontWeight: 600 }}>💡 Tip for Non-Tech Users: </span>
+                        If you are using tools like Zapier or a hosted bridge, you can simply paste the HTTPS webhook URL provided in their developer dashboard. No terminal commands needed.
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {genericAuthError && (
+                  <div
+                    style={{
+                      background: 'rgba(239, 68, 68, 0.1)',
+                      border: '1px solid rgba(239, 68, 68, 0.3)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '0.6rem 0.8rem',
+                      color: '#f87171',
+                      fontSize: '0.76rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      marginBottom: '1rem'
+                    }}
+                  >
+                    <AlertTriangle size={15} style={{ flexShrink: 0 }} />
+                    <span>{genericAuthError}</span>
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem', marginTop: '1.25rem' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setSelectedExternalModalServer(null)}
+                    disabled={isGenericTesting}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    disabled={!genericEndpointInput.trim() || isGenericTesting}
+                    style={{ gap: '0.4rem', minWidth: '150px', justifyContent: 'center' }}
+                  >
+                    {isGenericTesting ? (
+                      <>
+                        <RefreshCw size={13} className="animate-spin" />
+                        <span>Connecting…</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check size={14} />
+                        <span>Connect & Discover</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── CREATE / EDIT SKILL MODAL ── */}
       {isSkillModalOpen && (

@@ -30,7 +30,6 @@ import {
   Laptop,
   Monitor,
   Check,
-  Copy,
   MoreHorizontal
 } from 'lucide-react';
 
@@ -172,10 +171,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
   // Step 3: Local Device Bridge State
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>(() => bridgeClient.getStatus());
-  const [bridgeUrlInput, setBridgeUrlInput] = useState<string>(() => bridgeClient.getBridgeUrl() || DEFAULT_BRIDGE_URL);
+  const [bridgeUrlInput] = useState<string>(() => bridgeClient.getBridgeUrl() || DEFAULT_BRIDGE_URL);
   const [isTestingBridge, setIsTestingBridge] = useState(false);
   const [bridgeConnectError, setBridgeConnectError] = useState<string | null>(null);
-  const [copiedBridgeCmd, setCopiedBridgeCmd] = useState(false);
 
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentMeta = PROVIDER_METAS[selectedProvider];
@@ -556,7 +554,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     className="brand-title"
                     style={{
                       fontSize: '1.45rem',
-                      fontWeight: 700,
+                      fontWeight: 500,
                       letterSpacing: '-0.02em',
                       color: 'var(--text-bright)',
                       textTransform: 'uppercase'
@@ -576,7 +574,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                       letterSpacing: '0.04em'
                     }}
                   >
-                    v1.0
+                    ALPHA
                   </span>
                 </div>
                 <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '2px', fontWeight: 500 }}>
@@ -1640,7 +1638,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               </div>
 
               {/* Connection Address input */}
-              <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              {/* <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                 <span style={{ fontSize: '0.74rem', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>Connection Address:</span>
                 <input
                   type="text"
@@ -1658,7 +1656,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     color: 'var(--text-bright)'
                   }}
                 />
-              </div>
+              </div> */}
 
               {/* Error Alert if any */}
               {bridgeConnectError && (
@@ -1721,7 +1719,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 </div>
 
                 {/* Command snippet */}
-                <div style={{ marginTop: '0.85rem', paddingTop: '0.75rem', borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                {/* <div style={{ marginTop: '0.85rem', paddingTop: '0.75rem', borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
                   <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginBottom: '0.35rem' }}>
                     Need to launch the local helper? Run this in your terminal:
                   </div>
@@ -1763,7 +1761,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                       <span>{copiedBridgeCmd ? 'Copied' : 'Copy'}</span>
                     </button>
                   </div>
-                </div>
+                </div> */}
               </div>
             </div>
           )}

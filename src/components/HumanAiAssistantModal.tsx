@@ -240,7 +240,7 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
       const nextHistory = [...filtered, trimmed];
       try {
         sessionStorage.setItem('ergo_assistant_history', JSON.stringify(nextHistory));
-      } catch {}
+      } catch { }
       return nextHistory;
     });
     setHistoryIndex(-1);
