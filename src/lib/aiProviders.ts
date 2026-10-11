@@ -1,5 +1,5 @@
 import { type AIProviderId, type AgentRole, type ProviderCredentials, type CliDetectedAgent, type CliExecutionResult } from '../types';
-import { bridgeClient } from './bridgeClient';
+import { bridgeClient, isNetworkError } from './bridgeClient';
 
 export interface ProviderModel {
   id: string;
@@ -409,26 +409,15 @@ export interface CliAuthStatus {
 }
 
 function formatFetchError(err: any): string {
-  const isHosted = bridgeClient.isHostedWeb();
-  const isSecure = typeof window !== 'undefined' && window.location.protocol === 'https:';
-  const bridgeUrl = bridgeClient.getBridgeUrl();
-
-  if (err?.name === 'TypeError' && err?.message?.toLowerCase().includes('failed to fetch')) {
-    if (isHosted && isSecure && bridgeUrl.startsWith('http://')) {
-      return `Cannot reach your local device bridge from this hosted web address (HTTPS). Browser security blocks plain HTTP calls to localhost. Run Ergo locally at http://localhost:5173, or connect via API Key.`;
-    }
-    if (isHosted) {
-      return `Unable to connect to local device bridge at ${bridgeUrl}. Ensure Ergo is running locally on your device.`;
-    }
+  if (isNetworkError(err)) {
+    return bridgeClient.describeUnreachable();
   }
   return err?.message || 'Failed to connect to local device bridge';
 }
 
 export async function fetchCliAuthStatus(cli = 'claude'): Promise<CliAuthStatus> {
   try {
-    const res = await fetch(bridgeClient.getApiUrl(`/api/cli/auth-status?cli=${encodeURIComponent(cli)}`), {
-      headers: { 'Access-Control-Request-Private-Network': 'true' }
-    });
+    const res = await fetch(bridgeClient.getApiUrl(`/api/cli/auth-status?cli=${encodeURIComponent(cli)}`));
     if (!res.ok) {
       return { cli, isInstalled: false, isAuthenticated: false, userEmail: null, message: `HTTP ${res.status}` };
     }
@@ -442,10 +431,7 @@ export async function installCli(cli = 'claude'): Promise<{ success: boolean; ou
   try {
     const res = await fetch(bridgeClient.getApiUrl('/api/cli/install'), {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Request-Private-Network': 'true'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cli })
     });
     const data = await res.json();
@@ -462,10 +448,7 @@ export async function resetCliAuth(cli = 'claude'): Promise<{ success: boolean; 
   try {
     const res = await fetch(bridgeClient.getApiUrl('/api/cli/reset-auth'), {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Request-Private-Network': 'true'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cli })
     });
     const data = await res.json();
@@ -479,10 +462,7 @@ export async function triggerCliLogin(cli = 'claude'): Promise<{ success: boolea
   try {
     const res = await fetch(bridgeClient.getApiUrl('/api/cli/login'), {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Request-Private-Network': 'true'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cli })
     });
     const data = await res.json();

@@ -1026,7 +1026,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         <div style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: 1.45 }}>
                           {loginError || installError}
                         </div>
-                        {((loginError || installError || '').includes('Browser security') || (loginError || installError || '').includes('hosted web address') || (loginError || installError || '').includes('Cannot reach your local device')) && (
+                        {((loginError || installError || '').includes('Browser security') || (loginError || installError || '').includes('hosted web address') || (loginError || installError || '').includes('Cannot reach your local device') || (loginError || installError || '').includes('Unable to reach your local Ergo bridge')) && (
                           <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             <button
                               type="button"

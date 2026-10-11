@@ -31,6 +31,16 @@ const STORAGE_KEY_BRIDGE_URL = 'ergo_local_bridge_url';
 const STORAGE_KEY_AUTO_CONNECT = 'ergo_bridge_auto_connect';
 export const DEFAULT_BRIDGE_URL = 'http://localhost:5173';
 
+/**
+ * True when fetch() failed before getting any HTTP response (bridge offline, CORS rejection,
+ * mixed-content block). Each browser words this differently.
+ */
+export function isNetworkError(err: any): boolean {
+  if (err?.name !== 'TypeError') return false;
+  const msg = String(err?.message || '').toLowerCase();
+  return msg.includes('failed to fetch') || msg.includes('networkerror') || msg.includes('load failed') || msg.includes('network request failed');
+}
+
 class BridgeClient {
   private bridgeUrl: string = DEFAULT_BRIDGE_URL;
   private isConnected: boolean = false;
@@ -125,6 +135,17 @@ class BridgeClient {
   }
 
   /**
+   * Human-readable explanation for a request that never reached the bridge.
+   */
+  public describeUnreachable(): string {
+    if (!this.isHostedWeb()) {
+      return 'Unable to reach the local Ergo server. Make sure `npm run dev` is still running.';
+    }
+    return `Unable to reach your local Ergo bridge at ${this.bridgeUrl}. Make sure Ergo is running on this device (npm run dev). ` +
+      `The bridge only accepts this site if ${window.location.origin} is in its allowed origins (HOSTED_APP_ORIGINS in vite.config.ts) — it refuses every other website.`;
+  }
+
+  /**
    * Get current connection status snapshot.
    */
   public getStatus(): BridgeStatus {
@@ -201,10 +222,7 @@ class BridgeClient {
 
         const res = await fetch(endpoint, {
           method: 'GET',
-          signal: controller.signal,
-          headers: {
-            'Access-Control-Request-Private-Network': 'true'
-          }
+          signal: controller.signal
         });
         clearTimeout(timeoutId);
 
@@ -232,7 +250,9 @@ class BridgeClient {
         }
         lastErrorMessage = err.name === 'AbortError'
           ? 'Connection timed out. Make sure Ergo is running locally on your device.'
-          : (err.message || 'Unable to reach local bridge');
+          : isNetworkError(err)
+            ? this.describeUnreachable()
+            : (err.message || 'Unable to reach local bridge');
       }
     }
 
@@ -241,7 +261,9 @@ class BridgeClient {
     this.isMixedContentBlocked = mixedContentSuspected;
 
     if (mixedContentSuspected) {
-      this.lastError = 'Browser security (Mixed Content / Private Network Access) blocked calling your local device from this hosted HTTPS website. Open Ergo locally at http://localhost:5173 or use an API Key.';
+      // Chrome, Edge and Firefox allow HTTPS pages to reach http://localhost (Chrome asks for
+      // local network permission first); Safari blocks it outright as mixed content.
+      this.lastError = `${this.describeUnreachable()} If you're using Safari, it blocks HTTPS sites from reaching http://localhost. Use Chrome, Edge or Firefox, or open Ergo locally at http://localhost:5173.`;
     } else {
       this.lastError = lastErrorMessage || 'Unable to reach local bridge';
     }

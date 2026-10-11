@@ -66,6 +66,19 @@ Ergo keeps the human in the loop:
 
 3. Open your browser and navigate to `http://localhost:5173`.
 
+### Using the hosted web app with your local device
+
+The local server doubles as the device bridge: it lets AI agents run CLIs and read/write files on your machine. It only accepts requests from this machine (loopback), and only from Ergo's own page or from allowed origins. The hosted app at `https://ergo.appwrite.network` is allowed by default — no setup needed.
+
+To change the default (e.g. after moving to a new domain), edit `HOSTED_APP_ORIGINS` at the top of `vite.config.ts`. To allow additional origins without editing code, create `.env.local` in the project root:
+
+```bash
+# Exact https:// origins only — no wildcards, no trailing paths. Comma-separate multiple entries.
+ERGO_ALLOWED_ORIGINS=https://another-ergo-site.example.com
+```
+
+Restart `npm run dev` after changing it. Requests from any other website are refused (and logged in the terminal).
+
 ---
 
 ## 📄 License

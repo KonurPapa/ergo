@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, loadEnv, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
@@ -6,6 +6,12 @@ import path from 'node:path';
 import os from 'node:os';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+/**
+ * Hosted Ergo web app origin(s) allowed to use this machine's local bridge out of the box.
+ * Change this when the app moves to a new domain (exact https:// origins only — no paths,
+ * trailing slashes or wildcards). Users can allow extra origins via ERGO_ALLOWED_ORIGINS.
+ */
+const HOSTED_APP_ORIGINS = ['https://ergo.appwrite.network'];
 
 let activeStoragePath = '~/.ergo';
 
@@ -209,7 +215,8 @@ async function resolveInsideAllowedRoots(rawPath: string, storageDir: string): P
     ? path.resolve(process.cwd(), targetPath)
     : path.resolve(storageDir, targetPath || '.');
   const allowedRoots = await loadAllowedRoots(storageDir);
-  const isAgentCustomization = fullPath.startsWith(path.resolve(process.cwd(), '.agents'));
+  const agentsDir = path.resolve(process.cwd(), '.agents');
+  const isAgentCustomization = fullPath === agentsDir || fullPath.startsWith(agentsDir + path.sep);
   const isAllowed = isAgentCustomization || allowedRoots.some((root) => fullPath === root || fullPath.startsWith(root + path.sep));
   if (!isAllowed) {
     return {
@@ -662,10 +669,137 @@ async function runCliProcess(options: {
 function sendJson(res: ServerResponse, statusCode: number, data: any) {
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
   res.end(JSON.stringify(data));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bridge Access Guard
+// The /api/* bridge can spawn shells and read/write files, so every HTTP request
+// and WebSocket upgrade must pass this guard before reaching a route handler:
+//   1. The TCP peer must be loopback — even if Vite is started with --host,
+//      nothing on the LAN can reach the bridge.
+//   2. The Host header must be a loopback name — blocks DNS-rebinding attacks.
+//   3. A browser caller must be same-origin or an exact entry in
+//      ERGO_ALLOWED_ORIGINS (the hosted Ergo app). No wildcards. Callers without
+//      an Origin header are rejected when Fetch Metadata marks them cross-site
+//      (e.g. <img src>, <form>, or link navigations from another site).
+// ─────────────────────────────────────────────────────────────────────────────
+
+function isLoopbackHostname(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return h === 'localhost' || h === '::1' || /^127(\.\d{1,3}){3}$/.test(h);
+}
+
+function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  const a = address.replace(/^::ffff:/i, '');
+  return a === '::1' || /^127(\.\d{1,3}){3}$/.test(a);
+}
+
+/** HOSTED_APP_ORIGINS plus any extra exact origins from ERGO_ALLOWED_ORIGINS. */
+function loadAllowedBridgeOrigins(): Set<string> {
+  const env = loadEnv(process.env.NODE_ENV === 'production' ? 'production' : 'development', process.cwd(), 'ERGO_');
+  const extra = (process.env.ERGO_ALLOWED_ORIGINS || env.ERGO_ALLOWED_ORIGINS || '').split(',');
+  const origins = new Set<string>();
+  for (const entry of [...HOSTED_APP_ORIGINS, ...extra].map((s) => s.trim()).filter(Boolean)) {
+    try {
+      const parsed = new URL(entry);
+      // Plain-HTTP origins can be tampered with in transit, which would hand a network attacker a shell.
+      if (parsed.protocol !== 'https:' && !isLoopbackHostname(parsed.hostname)) {
+        console.warn(`[Ergo Bridge] Ignoring ERGO_ALLOWED_ORIGINS entry "${entry}": only https:// origins are allowed.`);
+        continue;
+      }
+      if (parsed.hostname.includes('*')) {
+        console.warn(`[Ergo Bridge] Ignoring ERGO_ALLOWED_ORIGINS entry "${entry}": wildcards are not allowed.`);
+        continue;
+      }
+      origins.add(parsed.origin);
+    } catch {
+      console.warn(`[Ergo Bridge] Ignoring invalid ERGO_ALLOWED_ORIGINS entry "${entry}".`);
+    }
+  }
+  return origins;
+}
+
+const allowedBridgeOrigins = loadAllowedBridgeOrigins();
+const rejectedOriginsLogged = new Set<string>();
+
+type BridgeAccess = { ok: true; corsOrigin: string | null } | { ok: false; reason: string };
+
+function checkBridgeAccess(req: IncomingMessage): BridgeAccess {
+  if (!isLoopbackAddress(req.socket.remoteAddress)) {
+    return { ok: false, reason: `non-loopback client ${req.socket.remoteAddress}` };
+  }
+
+  const hostHeader = req.headers.host || '';
+  let hostname = '';
+  try {
+    hostname = new URL(`http://${hostHeader}`).hostname;
+  } catch {}
+  if (!hostname || !isLoopbackHostname(hostname)) {
+    return { ok: false, reason: `non-loopback Host header "${hostHeader}"` };
+  }
+
+  const origin = req.headers.origin;
+  if (origin) {
+    if (origin === `http://${hostHeader}` || origin === `https://${hostHeader}`) {
+      return { ok: true, corsOrigin: null };
+    }
+    if (allowedBridgeOrigins.has(origin)) {
+      return { ok: true, corsOrigin: origin };
+    }
+    if (origin !== 'null' && !rejectedOriginsLogged.has(origin)) {
+      rejectedOriginsLogged.add(origin);
+      console.warn(
+        `[Ergo Bridge] Blocked request from origin ${origin}. If this is your hosted Ergo app, ` +
+        `add it to HOSTED_APP_ORIGINS in vite.config.ts (or ERGO_ALLOWED_ORIGINS in .env.local) and restart.`
+      );
+    }
+    return { ok: false, reason: `origin ${origin} is not allowed` };
+  }
+
+  // Pasted images are embedded in notes as plain <img src="…/api/media/…">, which never send an
+  // Origin header. That route is read-only, image-only and confined to the storage dir.
+  const isMediaGet = req.method === 'GET' && Boolean(req.url?.startsWith('/api/media/'));
+  const fetchSite = req.headers['sec-fetch-site'];
+  if (!isMediaGet && fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') {
+    return { ok: false, reason: `cross-site request without Origin (sec-fetch-site: ${fetchSite})` };
+  }
+  return { ok: true, corsOrigin: null };
+}
+
+/**
+ * Applies the bridge guard to an /api/* HTTP request and sets CORS headers for allowed
+ * cross-origin callers. Returns false after responding when the request is rejected
+ * or was a completed CORS preflight.
+ */
+function guardBridgeRequest(req: IncomingMessage, res: ServerResponse): boolean {
+  res.setHeader('Vary', 'Origin');
+  const access = checkBridgeAccess(req);
+  if (!access.ok) {
+    sendJson(res, 403, { error: `Ergo bridge refused this request: ${access.reason}.` });
+    return false;
+  }
+  if (access.corsOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', access.corsOrigin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    res.setHeader('Access-Control-Max-Age', '600');
+    if (req.headers['access-control-request-private-network']) {
+      res.setHeader('Access-Control-Allow-Private-Network', 'true');
+    }
+  }
+  if (req.method === 'OPTIONS') {
+    res.statusCode = 204;
+    res.end();
+    return false;
+  }
+  return true;
+}
+
+/** True for bare executable names like "claude" or "agy" — safe to interpolate into a shell command. */
+function isSafeCommandName(cmd: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(cmd);
 }
 
 // Set of active SSE clients listening for file changes
@@ -765,20 +899,9 @@ function ergoFileSystemPlugin(): Plugin {
     setupProjectWatcher(storageDir);
 
     server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: Function) => {
-      // Set CORS headers for all requests (supporting hosted web app connecting to local daemon)
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-      if (req.headers['access-control-request-private-network']) {
-        res.setHeader('Access-Control-Allow-Private-Network', 'true');
-      }
-
-      if (req.method === 'OPTIONS') {
-        res.statusCode = 204;
-        return res.end();
-      }
-
       const url = req.url?.split('?')[0];
+      if (!url?.startsWith('/api/')) return next();
+      if (!guardBridgeRequest(req, res)) return;
       const storageDir = getActiveStorageDir();
 
       // ─────────────────────────────────────────────────────────────
@@ -846,11 +969,9 @@ function ergoFileSystemPlugin(): Plugin {
           const writtenFiles: string[] = [];
           const now = Date.now();
           for (const item of files) {
-            const fullPath = path.isAbsolute(item.filePath)
-              ? path.resolve(item.filePath)
-              : item.filePath.startsWith('.agents')
-              ? path.resolve(process.cwd(), item.filePath)
-              : path.resolve(storageDir, item.filePath);
+            const check = await resolveInsideAllowedRoots(item.filePath, storageDir);
+            if (!check.ok) return sendJson(res, 403, { error: check.error });
+            const fullPath = check.fullPath;
             await fs.mkdir(path.dirname(fullPath), { recursive: true });
             await fs.writeFile(fullPath, item.content, 'utf-8');
             writtenFiles.push(item.filePath);
@@ -883,8 +1004,10 @@ function ergoFileSystemPlugin(): Plugin {
             ? base64Content.split(',')[1]
             : base64Content;
 
+          const check = await resolveInsideAllowedRoots(filePath, storageDir);
+          if (!check.ok) return sendJson(res, 403, { error: check.error });
           const buffer = Buffer.from(rawBase64, 'base64');
-          const fullPath = path.resolve(storageDir, filePath);
+          const fullPath = check.fullPath;
           await fs.mkdir(path.dirname(fullPath), { recursive: true });
           await fs.writeFile(fullPath, buffer);
 
@@ -910,9 +1033,13 @@ function ergoFileSystemPlugin(): Plugin {
           const results: Record<string, string | null> = {};
 
           for (const fp of filePaths) {
-            const fullPath = path.resolve(storageDir, fp);
+            const check = await resolveInsideAllowedRoots(fp, storageDir);
+            if (!check.ok) {
+              results[fp] = null;
+              continue;
+            }
             try {
-              const content = await fs.readFile(fullPath, 'utf-8');
+              const content = await fs.readFile(check.fullPath, 'utf-8');
               results[fp] = content;
             } catch {
               results[fp] = null;
@@ -939,7 +1066,9 @@ function ergoFileSystemPlugin(): Plugin {
           const now = Date.now();
           for (const fp of filePaths) {
             if (!fp) continue;
-            const fullPath = path.resolve(storageDir, fp);
+            const check = await resolveInsideAllowedRoots(fp, storageDir);
+            if (!check.ok) return sendJson(res, 403, { error: check.error });
+            const fullPath = check.fullPath;
             try {
               await fs.unlink(fullPath);
               deletedFiles.push(fp);
@@ -972,8 +1101,12 @@ function ergoFileSystemPlugin(): Plugin {
             return sendJson(res, 400, { error: 'oldPath and newPath are required' });
           }
 
-          const oldFullPath = path.resolve(storageDir, oldPath);
-          const newFullPath = path.resolve(storageDir, newPath);
+          const oldCheck = await resolveInsideAllowedRoots(oldPath, storageDir);
+          if (!oldCheck.ok) return sendJson(res, 403, { error: oldCheck.error });
+          const newCheck = await resolveInsideAllowedRoots(newPath, storageDir);
+          if (!newCheck.ok) return sendJson(res, 403, { error: newCheck.error });
+          const oldFullPath = oldCheck.fullPath;
+          const newFullPath = newCheck.fullPath;
           const now = Date.now();
 
           await fs.mkdir(path.dirname(newFullPath), { recursive: true });
@@ -1382,8 +1515,18 @@ function ergoFileSystemPlugin(): Plugin {
             return sendJson(res, 404, { error: `File not found: ${filePath}`, resolvedPath: target });
           }
 
-          const { exec } = await import('child_process');
-          const targetWithLine = line ? `${target}:${line}${column ? `:${column}` : ''}` : target;
+          // Launch without a shell so file names can never be interpreted as commands.
+          const { spawn, spawnSync } = await import('child_process');
+          const launch = (cmd: string, args: string[]) => {
+            const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+            child.on('error', (launchErr) => console.warn(`[Ergo File Open] Could not launch ${cmd}:`, launchErr));
+            child.unref();
+          };
+          const isOnPath = (cmd: string) =>
+            spawnSync(process.platform === 'win32' ? 'where' : 'which', [cmd], { stdio: 'ignore' }).status === 0;
+          const lineNum = Number.isInteger(Number(line)) && Number(line) > 0 ? Number(line) : null;
+          const colNum = Number.isInteger(Number(column)) && Number(column) > 0 ? Number(column) : null;
+          const targetWithLine = lineNum ? `${target}:${lineNum}${colNum ? `:${colNum}` : ''}` : target;
           let opened = false;
           let methodUsed = '';
 
@@ -1391,25 +1534,20 @@ function ergoFileSystemPlugin(): Plugin {
           const ideCommands = ['code', 'cursor', 'webstorm', 'subl', 'gedit', 'kate', 'notepad'];
 
           if (openInIde || isCodeFile) {
-            for (const cmd of ideCommands) {
-              try {
-                exec(`${cmd} "${targetWithLine}"`, () => {});
-                opened = true;
-                methodUsed = cmd;
-                break;
-              } catch {}
+            const ide = ideCommands.find(isOnPath);
+            if (ide) {
+              const supportsGoto = ide === 'code' || ide === 'cursor';
+              launch(ide, supportsGoto && lineNum ? ['-g', targetWithLine] : [target]);
+              opened = true;
+              methodUsed = ide;
             }
           }
 
           if (!opened) {
-            const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start ""' : 'xdg-open';
-            try {
-              exec(`${opener} "${target}"`, () => {});
-              opened = true;
-              methodUsed = opener;
-            } catch (openErr: any) {
-              console.warn('[Ergo File Open] Could not launch system opener:', openErr);
-            }
+            const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer.exe' : 'xdg-open';
+            launch(opener, [target]);
+            opened = true;
+            methodUsed = opener;
           }
 
           return sendJson(res, 200, {
@@ -2789,6 +2927,9 @@ function ergoFileSystemPlugin(): Plugin {
           }
 
           let customResult = null;
+          if (customCmd && !isSafeCommandName(customCmd)) {
+            return sendJson(res, 400, { error: 'Invalid custom command name' });
+          }
           if (customCmd) {
             const whichRes = await runShellCommand(`which ${customCmd}`, storageDir, 3000);
             const isInstalled = whichRes.exitCode === 0 && Boolean(whichRes.stdout.trim());
@@ -2872,6 +3013,9 @@ function ergoFileSystemPlugin(): Plugin {
         try {
           const fullUrl = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
           let cli = fullUrl.searchParams.get('cli')?.trim() || 'claude';
+          if (!isSafeCommandName(cli)) {
+            return sendJson(res, 400, { error: 'Invalid CLI name' });
+          }
           let resolvedCmd = (cli === 'antigravity' || cli === 'gemini') ? 'agy' : cli;
 
           // 1. Check if CLI binary is in PATH (with fallback for agy in ~/.local/bin)
@@ -3079,6 +3223,9 @@ function ergoFileSystemPlugin(): Plugin {
         try {
           const body = await parseJsonBody(req);
           let { cli = 'claude' } = body;
+          if (typeof cli !== 'string' || !isSafeCommandName(cli)) {
+            return sendJson(res, 400, { success: false, authUrl: null, output: '', error: 'Invalid CLI name' });
+          }
           let resolvedCmd = (cli === 'antigravity' || cli === 'gemini') ? 'agy' : cli;
           if (cli === 'antigravity' || cli === 'agy' || cli === 'gemini') {
             const flag = path.join(os.homedir(), '.gemini', '.ergo_disconnected_agy');
@@ -3293,7 +3440,8 @@ function ergoFileSystemPlugin(): Plugin {
             return sendJson(res, 400, { error: 'folderPath is required' });
           }
           const fullFolderPath = path.resolve(storageDir, folderPath);
-          if (!fullFolderPath.startsWith(path.resolve(storageDir))) {
+          const storageRoot = path.resolve(storageDir);
+          if (fullFolderPath !== storageRoot && !fullFolderPath.startsWith(storageRoot + path.sep)) {
             return sendJson(res, 403, { error: 'Forbidden' });
           }
           let files: string[] = [];
@@ -3324,7 +3472,7 @@ function ergoFileSystemPlugin(): Plugin {
           }
           const fullPath = path.resolve(storageDir, relativePath);
           // Only serve from within storageDir
-          if (!fullPath.startsWith(path.resolve(storageDir))) {
+          if (!fullPath.startsWith(path.resolve(storageDir) + path.sep)) {
             res.statusCode = 403;
             return res.end('Forbidden');
           }
@@ -3340,11 +3488,18 @@ function ergoFileSystemPlugin(): Plugin {
             '.ico': 'image/x-icon',
             '.avif': 'image/avif',
           };
-          const contentType = mimeTypes[ext] || 'application/octet-stream';
+          const contentType = mimeTypes[ext];
+          if (!contentType) {
+            res.statusCode = 404;
+            return res.end('Not found');
+          }
           const fileBuffer = await fs.readFile(fullPath);
           res.statusCode = 200;
           res.setHeader('Content-Type', contentType);
-          res.setHeader('Cache-Control', 'public, max-age=3600');
+          res.setHeader('Cache-Control', 'private, max-age=3600');
+          // An SVG opened directly would otherwise run scripts with the bridge's own origin.
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
           return res.end(fileBuffer);
         } catch {
           res.statusCode = 404;
@@ -3401,6 +3556,7 @@ function ergoPtyPlugin(): Plugin {
       // REST middleware for querying active background sessions and killing them
       server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
         const url = req.url?.split('?')[0];
+        if (url?.startsWith('/api/pty/') && !guardBridgeRequest(req, res)) return;
         if (url === '/api/pty/sessions' && req.method === 'GET') {
           const sessions = Array.from(activePtySessions.values()).map((s) => ({
             id: s.id,
@@ -3484,6 +3640,15 @@ function ergoPtyPlugin(): Plugin {
 
         server.httpServer!.on('upgrade', (req: IncomingMessage, socket: any, head: any) => {
           if (req.url === '/api/pty') {
+            // WebSockets are exempt from CORS, so the guard is the only thing stopping
+            // an arbitrary web page from spawning a shell here.
+            const access = checkBridgeAccess(req);
+            if (!access.ok) {
+              console.warn(`[Ergo PTY] Refused WebSocket upgrade: ${access.reason}`);
+              socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+              socket.destroy();
+              return;
+            }
             wss.handleUpgrade(req, socket as any, head, (ws) => {
               wss.emit('connection', ws, req);
             });
@@ -3718,14 +3883,5 @@ function ergoPtyPlugin(): Plugin {
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), ergoFileSystemPlugin(), ergoPtyPlugin()],
-  server: {
-    cors: true,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
-      'Access-Control-Allow-Private-Network': 'true'
-    }
-  }
+  plugins: [react(), ergoFileSystemPlugin(), ergoPtyPlugin()]
 });
