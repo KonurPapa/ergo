@@ -22,6 +22,7 @@ export interface BridgeStatus {
   storageDir?: string;
   homeDir?: string;
   error?: string | null;
+  isMixedContentBlocked?: boolean;
   lastCheckedAt?: string;
   lastHeartbeat?: string;
 }
@@ -37,6 +38,7 @@ class BridgeClient {
   private storageDir: string = '~/.ergo';
   private homeDir: string = '';
   private lastError: string | null = null;
+  private isMixedContentBlocked: boolean = false;
   private lastCheckedAt: string = '';
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private listeners: Set<(status: BridgeStatus) => void> = new Set();
@@ -61,6 +63,14 @@ class BridgeClient {
     if (typeof window === 'undefined') return false;
     const host = window.location.hostname;
     return host !== 'localhost' && host !== '127.0.0.1' && host !== '0.0.0.0' && host !== '::1';
+  }
+
+  /**
+   * Determine if the hosted web app is running under HTTPS
+   */
+  public isSecureContext(): boolean {
+    if (typeof window === 'undefined') return false;
+    return window.location.protocol === 'https:';
   }
 
   /**
@@ -126,6 +136,7 @@ class BridgeClient {
       storageDir: this.storageDir,
       homeDir: this.homeDir,
       error: this.lastError,
+      isMixedContentBlocked: this.isMixedContentBlocked,
       lastCheckedAt: this.lastCheckedAt,
       lastHeartbeat: this.lastCheckedAt
     };
@@ -154,9 +165,11 @@ class BridgeClient {
   /**
    * Check connection to the local bridge.
    */
-  public async checkConnection(targetUrl?: string): Promise<{ success: boolean; error?: string }> {
+  public async checkConnection(targetUrl?: string): Promise<{ success: boolean; error?: string; isMixedContentBlocked?: boolean }> {
     this.isChecking = true;
     this.notify();
+
+    const isSecureWeb = this.isHostedWeb() && this.isSecureContext();
 
     const candidateUrls = targetUrl
       ? [targetUrl.replace(/\/+$/, '')]
@@ -165,17 +178,22 @@ class BridgeClient {
             this.bridgeUrl.replace(/\/+$/, ''),
             'http://localhost:5173',
             'http://127.0.0.1:5173',
+            'http://localhost:5174',
+            'http://127.0.0.1:5174',
             'http://localhost:3000',
             'http://127.0.0.1:3000'
           ]))
         : [this.bridgeUrl.replace(/\/+$/, '')];
 
     let lastErrorMessage: string | null = null;
+    let mixedContentSuspected = false;
 
     for (const testUrl of candidateUrls) {
       const endpoint = !this.isHostedWeb() && !targetUrl
         ? '/api/storage/config'
         : `${testUrl}/api/storage/config`;
+
+      const isTargetHttp = testUrl.startsWith('http://');
 
       try {
         const controller = new AbortController();
@@ -183,7 +201,10 @@ class BridgeClient {
 
         const res = await fetch(endpoint, {
           method: 'GET',
-          signal: controller.signal
+          signal: controller.signal,
+          headers: {
+            'Access-Control-Request-Private-Network': 'true'
+          }
         });
         clearTimeout(timeoutId);
 
@@ -192,6 +213,7 @@ class BridgeClient {
           this.isConnected = true;
           this.isChecking = false;
           this.lastError = null;
+          this.isMixedContentBlocked = false;
           this.lastCheckedAt = new Date().toISOString();
           if (data.resolvedPath) this.storageDir = data.resolvedPath;
           if (data.homeDir) this.homeDir = data.homeDir;
@@ -205,6 +227,9 @@ class BridgeClient {
           lastErrorMessage = `Device bridge at ${testUrl} returned HTTP ${res.status}`;
         }
       } catch (err: any) {
+        if (isSecureWeb && isTargetHttp) {
+          mixedContentSuspected = true;
+        }
         lastErrorMessage = err.name === 'AbortError'
           ? 'Connection timed out. Make sure Ergo is running locally on your device.'
           : (err.message || 'Unable to reach local bridge');
@@ -213,10 +238,21 @@ class BridgeClient {
 
     this.isConnected = false;
     this.isChecking = false;
-    this.lastError = lastErrorMessage || 'Unable to reach local bridge';
+    this.isMixedContentBlocked = mixedContentSuspected;
+
+    if (mixedContentSuspected) {
+      this.lastError = 'Browser security (Mixed Content / Private Network Access) blocked calling your local device from this hosted HTTPS website. Open Ergo locally at http://localhost:5173 or use an API Key.';
+    } else {
+      this.lastError = lastErrorMessage || 'Unable to reach local bridge';
+    }
+
     this.lastCheckedAt = new Date().toISOString();
     this.notify();
-    return { success: false, error: this.lastError || undefined };
+    return {
+      success: false,
+      error: this.lastError || undefined,
+      isMixedContentBlocked: this.isMixedContentBlocked
+    };
   }
 
   /**

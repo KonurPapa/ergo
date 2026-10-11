@@ -2908,57 +2908,69 @@ function ergoFileSystemPlugin(): Plugin {
 
           if (cli === 'claude' || cli.includes('claude')) {
             const claudeConfigPath = path.join(os.homedir(), '.claude.json');
+            const claudeCredsPath = path.join(os.homedir(), '.claude', '.credentials.json');
+            const claudeAuthPath = path.join(os.homedir(), '.claude', 'auth.json');
             try {
-              const configText = await fs.readFile(claudeConfigPath, 'utf-8');
-              const parsed = JSON.parse(configText);
-              if (parsed?.oauthAccount || parsed?.sessionKey || parsed?.userID || parsed?.primaryApiKey) {
+              if (fsSync.existsSync(claudeCredsPath) || fsSync.existsSync(claudeAuthPath)) {
                 isAuthenticated = true;
-                userEmail = parsed?.oauthAccount?.email || parsed?.email || null;
-                message = userEmail ? `Authenticated as ${userEmail}` : 'Authenticated with Claude Pro/Team';
+              }
+              if (fsSync.existsSync(claudeConfigPath)) {
+                const configText = await fs.readFile(claudeConfigPath, 'utf-8');
+                const parsed = JSON.parse(configText);
+                if (parsed?.oauthAccount || parsed?.sessionKey || parsed?.accountToken || parsed?.primaryApiKey) {
+                  isAuthenticated = true;
+                  userEmail = parsed?.oauthAccount?.email || parsed?.email || null;
+                  message = userEmail ? `Authenticated as ${userEmail}` : 'Authenticated with Claude Pro/Team';
+                }
               }
             } catch {}
 
             if (!isAuthenticated) {
-              const pingRes = await runShellCommand('claude -p "ping" --dangerously-skip-permissions', storageDir, 8000);
-              const combined = (pingRes.stdout + ' ' + pingRes.stderr).toLowerCase();
-              if (pingRes.exitCode === 0 && !combined.includes('login') && !combined.includes('unauthorized') && !combined.includes('authenticate')) {
-                isAuthenticated = true;
-                message = 'Authenticated with Claude';
-              } else if (combined.includes('login') || combined.includes('auth')) {
-                isAuthenticated = false;
-                message = 'Login required via "claude login"';
-              }
+              userEmail = null;
+              message = 'Not authenticated (Sign in to connect)';
             }
           } else if (cli === 'antigravity' || cli === 'agy' || cli === 'gemini' || resolvedCmd.includes('agy')) {
             const geminiConfigDir = path.join(os.homedir(), '.gemini');
-            const userConfigDir = path.join(os.homedir(), '.config', 'gemini');
-            const hasGeminiDir = fsSync.existsSync(geminiConfigDir) || fsSync.existsSync(userConfigDir);
-            if (hasGeminiDir) {
+            const accountsFile = path.join(geminiConfigDir, 'google_accounts.json');
+            const oauthFile = path.join(geminiConfigDir, 'oauth_creds.json');
+            const tokensFile = path.join(geminiConfigDir, 'tokens.json');
+            const agyCliDir = path.join(geminiConfigDir, 'antigravity-cli');
+            const settingsFile = path.join(agyCliDir, 'settings.json');
+            const ideDir = path.join(geminiConfigDir, 'antigravity-ide');
+            const mcpTokens = path.join(ideDir, 'mcp_oauth_tokens.json');
+            const disconnectedFlag = path.join(geminiConfigDir, '.ergo_disconnected_agy');
+
+            // If user explicitly reset/disconnected, do not report authenticated until reconnected
+            if (fsSync.existsSync(disconnectedFlag)) {
+              isAuthenticated = false;
+              userEmail = null;
+              message = 'Not authenticated (Sign in to connect)';
+            } else if (fsSync.existsSync(accountsFile) || fsSync.existsSync(oauthFile) || fsSync.existsSync(tokensFile)) {
               isAuthenticated = true;
               try {
-                const accountsFile = path.join(geminiConfigDir, 'google_accounts.json');
                 if (fsSync.existsSync(accountsFile)) {
                   const accData = JSON.parse(await fs.readFile(accountsFile, 'utf-8'));
-                  userEmail = accData?.active || accData?.current || null;
+                  userEmail = accData?.active || accData?.current || (Array.isArray(accData?.accounts) ? accData.accounts[0]?.email : null) || null;
                 }
               } catch {}
               message = userEmail ? `Authenticated with Google as ${userEmail}` : 'Antigravity CLI (agy) is authenticated with your Google account.';
+            } else if (fsSync.existsSync(settingsFile) || fsSync.existsSync(mcpTokens) || fsSync.existsSync(path.join(geminiConfigDir, 'settings.json'))) {
+              isAuthenticated = true;
+              message = 'Antigravity CLI is installed and active.';
             } else {
-              const pingRes = await runShellCommand(`${resolvedCmd} --version`, storageDir, 5000);
-              if (pingRes.exitCode === 0) {
-                isAuthenticated = true;
-                message = `Antigravity CLI ready (${pingRes.stdout.trim().split('\n')[0]})`;
-              } else {
-                isAuthenticated = false;
-                message = 'Login required for Antigravity CLI (agy)';
-              }
+              isAuthenticated = false;
+              userEmail = null;
+              message = 'Not authenticated (Sign in to connect)';
             }
           } else if (cli === 'codex') {
             const codexConfig = path.join(os.homedir(), '.codex');
-            if (fsSync.existsSync(codexConfig)) {
+            const authJsonPath = path.join(codexConfig, 'auth.json');
+            const credsJsonPath = path.join(codexConfig, 'credentials.json');
+            const sessionJsonPath = path.join(codexConfig, 'session.json');
+
+            if (fsSync.existsSync(authJsonPath) || fsSync.existsSync(credsJsonPath) || fsSync.existsSync(sessionJsonPath)) {
               isAuthenticated = true;
               try {
-                const authJsonPath = path.join(codexConfig, 'auth.json');
                 if (fsSync.existsSync(authJsonPath)) {
                   const authData = JSON.parse(await fs.readFile(authJsonPath, 'utf-8'));
                   const idTok = authData?.tokens?.id_token;
@@ -2977,14 +2989,9 @@ function ergoFileSystemPlugin(): Plugin {
               } catch {}
               message = userEmail ? `Authenticated with OpenAI as ${userEmail}` : 'Codex authenticated';
             } else {
-              const pingRes = await runShellCommand('codex --version', storageDir, 5000);
-              if (pingRes.exitCode === 0) {
-                isAuthenticated = true;
-                message = 'Codex installed and ready';
-              } else {
-                isAuthenticated = false;
-                message = 'Login required via "codex login"';
-              }
+              isAuthenticated = false;
+              userEmail = null;
+              message = 'Not authenticated (Sign in to connect)';
             }
           } else if (cli === 'cursor' || cli === 'cursor-cli') {
             const cursorConfig = path.join(os.homedir(), '.cursor');
@@ -3073,6 +3080,12 @@ function ergoFileSystemPlugin(): Plugin {
           const body = await parseJsonBody(req);
           let { cli = 'claude' } = body;
           let resolvedCmd = (cli === 'antigravity' || cli === 'gemini') ? 'agy' : cli;
+          if (cli === 'antigravity' || cli === 'agy' || cli === 'gemini') {
+            const flag = path.join(os.homedir(), '.gemini', '.ergo_disconnected_agy');
+            if (fsSync.existsSync(flag)) {
+              await fs.unlink(flag).catch(() => {});
+            }
+          }
 
           let whichRes = await runShellCommand(`which ${resolvedCmd}`, storageDir, 3000);
           if (whichRes.exitCode !== 0 && (cli === 'antigravity' || cli === 'agy' || cli === 'gemini')) {
@@ -3100,7 +3113,9 @@ function ergoFileSystemPlugin(): Plugin {
           const { spawn } = await import('node:child_process');
 
           let loginArgs = ['login'];
-          if (resolvedCmd.includes('agy')) {
+          if (resolvedCmd.includes('claude')) {
+            loginArgs = ['auth', 'login'];
+          } else if (resolvedCmd.includes('agy')) {
             loginArgs = []; // agy runs interactive authentication loop directly
           }
 
@@ -3109,7 +3124,11 @@ function ergoFileSystemPlugin(): Plugin {
           try {
             proc = spawn(resolvedCmd, loginArgs, {
               cwd: storageDir,
-              env: { ...process.env },
+              env: {
+                ...process.env,
+                BROWSER: 'none',
+                NO_BROWSER: '1'
+              },
               stdio: ['pipe', 'pipe', 'pipe']
             });
           } catch (err: any) {
@@ -3129,7 +3148,7 @@ function ergoFileSystemPlugin(): Plugin {
           let stderr = '';
           let capturedUrl: string | null = null;
 
-          const urlRegex = /(https:\/\/(?:auth\.anthropic\.com|claude\.ai|openai\.com|accounts\.google\.com|google\.com\/device|oauth2\.googleapis\.com)[^\s"'<>]+)/i;
+          const urlRegex = /(https:\/\/(?:auth\.anthropic\.com|claude\.ai|claude\.com|[a-zA-Z0-9.-]*openai\.com|[a-zA-Z0-9.-]*google\.com)[^\s"'<>]+)/i;
 
           proc.stdout?.on('data', (chunk: Buffer) => {
             const str = chunk.toString('utf-8');
@@ -3149,8 +3168,8 @@ function ergoFileSystemPlugin(): Plugin {
             }
           });
 
-          // Wait up to 3.5 seconds to see if an OAuth URL or prompt is generated immediately
-          await new Promise((resolve) => setTimeout(resolve, 3500));
+          // Wait up to 4.5 seconds to see if an OAuth URL or prompt is generated immediately
+          await new Promise((resolve) => setTimeout(resolve, 4500));
 
           if (spawnError) {
             return sendJson(res, 200, {
@@ -3184,18 +3203,59 @@ function ergoFileSystemPlugin(): Plugin {
           const { cli = 'claude' } = body;
 
           if (cli === 'codex') {
-            const codexAuth = path.join(os.homedir(), '.codex', 'auth.json');
-            if (fsSync.existsSync(codexAuth)) {
-              await fs.unlink(codexAuth).catch(() => {});
+            const codexDir = path.join(os.homedir(), '.codex');
+            const filesToWipe = ['auth.json', 'credentials.json', 'session.json', 'tokens.json'];
+            for (const file of filesToWipe) {
+              const fullPath = path.join(codexDir, file);
+              if (fsSync.existsSync(fullPath)) {
+                await fs.unlink(fullPath).catch(() => {});
+              }
             }
+            // Execute codex logout if binary exists
+            await runShellCommand('codex logout', storageDir, 5000).catch(() => {});
           } else if (cli === 'antigravity' || cli === 'agy' || cli === 'gemini') {
-            const geminiAccounts = path.join(os.homedir(), '.gemini', 'google_accounts.json');
-            const geminiOauth = path.join(os.homedir(), '.gemini', 'oauth_creds.json');
-            if (fsSync.existsSync(geminiAccounts)) await fs.unlink(geminiAccounts).catch(() => {});
-            if (fsSync.existsSync(geminiOauth)) await fs.unlink(geminiOauth).catch(() => {});
+            const geminiDir = path.join(os.homedir(), '.gemini');
+            const filesToWipe = ['google_accounts.json', 'oauth_creds.json', 'tokens.json', 'state.json'];
+            for (const file of filesToWipe) {
+              const fullPath = path.join(geminiDir, file);
+              if (fsSync.existsSync(fullPath)) {
+                await fs.unlink(fullPath).catch(() => {});
+              }
+            }
+            const configGeminiDir = path.join(os.homedir(), '.config', 'gemini');
+            for (const file of filesToWipe) {
+              const fullPath = path.join(configGeminiDir, file);
+              if (fsSync.existsSync(fullPath)) {
+                await fs.unlink(fullPath).catch(() => {});
+              }
+            }
+            // Mark provider as disconnected so onboarding reset persists
+            try {
+              await fs.writeFile(path.join(geminiDir, '.ergo_disconnected_agy'), Date.now().toString());
+            } catch {}
+            // Execute agy logout if available
+            await runShellCommand('agy auth logout || agy logout', storageDir, 5000).catch(() => {});
           } else if (cli === 'claude') {
-            const claudeCreds = path.join(os.homedir(), '.claude', '.credentials.json');
-            if (fsSync.existsSync(claudeCreds)) await fs.unlink(claudeCreds).catch(() => {});
+            // 1. Run claude auth logout to clear keychain/secure storage if supported
+            await runShellCommand('claude auth logout || claude logout', storageDir, 6000).catch(() => {});
+
+            // 2. Clear credentials from ~/.claude
+            const claudeDir = path.join(os.homedir(), '.claude');
+            const claudeFilesToWipe = [
+              '.credentials.json',
+              'auth.json',
+              'tokens.json',
+              'credentials.json',
+              'session.json'
+            ];
+            for (const file of claudeFilesToWipe) {
+              const fullPath = path.join(claudeDir, file);
+              if (fsSync.existsSync(fullPath)) {
+                await fs.unlink(fullPath).catch(() => {});
+              }
+            }
+
+            // 3. Clear auth fields from ~/.claude.json
             const claudeConfig = path.join(os.homedir(), '.claude.json');
             if (fsSync.existsSync(claudeConfig)) {
               try {
@@ -3204,12 +3264,17 @@ function ergoFileSystemPlugin(): Plugin {
                 delete parsed.oauthAccount;
                 delete parsed.sessionKey;
                 delete parsed.primaryApiKey;
+                delete parsed.accountToken;
+                delete parsed.userID;
+                delete parsed.email;
+                delete parsed.user;
+                delete parsed.tokens;
                 await fs.writeFile(claudeConfig, JSON.stringify(parsed, null, 2), 'utf-8');
               } catch {}
             }
           }
 
-          return sendJson(res, 200, { success: true, message: `Authentication for ${cli} reset.` });
+          return sendJson(res, 200, { success: true, message: `Authentication for ${cli} has been reset. You can now connect a new profile.` });
         } catch (err: any) {
           return sendJson(res, 500, { success: false, error: err.message });
         }
@@ -3479,6 +3544,13 @@ function ergoPtyPlugin(): Plugin {
               const cmd: string = msg.cmd || 'bash';
               let args: string[] = Array.isArray(msg.args) ? [...msg.args] : [];
               const customEnv: Record<string, string> = msg.env && typeof msg.env === 'object' ? msg.env : {};
+
+              if (cmd.includes('agy') || cmd === 'antigravity') {
+                const flag = path.join(os.homedir(), '.gemini', '.ergo_disconnected_agy');
+                if (fsSync.existsSync(flag)) {
+                  try { fsSync.unlinkSync(flag); } catch {}
+                }
+              }
 
               let cwd: string = resolveStoragePath(msg.cwd || os.homedir());
               try {

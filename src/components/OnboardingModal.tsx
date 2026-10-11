@@ -23,6 +23,8 @@ import {
   Terminal,
   ShieldCheck,
   ChevronRight,
+  ChevronDown,
+  Settings2,
   X,
   RefreshCw,
   RotateCcw,
@@ -30,6 +32,7 @@ import {
   Laptop,
   Monitor,
   Check,
+  Copy,
   MoreHorizontal
 } from 'lucide-react';
 
@@ -37,6 +40,7 @@ interface OnboardingModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSaveUserKey: (key: Omit<UserApiKey, 'id'> & { id?: string }) => void;
+  onResetSubscription?: (cliAgentId: string) => void;
   onCompleteOnboarding: (key?: UserApiKey) => void;
 }
 
@@ -135,6 +139,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   isOpen,
   onClose,
   onSaveUserKey,
+  onResetSubscription,
   onCompleteOnboarding
 }) => {
   // Wizard Steps: 1 = AI Account Connection, 2 = Optional Laya Download Step, 3 = Local Device Bridge
@@ -154,7 +159,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   const [isConnectingSubscription, setIsConnectingSubscription] = useState(false);
   const [installError, setInstallError] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [showTerminal, setShowTerminal] = useState(false);
+  const [resetSuccessMessage, setResetSuccessMessage] = useState<string | null>(null);
+  const [geminiTerminalSessionId, setGeminiTerminalSessionId] = useState<string>(`gemini-auth-${Date.now()}`);
+  const [geminiTerminalActive, setGeminiTerminalActive] = useState<boolean>(false);
   const [loginAuthUrl, setLoginAuthUrl] = useState<string | null>(null);
   const [connectedUserKey, setConnectedUserKey] = useState<UserApiKey | null>(null);
 
@@ -171,9 +178,18 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
   // Step 3: Local Device Bridge State
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>(() => bridgeClient.getStatus());
-  const [bridgeUrlInput] = useState<string>(() => bridgeClient.getBridgeUrl() || DEFAULT_BRIDGE_URL);
+  const [bridgePortInput, setBridgePortInput] = useState<string>(() => {
+    try {
+      const url = new URL(bridgeClient.getBridgeUrl() || DEFAULT_BRIDGE_URL);
+      return url.port || '5173';
+    } catch {
+      return '5173';
+    }
+  });
+  const [showAdvancedBridge, setShowAdvancedBridge] = useState(false);
   const [isTestingBridge, setIsTestingBridge] = useState(false);
   const [bridgeConnectError, setBridgeConnectError] = useState<string | null>(null);
+  const [copiedBridgeCmd, setCopiedBridgeCmd] = useState(false);
 
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentMeta = PROVIDER_METAS[selectedProvider];
@@ -201,11 +217,21 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   const checkStatus = async (cliName: string) => {
     setIsCheckingAuth(true);
     try {
+      const isExplicitlyDisconnected = localStorage.getItem(`ergo_disconnected_${selectedProvider}`) === 'true';
       const status = await fetchCliAuthStatus(cliName);
-      setAuthStatus(status);
-      if (status.isAuthenticated) {
-        setLoginError(null);
-        setInstallError(null);
+      if (isExplicitlyDisconnected) {
+        setAuthStatus({
+          ...status,
+          isAuthenticated: false,
+          userEmail: null,
+          message: 'Not connected (Sign in to connect)'
+        });
+      } else {
+        setAuthStatus(status);
+        if (status.isAuthenticated) {
+          setLoginError(null);
+          setInstallError(null);
+        }
       }
     } catch {
       // Ignored
@@ -219,22 +245,46 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     setIsResettingAuth(true);
     setLoginError(null);
     setInstallError(null);
+    setResetSuccessMessage(null);
+    setGeminiTerminalActive(false);
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+    setIsConnectingSubscription(false);
+
+    const targetId = currentMeta.id === 'gemini' ? 'antigravity' : currentMeta.id === 'codex' ? 'codex' : 'claude-code';
+
     try {
-      await resetCliAuth(currentMeta.cli);
-      // Clean up any saved subscription key in localStorage matching this provider
+      // 1. Reset remote CLI daemon credentials
+      await resetCliAuth(currentMeta.cli).catch(() => { });
+
+      // 2. Clean up saved subscription keys in localStorage matching this provider
       try {
         const savedKeysRaw = localStorage.getItem('ergo_user_api_keys');
         if (savedKeysRaw) {
           const keys: UserApiKey[] = JSON.parse(savedKeysRaw);
-          const targetId = currentMeta.id === 'gemini' ? 'antigravity' : currentMeta.id === 'codex' ? 'codex' : 'claude-code';
           const filtered = keys.filter(
-            k => !(k.provider === 'cli_subscription' && (k.cliAgentId === targetId || k.model === targetId))
+            k => !(k.provider === 'cli_subscription' && (k.cliAgentId === targetId || k.model === targetId || k.cliAgentId === currentMeta.cli))
           );
           localStorage.setItem('ergo_user_api_keys', JSON.stringify(filtered));
         }
+        localStorage.setItem(`ergo_disconnected_${currentMeta.id}`, 'true');
       } catch { }
+
+      // 3. Notify parent app to purge secrets and active keys in memory and storageManager
+      if (onResetSubscription) {
+        onResetSubscription(targetId);
+      }
+
       setConnectedUserKey(null);
-      await checkStatus(currentMeta.cli);
+      setAuthStatus({
+        cli: currentMeta.cli,
+        isInstalled: authStatus?.isInstalled ?? true,
+        isAuthenticated: false,
+        userEmail: null,
+        message: 'Subscription disconnected. You can now connect a different profile.'
+      });
     } catch (err: any) {
       setLoginError(err.message || 'Failed to reset authentication.');
     } finally {
@@ -273,13 +323,21 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     setCurrentStep(2);
   };
 
+  const getFullBridgeUrl = (portStr: string) => {
+    const cleanPort = portStr.replace(/\D/g, '').trim();
+    if (!cleanPort) return DEFAULT_BRIDGE_URL;
+    return `http://localhost:${cleanPort}`;
+  };
+
   // Move from Step 2 to Step 3: Local Device Bridge
   const proceedToBridgeStep = () => {
     setCurrentStep(3);
+    const targetUrl = getFullBridgeUrl(bridgePortInput);
+    bridgeClient.setBridgeUrl(targetUrl);
     // Auto-check bridge connection on entering Step 3
     setIsTestingBridge(true);
     setBridgeConnectError(null);
-    bridgeClient.checkConnection(bridgeUrlInput)
+    bridgeClient.checkConnection(targetUrl)
       .then((res) => {
         if (!res.success) {
           setBridgeConnectError(res.error || 'Bridge not detected yet.');
@@ -290,10 +348,13 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       });
   };
 
-  const handleTestBridgeConnection = async () => {
+  const handleTestBridgeConnection = async (overridePort?: string) => {
+    const portToUse = overridePort !== undefined ? overridePort : bridgePortInput;
+    const targetUrl = getFullBridgeUrl(portToUse);
+    bridgeClient.setBridgeUrl(targetUrl);
     setIsTestingBridge(true);
     setBridgeConnectError(null);
-    const res = await bridgeClient.checkConnection(bridgeUrlInput);
+    const res = await bridgeClient.checkConnection(targetUrl);
     setIsTestingBridge(false);
     if (!res.success) {
       setBridgeConnectError(res.error || 'Could not connect to device bridge.');
@@ -312,6 +373,10 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       proceedToLayaStep();
       return;
     }
+
+    try {
+      localStorage.removeItem(`ergo_disconnected_${selectedProvider}`);
+    } catch { }
 
     setIsConnectingSubscription(true);
     setInstallError(null);
@@ -352,24 +417,40 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       }
 
       // 3. Initiate browser login
-      const loginRes = await triggerCliLogin(currentMeta.cli);
-      if (!loginRes.success || loginRes.error) {
-        setLoginError(loginRes.error || `Could not launch login for ${currentMeta.name}.`);
-        setIsConnectingSubscription(false);
-        return;
-      }
+      if (currentMeta.id === 'gemini') {
+        // Antigravity CLI runs interactively in the embedded terminal below.
+        // Regenerating sessionId guarantees a clean, active terminal process.
+        setGeminiTerminalActive(true);
+        setGeminiTerminalSessionId(`gemini-auth-${Date.now()}`);
+      } else {
+        const loginRes = await triggerCliLogin(currentMeta.cli);
+        if (!loginRes.success || loginRes.error) {
+          setLoginError(loginRes.error || `Could not launch login for ${currentMeta.name}.`);
+          setIsConnectingSubscription(false);
+          return;
+        }
 
-      if (loginRes.authUrl) {
-        setLoginAuthUrl(loginRes.authUrl);
-        const popup = window.open(loginRes.authUrl, '_blank', 'width=650,height=750,noopener,noreferrer');
-        if (!popup) {
-          setLoginError('Browser blocked the authorization popup window. Please click "Re-open Authorization URL" below.');
+        if (loginRes.authUrl) {
+          setLoginAuthUrl(loginRes.authUrl);
+          const popup = window.open(loginRes.authUrl, 'ai_auth_window', 'width=650,height=750,noopener,noreferrer');
+          if (!popup) {
+            setLoginError('Popup window was blocked by the browser. Click "Open Authorization Window" below.');
+          }
         }
       }
 
-      // Polling for completed OAuth
+      // Polling for completed OAuth with a safety timeout (90s)
       if (pollingRef.current) clearInterval(pollingRef.current);
+      const pollStartTime = Date.now();
       pollingRef.current = setInterval(async () => {
+        // Timeout after 90 seconds
+        if (Date.now() - pollStartTime > 90_000) {
+          if (pollingRef.current) clearInterval(pollingRef.current);
+          setIsConnectingSubscription(false);
+          setLoginError(`Authentication timed out. If you completed signing in, click "Connect with ${currentMeta.name}" again or use the terminal below.`);
+          return;
+        }
+
         const st = await fetchCliAuthStatus(currentMeta.cli);
         if (st.isAuthenticated) {
           if (pollingRef.current) clearInterval(pollingRef.current);
@@ -549,11 +630,11 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               </div>
 
               <div>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <span
                     className="brand-title"
                     style={{
-                      fontSize: '1.45rem',
+                      fontSize: '1.5rem',
                       fontWeight: 500,
                       letterSpacing: '-0.02em',
                       color: 'var(--text-bright)',
@@ -564,7 +645,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   </span>
                   <span
                     style={{
-                      fontSize: '0.68rem',
+                      fontSize: '0.6rem',
+                      margin: '4px',
                       padding: '2px 8px',
                       borderRadius: '999px',
                       background: 'rgba(0, 212, 146, 0.15)',
@@ -577,7 +659,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     ALPHA
                   </span>
                 </div>
-                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '2px', fontWeight: 500 }}>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '-2px', fontWeight: 500 }}>
                   Human & AI Collaborative Workspace
                 </div>
               </div>
@@ -621,14 +703,21 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             >
               {/* Step 1: Connect AI */}
               <div
+                onClick={() => setCurrentStep(1)}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.45rem',
                   fontSize: '0.76rem',
                   fontWeight: currentStep === 1 ? 700 : 600,
-                  color: currentStep === 1 ? 'var(--text-bright)' : 'var(--accent-emerald)'
+                  color: currentStep === 1 ? 'var(--text-bright)' : 'var(--accent-emerald)',
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  transition: 'opacity 0.15s ease'
                 }}
+                role="button"
+                tabIndex={0}
+                title="Go to Step 1: Connect AI"
               >
                 <div
                   style={{
@@ -653,14 +742,21 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
               {/* Step 2: Local Verifier */}
               <div
+                onClick={() => setCurrentStep(2)}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.45rem',
                   fontSize: '0.76rem',
                   fontWeight: currentStep === 2 ? 700 : 500,
-                  color: currentStep === 2 ? 'var(--text-bright)' : currentStep > 2 ? 'var(--accent-emerald)' : 'var(--text-dim)'
+                  color: currentStep === 2 ? 'var(--text-bright)' : currentStep > 2 ? 'var(--accent-emerald)' : 'var(--text-dim)',
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  transition: 'opacity 0.15s ease'
                 }}
+                role="button"
+                tabIndex={0}
+                title="Go to Step 2: Local Verifier"
               >
                 <div
                   style={{
@@ -685,14 +781,21 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
               {/* Step 3: Connect Device Bridge */}
               <div
+                onClick={() => setCurrentStep(3)}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.45rem',
                   fontSize: '0.76rem',
                   fontWeight: currentStep === 3 ? 700 : 500,
-                  color: currentStep === 3 ? 'var(--text-bright)' : 'var(--text-dim)'
+                  color: currentStep === 3 ? 'var(--text-bright)' : 'var(--text-dim)',
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  transition: 'opacity 0.15s ease'
                 }}
+                role="button"
+                tabIndex={0}
+                title="Go to Step 3: Connect Device"
               >
                 <div
                   style={{
@@ -815,12 +918,12 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                             key={p.id}
                             onClick={() => {
                               setSelectedProvider(pId);
-                              setShowTerminal(false);
+                              setGeminiTerminalActive(false);
                               setLoginError(null);
                               setInstallError(null);
                             }}
                             style={{
-                              padding: '0.9rem 0.75rem',
+                              padding: '0.65rem 0.8rem',
                               borderRadius: '12px',
                               border: `1.5px solid ${isSelected ? p.brandColor : 'rgba(255, 255, 255, 0.08)'}`,
                               background: isSelected ? 'rgba(255, 255, 255, 0.04)' : 'rgba(255, 255, 255, 0.015)',
@@ -923,6 +1026,34 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         <div style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: 1.45 }}>
                           {loginError || installError}
                         </div>
+                        {((loginError || installError || '').includes('Browser security') || (loginError || installError || '').includes('hosted web address') || (loginError || installError || '').includes('Cannot reach your local device')) && (
+                          <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveTab('apikey');
+                                setLoginError(null);
+                                setInstallError(null);
+                              }}
+                              style={{
+                                padding: '0.35rem 0.75rem',
+                                borderRadius: '6px',
+                                background: 'rgba(255, 255, 255, 0.12)',
+                                border: '1px solid rgba(255, 255, 255, 0.2)',
+                                color: '#ffffff',
+                                fontSize: '0.74rem',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem'
+                              }}
+                            >
+                              <Key size={13} />
+                              <span>Switch to API Key Tab</span>
+                            </button>
+                          </div>
+                        )}
                       </div>
                       <button
                         type="button"
@@ -930,6 +1061,39 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           setLoginError(null);
                           setInstallError(null);
                         }}
+                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 2 }}
+                        title="Dismiss"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Reset Confirmation Notice */}
+                  {resetSuccessMessage && (
+                    <div
+                      style={{
+                        background: 'rgba(16, 185, 129, 0.08)',
+                        border: '1px solid rgba(16, 185, 129, 0.25)',
+                        borderRadius: '10px',
+                        padding: '0.85rem 1rem',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '0.65rem'
+                      }}
+                    >
+                      <CheckCircle2 size={18} color="var(--accent-emerald)" style={{ marginTop: '2px', flexShrink: 0 }} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--accent-emerald)', marginBottom: '0.2rem' }}>
+                          Subscription Disconnected
+                        </div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: 1.45 }}>
+                          {resetSuccessMessage}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setResetSuccessMessage(null)}
                         style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 2 }}
                         title="Dismiss"
                       >
@@ -1038,28 +1202,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         )}
                       </button>
 
-                      {/* Optional Terminal toggle */}
-                      {/* <button
-                        type="button"
-                        onClick={() => setShowTerminal((prev) => !prev)}
-                        style={{
-                          padding: '0.75rem 1rem',
-                          borderRadius: '10px',
-                          background: 'rgba(255, 255, 255, 0.05)',
-                          border: '1px solid rgba(255, 255, 255, 0.1)',
-                          color: 'var(--text-main)',
-                          fontSize: '0.8rem',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.4rem'
-                        }}
-                      >
-                        <Terminal size={14} />
-                        <span>{showTerminal ? 'Hide Terminal' : 'Terminal View'}</span>
-                      </button> */}
-
                       {selectedProvider !== 'other' && (
                         <button
                           type="button"
@@ -1091,11 +1233,82 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           <span>Reset</span>
                         </button>
                       )}
+
+                      {/* Cancel button if currently in connecting state */}
+                      {isConnectingSubscription && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (pollingRef.current) {
+                              clearInterval(pollingRef.current);
+                              pollingRef.current = null;
+                            }
+                            setIsConnectingSubscription(false);
+                          }}
+                          style={{
+                            padding: '0.75rem 1rem',
+                            borderRadius: '10px',
+                            background: 'rgba(255, 255, 255, 0.05)',
+                            border: '1px solid rgba(255, 255, 255, 0.15)',
+                            color: 'var(--text-dim)',
+                            fontSize: '0.8rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.35rem'
+                          }}
+                        >
+                          <X size={14} />
+                          <span>Cancel</span>
+                        </button>
+                      )}
                     </div>
 
-                    {/* Collapsible live terminal container */}
-                    {showTerminal && (
+                    {/* Quick Access to OAuth Link if window was blocked or closed */}
+                    {isConnectingSubscription && loginAuthUrl && (
+                      <div
+                        style={{
+                          background: 'rgba(37, 99, 235, 0.08)',
+                          border: '1px solid rgba(37, 99, 235, 0.25)',
+                          borderRadius: '8px',
+                          padding: '0.65rem 0.85rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '0.5rem',
+                          marginTop: '0.25rem'
+                        }}
+                      >
+                        <span style={{ fontSize: '0.76rem', color: 'var(--text-main)' }}>
+                          Sign-in window didn't open?
+                        </span>
+                        <a
+                          href={loginAuthUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{
+                            fontSize: '0.76rem',
+                            fontWeight: 600,
+                            color: 'var(--accent-primary)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.3rem',
+                            textDecoration: 'none'
+                          }}
+                        >
+                          <span>Open Authorization Window</span>
+                          <ExternalLink size={12} />
+                        </a>
+                      </div>
+                    )}
+
+                    {/* Interactive terminal container - only shown for Gemini when user initiates connection and authentication is needed */}
+                    {selectedProvider === 'gemini' && (isConnectingSubscription || (authStatus && !authStatus.isAuthenticated && geminiTerminalActive)) && (
                       <div style={{ marginTop: '0.5rem', borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '0.85rem' }}>
+                        <div style={{ marginBottom: '0.5rem', fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                          Antigravity CLI authenticates directly via the interactive console below. Follow the on-screen prompt:
+                        </div>
                         <ResizableTerminalContainer
                           defaultHeight={280}
                           minHeight={180}
@@ -1110,27 +1323,16 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           headerLeft={
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.73rem', fontWeight: 700, color: 'var(--accent-cyan)' }}>
                               <Terminal size={13} />
-                              <span>CLI Terminal Feed ({currentMeta.cliName})</span>
+                              <span>Console Authentication ({currentMeta.cliName})</span>
                             </div>
-                          }
-                          headerRight={
-                            loginAuthUrl ? (
-                              <a
-                                href={loginAuthUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                style={{ fontSize: '0.7rem', color: 'var(--accent-primary)', textDecoration: 'underline', marginRight: '0.35rem' }}
-                              >
-                                Re-open Authorization URL
-                              </a>
-                            ) : null
                           }
                         >
                           <AgentTerminal
+                            key={geminiTerminalSessionId}
                             cmd={currentMeta.cli}
                             args={currentMeta.loginArgs}
                             cwd="~"
-                            sessionId="onboarding-cli-auth"
+                            sessionId={geminiTerminalSessionId}
                             forceRestart={true}
                             killOnUnmount={true}
                             onExit={(code) => {
@@ -1614,7 +1816,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
                 <button
                   type="button"
-                  onClick={handleTestBridgeConnection}
+                  onClick={() => handleTestBridgeConnection()}
                   disabled={isTestingBridge}
                   style={{
                     padding: '0.55rem 1rem',
@@ -1637,27 +1839,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 </button>
               </div>
 
-              {/* Connection Address input */}
-              {/* <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                <span style={{ fontSize: '0.74rem', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>Connection Address:</span>
-                <input
-                  type="text"
-                  value={bridgeUrlInput}
-                  onChange={(e) => setBridgeUrlInput(e.target.value)}
-                  placeholder="http://localhost:5173"
-                  style={{
-                    flex: 1,
-                    fontSize: '0.75rem',
-                    fontFamily: 'monospace',
-                    padding: '0.3rem 0.6rem',
-                    borderRadius: '6px',
-                    background: 'rgba(0, 0, 0, 0.35)',
-                    border: '1px solid rgba(255, 255, 255, 0.1)',
-                    color: 'var(--text-bright)'
-                  }}
-                />
-              </div> */}
-
               {/* Error Alert if any */}
               {bridgeConnectError && (
                 <div
@@ -1677,9 +1858,14 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '2px' }} />
                   <div>
                     <div style={{ fontWeight: 600 }}>Connection Notice</div>
-                    <div style={{ marginTop: '2px', color: 'rgba(255, 255, 255, 0.7)' }}>
-                      If Ergo is running in your local terminal on port 5173, click <strong>Connect Now</strong>. If not running yet, follow the quick command below.
+                    <div style={{ marginTop: '2px', color: 'rgba(255, 255, 255, 0.75)', lineHeight: 1.45 }}>
+                      {bridgeConnectError}
                     </div>
+                    {bridgeStatus.isMixedContentBlocked && (
+                      <div style={{ marginTop: '0.5rem', padding: '0.45rem 0.65rem', background: 'rgba(0, 0, 0, 0.3)', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.08)', color: 'var(--text-bright)', fontSize: '0.74rem' }}>
+                        💡 <strong>Why this happens:</strong> Mobile browsers and HTTPS websites restrict connecting to <code>localhost</code> over unencrypted HTTP. To use Ergo on this device, either use an <strong>API Key</strong> in Step 1, or open Ergo directly on your computer at <code>http://localhost:5173</code>.
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -1701,7 +1887,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
                     <div style={{ color: 'var(--accent-primary)', fontWeight: 700 }}>1.</div>
                     <div>
-                      <strong>Your work stays on your device.</strong> Ergo saves data to your local <code>~/.ergo</code> folder, and any other folders you grant access.
+                      <strong>Your work stays on your device.</strong> Ergo automatically stores data locally in your personal <code>~/.ergo</code> workspace folder, created fresh on your computer.
                     </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
@@ -1717,51 +1903,191 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     </div>
                   </div>
                 </div>
+              </div>
 
-                {/* Command snippet */}
-                {/* <div style={{ marginTop: '0.85rem', paddingTop: '0.75rem', borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginBottom: '0.35rem' }}>
-                    Need to launch the local helper? Run this in your terminal:
+              {/* Collapsible Advanced Settings Dropdown */}
+              <div
+                style={{
+                  marginTop: '0.85rem',
+                  borderRadius: '10px',
+                  background: 'rgba(0, 0, 0, 0.2)',
+                  border: '1px solid rgba(255, 255, 255, 0.07)',
+                  overflow: 'hidden',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedBridge((prev) => !prev)}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem 1rem',
+                    background: 'transparent',
+                    border: 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    cursor: 'pointer',
+                    color: 'var(--text-muted)',
+                    fontSize: '0.78rem',
+                    fontWeight: 600,
+                    transition: 'color 0.15s ease'
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-bright)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted)')}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <Settings2 size={14} color="#8b5cf6" />
+                    <span>Advanced Settings</span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: 400 }}>
+                      (Port configuration & helper commands)
+                    </span>
                   </div>
+                  <div style={{ display: 'flex', alignItems: 'center' }}>
+                    {showAdvancedBridge ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  </div>
+                </button>
+
+                {showAdvancedBridge && (
                   <div
                     style={{
+                      padding: '0.85rem 1rem 1rem 1rem',
+                      borderTop: '1px solid rgba(255, 255, 255, 0.05)',
                       display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      background: 'rgba(0, 0, 0, 0.4)',
-                      padding: '0.45rem 0.75rem',
-                      borderRadius: '6px',
-                      border: '1px solid rgba(255, 255, 255, 0.08)',
-                      fontFamily: 'monospace',
-                      fontSize: '0.75rem',
-                      color: 'var(--accent-emerald)'
+                      flexDirection: 'column',
+                      gap: '0.9rem'
                     }}
                   >
-                    <span>npm run dev</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText('npm run dev');
-                        setCopiedBridgeCmd(true);
-                        setTimeout(() => setCopiedBridgeCmd(false), 2000);
-                      }}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        color: 'var(--text-muted)',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.25rem',
-                        fontSize: '0.72rem'
-                      }}
-                      title="Copy command"
-                    >
-                      {copiedBridgeCmd ? <Check size={12} color="var(--accent-emerald)" /> : <Copy size={12} />}
-                      <span>{copiedBridgeCmd ? 'Copied' : 'Copy'}</span>
-                    </button>
+                    {/* Port Customization */}
+                    <div>
+                      <div style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-bright)', marginBottom: '0.35rem' }}>
+                        Local Bridge Port
+                      </div>
+                      <div style={{ fontSize: '0.71rem', color: 'var(--text-dim)', marginBottom: '0.45rem' }}>
+                        Change the port number if your local Ergo bridge is running on a custom port.
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            background: 'rgba(0, 0, 0, 0.4)',
+                            border: '1px solid rgba(255, 255, 255, 0.12)',
+                            borderRadius: '6px',
+                            padding: '0 0.5rem',
+                            flex: 1
+                          }}
+                        >
+                          <span style={{ fontSize: '0.76rem', color: 'var(--text-dim)', fontFamily: 'monospace', userSelect: 'none' }}>
+                            http://localhost:
+                          </span>
+                          <input
+                            type="text"
+                            value={bridgePortInput}
+                            onChange={(e) => {
+                              const cleaned = e.target.value.replace(/\D/g, '').slice(0, 5);
+                              setBridgePortInput(cleaned);
+                              const fullUrl = getFullBridgeUrl(cleaned);
+                              bridgeClient.setBridgeUrl(fullUrl);
+                            }}
+                            placeholder="5173"
+                            style={{
+                              width: '70px',
+                              fontSize: '0.78rem',
+                              fontFamily: 'monospace',
+                              fontWeight: 700,
+                              padding: '0.4rem 0.35rem',
+                              background: 'transparent',
+                              border: 'none',
+                              color: 'var(--accent-primary)',
+                              outline: 'none'
+                            }}
+                          />
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleTestBridgeConnection(bridgePortInput)}
+                          disabled={isTestingBridge}
+                          style={{
+                            padding: '0.42rem 0.85rem',
+                            borderRadius: '6px',
+                            background: 'rgba(255, 255, 255, 0.06)',
+                            border: '1px solid rgba(255, 255, 255, 0.12)',
+                            color: 'var(--text-bright)',
+                            fontSize: '0.74rem',
+                            fontWeight: 600,
+                            cursor: isTestingBridge ? 'wait' : 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.35rem',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          <RefreshCw size={11} className={isTestingBridge ? 'animate-spin' : ''} />
+                          <span>Apply Port</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Terminal Launch Command */}
+                    <div>
+                      <div style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-bright)', marginBottom: '0.35rem' }}>
+                        Manual Helper Launch Command
+                      </div>
+                      <div style={{ fontSize: '0.71rem', color: 'var(--text-dim)', marginBottom: '0.45rem' }}>
+                        If the bridge isn't running automatically, run this in a terminal to start it:
+                      </div>
+                      {(() => {
+                        const localFolder = bridgeStatus.storageDir || (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'Ergo' : '<folder where Ergo is stored>');
+                        const launchCmd = `cd ${localFolder.includes(' ') ? `"${localFolder}"` : localFolder} && npm run dev`;
+                        return (
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              background: 'rgba(0, 0, 0, 0.45)',
+                              padding: '0.45rem 0.75rem',
+                              borderRadius: '6px',
+                              border: '1px solid rgba(255, 255, 255, 0.08)',
+                              fontFamily: 'monospace',
+                              fontSize: '0.75rem',
+                              color: 'var(--accent-emerald)',
+                              overflowX: 'auto',
+                              gap: '0.5rem'
+                            }}
+                          >
+                            <span style={{ whiteSpace: 'nowrap' }}>{launchCmd}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(launchCmd);
+                                setCopiedBridgeCmd(true);
+                                setTimeout(() => setCopiedBridgeCmd(false), 2000);
+                              }}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: 'var(--text-muted)',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.25rem',
+                                fontSize: '0.72rem',
+                                flexShrink: 0
+                              }}
+                              title="Copy command"
+                            >
+                              {copiedBridgeCmd ? <Check size={12} color="var(--accent-emerald)" /> : <Copy size={12} />}
+                              <span>{copiedBridgeCmd ? 'Copied' : 'Copy'}</span>
+                            </button>
+                          </div>
+                        );
+                      })()}
+                    </div>
                   </div>
-                </div> */}
+                )}
               </div>
             </div>
           )}

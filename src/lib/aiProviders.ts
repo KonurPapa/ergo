@@ -408,15 +408,33 @@ export interface CliAuthStatus {
   message: string;
 }
 
+function formatFetchError(err: any): string {
+  const isHosted = bridgeClient.isHostedWeb();
+  const isSecure = typeof window !== 'undefined' && window.location.protocol === 'https:';
+  const bridgeUrl = bridgeClient.getBridgeUrl();
+
+  if (err?.name === 'TypeError' && err?.message?.toLowerCase().includes('failed to fetch')) {
+    if (isHosted && isSecure && bridgeUrl.startsWith('http://')) {
+      return `Cannot reach your local device bridge from this hosted web address (HTTPS). Browser security blocks plain HTTP calls to localhost. Run Ergo locally at http://localhost:5173, or connect via API Key.`;
+    }
+    if (isHosted) {
+      return `Unable to connect to local device bridge at ${bridgeUrl}. Ensure Ergo is running locally on your device.`;
+    }
+  }
+  return err?.message || 'Failed to connect to local device bridge';
+}
+
 export async function fetchCliAuthStatus(cli = 'claude'): Promise<CliAuthStatus> {
   try {
-    const res = await fetch(bridgeClient.getApiUrl(`/api/cli/auth-status?cli=${encodeURIComponent(cli)}`));
+    const res = await fetch(bridgeClient.getApiUrl(`/api/cli/auth-status?cli=${encodeURIComponent(cli)}`), {
+      headers: { 'Access-Control-Request-Private-Network': 'true' }
+    });
     if (!res.ok) {
       return { cli, isInstalled: false, isAuthenticated: false, userEmail: null, message: `HTTP ${res.status}` };
     }
     return res.json();
   } catch (err: any) {
-    return { cli, isInstalled: false, isAuthenticated: false, userEmail: null, message: err.message };
+    return { cli, isInstalled: false, isAuthenticated: false, userEmail: null, message: formatFetchError(err) };
   }
 }
 
@@ -424,7 +442,10 @@ export async function installCli(cli = 'claude'): Promise<{ success: boolean; ou
   try {
     const res = await fetch(bridgeClient.getApiUrl('/api/cli/install'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Request-Private-Network': 'true'
+      },
       body: JSON.stringify({ cli })
     });
     const data = await res.json();
@@ -433,7 +454,7 @@ export async function installCli(cli = 'claude'): Promise<{ success: boolean; ou
     }
     return data;
   } catch (err: any) {
-    return { success: false, output: '', error: err.message || 'Failed to connect to installation endpoint' };
+    return { success: false, output: '', error: formatFetchError(err) };
   }
 }
 
@@ -441,13 +462,16 @@ export async function resetCliAuth(cli = 'claude'): Promise<{ success: boolean; 
   try {
     const res = await fetch(bridgeClient.getApiUrl('/api/cli/reset-auth'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Request-Private-Network': 'true'
+      },
       body: JSON.stringify({ cli })
     });
     const data = await res.json();
     return data;
   } catch (err: any) {
-    return { success: false, error: err.message || 'Failed to reset credentials' };
+    return { success: false, error: formatFetchError(err) };
   }
 }
 
@@ -455,7 +479,10 @@ export async function triggerCliLogin(cli = 'claude'): Promise<{ success: boolea
   try {
     const res = await fetch(bridgeClient.getApiUrl('/api/cli/login'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Request-Private-Network': 'true'
+      },
       body: JSON.stringify({ cli })
     });
     const data = await res.json();
@@ -464,7 +491,7 @@ export async function triggerCliLogin(cli = 'claude'): Promise<{ success: boolea
     }
     return data;
   } catch (err: any) {
-    return { success: false, authUrl: null, output: '', pid: undefined, error: err.message || 'Failed to connect to login endpoint' };
+    return { success: false, authUrl: null, output: '', pid: undefined, error: formatFetchError(err) };
   }
 }
 

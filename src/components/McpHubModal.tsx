@@ -1892,7 +1892,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                       <input
                         type="text"
                         className="input-text"
-                        placeholder="https://mcp.my-tool.com/sse or http://localhost:3000/sse"
+                        placeholder="https://mcp.my-tool.com/mcp or http://localhost:3000/mcp"
                         value={newServerEndpoint}
                         onChange={(e) => {
                           setNewServerEndpoint(e.target.value);

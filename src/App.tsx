@@ -727,6 +727,18 @@ export function App() {
     }
   };
 
+  const handleResetSubscription = (cliAgentId: string) => {
+    setUserApiKeys((prev) => {
+      const remaining = prev.filter(
+        (k) => !(k.provider === 'cli_subscription' && (k.cliAgentId === cliAgentId || k.model === cliAgentId))
+      );
+      if (activeKeyId && !remaining.some((k) => k.id === activeKeyId)) {
+        setActiveKeyId(remaining[0]?.id || null);
+      }
+      return remaining;
+    });
+  };
+
   const handleSelectUserKey = (keyId: string | null) => {
     setActiveKeyId(keyId);
   };
@@ -3895,7 +3907,8 @@ export function App() {
             gap: '1rem',
             zIndex: 40,
             fontSize: '0.8rem',
-            color: 'var(--text-bright)'
+            color: 'var(--text-bright)',
+            flexWrap: 'wrap'
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
@@ -3914,7 +3927,10 @@ export function App() {
               <AlertTriangle size={13} />
             </div>
             <span>
-              <strong>Local Device Bridge Disconnected.</strong> Reconnect to access your local <code>~/.ergo</code> folders and run autonomous agents (Claude Code, Antigravity, etc.).
+              <strong>Local Device Bridge Disconnected.</strong>{' '}
+              {bridgeStatus.isMixedContentBlocked
+                ? 'Hosted HTTPS web apps cannot call local HTTP devices. Run Ergo locally at http://localhost:5173 or connect via API Key in Settings.'
+                : 'Reconnect to access your local ~/.ergo folders and run autonomous agents (Claude Code, Antigravity, etc.).'}
             </span>
           </div>
 
@@ -3940,6 +3956,22 @@ export function App() {
             >
               <RefreshCw size={12} className={isReconnectingBridge ? 'spin-animate' : ''} />
               <span>{isReconnectingBridge ? 'Connecting...' : 'Reconnect Device'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsSettingsModalOpen(true)}
+              style={{
+                background: 'rgba(255, 255, 255, 0.08)',
+                color: 'var(--text-bright)',
+                fontWeight: 600,
+                fontSize: '0.74rem',
+                border: '1px solid rgba(255, 255, 255, 0.15)',
+                borderRadius: '6px',
+                padding: '0.35rem 0.65rem',
+                cursor: 'pointer'
+              }}
+            >
+              Configure Bridge
             </button>
           </div>
         </div>
@@ -4210,6 +4242,7 @@ export function App() {
         isOpen={isOnboardingOpen}
         onClose={() => setIsOnboardingOpen(false)}
         onSaveUserKey={handleSaveUserKey}
+        onResetSubscription={handleResetSubscription}
         onCompleteOnboarding={handleCompleteOnboarding}
       />
 
