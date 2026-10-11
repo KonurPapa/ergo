@@ -19,6 +19,8 @@ import {
   type OllamaFallbackPrompt,
   type SwimLaneDoc,
   type AgentPipelineOptions,
+  type PermissionDecision,
+  type TokenUsage,
   type TaskStatus,
   type McpSecretEntry,
   type RunningJobInfo,
@@ -71,6 +73,7 @@ import { executeTaskWithAi, syncTaskOverviewWithAi } from './lib/ai';
 import { startMcpRoutineUpdateChecker } from './lib/mcpClient';
 import { DEFAULT_AGENT_PIPELINE_OPTIONS } from './lib/agentPipeline/contracts';
 import { formatOverviewDocToMarkdown } from './lib/agentPipeline/summary';
+import { routeModelsForRun } from './lib/agentPipeline/modelRouter';
 import {
   type ScheduledJob,
   getScheduledJobs,
@@ -82,6 +85,29 @@ import { registerWorkspaceActionBridge } from './lib/workspaceMcp';
 import { syncSkillsToWorkspace } from './lib/skillsManager';
 import { bridgeClient, type BridgeStatus } from './lib/bridgeClient';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
+
+/**
+ * Token usage of an embedded CLI agent session. The bridge reads the CLI's own session log (Claude Code,
+ * Codex, Gemini CLI) and falls back to a transcript-length estimate (flagged `estimated`) for other CLIs.
+ */
+async function fetchCliSessionUsage(sessionId: string): Promise<TokenUsage | null> {
+  try {
+    const res = await fetch(bridgeClient.getApiUrl(`/api/pty/usage?sessionId=${encodeURIComponent(sessionId)}`));
+    if (!res.ok) return null;
+    const u = (await res.json())?.usage;
+    if (!u || typeof u.inputTokens !== 'number') return null;
+    return {
+      inputTokens: u.inputTokens || 0,
+      outputTokens: u.outputTokens || 0,
+      cachedInputTokens: u.cachedInputTokens || 0,
+      cacheWriteTokens: u.cacheWriteTokens || 0,
+      calls: u.calls || 0,
+      ...(u.estimated ? { estimated: true } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
 
 /** Merge persisted (possibly partial / stale) pipeline settings over the defaults, ignoring undefined values. */
 function mergeAgentPipelineOptions(
@@ -95,6 +121,9 @@ function mergeAgentPipelineOptions(
   if (typeof patch.maxToolRoundsPerAgent === 'number' && Number.isFinite(patch.maxToolRoundsPerAgent)) next.maxToolRoundsPerAgent = patch.maxToolRoundsPerAgent;
   if (typeof patch.enableCleaner === 'boolean') next.enableCleaner = patch.enableCleaner;
   if (typeof patch.enableHardener === 'boolean') next.enableHardener = patch.enableHardener;
+  if (patch.permissionLevel && ['plan', 'ask', 'acceptEdits', 'bypass'].includes(patch.permissionLevel)) next.permissionLevel = patch.permissionLevel;
+  if (patch.effortLevel && ['low', 'medium', 'high', 'xhigh', 'max'].includes(patch.effortLevel)) next.effortLevel = patch.effortLevel;
+  if (typeof patch.autoModelRouting === 'boolean') next.autoModelRouting = patch.autoModelRouting;
   return next;
 }
 
@@ -560,12 +589,12 @@ export function App() {
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
   const [executingTaskId, setExecutingTaskId] = useState<string | number | null>(null);
   const [taskExecutionSteps, setTaskExecutionSteps] = useState<Record<string | number, ExecutionStep[]>>({});
-  const [pendingPermissions, setPendingPermissions] = useState<Record<string | number, { prompt: McpToolPermissionPrompt; resolve: (approved: boolean) => void }>>({});
+  const [pendingPermissions, setPendingPermissions] = useState<Record<string | number, { prompt: McpToolPermissionPrompt; resolve: (decision: PermissionDecision) => void }>>({});
   const [pendingHumanInputs, setPendingHumanInputs] = useState<Record<string | number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>>({});
   const [pendingOllamaFallbacks, setPendingOllamaFallbacks] = useState<Record<string | number, { prompt: OllamaFallbackPrompt; resolve: (choice: OllamaFallbackChoice) => void }>>({});
 
   // Synchronous refs to prevent React state closure races when toasts or buttons fire
-  const pendingPermissionsRef = useRef<Record<string | number, { prompt: McpToolPermissionPrompt; resolve: (approved: boolean) => void }>>({});
+  const pendingPermissionsRef = useRef<Record<string | number, { prompt: McpToolPermissionPrompt; resolve: (decision: PermissionDecision) => void }>>({});
   const pendingHumanInputsRef = useRef<Record<string | number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>>({});
   const pendingOllamaFallbacksRef = useRef<Record<string | number, { prompt: OllamaFallbackPrompt; resolve: (choice: OllamaFallbackChoice) => void }>>({});
 
@@ -1652,10 +1681,10 @@ export function App() {
     });
   }, [briefs, handleDismissToast, pendingPermissions, syncAndSaveProject]);
 
-  const handlePermissionChoice = (taskId: string | number, approved: boolean) => {
+  const handlePermissionChoice = (taskId: string | number, approved: PermissionDecision) => {
     handleDismissToast(`perm-toast-${taskId}`);
 
-    let pending: { prompt: McpToolPermissionPrompt; resolve: (approved: boolean) => void } | undefined;
+    let pending: { prompt: McpToolPermissionPrompt; resolve: (decision: PermissionDecision) => void } | undefined;
     for (const [key, val] of Object.entries(pendingPermissionsRef.current)) {
       if (String(key) === String(taskId)) {
         pending = val;
@@ -1949,7 +1978,35 @@ export function App() {
       );
 
       const prompt = buildTaskCliPrompt(task, currentBrief);
-      const args = buildCliArgsForTask(effectiveCli.command, effectiveCli.extraArgs, prompt, hasApiKeyForCli);
+      // The CLI agent runs the whole task as the manager: pick its model + effort from the effort level.
+      let routedModel: string | undefined;
+      let routedEffort = agentPipelineOptions.effortLevel;
+      try {
+        const routing = await routeModelsForRun({
+          config: {
+            ...aiConfig,
+            authMode: 'cli_subscription',
+            cliCustomCommand: effectiveCli.command,
+          },
+          effort: agentPipelineOptions.effortLevel,
+          autoModelRouting: agentPipelineOptions.autoModelRouting,
+          roles: ['manager'],
+          taskText: `${task.title}\n${task.subtasks.map((st) => `- ${st.text}`).join('\n')}\n${currentBrief?.overview || ''}`,
+          connectedMcps: mcpServers,
+        });
+        const decision = routing.decisions[0];
+        routedModel = decision?.via === 'pinned' ? undefined : decision?.model;
+        routedEffort = decision?.effort || routedEffort;
+      } catch (err) {
+        console.warn('[Ergo CLI Task] Model routing failed; launching with CLI defaults:', err);
+      }
+      const isClaudeCli = effectiveCli.command.trim().replace(/^.*[\\/]/, '').toLowerCase() === 'claude';
+      const args = buildCliArgsForTask(effectiveCli.command, effectiveCli.extraArgs, prompt, hasApiKeyForCli, {
+        permissionLevel: agentPipelineOptions.permissionLevel,
+        effort: routedEffort,
+        model: routedModel,
+        sessionId: isClaudeCli ? crypto.randomUUID() : undefined,
+      });
 
       // Ensure any lingering background PTY process for this task is cleanly killed
       try {
@@ -1975,6 +2032,7 @@ export function App() {
         args,
         env,
         forceRestart: true,
+        spawnId: `${task.id}-${Date.now().toString(36)}`,
       };
 
       setTerminalSessions((prev) => {
@@ -2186,11 +2244,11 @@ export function App() {
           },
           (permissionPrompt) => {
             const toastId = `perm-toast-${task.id}`;
-            return new Promise<boolean>((resolve) => {
-              const wrappedResolve = (approved: boolean) => {
+            return new Promise<PermissionDecision>((resolve) => {
+              const wrappedResolve = (decision: PermissionDecision) => {
                 handleDismissToast(toastId);
                 delete pendingPermissionsRef.current[task.id];
-                resolve(approved);
+                resolve(decision);
               };
 
               pendingPermissionsRef.current[task.id] = { prompt: permissionPrompt, resolve: wrappedResolve };
@@ -2211,6 +2269,13 @@ export function App() {
                     variant: 'secondary',
                     onClick: () => handlePermissionChoice(task.id, false),
                   },
+                  ...(permissionPrompt.rememberLabel
+                    ? [{
+                      label: 'Allow for task',
+                      variant: 'secondary' as const,
+                      onClick: () => handlePermissionChoice(task.id, 'always'),
+                    }]
+                    : []),
                   {
                     label: 'Approve',
                     variant: 'emerald',
@@ -2368,7 +2433,54 @@ export function App() {
     }
   };
 
+  // ── Live token usage for embedded CLI agent sessions ──
+  const cliUsageRef = useRef<Record<string, TokenUsage>>({});
+
+  const applyCliUsage = useCallback((taskId: string | number, usage: TokenUsage) => {
+    cliUsageRef.current[String(taskId)] = usage;
+    setTaskExecutionSteps((prev) => {
+      const existing = prev[taskId] || prev[String(taskId)];
+      if (!existing || existing.length === 0) return prev;
+      let changed = false;
+      const next = existing.map((st) => {
+        if (st.agentRole !== 'manager' || !st.id.startsWith('step-manager-')) return st;
+        changed = true;
+        return { ...st, usage, totalUsage: usage };
+      });
+      if (!changed) return prev;
+      const record = { ...prev, [taskId]: next };
+      taskExecutionStepsRef.current = record;
+      return record;
+    });
+  }, []);
+
+  useEffect(() => {
+    const active = terminalSessions.filter((s) => s.session.isActive);
+    if (active.length === 0) return;
+    let cancelled = false;
+    const poll = async () => {
+      for (const s of active) {
+        const usage = await fetchCliSessionUsage(String(s.session.taskId));
+        if (!cancelled && usage) applyCliUsage(s.session.taskId, usage);
+      }
+    };
+    void poll();
+    const timer = setInterval(poll, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [terminalSessions, applyCliUsage]);
+
   const handleSessionExit = (taskId: string | number, code: number) => {
+    // CLIs flush their session logs on exit — take one last reading for the steps view.
+    setTimeout(() => {
+      void fetchCliSessionUsage(String(taskId)).then((usage) => {
+        if (usage) applyCliUsage(taskId, usage);
+      });
+    }, 1500);
+    const lastCliUsage = cliUsageRef.current[String(taskId)];
+
     setTerminalSessions((prev) =>
       prev.map((s) =>
         s.session.taskId === taskId
@@ -2399,14 +2511,20 @@ export function App() {
         const fallbackCompletion = `**Completion Summary (${buildDate}):**\n- CLI Agent completed task execution successfully (exit code 0).\n- Status: Done / Verified.`;
         const completionText: string = (existingBrief?.completion || existingBrief?.validation) || fallbackCompletion;
 
+        // Persist the CLI session's token usage the same way the pipeline logger does (survives reloads).
+        const withUsageComment = (text: string) =>
+          lastCliUsage
+            ? `${text.replace(/\n*<!--\s*task_token_usage:[\s\S]*?-->/g, '')}\n\n<!-- task_token_usage: ${JSON.stringify(lastCliUsage)} -->`.trim()
+            : text;
         const updatedBrief: AgentContextItem = existingBrief
           ? {
             ...existingBrief,
             overview: existingBrief.overview || '',
-            buildAndVerification: existingBrief.buildAndVerification || '',
+            buildAndVerification: withUsageComment(existingBrief.buildAndVerification || ''),
             status: 'done',
             completion: completionText,
             validation: completionText,
+            ...(lastCliUsage ? { totalUsage: lastCliUsage } : {}),
           }
           : {
             id: `brief_${taskId}`,
@@ -2414,8 +2532,9 @@ export function App() {
             title: task.title,
             status: 'done',
             overview: `Task (${task.title})`,
-            buildAndVerification: `Executed in CLI agent terminal.`,
+            buildAndVerification: withUsageComment(`Executed in CLI agent terminal.`),
             completion: completionText,
+            ...(lastCliUsage ? { totalUsage: lastCliUsage } : {}),
           };
 
         const existingIdx = briefs.findIndex(
@@ -4101,6 +4220,8 @@ export function App() {
             onCancelScheduleTask={handleCancelScheduleTask}
             isPanelOpen={isAiPanelOpen}
             onTogglePanel={handleToggleAiPanel}
+            agentPipelineOptions={agentPipelineOptions}
+            onSetAgentPipelineOptions={setAgentPipelineOptions}
           />
         </div>
 
@@ -4225,6 +4346,8 @@ export function App() {
         onSetAutocompleteSettings={setAutocompleteSettings}
         onClearProjectMemory={handleClearActiveProjectMemory}
         onClearAllMemory={handleClearAllMemory}
+        onExportProject={handleExportProject}
+        onOpenRawMarkdownModal={() => setIsRawMarkdownOpen(true)}
       />
 
       {/* Modal 8: Local Root Directory Picker */}

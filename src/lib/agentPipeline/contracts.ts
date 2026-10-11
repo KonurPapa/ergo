@@ -19,6 +19,7 @@ import {
   type AgentRole,
   type AgentContextItem,
   type AuthMode,
+  type EffortLevel,
   type ExecutionStep,
   type HumanInputPrompt,
   type MCPServer,
@@ -26,12 +27,17 @@ import {
   type McpToolPermissionPrompt,
   type OllamaFallbackChoice,
   type OllamaFallbackPrompt,
+  type PermissionDecision,
+  type PermissionLevel,
   type ProjectData,
   type TaskItem,
   type TokenUsage
 } from '../../types';
 
 export const DEFAULT_AGENT_PIPELINE_OPTIONS: AgentPipelineOptions = {
+  permissionLevel: 'acceptEdits',
+  effortLevel: 'medium',
+  autoModelRouting: true,
   maxConcurrentAgents: 3,
   maxQaRetries: 2,
   maxToolRoundsPerAgent: 10,
@@ -56,6 +62,7 @@ export function addUsage(target: TokenUsage, delta: Partial<TokenUsage>): TokenU
   target.cachedInputTokens += delta.cachedInputTokens || 0;
   target.cacheWriteTokens += delta.cacheWriteTokens || 0;
   target.calls += delta.calls || 0;
+  if (delta.estimated) target.estimated = true;
   return target;
 }
 
@@ -64,7 +71,7 @@ export function formatUsage(u: TokenUsage): string {
   if (u.cachedInputTokens > 0) parts.push(`${u.cachedInputTokens.toLocaleString()} cached`);
   if (u.cacheWriteTokens > 0) parts.push(`${u.cacheWriteTokens.toLocaleString()} written`);
   const cacheStr = parts.length > 0 ? ` (${parts.join(', ')})` : '';
-  return `${u.calls} call${u.calls === 1 ? '' : 's'} · in ${u.inputTokens.toLocaleString()}${cacheStr} · out ${u.outputTokens.toLocaleString()}`;
+  return `${u.estimated ? '≈ ' : ''}${u.calls} call${u.calls === 1 ? '' : 's'} · in ${u.inputTokens.toLocaleString()}${cacheStr} · out ${u.outputTokens.toLocaleString()}`;
 }
 
 // ─── Tools ──────────────────────────────────────────────────────────────────
@@ -129,6 +136,12 @@ export interface ToolLoopRequest {
   authMode?: AuthMode;
   cliAgentId?: string;
   cliCustomCommand?: string;
+  /** Reasoning effort mapped onto the provider's own control (Anthropic output_config.effort, OpenAI reasoning_effort, Gemini thinkingConfig, CLI --effort). */
+  effort?: EffortLevel;
+  /** Model to retry with if the provider rejects `model` (e.g. a routed model the account can't access). */
+  fallbackModel?: string;
+  /** Permission level, forwarded to headless CLI agents so their built-in tools follow the same policy. */
+  permissionLevel?: PermissionLevel;
   /**
    * Cached block 2 — role skill + execution rules. Byte-identical for every agent sharing a role
    * within a run. Rendered AFTER sharedContext so all roles share the longest possible prefix.
@@ -183,7 +196,7 @@ export interface ToolLoopResult {
 
 export interface PipelineCallbacks {
   onStepUpdate: (step: ExecutionStep) => void;
-  onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<boolean>;
+  onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<PermissionDecision>;
   onRequestHumanInput?: (prompt: HumanInputPrompt) => Promise<string>;
   onRequestOllamaFallback?: (prompt: OllamaFallbackPrompt) => Promise<OllamaFallbackChoice>;
 }
@@ -205,6 +218,8 @@ export interface PipelineContext extends PipelineCallbacks {
   usage: TokenUsage;
   /** Shared consecutive failure counter for Ollama calls across all pipeline phases. */
   ollamaFailureState: { count: number };
+  /** Permission rules the user granted with "allow for this task" (keys from permissionRuleKey). */
+  sessionAllowedTools: Set<string>;
   /** Convenience emitter that stamps `time` and `taskId`. */
   emit: (step: Omit<ExecutionStep, 'time' | 'taskId'> & Partial<Pick<ExecutionStep, 'time' | 'taskId'>>) => void;
 }
@@ -218,6 +233,9 @@ export interface ResolvedRoleTarget {
   authMode?: AuthMode;
   cliAgentId?: string;
   cliCustomCommand?: string;
+  effort?: EffortLevel;
+  /** The model this role would use without effort routing — the retry target if a routed model is rejected. */
+  fallbackModel?: string;
 }
 
 /** Resolve which model a role should use — decided once per run (route at task boundaries). */
@@ -260,6 +278,7 @@ export function resolveRoleTarget(config: AIProviderConfig, role: AgentRole): Re
   const authMode = config.authMode || (apiKey === 'cli_subscription_active' ? 'cli_subscription' : undefined);
   const cliAgentId = config.cliAgentId;
   const cliCustomCommand = config.cliCustomCommand;
+  const unroutedModel = resolveModelForRole({ ...config, roleConfigs: config.routedFrom?.roleConfigs ?? config.roleConfigs }, role);
 
   return {
     provider,
@@ -268,8 +287,52 @@ export function resolveRoleTarget(config: AIProviderConfig, role: AgentRole): Re
     baseUrl,
     authMode,
     cliAgentId,
-    cliCustomCommand
+    cliCustomCommand,
+    effort: roleOverride?.effort,
+    fallbackModel: unroutedModel && unroutedModel !== model ? unroutedModel : undefined
   };
+}
+
+const CLI_PRESET_IDS = new Set(['claude-code', 'codex', 'antigravity', 'cursor-cli', 'grok-cli', 'custom']);
+
+/** True if `model` is a preset id / binary name rather than a real model the CLI accepts via --model. */
+export function isCliPlaceholderModel(model: string | undefined, binary: string): boolean {
+  if (!model) return true;
+  return CLI_PRESET_IDS.has(model) || model === binary || model === 'cli_subscription';
+}
+
+/** Resolve the CLI binary a subscription target runs (claude, agy, codex, …). */
+export function resolveCliBinary(target: {
+  provider: AIProviderId;
+  model?: string;
+  cliAgentId?: string;
+  cliCustomCommand?: string;
+}): string {
+  if (target.cliCustomCommand) return target.cliCustomCommand;
+  const byAgentId: Record<string, string> = {
+    antigravity: 'agy',
+    'claude-code': 'claude',
+    codex: 'codex',
+    'cursor-cli': 'cursor',
+    cursor: 'cursor',
+    'grok-cli': 'grok',
+    grok: 'grok',
+    aider: 'aider'
+  };
+  if (target.cliAgentId) return byAgentId[target.cliAgentId] || target.cliAgentId;
+  const byProvider: Partial<Record<AIProviderId, string>> = { gemini: 'agy', openai: 'codex', cursor: 'cursor', grok: 'grok', ollama: 'aider' };
+  if (byProvider[target.provider]) return byProvider[target.provider]!;
+  const m = target.model || '';
+  if (m === 'antigravity' || m.includes('agy') || m.includes('gemini')) return 'agy';
+  if (m === 'codex') return 'codex';
+  if (m === 'cursor-cli' || m === 'cursor') return 'cursor';
+  if (m === 'grok-cli' || m === 'grok') return 'grok';
+  if (m === 'claude-code' || m.includes('claude')) return 'claude';
+  return m || 'claude';
+}
+
+export function isSubscriptionTarget(target: { provider: AIProviderId; authMode?: string; apiKey?: string }): boolean {
+  return target.provider === 'cli_subscription' || target.authMode === 'cli_subscription' || target.apiKey === 'cli_subscription_active';
 }
 
 export function throwIfAborted(signal?: AbortSignal): void {
@@ -312,6 +375,9 @@ export function buildToolLoopRequest(
     authMode: params.authMode ?? target.authMode,
     cliAgentId: params.cliAgentId ?? target.cliAgentId,
     cliCustomCommand: params.cliCustomCommand ?? target.cliCustomCommand,
+    effort: params.effort ?? target.effort,
+    fallbackModel: params.fallbackModel ?? target.fallbackModel,
+    permissionLevel: params.permissionLevel ?? ctx.options.permissionLevel,
     signal: ctx.signal,
     ollamaFailureState: ctx.ollamaFailureState,
     taskId: ctx.task.id,

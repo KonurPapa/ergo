@@ -228,6 +228,10 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     keyPlaceholder: 'sk-ant-api03-...',
     keyDocUrl: 'https://console.anthropic.com/settings/keys',
     models: [
+      { id: 'claude-fable-5-1', name: 'Claude Fable 5.1', description: 'Anthropic’s most capable widely released model for the hardest long-horizon work', tier: 'advanced', contextWindow: 1000000 },
+      { id: 'claude-opus-5-5', name: 'Claude Opus 5.5', description: 'Current Opus: complex agentic coding and multi-step planning', tier: 'advanced', contextWindow: 1000000 },
+      { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', description: 'Current Sonnet: speed and capability for everyday coding and agents', tier: 'standard', contextWindow: 1000000 },
+      { id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', description: 'Current Haiku: fastest and cheapest for simple, well-scoped steps', tier: 'light', contextWindow: 1000000 },
       { id: 'claude-fable-5', name: 'Claude Fable 5', description: 'Anthropic’s most capable widely released frontier model', tier: 'advanced', contextWindow: 200000 },
       { id: 'claude-opus-5', name: 'Claude Opus 5', description: 'Complex agentic coding, deep architecture and enterprise work', tier: 'advanced', contextWindow: 200000 },
       { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', description: 'State-of-the-art balance of speed, intelligence and coding', tier: 'standard', contextWindow: 200000 },

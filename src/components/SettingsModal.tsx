@@ -27,7 +27,8 @@ import {
   Database,
   Trash2,
   Laptop,
-  Beaker
+  Beaker,
+  Download
 } from 'lucide-react';
 import { getChunkCount } from '../lib/memory';
 import { bridgeClient, type BridgeStatus } from '../lib/bridgeClient';
@@ -56,6 +57,8 @@ interface SettingsModalProps {
   onClearAllMemory?: () => Promise<number>;
   autocompleteSettings?: import('../types').AutocompleteSettings;
   onSetAutocompleteSettings?: (next: import('../types').AutocompleteSettings) => void;
+  onExportProject?: () => void;
+  onOpenRawMarkdownModal?: () => void;
 }
 
 /** Bounds for the numeric pipeline knobs (kept in sync with the helper text below). */
@@ -121,7 +124,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClearProjectMemory,
   onClearAllMemory,
   autocompleteSettings = { enabled: true, keybinding: 'Tab' },
-  onSetAutocompleteSettings
+  onSetAutocompleteSettings,
+  onExportProject,
+  onOpenRawMarkdownModal
 }) => {
   const [isScanning, setIsScanning] = useState(false);
   const [storagePathInput, setStoragePathInput] = useState(
@@ -1133,20 +1138,86 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 Last disk write: <strong>{new Date(lastSavedAt).toLocaleTimeString()}</strong> ({new Date(lastSavedAt).toLocaleDateString()})
               </div>
             )}
+
+            {/* Workspace File Downloads & Export */}
+            <div
+              style={{
+                marginTop: '0.85rem',
+                paddingTop: '0.75rem',
+                borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '0.6rem'
+              }}
+            >
+              <div>
+                <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-bright)' }}>
+                  Workspace File Downloads
+                </div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                  Download and export workspace markdown files (.md) directly to your system.
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                {onOpenRawMarkdownModal && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ fontSize: '0.78rem', padding: '0.35rem 0.65rem' }}
+                    onClick={() => {
+                      onClose();
+                      onOpenRawMarkdownModal();
+                    }}
+                    title="Preview and edit raw workspace markdown files before downloading"
+                  >
+                    <FolderOpen size={13} color="var(--accent-cyan)" />
+                    <span>Preview Markdown</span>
+                  </button>
+                )}
+                {onExportProject && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ fontSize: '0.78rem', padding: '0.35rem 0.75rem' }}
+                    onClick={onExportProject}
+                    title="Download all workspace markdown files (.md)"
+                  >
+                    <Download size={13} color="var(--accent-cyan)" />
+                    <span>Download Files (.md)</span>
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
         {/* Modal Footer */}
         <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <button
-            type="button"
-            className="btn btn-outline-glow"
-            style={{ fontSize: '0.82rem' }}
-            onClick={() => onSaveImmediately()}
-          >
-            <Save size={14} />
-            <span>Save to Disk Now</span>
-          </button>
+          <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+            <button
+              type="button"
+              className="btn btn-outline-glow"
+              style={{ fontSize: '0.82rem' }}
+              onClick={() => onSaveImmediately()}
+            >
+              <Save size={14} />
+              <span>Save to Disk Now</span>
+            </button>
+            {onExportProject && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ fontSize: '0.82rem' }}
+                onClick={onExportProject}
+                title="Download all workspace markdown files (.md)"
+              >
+                <Download size={14} color="var(--accent-cyan)" />
+                <span>Download (.md)</span>
+              </button>
+            )}
+          </div>
 
           <button type="button" className="btn btn-primary" onClick={onClose}>
             <Check size={15} />

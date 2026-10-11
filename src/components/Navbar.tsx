@@ -5,7 +5,6 @@ import { type AutosaveStatus } from '../hooks/useAutosave';
 import ergoIcon from '../assets/ergo_icon_2.png';
 import {
   Unplug,
-  Download,
   Brain,
   ChevronDown,
   Check,
@@ -61,7 +60,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   aiConfig: _aiConfig,
   onSelectUserKey,
   onOpenAiScreen,
-  onOpenRawMarkdownModal,
+  onOpenRawMarkdownModal: _onOpenRawMarkdownModal,
   onOpenSettingsModal,
   onSaveImmediately,
   autosaveStatus,
@@ -436,11 +435,6 @@ export const Navbar: React.FC<NavbarProps> = ({
           {connectedCount > 0 ? 'Connections' : 'Add Connections'}
         </button>
 
-        {/* Download & Preview Markdown Files Button */}
-        <button className="btn btn-secondary btn-icon-only" onClick={onOpenRawMarkdownModal} title="Preview and Download Workspace Markdown Files">
-          <Download size={16} color="var(--accent-cyan)" />
-          {/* <span>Download</span> */}
-        </button>
 
         {/* Settings Button (Gear Icon next to Download Button) */}
         <button className="btn btn-secondary btn-icon-only" onClick={onOpenSettingsModal} title="Workspace Settings (Auto-Save Delay & Disk Sync)">

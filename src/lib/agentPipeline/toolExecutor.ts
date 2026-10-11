@@ -9,7 +9,7 @@
  * Results are trimmed to TOOL_RESULT_CHAR_CAP (pass pointers over payloads); the model is told how
  * to narrow the request when that happens.
  */
-import { type ExecutionStep, type HumanInputPrompt, type AgentRole } from '../../types';
+import { type ExecutionStep, type HumanInputPrompt, type AgentRole, type PermissionLevel } from '../../types';
 import { callMcpTool } from '../mcpClient';
 import {
   TOOL_RESULT_CHAR_CAP,
@@ -31,6 +31,101 @@ export interface ToolExecutorOptions {
   locks?: FileLockRegistry;
   onFileWritten?: (path: string) => void;
   stepIdPrefix?: string;
+}
+
+// ─── Permission policy ──────────────────────────────────────────────────────
+
+/** Commands that only read state; anything that writes, deletes, installs or executes project code is excluded. */
+const READ_ONLY_COMMANDS = new Set([
+  'ls', 'cat', 'head', 'tail', 'pwd', 'echo', 'wc', 'grep', 'rg', 'tree', 'which', 'whoami', 'date', 'file', 'stat',
+  'du', 'df', 'uname', 'sort', 'uniq', 'cut', 'realpath', 'dirname', 'basename', 'diff', 'printenv', 'type'
+]);
+const READ_ONLY_GIT = new Set(['status', 'diff', 'log', 'show', 'rev-parse', 'ls-files', 'blame', 'shortlog', 'describe']);
+const FIND_WRITE_FLAGS = new Set(['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprintf', '-fls']);
+
+function isReadOnlySegment(segment: string): boolean {
+  const tokens = segment.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return false;
+  const [cmd, ...rest] = tokens;
+  const name = cmd.replace(/^.*\//, '');
+  if (rest.length === 1 && /^(--version|-v|-V|--help)$/.test(rest[0])) return true;
+  if (READ_ONLY_COMMANDS.has(name)) return true;
+  if (name === 'find') return !rest.some((t) => FIND_WRITE_FLAGS.has(t));
+  if (name === 'git') {
+    const sub = rest.find((t) => !t.startsWith('-'));
+    if (sub === 'branch' || sub === 'remote') return rest.length <= 2 && rest.every((t) => t === sub || t === '-v' || t === '-a' || t === '--list');
+    return Boolean(sub && READ_ONLY_GIT.has(sub));
+  }
+  if (name === 'sed') return rest[0] === '-n' && !rest.some((t) => t.startsWith('-i'));
+  return false;
+}
+
+/**
+ * True for shell commands that can't change anything (ls, cat, grep, git status, find without -exec, …).
+ * Redirection, command substitution, chaining and backgrounding disqualify a command; pipes are fine when
+ * every stage is read-only. Errs on the side of asking.
+ */
+export function isReadOnlyCommand(command: unknown): boolean {
+  if (typeof command !== 'string' || !command.trim()) return false;
+  if (/[;&`<>]|\$\(|\|\|/.test(command)) return false;
+  return command.split('|').every(isReadOnlySegment);
+}
+
+/** Rule key an "allow for this task" answer grants: per command name for shell, one rule for all file edits. */
+export function permissionRuleKey(def: ToolDefinition, call: ToolCallRequest): { key: string; label: string } {
+  if (call.name === 'run_command') {
+    const first = String(call.args?.command || '').trim().split(/\s+/)[0]?.replace(/^.*\//, '') || 'shell';
+    return { key: `run_command:${first}`, label: `all "${first}" commands` };
+  }
+  if (FILE_MUTATING_TOOL_NAMES.has(call.name)) return { key: 'files:edit', label: 'all file edits' };
+  return { key: `${def.serverId}:${call.name}`, label: `all ${def.serverName} / ${call.name} calls` };
+}
+
+type PermissionVerdict = 'allow' | 'prompt' | 'block';
+
+const TRUSTED_SERVERS = new Set(['mcp-filesystem', 'builtin', 'ergo-workspace']);
+const READ_STYLE_TOOL_RE = /^(get|list|read|search|fetch|find|view|describe|query|show|lookup|stat|count|check)(_|[A-Z]|$)/;
+
+/**
+ * Whether a call may change something. External MCP tools are only marked readOnly by a name-list heuristic,
+ * so for them a read-style name (get_*, list_*, search_*…) is also required before skipping approval.
+ */
+function mayMutate(def: ToolDefinition, call: ToolCallRequest): boolean {
+  if (MUTATING_TOOL_NAMES.has(call.name) || !def.readOnly) return true;
+  if (TRUSTED_SERVERS.has(def.serverId) || def.serverId.toLowerCase().includes('workspace')) return false;
+  return !READ_STYLE_TOOL_RE.test(call.name);
+}
+
+/** What the permission level says about one tool call (before any "allow for this task" grants). */
+export function permissionVerdict(level: PermissionLevel, def: ToolDefinition, call: ToolCallRequest): PermissionVerdict {
+  const isMutating = mayMutate(def, call);
+  if (call.name === 'run_command' && isReadOnlyCommand(call.args?.command) && level !== 'ask') return 'allow';
+  if (!isMutating) return level === 'ask' && !def.autoApprove ? 'prompt' : 'allow';
+  switch (level) {
+    case 'plan':
+      return 'block';
+    case 'bypass':
+      return 'allow';
+    case 'ask':
+      return 'prompt';
+    case 'acceptEdits':
+    default:
+      if (FILE_MUTATING_TOOL_NAMES.has(call.name)) return 'allow';
+      return def.autoApprove ? 'allow' : 'prompt';
+  }
+}
+
+/**
+ * One permission prompt at a time per run: parallel workers would otherwise overwrite each other's pending
+ * prompt in the UI (leaving a worker waiting forever). Queued requests re-check grants made while they waited.
+ */
+const permissionQueues = new WeakMap<PipelineContext, Promise<unknown>>();
+
+function withPermissionLock<T>(ctx: PipelineContext, fn: () => Promise<T>): Promise<T> {
+  const prev = permissionQueues.get(ctx) || Promise.resolve();
+  const run = prev.catch(() => undefined).then(fn);
+  permissionQueues.set(ctx, run.catch(() => undefined));
+  return run;
 }
 
 export function summarizeToolArgsForPermission(name: string, args: Record<string, any>): string {
@@ -169,7 +264,11 @@ export function createToolExecutor(opts: ToolExecutorOptions): (calls: ToolCallR
     if (missing.length > 0) {
       return err(call, `"${call.name}" is missing required argument(s): ${missing.join(', ')}.`);
     }
-    const scopeError = checkScope(call, def);
+    const level: PermissionLevel = ctx.options.permissionLevel || 'acceptEdits';
+    const verdict = permissionVerdict(level, def, call);
+    const scopeError = verdict === 'block'
+      ? `"${call.name}" is not allowed: the run is in Plan (read-only) permission mode, so files can't be changed and commands that modify state can't run. Inspect with read-only tools and describe the changes you would make instead.`
+      : checkScope(call, def);
     if (scopeError) {
       const n = ++counter;
       emit({
@@ -195,14 +294,22 @@ export function createToolExecutor(opts: ToolExecutorOptions): (calls: ToolCallR
     });
 
     let approved = true;
-    if (!def.autoApprove && ctx.onRequestPermission) {
-      approved = await ctx.onRequestPermission({
-        id: `perm-${Date.now()}-${n}`,
-        serverId: def.serverId,
-        serverName: def.serverName,
-        toolName: call.name,
-        args,
-        summary: summarizeToolArgsForPermission(call.name, args)
+    if (verdict === 'prompt' && ctx.onRequestPermission) {
+      const rule = permissionRuleKey(def, call);
+      const requestPermission = ctx.onRequestPermission;
+      approved = await withPermissionLock(ctx, async () => {
+        if (ctx.sessionAllowedTools.has(rule.key)) return true;
+        const decision = await requestPermission({
+          id: `perm-${Date.now()}-${n}`,
+          serverId: def.serverId,
+          serverName: def.serverName,
+          toolName: call.name,
+          args,
+          summary: summarizeToolArgsForPermission(call.name, args),
+          rememberLabel: rule.label
+        });
+        if (decision === 'always') ctx.sessionAllowedTools.add(rule.key);
+        return decision === true || decision === 'always';
       });
     }
     if (!approved) {

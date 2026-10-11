@@ -1114,7 +1114,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                       gap: '1rem'
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    {selectedProvider !== 'other' && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                         <ShieldCheck size={18} color="var(--accent-emerald)" />
                         <span style={{ fontSize: '0.86rem', fontWeight: 700, color: 'var(--text-bright)' }}>
@@ -1128,7 +1128,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           <span>Checking status...</span>
                         </div>
                       )}
-                    </div>
+                    </div>}
 
                     <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>
                       {selectedProvider === 'other'

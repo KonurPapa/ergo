@@ -1538,6 +1538,287 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
     }, 800);
   }, [lane.id]);
 
+  // Extension: Pop up markdown formatting characters (e.g. backticks around code) on hover,
+  // allowing user to click to delete them, while keeping formatting clean the rest of the time.
+  const MarkdownHoverSyntaxExtension = Extension.create({
+    name: `markdownHoverSyntax_${lane.id}`,
+    addProseMirrorPlugins() {
+      return [
+        new Plugin({
+          key: new PluginKey(`markdownHoverSyntaxPlugin_${lane.id}`),
+          props: {
+            handleDOMEvents: {
+              mouseover(view, event) {
+                const target = event.target as HTMLElement | null;
+                const spanEl = target?.closest('[data-md-span-id]');
+                if (spanEl) {
+                  const spanId = spanEl.getAttribute('data-md-span-id');
+                  if (spanId) {
+                    view.dom.querySelectorAll(`[data-md-span-id="${spanId}"]`).forEach((el) => {
+                      el.classList.add('is-grave-active');
+                    });
+                  }
+                }
+              },
+              mouseout(view, event) {
+                const target = event.target as HTMLElement | null;
+                const spanEl = target?.closest('[data-md-span-id]');
+                if (spanEl) {
+                  const spanId = spanEl.getAttribute('data-md-span-id');
+                  if (spanId) {
+                    view.dom.querySelectorAll(`[data-md-span-id="${spanId}"]`).forEach((el) => {
+                      el.classList.remove('is-grave-active');
+                    });
+                  }
+                }
+              }
+            },
+            decorations(state) {
+              const decorations: Decoration[] = [];
+              const doc = state.doc;
+              const schema = state.schema;
+
+              // 1. Codeblocks: reveal ``` graves on hover at top & bottom with click-to-delete
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              doc.descendants((node: any, pos: number) => {
+                if (node.type.name === 'codeBlock') {
+                  const nodeStart = pos;
+                  const nodeEnd = pos + node.nodeSize;
+
+                  decorations.push(
+                    Decoration.node(nodeStart, nodeEnd, {
+                      class: 'md-hover-codeblock-node',
+                    })
+                  );
+
+                  // Header widget with ``` backticks and delete action
+                  decorations.push(
+                    Decoration.widget(
+                      nodeStart + 1,
+                      (view, getPos) => {
+                        const header = document.createElement('div');
+                        header.className = 'md-codeblock-hover-graves-header';
+                        header.setAttribute('contenteditable', 'false');
+                        header.title = 'Click to delete code block backticks (```)';
+
+                        const badge = document.createElement('span');
+                        badge.className = 'md-codeblock-grave-badge';
+                        badge.innerHTML = '<span class="md-grave-chars">```</span><span class="md-grave-delete-hint">delete ```</span>';
+
+                        header.appendChild(badge);
+
+                        header.onclick = (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const rawPos = typeof getPos === 'function' ? getPos() : nodeStart;
+                          const currentPos = typeof rawPos === 'number' ? rawPos : nodeStart;
+                          const paragraphType = view.state.schema.nodes.paragraph;
+                          if (paragraphType) {
+                            const tr = view.state.tr;
+                            const resolved = tr.doc.resolve(Math.min(currentPos, tr.doc.content.size));
+                            let depth = resolved.depth;
+                            while (depth > 0 && resolved.node(depth).type.name !== 'codeBlock') {
+                              depth--;
+                            }
+                            if (depth > 0) {
+                              const blockStart = resolved.before(depth);
+                              const blockNode = resolved.node(depth);
+                              const textContent = blockNode.textContent;
+                              const lines = textContent.split('\n');
+                              const paragraphs = lines.map((line: string) =>
+                                paragraphType.create(null, line ? view.state.schema.text(line) : null)
+                              );
+                              tr.replaceWith(blockStart, blockStart + blockNode.nodeSize, paragraphs);
+                              view.dispatch(tr);
+                              view.focus();
+                              scheduleMarkdownChange();
+                            }
+                          }
+                        };
+
+                        return header;
+                      },
+                      { side: -1 }
+                    )
+                  );
+
+                  // Footer widget with closing ``` backticks
+                  decorations.push(
+                    Decoration.widget(
+                      nodeEnd - 1,
+                      (view, getPos) => {
+                        const footer = document.createElement('div');
+                        footer.className = 'md-codeblock-hover-graves-footer';
+                        footer.setAttribute('contenteditable', 'false');
+                        footer.title = 'Click to delete code block backticks (```)';
+
+                        const badge = document.createElement('span');
+                        badge.className = 'md-codeblock-grave-badge';
+                        badge.innerHTML = '<span class="md-grave-chars">```</span>';
+
+                        footer.appendChild(badge);
+
+                        footer.onclick = (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const rawPos = typeof getPos === 'function' ? getPos() : nodeStart;
+                          const currentPos = typeof rawPos === 'number' ? rawPos : nodeStart;
+                          const paragraphType = view.state.schema.nodes.paragraph;
+                          if (paragraphType) {
+                            const tr = view.state.tr;
+                            const resolved = tr.doc.resolve(Math.min(currentPos, tr.doc.content.size));
+                            let depth = resolved.depth;
+                            while (depth > 0 && resolved.node(depth).type.name !== 'codeBlock') {
+                              depth--;
+                            }
+                            if (depth > 0) {
+                              const blockStart = resolved.before(depth);
+                              const blockNode = resolved.node(depth);
+                              const textContent = blockNode.textContent;
+                              const lines = textContent.split('\n');
+                              const paragraphs = lines.map((line: string) =>
+                                paragraphType.create(null, line ? view.state.schema.text(line) : null)
+                              );
+                              tr.replaceWith(blockStart, blockStart + blockNode.nodeSize, paragraphs);
+                              view.dispatch(tr);
+                              view.focus();
+                              scheduleMarkdownChange();
+                            }
+                          }
+                        };
+
+                        return footer;
+                      },
+                      { side: 1 }
+                    )
+                  );
+                }
+              });
+
+              // 2. Inline marks (code, bold, italic, strike): pop up delimiters around text on hover
+              const markTypesToTrack = [
+                { name: 'code', openChar: '`', closeChar: '`', label: 'grave (`)' },
+                { name: 'bold', openChar: '**', closeChar: '**', label: 'bold (**)' },
+                { name: 'italic', openChar: '*', closeChar: '*', label: 'italic (*)' },
+                { name: 'strike', openChar: '~~', closeChar: '~~', label: 'strikethrough (~~)' }
+              ];
+
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              doc.descendants((node: any, pos: number) => {
+                if (node.isBlock && node.content.size > 0) {
+                  markTypesToTrack.forEach(({ name, openChar, closeChar, label }) => {
+                    const markType = schema.marks[name];
+                    if (!markType) return;
+
+                    let spanStart: number | null = null;
+                    let spanEnd: number | null = null;
+
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    node.forEach((child: any, offset: number) => {
+                      const childPos = pos + 1 + offset;
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      const hasMark = child.isText && child.marks.some((m: any) => m.type.name === name);
+
+                      if (hasMark) {
+                        if (spanStart === null) {
+                          spanStart = childPos;
+                        }
+                        spanEnd = childPos + child.nodeSize;
+                      } else {
+                        if (spanStart !== null && spanEnd !== null) {
+                          addInlineGraveDecorations(spanStart, spanEnd, name, openChar, closeChar, label, markType);
+                          spanStart = null;
+                          spanEnd = null;
+                        }
+                      }
+                    });
+
+                    if (spanStart !== null && spanEnd !== null) {
+                      addInlineGraveDecorations(spanStart, spanEnd, name, openChar, closeChar, label, markType);
+                    }
+                  });
+                }
+              });
+
+              function addInlineGraveDecorations(
+                from: number,
+                to: number,
+                name: string,
+                openChar: string,
+                closeChar: string,
+                label: string,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                markType: any
+              ) {
+                const spanId = `md_span_${lane.id}_${from}_${to}_${name}`;
+
+                // Inline decoration spanning the formatted text
+                decorations.push(
+                  Decoration.inline(from, to, {
+                    class: `md-hover-formatted-text md-hover-mark-${name}`,
+                    'data-md-span-id': spanId,
+                  })
+                );
+
+                // Start grave widget
+                decorations.push(
+                  Decoration.widget(
+                    from,
+                    (view) => {
+                      const span = document.createElement('span');
+                      span.className = `md-hover-inline-grave md-grave-open md-grave-type-${name}`;
+                      span.setAttribute('contenteditable', 'false');
+                      span.setAttribute('data-md-span-id', spanId);
+                      span.textContent = openChar;
+                      span.title = `Click to delete ${label}`;
+                      span.onclick = (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const tr = view.state.tr.removeMark(from, to, markType);
+                        view.dispatch(tr);
+                        view.focus();
+                        scheduleMarkdownChange();
+                      };
+                      return span;
+                    },
+                    { side: -1 }
+                  )
+                );
+
+                // End grave widget
+                decorations.push(
+                  Decoration.widget(
+                    to,
+                    (view) => {
+                      const span = document.createElement('span');
+                      span.className = `md-hover-inline-grave md-grave-close md-grave-type-${name}`;
+                      span.setAttribute('contenteditable', 'false');
+                      span.setAttribute('data-md-span-id', spanId);
+                      span.textContent = closeChar;
+                      span.title = `Click to delete ${label}`;
+                      span.onclick = (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const tr = view.state.tr.removeMark(from, to, markType);
+                        view.dispatch(tr);
+                        view.focus();
+                        scheduleMarkdownChange();
+                      };
+                      return span;
+                    },
+                    { side: 1 }
+                  )
+                );
+              }
+
+              return DecorationSet.create(doc, decorations);
+            }
+          }
+        })
+      ];
+    }
+  });
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -1579,6 +1860,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       TaskCheckboxDecorationExtension,
       AutoSurroundExtension,
       TaskAutocompleteExtension,
+      MarkdownHoverSyntaxExtension,
     ],
     content: stripHeaderComments(lane.markdown),
     editorProps: {

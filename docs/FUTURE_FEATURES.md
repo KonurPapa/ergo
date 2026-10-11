@@ -128,7 +128,7 @@ Maybe the implementation looks something like the AI drafting its plan and build
     - the AI should only check off tasks as completed if it successfully gets to the end, not if the user stops a task partway through
     - **make the Ergo app icon `❯` but with a purple gradient across it**
     - tasks with a code line in them don't correctly check/uncheck from the boxes
-    - nest the download button into the settings panel
+    - ~~nest the download button into the settings panel~~
     - remove the AI workstation form being a panel and instead have it be a section directly against the background
     - **task headers / grouping**
         - headers should automatically be assigned a random color from a palette when the user makes a header

@@ -22,11 +22,13 @@ import {
   type ToolLoopStopReason,
   addUsage,
   emptyUsage,
-  throwIfAborted
+  throwIfAborted,
+  isCliPlaceholderModel,
+  resolveCliBinary
 } from './contracts';
 import { bridgeClient } from '../bridgeClient';
 import { toAnthropicTools, toGeminiTools, toOpenAiTools } from './toolSchemas';
-import { type TokenUsage } from '../../types';
+import { type EffortLevel, type TokenUsage } from '../../types';
 
 const RETRYABLE_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529]);
 const MAX_ATTEMPTS = 3;
@@ -84,6 +86,53 @@ async function postJsonWithRetry(url: string, headers: Record<string, string>, b
     }
   }
   return lastOutcome;
+}
+
+/** A 400 that names the effort/thinking parameter — retry the round without it. */
+function isEffortRejection(outcome: FetchOutcome): boolean {
+  return outcome.status === 400 && /effort|reasoning|thinking|output_config/i.test(outcome.errorMessage || '');
+}
+
+/** The provider doesn't know or won't serve this model — retry with the role's un-routed model. */
+function isModelRejection(outcome: FetchOutcome): boolean {
+  return (outcome.status === 404 || outcome.status === 400 || outcome.status === 403) && /model/i.test(outcome.errorMessage || '');
+}
+
+/** Anthropic output_config.effort support: 4.6+ Opus/Sonnet, Haiku 5.5+, every Fable/Mythos. xhigh needs Opus 4.7+ / Sonnet 5+. */
+export function anthropicEffortFor(model: string, effort?: EffortLevel): EffortLevel | undefined {
+  if (!effort) return undefined;
+  const m = /claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d+))?/.exec(model);
+  if (!m) return undefined;
+  const version = Number(m[2]) + (m[3] && m[3].length <= 2 ? Number(m[3]) / 10 : 0);
+  const family = m[1];
+  let supported = false;
+  let xhigh = false;
+  if (family === 'fable' || family === 'mythos') supported = xhigh = true;
+  else if (family === 'opus') { supported = version >= 4.6; xhigh = version >= 4.7; }
+  else if (family === 'sonnet') { supported = version >= 4.6; xhigh = version >= 5; }
+  else if (family === 'haiku') supported = xhigh = version >= 5.5;
+  if (!supported) return undefined;
+  return effort === 'xhigh' && !xhigh ? 'high' : effort;
+}
+
+/** OpenAI reasoning_effort (gpt-5 family and o-series only; low/medium/high). */
+export function openAiEffortFor(model: string, effort?: EffortLevel): 'low' | 'medium' | 'high' | undefined {
+  if (!effort || !/^(gpt-5|o\d)/i.test(model)) return undefined;
+  return effort === 'low' ? 'low' : effort === 'medium' ? 'medium' : 'high';
+}
+
+/** Gemini thinkingConfig: thinkingLevel on Gemini 3+, a thinking-token budget on 2.5. */
+export function geminiThinkingFor(model: string, effort?: EffortLevel): Record<string, any> | undefined {
+  if (!effort) return undefined;
+  const ver = /gemini-(\d+(?:\.\d+)?)/.exec(model);
+  if (!ver) return undefined;
+  const v = Number(ver[1]);
+  if (v >= 3) return { thinkingLevel: effort === 'low' || effort === 'medium' ? 'low' : 'high' };
+  if (v >= 2.5) {
+    const budgets: Record<EffortLevel, number> = { low: 1024, medium: 4096, high: 8192, xhigh: 16384, max: 24576 };
+    return { thinkingBudget: budgets[effort] };
+  }
+  return undefined;
 }
 
 function joinSystem(req: ToolLoopRequest): string {
@@ -324,16 +373,20 @@ async function runAnthropic(req: ToolLoopRequest, tools: ToolDefinition[], usage
   let toolCallCount = 0;
   let firstResponseFired = false;
   let lastToolResultMessage: any | null = null;
+  let activeModel = req.model || 'claude-opus-5-5';
+  let effortDisabled = false;
 
   for (let round = 1; round <= req.maxRounds; round++) {
     throwIfAborted(req.signal);
     const body: any = {
-      model: req.model || 'claude-opus-5',
+      model: activeModel,
       max_tokens: req.maxTokens ?? 16000,
       system,
       messages
     };
     if (anthropicTools) body.tools = anthropicTools;
+    const effort = effortDisabled ? undefined : anthropicEffortFor(activeModel, req.effort);
+    if (effort) body.output_config = { effort };
 
     const outcome = await postJsonWithRetry(
       'https://api.anthropic.com/v1/messages',
@@ -347,14 +400,30 @@ async function runAnthropic(req: ToolLoopRequest, tools: ToolDefinition[], usage
       req.signal,
       'Anthropic'
     );
-    if (!outcome.ok) return makeResult(lastText, round, toolCallCount, usage, 'error', outcome.errorMessage);
+    if (!outcome.ok) {
+      if (effort && isEffortRejection(outcome)) {
+        effortDisabled = true;
+        round--;
+        continue;
+      }
+      if (req.fallbackModel && activeModel !== req.fallbackModel && isModelRejection(outcome)) {
+        console.warn(`[Ergo Provider] Anthropic rejected model ${activeModel}; retrying with ${req.fallbackModel}.`, outcome.errorMessage);
+        activeModel = req.fallbackModel;
+        round--;
+        continue;
+      }
+      return makeResult(lastText, round, toolCallCount, usage, 'error', outcome.errorMessage);
+    }
 
     const data = outcome.json || {};
+    const cacheRead = data.usage?.cache_read_input_tokens || 0;
+    const cacheWrite = data.usage?.cache_creation_input_tokens || 0;
     const delta: TokenUsage = {
-      inputTokens: data.usage?.input_tokens || 0,
+      // Anthropic's input_tokens excludes cache reads/writes; count them so totals reflect the real prompt size.
+      inputTokens: (data.usage?.input_tokens || 0) + cacheRead + cacheWrite,
       outputTokens: data.usage?.output_tokens || 0,
-      cachedInputTokens: data.usage?.cache_read_input_tokens || 0,
-      cacheWriteTokens: data.usage?.cache_creation_input_tokens || 0,
+      cachedInputTokens: cacheRead,
+      cacheWriteTokens: cacheWrite,
       calls: 1
     };
     addUsage(usage, delta);
@@ -410,7 +479,13 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
   const isOllama = flavour === 'ollama';
   if (!isOllama && !req.apiKey) return makeResult('', 0, 0, usage, 'error', 'OpenAI API key missing.');
   const host = (req.baseUrl || 'http://localhost:11434').replace(/\/+$/, '');
-  const url = isOllama ? `${host}/api/chat` : 'https://api.openai.com/v1/chat/completions';
+  // Grok / Cursor arrive here with their own OpenAI-compatible baseUrl.
+  const url = isOllama
+    ? `${host}/api/chat`
+    : req.baseUrl
+      ? `${req.baseUrl.replace(/\/+$/, '')}/chat/completions`
+      : 'https://api.openai.com/v1/chat/completions';
+  const providerLabel = isOllama ? 'Ollama' : req.baseUrl?.includes('x.ai') ? 'xAI' : req.baseUrl?.includes('cursor') ? 'Cursor' : 'OpenAI';
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (!isOllama) headers.Authorization = `Bearer ${req.apiKey}`;
 
@@ -423,10 +498,13 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
   let toolCallCount = 0;
   let firstResponseFired = false;
   let noToolSupport = false;
+  let activeModel = req.model || (isOllama ? 'llama3.2' : 'gpt-5.4');
+  let effortDisabled = false;
 
   for (let round = 1; round <= req.maxRounds; round++) {
     throwIfAborted(req.signal);
-    const body: any = { model: req.model || (isOllama ? 'llama3.2' : 'gpt-5.4'), messages };
+    const body: any = { model: activeModel, messages };
+    const effort = isOllama || effortDisabled ? undefined : openAiEffortFor(activeModel, req.effort);
     if (isOllama) {
       body.stream = false;
       body.options = {
@@ -435,7 +513,12 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
         temperature: 0.2
       };
     } else {
-      if (req.maxTokens) body.max_tokens = req.maxTokens;
+      // Reasoning models (gpt-5 / o-series) reject max_tokens in favour of max_completion_tokens.
+      if (req.maxTokens) {
+        if (/^(gpt-5|o\d)/i.test(activeModel)) body.max_completion_tokens = req.maxTokens;
+        else body.max_tokens = req.maxTokens;
+      }
+      if (effort) body.reasoning_effort = effort;
     }
     if (oaTools) {
       body.tools = oaTools;
@@ -445,7 +528,7 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
       else body.response_format = { type: 'json_object' };
     }
 
-    let outcome = await postJsonWithRetry(url, headers, body, req.signal, isOllama ? 'Ollama' : 'OpenAI');
+    let outcome = await postJsonWithRetry(url, headers, body, req.signal, providerLabel);
     if (!outcome.ok && isOllama && oaTools && /does not support tools/i.test(outcome.errorMessage || '')) {
       // Model lacks tool calling: degrade to a single-shot answer and report it.
       noToolSupport = true;
@@ -454,7 +537,20 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
       if (req.responseFormat === 'json') body.format = 'json';
       outcome = await postJsonWithRetry(url, headers, body, req.signal, 'Ollama');
     }
-    if (!outcome.ok) return makeResult(lastText, round, toolCallCount, usage, 'error', outcome.errorMessage);
+    if (!outcome.ok) {
+      if (effort && isEffortRejection(outcome)) {
+        effortDisabled = true;
+        round--;
+        continue;
+      }
+      if (req.fallbackModel && activeModel !== req.fallbackModel && isModelRejection(outcome)) {
+        console.warn(`[Ergo Provider] ${providerLabel} rejected model ${activeModel}; retrying with ${req.fallbackModel}.`, outcome.errorMessage);
+        activeModel = req.fallbackModel;
+        round--;
+        continue;
+      }
+      return makeResult(lastText, round, toolCallCount, usage, 'error', outcome.errorMessage);
+    }
 
     const data = outcome.json || {};
     const delta: TokenUsage = isOllama
@@ -474,7 +570,7 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
     }
 
     const message = isOllama ? data.message : data.choices?.[0]?.message;
-    if (!message) return makeResult(lastText, round, toolCallCount, usage, 'error', `${isOllama ? 'Ollama' : 'OpenAI'} returned no message.`);
+    if (!message) return makeResult(lastText, round, toolCallCount, usage, 'error', `${providerLabel} returned no message.`);
     if (typeof message.content === 'string' && message.content.trim()) lastText = message.content;
 
     const toolCalls: any[] = Array.isArray(message.tool_calls) ? [...message.tool_calls] : [];
@@ -539,13 +635,15 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
 
 async function runGemini(req: ToolLoopRequest, tools: ToolDefinition[], usage: TokenUsage): Promise<ToolLoopResult> {
   if (!req.apiKey) return makeResult('', 0, 0, usage, 'error', 'Google Gemini API key missing.');
-  const model = req.model || 'gemini-3.7-pro';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(req.apiKey)}`;
+  let activeModel = req.model || 'gemini-3.7-pro';
+  const urlFor = (model: string) =>
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(req.apiKey!)}`;
   const contents: any[] = [{ role: 'user', parts: [{ text: req.initialUserMessage }] }];
   const geminiTools = tools.length > 0 ? [{ functionDeclarations: toGeminiTools(tools) }] : undefined;
   let lastText = '';
   let toolCallCount = 0;
   let firstResponseFired = false;
+  let effortDisabled = false;
 
   for (let round = 1; round <= req.maxRounds; round++) {
     throwIfAborted(req.signal);
@@ -553,16 +651,34 @@ async function runGemini(req: ToolLoopRequest, tools: ToolDefinition[], usage: T
       systemInstruction: { parts: [{ text: joinSystem(req) }] },
       contents
     };
+    const generationConfig: Record<string, any> = {};
     if (geminiTools) body.tools = geminiTools;
-    else if (req.responseFormat === 'json') body.generationConfig = { responseMimeType: 'application/json' };
+    else if (req.responseFormat === 'json') generationConfig.responseMimeType = 'application/json';
+    const thinkingConfig = effortDisabled ? undefined : geminiThinkingFor(activeModel, req.effort);
+    if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
+    if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
 
-    const outcome = await postJsonWithRetry(url, { 'Content-Type': 'application/json' }, body, req.signal, 'Gemini');
-    if (!outcome.ok) return makeResult(lastText, round, toolCallCount, usage, 'error', outcome.errorMessage);
+    const outcome = await postJsonWithRetry(urlFor(activeModel), { 'Content-Type': 'application/json' }, body, req.signal, 'Gemini');
+    if (!outcome.ok) {
+      if (thinkingConfig && isEffortRejection(outcome)) {
+        effortDisabled = true;
+        round--;
+        continue;
+      }
+      if (req.fallbackModel && activeModel !== req.fallbackModel && isModelRejection(outcome)) {
+        console.warn(`[Ergo Provider] Gemini rejected model ${activeModel}; retrying with ${req.fallbackModel}.`, outcome.errorMessage);
+        activeModel = req.fallbackModel;
+        round--;
+        continue;
+      }
+      return makeResult(lastText, round, toolCallCount, usage, 'error', outcome.errorMessage);
+    }
 
     const data = outcome.json || {};
     const delta: TokenUsage = {
       inputTokens: data.usageMetadata?.promptTokenCount || 0,
-      outputTokens: data.usageMetadata?.candidatesTokenCount || 0,
+      // Thinking tokens are billed as output.
+      outputTokens: (data.usageMetadata?.candidatesTokenCount || 0) + (data.usageMetadata?.thoughtsTokenCount || 0),
       cachedInputTokens: data.usageMetadata?.cachedContentTokenCount || 0,
       cacheWriteTokens: 0,
       calls: 1
@@ -614,46 +730,10 @@ async function runGemini(req: ToolLoopRequest, tools: ToolDefinition[], usage: T
 // ─── CLI Subscription Bridge (Headless) ──────────────────────────────────────
 
 async function runCliSubscription(req: ToolLoopRequest, tools: ToolDefinition[], usage: TokenUsage): Promise<ToolLoopResult> {
-  let binary = 'claude';
-  if (req.cliCustomCommand) {
-    binary = req.cliCustomCommand;
-  } else if (req.cliAgentId) {
-    binary = req.cliAgentId === 'antigravity'
-      ? 'agy'
-      : req.cliAgentId === 'claude-code'
-      ? 'claude'
-      : req.cliAgentId === 'codex'
-      ? 'codex'
-      : req.cliAgentId === 'cursor-cli' || req.cliAgentId === 'cursor'
-      ? 'cursor'
-      : req.cliAgentId === 'grok-cli' || req.cliAgentId === 'grok'
-      ? 'grok'
-      : req.cliAgentId === 'aider'
-      ? 'aider'
-      : req.cliAgentId;
-  } else if (req.provider === 'gemini') {
-    binary = 'agy';
-  } else if (req.provider === 'openai') {
-    binary = 'codex';
-  } else if (req.provider === 'cursor') {
-    binary = 'cursor';
-  } else if (req.provider === 'grok') {
-    binary = 'grok';
-  } else if (req.provider === 'ollama') {
-    binary = 'aider';
-  } else if (req.model === 'antigravity' || req.model?.includes('agy') || req.model?.includes('gemini')) {
-    binary = 'agy';
-  } else if (req.model === 'codex') {
-    binary = 'codex';
-  } else if (req.model === 'cursor-cli' || req.model === 'cursor') {
-    binary = 'cursor';
-  } else if (req.model === 'grok-cli' || req.model === 'grok') {
-    binary = 'grok';
-  } else if (req.model === 'claude-code' || req.model?.includes('claude')) {
-    binary = 'claude';
-  } else if (req.model) {
-    binary = req.model;
-  }
+  const binary = resolveCliBinary(req);
+  // Only forward real model names; preset ids like "claude-code" are not valid --model values.
+  let cliModel = isCliPlaceholderModel(req.model, binary) ? undefined : req.model;
+  const cliFallbackModel = isCliPlaceholderModel(req.fallbackModel, binary) ? undefined : req.fallbackModel;
 
   const systemText = joinSystem(req);
   let conversationHistory = req.initialUserMessage;
@@ -687,6 +767,9 @@ async function runCliSubscription(req: ToolLoopRequest, tools: ToolDefinition[],
         prompt: conversationHistory + toolsInstruction,
         systemPrompt: systemText,
         responseFormat: req.responseFormat,
+        model: cliModel,
+        effort: req.effort,
+        permissionLevel: req.permissionLevel,
         timeoutMs: 60_000,
         env: cliEnv
       }),
@@ -700,20 +783,38 @@ async function runCliSubscription(req: ToolLoopRequest, tools: ToolDefinition[],
 
     const data = await res.json();
     if (!data.success && !data.output) {
+      const failure = `${data.stderr || ''} ${data.error || ''}`;
+      // A routed model the subscription can't use: retry this round with the un-routed model (or the CLI default).
+      if (cliModel && /model/i.test(failure) && /not (?:found|available|supported)|invalid|unknown|access|permission|unsupported/i.test(failure)) {
+        console.warn(`[Ergo Provider] ${binary} rejected model ${cliModel}; retrying with ${cliFallbackModel || 'the CLI default'}.`);
+        cliModel = cliFallbackModel && cliFallbackModel !== cliModel ? cliFallbackModel : undefined;
+        round--;
+        continue;
+      }
       return makeResult(lastText, round, toolCallCount, usage, 'error', data.stderr || 'CLI execution failed.');
     }
 
     lastText = data.output || '';
     req.onFirstResponse?.();
 
-    // Approximate usage delta for accounting
-    const delta: TokenUsage = {
-      inputTokens: Math.ceil(conversationHistory.length / 4),
-      outputTokens: Math.ceil(lastText.length / 4),
-      cachedInputTokens: 0,
-      cacheWriteTokens: 0,
-      calls: 1
-    };
+    // Prefer the usage the CLI reported (claude --output-format json, codex --json); otherwise estimate ~4 chars/token.
+    const reported = data.usage;
+    const delta: TokenUsage = reported && (reported.inputTokens > 0 || reported.outputTokens > 0)
+      ? {
+          inputTokens: reported.inputTokens || 0,
+          outputTokens: reported.outputTokens || 0,
+          cachedInputTokens: reported.cachedInputTokens || 0,
+          cacheWriteTokens: reported.cacheWriteTokens || 0,
+          calls: 1
+        }
+      : {
+          inputTokens: Math.ceil((systemText.length + conversationHistory.length + toolsInstruction.length) / 4),
+          outputTokens: Math.ceil(lastText.length / 4),
+          cachedInputTokens: 0,
+          cacheWriteTokens: 0,
+          calls: 1,
+          estimated: true
+        };
     addUsage(usage, delta);
     req.onUsage?.(delta);
 

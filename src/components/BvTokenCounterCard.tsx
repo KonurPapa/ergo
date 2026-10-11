@@ -107,7 +107,8 @@ export function extractTaskTokenSummary(
             outputTokens: parsed.outputTokens || 0,
             cachedInputTokens: parsed.cachedInputTokens || 0,
             cacheWriteTokens: parsed.cacheWriteTokens || 0,
-            calls: parsed.calls || 0
+            calls: parsed.calls || 0,
+            ...(parsed.estimated ? { estimated: true } : {})
           };
           found = true;
         }
@@ -334,10 +335,13 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
               textShadow: isExecuting ? '0 0 12px rgba(6, 182, 212, 0.3)' : 'none'
             }}
           >
-            {totalTokens.toLocaleString()}
+            {totalUsage.estimated ? '≈ ' : ''}{totalTokens.toLocaleString()}
           </span>
-          <span style={{ fontSize: '0.72rem', fontWeight: 500, color: 'var(--text-muted)' }}>
-            tokens
+          <span
+            style={{ fontSize: '0.72rem', fontWeight: 500, color: 'var(--text-muted)' }}
+            title={totalUsage.estimated ? "Estimated from text length — this CLI doesn't report exact token counts" : undefined}
+          >
+            {totalUsage.estimated ? 'tokens (est.)' : 'tokens'}
           </span>
         </div>
       </div>
@@ -522,10 +526,10 @@ export const BvHeaderTokenBadge: React.FC<BvTokenCounterCardProps> = ({
         padding: '0.15rem 0.45rem',
         borderRadius: '4px'
       }}
-      title={`Total tokens used: ${summary.totalTokens.toLocaleString()} (${summary.totalUsage.calls} calls)`}
+      title={`Total tokens used: ${summary.totalUsage.estimated ? '≈ ' : ''}${summary.totalTokens.toLocaleString()} (${summary.totalUsage.calls} calls)${summary.totalUsage.estimated ? ' — estimated' : ''}`}
     >
       <Zap size={11} color={isExecuting ? '#06b6d4' : 'var(--accent-violet)'} />
-      <span>{summary.totalTokens.toLocaleString()}</span>
+      <span>{summary.totalUsage.estimated ? '≈ ' : ''}{summary.totalTokens.toLocaleString()}</span>
       <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', fontWeight: 400 }}>tokens</span>
     </span>
   );

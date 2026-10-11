@@ -12,6 +12,7 @@ export interface AgentTerminalProps {
   sessionId?: string;
   env?: Record<string, string>;
   forceRestart?: boolean;
+  spawnId?: string;
   onExit?: (code: number) => void;
   /** Called once the WS + PTY are ready */
   onReady?: () => void;
@@ -29,6 +30,7 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
   sessionId,
   env,
   forceRestart,
+  spawnId,
   onExit,
   onReady,
   onError,
@@ -159,7 +161,8 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
           env,
           cols,
           rows,
-          forceRestart
+          forceRestart,
+          spawnId
         }));
       } catch (err) {
         console.error('[Ergo Terminal] Spawn send error:', err);

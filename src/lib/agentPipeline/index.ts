@@ -18,6 +18,7 @@ import {
   type MCPServer,
   type ExecutionStep,
   type McpToolPermissionPrompt,
+  type PermissionDecision,
   type HumanInputPrompt,
   type OllamaFallbackChoice,
   type OllamaFallbackPrompt,
@@ -35,6 +36,7 @@ import { runManager, isStraightforwardTask, type ManagerRunResult } from './mana
 import { runCleaner } from './cleaner';
 import { runHardener, type HardenerResult } from './hardener';
 import { runLogger } from './logger';
+import { routeModelsForRun, describeRouting, EFFORT_LABELS } from './modelRouter';
 
 export interface HardenerEvaluation {
   shouldRun: boolean;
@@ -132,7 +134,7 @@ export async function executeTaskWithAi(
   aiConfig: AIProviderConfig,
   connectedMcps: MCPServer[],
   onStepUpdate: (step: ExecutionStep) => void,
-  onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<boolean>,
+  onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<PermissionDecision>,
   onRequestHumanInput?: (prompt: HumanInputPrompt) => Promise<string>,
   signal?: AbortSignal,
   options?: Partial<AgentPipelineOptions>,
@@ -173,6 +175,7 @@ export async function executeTaskWithAi(
     signal,
     usage: emptyUsage(),
     ollamaFailureState: { count: 0 },
+    sessionAllowedTools: new Set<string>(),
     onStepUpdate,
     onRequestPermission,
     onRequestHumanInput,
@@ -191,6 +194,25 @@ export async function executeTaskWithAi(
 
     console.log('%c[Ergo Agent Pipeline] ── Run started ──', 'color: #38bdf8; font-weight: bold; font-size: 13px;');
     console.log(`Task #${task.id} "${task.title}" · run ${runId} · dir ${runDir} · options`, resolvedOptions);
+
+    // Effort routing: pick each stage's model + effort once, before any agent runs (route at task boundaries).
+    const routing = await routeModelsForRun({
+      config: aiConfig,
+      effort: resolvedOptions.effortLevel,
+      autoModelRouting: resolvedOptions.autoModelRouting,
+      roles: ['summary', 'manager', 'worker', 'cleaner', 'hardener', 'logger'],
+      taskText: `${task.title}\n${task.category || ''}\n${task.subtasks.map((st) => `- ${st.text}`).join('\n')}\n${brief?.overview || brief?.brief || ''}`,
+      connectedMcps
+    });
+    ctx.aiConfig = routing.config;
+    console.log('[Ergo Agent Pipeline] Model routing:\n' + describeRouting(routing.decisions));
+    ctx.emit({
+      id: 'step-model-routing',
+      stage: 'context',
+      title: `Effort ${EFFORT_LABELS[resolvedOptions.effortLevel]} · Permissions ${resolvedOptions.permissionLevel === 'acceptEdits' ? 'Accept edits' : resolvedOptions.permissionLevel === 'bypass' ? 'Full access' : resolvedOptions.permissionLevel === 'plan' ? 'Plan (read-only)' : 'Ask'}`,
+      detail: describeRouting(routing.decisions),
+      status: 'success'
+    });
 
     // Step 1: Zero-token vector memory & guidelines context assembly
     const baseline = await assembleTaskContext(ctx);

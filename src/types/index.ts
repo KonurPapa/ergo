@@ -119,7 +119,12 @@ export interface McpToolPermissionPrompt {
   args: Record<string, any>;
   summary: string;
   diffPreview?: string;
+  /** What an "allow for this task" answer would cover, e.g. "all npm commands" (omit to hide that option). */
+  rememberLabel?: string;
 }
+
+/** Answer to a permission prompt: allow once, deny, or allow every matching call for the rest of the run. */
+export type PermissionDecision = boolean | 'always';
 
 export type OllamaFallbackChoice = 'terminate' | 'switch_cloud';
 
@@ -211,6 +216,8 @@ export interface CliExecutionResult {
 export interface AgentModelConfig {
   provider?: AIProviderId;
   model?: string;
+  /** Reasoning effort for this role (set by the effort router; maps to each provider's own effort control). */
+  effort?: EffortLevel;
 }
 
 export interface AIProviderConfig {
@@ -233,6 +240,8 @@ export interface AIProviderConfig {
   autocompleteModel?: string;
   /** Per-role routing overrides: customize which provider and model runs each execution agent */
   roleConfigs?: Partial<Record<AgentRole, AgentModelConfig>>;
+  /** Set by the effort router: the user's own roleConfigs before routed models were merged in. */
+  routedFrom?: { roleConfigs?: Partial<Record<AgentRole, AgentModelConfig>> };
   /** Provider-specific credentials dictionary for multi-provider profiles */
   providerKeys?: Partial<Record<AIProviderId, { apiKey?: string; baseUrl?: string }>>;
   apiKey?: string;
@@ -493,6 +502,7 @@ export type AgentRole = 'summary' | 'manager' | 'worker' | 'cleaner' | 'hardener
 
 /** Token accounting for a single LLM call or an aggregate across calls. */
 export interface TokenUsage {
+  /** All prompt tokens, INCLUDING cache reads/writes (Anthropic's raw input_tokens is normalized up to this). */
   inputTokens: number;
   outputTokens: number;
   /** Prompt tokens served from the provider's prompt cache (Anthropic cache_read, OpenAI cached_tokens, Gemini cachedContentTokenCount). */
@@ -501,6 +511,8 @@ export interface TokenUsage {
   cacheWriteTokens: number;
   /** Number of LLM round-trips aggregated into this record. */
   calls: number;
+  /** True when any part of this tally was approximated from text length instead of reported by the provider. */
+  estimated?: boolean;
 }
 
 export interface ExecutionStep {
@@ -673,6 +685,8 @@ export interface SpawnedSession {
   env?: Record<string, string>;
   /** If true, tells PTY server to kill any prior lingering session for this task */
   forceRestart?: boolean;
+  /** Unique per launch; terminal views re-mounting with the same id reattach instead of restarting the agent. */
+  spawnId?: string;
 }
 
 // ─── Human Workspace AI Assistant Types ──────────────────────────────────────
@@ -694,8 +708,26 @@ export interface HumanAiAssistantResult {
 /** Coarse classification of a task; gates the Cleaner (lint/format) and shapes the Hardener's QA prompt. */
 export type TaskKind = 'coding' | 'writing' | 'research' | 'ops' | 'data' | 'other';
 
+/**
+ * How much the agent may do without asking, mirroring Claude Code's permission modes:
+ *  - plan:        read-only; edits and commands are refused, nothing is asked
+ *  - ask:         ask before every file edit, command, and external tool action
+ *  - acceptEdits: workspace file edits and read-only commands run freely; ask for other commands and external tools
+ *  - bypass:      never ask
+ */
+export type PermissionLevel = 'plan' | 'ask' | 'acceptEdits' | 'bypass';
+
+/** Reasoning effort, using the shared scale that Claude, Antigravity and Codex expose. */
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
 /** User-tunable knobs for the agent execution pipeline (persisted in settings.json). */
 export interface AgentPipelineOptions {
+  /** Permission level applied to pipeline tool calls and to spawned CLI agents. */
+  permissionLevel: PermissionLevel;
+  /** Effort level: drives each provider's effort parameter and the per-stage model choice. */
+  effortLevel: EffortLevel;
+  /** Pick each stage's model from the provider's lineup based on effort (explicit per-role pins still win). */
+  autoModelRouting: boolean;
   /** Maximum worker sub-agents running concurrently (fan-out limit). */
   maxConcurrentAgents: number;
   /** How many times a Hardener QA failure may trigger a fresh Step 3 retry. */

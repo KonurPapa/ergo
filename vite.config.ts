@@ -463,6 +463,149 @@ function syncClaudeConfig(apiKey?: string, projectCwd?: string) {
   }
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLI agent policy + usage helpers
+// Shared by the headless runner (/api/cli/execute) and PTY usage lookups (/api/pty/usage).
+// ─────────────────────────────────────────────────────────────────────────────
+
+type BridgeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+type BridgePermission = 'plan' | 'ask' | 'acceptEdits' | 'bypass';
+
+interface BridgeUsage {
+  /** All prompt tokens including cache reads/writes. */
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteTokens: number;
+  calls: number;
+  estimated?: boolean;
+}
+
+const EFFORT_VALUES = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+const PERMISSION_VALUES = new Set(['plan', 'ask', 'acceptEdits', 'bypass']);
+
+function asEffort(v: any): BridgeEffort | undefined {
+  return typeof v === 'string' && EFFORT_VALUES.has(v) ? (v as BridgeEffort) : undefined;
+}
+
+function asPermission(v: any): BridgePermission | undefined {
+  return typeof v === 'string' && PERMISSION_VALUES.has(v) ? (v as BridgePermission) : undefined;
+}
+
+const PERMISSION_FLAG_PATTERN = /^(--permission-mode|--dangerously-skip-permissions|--mode|--sandbox|-s|--ask-for-approval|-a|--dangerously-bypass-approvals-and-sandbox|--full-auto|--approval-mode|--yolo)$/;
+
+/** Normalizes Anthropic / OpenAI / Codex / Gemini usage objects onto BridgeUsage (input includes cached tokens). */
+function normalizeUsageObject(u: any): BridgeUsage | null {
+  if (!u || typeof u !== 'object') return null;
+  const n = (v: any) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  if ('promptTokenCount' in u || 'candidatesTokenCount' in u) {
+    return {
+      inputTokens: n(u.promptTokenCount),
+      outputTokens: n(u.candidatesTokenCount) + n(u.thoughtsTokenCount),
+      cachedInputTokens: n(u.cachedContentTokenCount),
+      cacheWriteTokens: 0,
+      calls: 1
+    };
+  }
+  if ('input_tokens' in u || 'output_tokens' in u) {
+    const anthropicStyle = 'cache_read_input_tokens' in u || 'cache_creation_input_tokens' in u;
+    const cacheRead = anthropicStyle ? n(u.cache_read_input_tokens) : n(u.cached_input_tokens);
+    const cacheWrite = anthropicStyle ? n(u.cache_creation_input_tokens) : 0;
+    return {
+      inputTokens: n(u.input_tokens) + (anthropicStyle ? cacheRead + cacheWrite : 0),
+      outputTokens: n(u.output_tokens),
+      cachedInputTokens: cacheRead,
+      cacheWriteTokens: cacheWrite,
+      calls: 1
+    };
+  }
+  if ('input' in u || 'output' in u) {
+    // Gemini CLI session message tokens
+    return { inputTokens: n(u.input), outputTokens: n(u.output) + n(u.thoughts), cachedInputTokens: n(u.cached), cacheWriteTokens: 0, calls: 1 };
+  }
+  return null;
+}
+
+function addBridgeUsage(target: BridgeUsage, delta: BridgeUsage | null) {
+  if (!delta) return;
+  target.inputTokens += delta.inputTokens;
+  target.outputTokens += delta.outputTokens;
+  target.cachedInputTokens += delta.cachedInputTokens;
+  target.cacheWriteTokens += delta.cacheWriteTokens;
+  target.calls += delta.calls;
+}
+
+function emptyBridgeUsage(): BridgeUsage {
+  return { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, calls: 0 };
+}
+
+/** `claude -p --output-format json` prints one result object. */
+function parseClaudeJsonResult(stdout: string): { text: string; usage: BridgeUsage | null; isError: boolean } | null {
+  const trimmed = stdout.trim();
+  const candidates = [trimmed, ...trimmed.split('\n').reverse().filter((l) => l.trim().startsWith('{'))];
+  for (const c of candidates) {
+    try {
+      const obj = JSON.parse(c);
+      if (obj && typeof obj === 'object' && (obj.type === 'result' || 'result' in obj)) {
+        const usage = normalizeUsageObject(obj.usage);
+        if (usage) usage.calls = typeof obj.num_turns === 'number' && obj.num_turns > 0 ? obj.num_turns : 1;
+        return { text: typeof obj.result === 'string' ? obj.result : '', usage, isError: Boolean(obj.is_error) };
+      }
+    } catch {}
+  }
+  return null;
+}
+
+/** `codex exec --json` prints JSONL events; usage arrives on turn.completed (or token_count events in older builds). */
+function parseCodexJsonl(stdout: string): { text: string; usage: BridgeUsage | null } {
+  let text = '';
+  const turnUsage = emptyBridgeUsage();
+  let lastTotal: BridgeUsage | null = null;
+  for (const line of stdout.split('\n')) {
+    const l = line.trim();
+    if (!l.startsWith('{')) continue;
+    let ev: any;
+    try { ev = JSON.parse(l); } catch { continue; }
+    if (ev.type === 'turn.completed' && ev.usage) addBridgeUsage(turnUsage, normalizeUsageObject(ev.usage));
+    const info = ev.payload?.info ?? ev.msg?.info ?? ev.info;
+    if ((ev.payload?.type === 'token_count' || ev.msg?.type === 'token_count' || ev.type === 'token_count') && info?.total_token_usage) {
+      lastTotal = normalizeUsageObject(info.total_token_usage);
+    }
+    const item = ev.item;
+    if (ev.type === 'item.completed' && item && (item.type === 'agent_message' || item.type === 'assistant_message') && typeof item.text === 'string') {
+      text = item.text;
+    }
+  }
+  const usage = turnUsage.calls > 0 ? turnUsage : lastTotal;
+  return { text, usage };
+}
+
+let agyModelListCache: { at: number; ids: string[] } | null = null;
+
+/** Model ids reported by `agy models` (cached 10 minutes). Empty when agy is missing or not logged in. */
+async function listAgyModels(cwd: string): Promise<string[]> {
+  if (agyModelListCache && Date.now() - agyModelListCache.at < 10 * 60_000) return agyModelListCache.ids;
+  const localAgy = path.join(os.homedir(), '.local', 'bin', 'agy');
+  const bin = fsSync.existsSync(localAgy) ? localAgy : 'agy';
+  const out = await runShellCommand(`"${bin}" models`, cwd, 20_000).catch(() => null);
+  const ids = out && out.exitCode === 0
+    ? out.stdout.split('\n').map((l) => l.trim().split(/\s+/)[0]).filter((id) => /^[a-z0-9][a-z0-9.-]+$/i.test(id) && id.includes('-'))
+    : [];
+  agyModelListCache = { at: Date.now(), ids };
+  return ids;
+}
+
+/** Drops model names the target CLI would reject (e.g. API ids sent to agy, preset ids sent to claude). */
+async function sanitizeCliModel(cliBase: string, model: string | undefined, cwd: string): Promise<string | undefined> {
+  if (!model || !model.trim()) return undefined;
+  const m = model.trim();
+  if (cliBase.includes('claude')) return /^(haiku|sonnet|opus|fable|claude-[a-z0-9.-]+)$/i.test(m) ? m : undefined;
+  if (cliBase.includes('agy')) return (await listAgyModels(cwd)).includes(m) ? m : undefined;
+  if (cliBase.includes('codex')) return /^(gpt-|o\d|codex)/i.test(m) ? m : undefined;
+  return m;
+}
+
 /**
  * Runs a local CLI coding agent process (e.g. claude -p, codex, agy, aider) headlessly.
  * Pipes the prompt to stdin and CLI arguments, and captures standard output.
@@ -476,8 +619,10 @@ async function runCliProcess(options: {
   timeoutMs?: number;
   env?: Record<string, string>;
   model?: string;
+  effort?: BridgeEffort;
+  permissionLevel?: BridgePermission;
   req?: any;
-}): Promise<{ exitCode: number; stdout: string; stderr: string; timedOut: boolean; durationMs: number }> {
+}): Promise<{ exitCode: number; stdout: string; stderr: string; timedOut: boolean; durationMs: number; output?: string; usage?: BridgeUsage | null }> {
   const { spawn } = await import('node:child_process');
   const started = Date.now();
   const timeoutMs = options.timeoutMs || 60_000;
@@ -498,6 +643,11 @@ async function runCliProcess(options: {
     : options.prompt.trim();
 
   let passedPromptInArgs = false;
+  const userSetPermissions = args.some((a) => PERMISSION_FLAG_PATTERN.test(a));
+  const level = options.permissionLevel;
+  const model = await sanitizeCliModel(cliBase, options.model, options.cwd);
+  let outputMode: 'text' | 'claude-json' | 'codex-jsonl' = 'text';
+  let codexLastMessageFile: string | null = null;
 
   if (cliBase.includes('claude')) {
     const anthropicKey = options.env?.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
@@ -505,11 +655,23 @@ async function runCliProcess(options: {
     if (!args.includes('-p') && !args.includes('--print')) {
       args.unshift('-p');
     }
-    if (!args.includes('--dangerously-skip-permissions')) {
-      args.push('--dangerously-skip-permissions');
+    if (!userSetPermissions) {
+      // Print mode can't answer prompts. Ergo's own tool layer gates <tool_call> actions, so "ask" denies the
+      // CLI's built-in tools (dontAsk) to route every edit and command through Ergo's approval flow.
+      if (level === 'plan') args.push('--permission-mode', 'plan');
+      else if (level === 'ask') args.push('--permission-mode', 'dontAsk');
+      else if (level === 'acceptEdits') args.push('--permission-mode', 'acceptEdits');
+      else args.push('--dangerously-skip-permissions');
     }
-    if (options.model && !args.includes('--model')) {
-      args.push('--model', options.model);
+    if (model && !args.includes('--model')) {
+      args.push('--model', model);
+    }
+    if (options.effort && !args.includes('--effort')) {
+      args.push('--effort', options.effort);
+    }
+    if (!args.includes('--output-format')) {
+      args.push('--output-format', 'json');
+      outputMode = 'claude-json';
     }
     if (anthropicKey && !args.includes('--settings')) {
       args.push('--settings', '{"apiKeyHelper":""}');
@@ -524,8 +686,8 @@ async function runCliProcess(options: {
       args.push('--message', combinedPrompt);
       passedPromptInArgs = true;
     }
-    if (options.model && !args.includes('--model') && !args.includes('-m')) {
-      args.push('--model', options.model);
+    if (model && !args.includes('--model') && !args.includes('-m')) {
+      args.push('--model', model);
     }
     if (!args.includes('--no-git')) {
       args.push('--no-git');
@@ -537,25 +699,47 @@ async function runCliProcess(options: {
     if (!args.includes('exec')) {
       args.unshift('exec');
     }
-    if (options.model && !args.includes('--model') && !args.includes('-m')) {
-      args.push('--model', options.model);
+    if (!args.includes('--skip-git-repo-check')) {
+      // Ergo workspaces are often not git repos; without this codex exec refuses to start.
+      args.push('--skip-git-repo-check');
+    }
+    if (!userSetPermissions) {
+      if (level === 'plan') args.push('--sandbox', 'read-only');
+      else if (level === 'bypass' || !level) args.push('--dangerously-bypass-approvals-and-sandbox');
+      else args.push('--sandbox', 'workspace-write');
+    }
+    if (model && !args.includes('--model') && !args.includes('-m')) {
+      args.push('--model', model);
+    }
+    if (options.effort && !args.some((a) => a.includes('model_reasoning_effort'))) {
+      const codexEffort = options.effort === 'low' ? 'low' : options.effort === 'medium' ? 'medium' : 'high';
+      args.push('-c', `model_reasoning_effort="${codexEffort}"`);
+    }
+    if (!args.includes('--json')) {
+      args.push('--json');
+      outputMode = 'codex-jsonl';
+      codexLastMessageFile = path.join(os.tmpdir(), `ergo-codex-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
+      args.push('--output-last-message', codexLastMessageFile);
     }
     if (combinedPrompt.length < 8000) {
       args.push(combinedPrompt);
       passedPromptInArgs = true;
     }
   } else if (cliBase.includes('agy')) {
-    if (!args.includes('--dangerously-skip-permissions')) {
-      args.push('--dangerously-skip-permissions');
+    if (!userSetPermissions) {
+      // Print mode can't answer approval prompts; plan keeps it read-only, every other level auto-approves
+      // (Ergo's tool layer still gates the <tool_call> actions it executes).
+      if (level === 'plan') args.push('--mode', 'plan');
+      else args.push('--dangerously-skip-permissions');
     }
     if (!args.includes('--disable-slash-commands')) {
       args.push('--disable-slash-commands');
     }
     if (!args.includes('--effort')) {
-      args.push('--effort', 'low');
+      args.push('--effort', options.effort || 'low');
     }
-    if (options.model && !args.includes('--model') && !args.includes('-m')) {
-      args.push('--model', options.model);
+    if (model && !args.includes('--model') && !args.includes('-m')) {
+      args.push('--model', model);
     }
     if (!args.includes('-p') && !args.includes('--print') && !args.some((a) => a.startsWith('-p=') || a.startsWith('--print='))) {
       args.push('-p', combinedPrompt);
@@ -635,12 +819,41 @@ async function runCliProcess(options: {
 
       proc.on('close', (code: number | null) => {
         clearTimeout(timer);
+        let output: string | undefined;
+        let usage: BridgeUsage | null = null;
+        let extraStderr = '';
+        if (outputMode === 'claude-json') {
+          const parsed = parseClaudeJsonResult(stdout);
+          if (parsed) {
+            usage = parsed.usage;
+            // Errors (bad model, auth) come back as is_error results — surface them as failures, not answers.
+            if (parsed.isError) {
+              extraStderr = parsed.text;
+              output = '';
+            } else {
+              output = parsed.text;
+            }
+          }
+        } else if (outputMode === 'codex-jsonl') {
+          const parsed = parseCodexJsonl(stdout);
+          usage = parsed.usage;
+          let lastMessage = '';
+          if (codexLastMessageFile) {
+            try {
+              lastMessage = fsSync.readFileSync(codexLastMessageFile, 'utf-8');
+              fsSync.unlinkSync(codexLastMessageFile);
+            } catch {}
+          }
+          output = (lastMessage || parsed.text).trim();
+        }
         resolve({
           exitCode: code ?? (timedOut ? 124 : 0),
           stdout,
-          stderr: stderr + (timedOut ? `\n[CLI process timed out after ${timeoutMs}ms]` : ''),
+          stderr: stderr + (extraStderr ? `\n${extraStderr}` : '') + (timedOut ? `\n[CLI process timed out after ${timeoutMs}ms]` : ''),
           timedOut,
-          durationMs: Date.now() - started
+          durationMs: Date.now() - started,
+          output,
+          usage
         });
       });
 
@@ -2971,7 +3184,7 @@ function ergoFileSystemPlugin(): Plugin {
       if (url === '/api/cli/execute' && req.method === 'POST') {
         try {
           const body = await parseJsonBody(req);
-          const { cli = 'claude', prompt, systemPrompt, cwd, args, timeoutMs, env, model } = body;
+          const { cli = 'claude', prompt, systemPrompt, cwd, args, timeoutMs, env, model, effort, permissionLevel } = body;
 
           if (!prompt || typeof prompt !== 'string') {
             return sendJson(res, 400, { error: 'prompt is required and must be a string' });
@@ -2991,12 +3204,15 @@ function ergoFileSystemPlugin(): Plugin {
             timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : 180_000,
             env,
             model,
+            effort: asEffort(effort),
+            permissionLevel: asPermission(permissionLevel),
             req
           });
 
           return sendJson(res, 200, {
             success: result.exitCode === 0,
-            output: result.stdout.trim(),
+            output: result.output !== undefined ? result.output : result.stdout.trim(),
+            usage: result.usage || null,
             stderr: result.stderr.trim(),
             exitCode: result.exitCode,
             timedOut: result.timedOut,
@@ -3005,6 +3221,20 @@ function ergoFileSystemPlugin(): Plugin {
           });
         } catch (err: any) {
           console.error('[Ergo CLI API] Execute error:', err);
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
+      if (url === '/api/cli/models' && req.method === 'GET') {
+        try {
+          const fullUrl = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+          const cli = fullUrl.searchParams.get('cli')?.trim() || '';
+          if (cli !== 'agy' && cli !== 'antigravity') {
+            return sendJson(res, 200, { cli, models: [] });
+          }
+          const ids = await listAgyModels(storageDir);
+          return sendJson(res, 200, { cli: 'agy', models: ids.map((id) => ({ id })) });
+        } catch (err: any) {
           return sendJson(res, 500, { error: err.message });
         }
       }
@@ -3531,6 +3761,213 @@ function ergoFileSystemPlugin(): Plugin {
 // Messages out: { type:'data', data }       (raw PTY output)
 //               { type:'exit', code }       (process exited)
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PTY session token usage
+// Interactive CLI agents don't print machine-readable usage, so read what each CLI logs locally:
+//   Claude Code → ~/.claude/projects/<cwd-slug>/<session-id>.jsonl (Ergo launches it with --session-id)
+//   Codex       → ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl (matched by cwd + start time)
+//   Gemini CLI  → ~/.gemini/tmp/<sha256(cwd)>/chats/session-*.json
+// Anything else (e.g. Antigravity, whose logs are protobuf) falls back to a transcript-length estimate.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface PtyUsageMeta {
+  cmd: string;
+  args: string[];
+  cwd: string;
+  startedAt: string;
+  buffer: string[];
+}
+
+/** Sessions removed by /api/pty/kill or respawn, kept briefly so their final usage can still be read. */
+const endedPtySessions = new Map<string, PtyUsageMeta>();
+
+function rememberEndedPtySession(id: string, meta: PtyUsageMeta) {
+  endedPtySessions.set(id, { cmd: meta.cmd, args: [...meta.args], cwd: meta.cwd, startedAt: meta.startedAt, buffer: [...meta.buffer] });
+  while (endedPtySessions.size > 25) {
+    const oldest = endedPtySessions.keys().next().value;
+    if (oldest === undefined) break;
+    endedPtySessions.delete(oldest);
+  }
+}
+
+function argValue(args: string[], flag: string): string | undefined {
+  const idx = args.indexOf(flag);
+  if (idx !== -1 && idx + 1 < args.length) return args[idx + 1];
+  const inline = args.find((a) => a.startsWith(`${flag}=`));
+  return inline ? inline.slice(flag.length + 1) : undefined;
+}
+
+async function readJsonlFile(file: string): Promise<any[]> {
+  const raw = await fs.readFile(file, 'utf-8').catch(() => '');
+  const out: any[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try { out.push(JSON.parse(line)); } catch {}
+  }
+  return out;
+}
+
+async function readClaudeSessionUsage(sessionId: string, cwd: string): Promise<BridgeUsage | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return null;
+  const projectsDir = path.join(os.homedir(), '.claude', 'projects');
+  let sessionDir = path.join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+  if (!fsSync.existsSync(path.join(sessionDir, `${sessionId}.jsonl`))) {
+    const dirs = await fs.readdir(projectsDir).catch(() => [] as string[]);
+    const hit = dirs.find((d) => fsSync.existsSync(path.join(projectsDir, d, `${sessionId}.jsonl`)));
+    if (!hit) return null;
+    sessionDir = path.join(projectsDir, hit);
+  }
+  const files = [path.join(sessionDir, `${sessionId}.jsonl`)];
+  const subagentDir = path.join(sessionDir, sessionId, 'subagents');
+  for (const f of await fs.readdir(subagentDir).catch(() => [] as string[])) {
+    if (f.endsWith('.jsonl')) files.push(path.join(subagentDir, f));
+  }
+  // One API response is logged as several lines (one per content block) sharing message.id — count it once.
+  const byMessage = new Map<string, any>();
+  for (const file of files) {
+    for (const entry of await readJsonlFile(file)) {
+      const usage = entry?.message?.usage;
+      if (entry?.type !== 'assistant' || !usage) continue;
+      const key = `${file}:${entry.message.id || entry.uuid}`;
+      const prev = byMessage.get(key);
+      if (!prev || (usage.output_tokens || 0) >= (prev.output_tokens || 0)) byMessage.set(key, usage);
+    }
+  }
+  if (byMessage.size === 0) return null;
+  const total = emptyBridgeUsage();
+  for (const u of byMessage.values()) addBridgeUsage(total, normalizeUsageObject(u));
+  return total;
+}
+
+function codexDayDirs(startMs: number): string[] {
+  const root = path.join(os.homedir(), '.codex', 'sessions');
+  const dirs = new Set<string>();
+  for (const t of [startMs, Date.now()]) {
+    const d = new Date(t);
+    for (const [y, m, day] of [
+      [d.getFullYear(), d.getMonth() + 1, d.getDate()],
+      [d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()]
+    ]) {
+      dirs.add(path.join(root, String(y), String(m).padStart(2, '0'), String(day).padStart(2, '0')));
+    }
+  }
+  return Array.from(dirs);
+}
+
+async function readCodexSessionUsage(cwd: string, startMs: number): Promise<BridgeUsage | null> {
+  let best: { file: string; started: number } | null = null;
+  for (const dir of codexDayDirs(startMs)) {
+    for (const f of await fs.readdir(dir).catch(() => [] as string[])) {
+      if (!f.startsWith('rollout-') || !f.endsWith('.jsonl')) continue;
+      const file = path.join(dir, f);
+      const stat = await fs.stat(file).catch(() => null);
+      if (!stat || stat.mtimeMs < startMs - 5_000) continue;
+      const head = (await fs.readFile(file, 'utf-8').catch(() => '')).split('\n', 1)[0];
+      let meta: any = null;
+      try { meta = JSON.parse(head); } catch {}
+      const payload = meta?.payload ?? meta;
+      const metaCwd = payload?.cwd;
+      const started = Date.parse(payload?.timestamp || meta?.timestamp || '');
+      if (!metaCwd || path.resolve(metaCwd) !== path.resolve(cwd)) continue;
+      if (!Number.isFinite(started) || started < startMs - 15_000) continue;
+      if (!best || started < best.started) best = { file, started };
+    }
+  }
+  if (!best) return null;
+  let last: BridgeUsage | null = null;
+  let turns = 0;
+  for (const ev of await readJsonlFile(best.file)) {
+    const info = ev?.payload?.info ?? ev?.msg?.info;
+    if ((ev?.payload?.type === 'token_count' || ev?.msg?.type === 'token_count') && info?.total_token_usage) {
+      last = normalizeUsageObject(info.total_token_usage);
+      turns++;
+    }
+  }
+  if (last) last.calls = Math.max(1, turns);
+  return last;
+}
+
+async function readGeminiCliSessionUsage(cwd: string, startMs: number): Promise<BridgeUsage | null> {
+  const { createHash } = await import('node:crypto');
+  const hash = createHash('sha256').update(cwd).digest('hex');
+  const root = path.join(os.homedir(), '.gemini', 'tmp');
+  const dirs = await fs.readdir(root).catch(() => [] as string[]);
+  const total = emptyBridgeUsage();
+  for (const d of dirs) {
+    const chats = path.join(root, d, 'chats');
+    for (const f of await fs.readdir(chats).catch(() => [] as string[])) {
+      if (!f.startsWith('session-') || !f.endsWith('.json')) continue;
+      const file = path.join(chats, f);
+      const stat = await fs.stat(file).catch(() => null);
+      if (!stat || stat.mtimeMs < startMs - 5_000) continue;
+      let session: any = null;
+      try { session = JSON.parse(await fs.readFile(file, 'utf-8')); } catch { continue; }
+      if (d !== hash && session?.projectHash !== hash) continue;
+      const started = Date.parse(session?.startTime || '');
+      if (Number.isFinite(started) && started < startMs - 15_000) continue;
+      for (const msg of Array.isArray(session?.messages) ? session.messages : []) {
+        if (msg?.tokens) addBridgeUsage(total, normalizeUsageObject(msg.tokens));
+      }
+    }
+  }
+  return total.calls > 0 ? total : null;
+}
+
+function stripTerminalCodes(str: string): string {
+  return str
+    .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1b[@-Z\\-_]/g, '')
+    .replace(/\r\n?/g, '\n');
+}
+
+/**
+ * Rough usage from the terminal transcript (~4 chars/token). TUIs repaint constantly, so only unique lines
+ * count, and lines that merely echo the task prompt are excluded from output.
+ */
+function estimatePtyUsage(meta: PtyUsageMeta): BridgeUsage {
+  const promptText = meta.args.join('\n');
+  const promptLines = new Set(promptText.split('\n').map((l) => l.trim()).filter(Boolean));
+  const seen = new Set<string>();
+  let outputChars = 0;
+  for (const line of stripTerminalCodes(meta.buffer.join('')).split('\n')) {
+    const l = line.trim();
+    if (l.length < 2 || seen.has(l) || promptLines.has(l)) continue;
+    seen.add(l);
+    outputChars += l.length;
+  }
+  return {
+    inputTokens: Math.ceil(promptText.length / 4),
+    outputTokens: Math.ceil(outputChars / 4),
+    cachedInputTokens: 0,
+    cacheWriteTokens: 0,
+    calls: 1,
+    estimated: true
+  };
+}
+
+async function resolvePtySessionUsage(meta: PtyUsageMeta): Promise<{ usage: BridgeUsage; source: string }> {
+  const base = path.basename(meta.cmd).toLowerCase();
+  const startMs = Date.parse(meta.startedAt) || Date.now();
+  try {
+    if (base.includes('claude')) {
+      const sessionId = argValue(meta.args, '--session-id');
+      const usage = sessionId ? await readClaudeSessionUsage(sessionId, meta.cwd) : null;
+      if (usage) return { usage, source: 'claude-session-log' };
+    } else if (base.includes('codex')) {
+      const usage = await readCodexSessionUsage(meta.cwd, startMs);
+      if (usage) return { usage, source: 'codex-session-log' };
+    } else if (base === 'gemini') {
+      const usage = await readGeminiCliSessionUsage(meta.cwd, startMs);
+      if (usage) return { usage, source: 'gemini-session-log' };
+    }
+  } catch (err) {
+    console.warn('[Ergo PTY] Usage lookup failed, falling back to estimate:', err);
+  }
+  return { usage: estimatePtyUsage(meta), source: 'estimate' };
+}
+
 interface PtySessionState {
   id: string;
   taskId: string | number;
@@ -3545,6 +3982,8 @@ interface PtySessionState {
   isActive: boolean;
   exitCode: number | null;
   startedAt: string;
+  /** Client-generated id of the launch that created this process; re-mounts with the same id reattach. */
+  spawnId?: string;
 }
 
 const activePtySessions = new Map<string, PtySessionState>();
@@ -3572,6 +4011,20 @@ function ergoPtyPlugin(): Plugin {
           res.setHeader('Content-Type', 'application/json');
           res.statusCode = 200;
           return res.end(JSON.stringify({ success: true, sessions }));
+        }
+
+        if (url === '/api/pty/usage' && req.method === 'GET') {
+          const fullUrl = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+          const id = fullUrl.searchParams.get('sessionId') || '';
+          const meta: PtyUsageMeta | undefined = activePtySessions.get(id) || endedPtySessions.get(id);
+          res.setHeader('Content-Type', 'application/json');
+          if (!meta) {
+            res.statusCode = 404;
+            return res.end(JSON.stringify({ success: false, error: 'No PTY session with that id.' }));
+          }
+          const { usage, source } = await resolvePtySessionUsage(meta);
+          res.statusCode = 200;
+          return res.end(JSON.stringify({ success: true, usage, source, cli: path.basename(meta.cmd) }));
         }
 
         if (url === '/api/pty/kill' && req.method === 'POST') {
@@ -3615,6 +4068,7 @@ function ergoPtyPlugin(): Plugin {
                 }
               } catch {}
               session.isActive = false;
+              rememberEndedPtySession(targetId, session);
               activePtySessions.delete(targetId);
               res.setHeader('Content-Type', 'application/json');
               res.statusCode = 200;
@@ -3679,9 +4133,28 @@ function ergoPtyPlugin(): Plugin {
               currentSessionKey = sessionKey;
 
               const existingSession = activePtySessions.get(sessionKey);
+              const spawnId = typeof msg.spawnId === 'string' ? msg.spawnId : undefined;
+              if (existingSession && spawnId && existingSession.spawnId === spawnId) {
+                // Same launch re-mounted (view switch, card re-expand): reattach — never restart or re-run the agent.
+                existingSession.subscribers.add(ws);
+                if (existingSession.isActive && typeof msg.cols === 'number' && typeof msg.rows === 'number') {
+                  try {
+                    existingSession.ptyProcess?.resize(msg.cols, msg.rows);
+                  } catch {}
+                }
+                send({ type: 'ready', reattached: true, taskId: existingSession.taskId, sessionId: sessionKey });
+                if (existingSession.buffer.length > 0) {
+                  send({ type: 'replay', data: existingSession.buffer.join('') });
+                }
+                if (!existingSession.isActive) {
+                  send({ type: 'exit', code: existingSession.exitCode ?? 0 });
+                }
+                return;
+              }
               if (existingSession && msg.forceRestart) {
                 console.log(`[Ergo PTY] Force-restarting persistent session [${sessionKey}] (pid ${existingSession.ptyProcess?.pid})`);
                 try { existingSession.ptyProcess?.kill(); } catch {}
+                rememberEndedPtySession(sessionKey, existingSession);
                 activePtySessions.delete(sessionKey);
               } else if (existingSession && existingSession.isActive && existingSession.ptyProcess) {
                 // Re-attach to the live, running background process!
@@ -3703,6 +4176,7 @@ function ergoPtyPlugin(): Plugin {
 
               // If an old inactive process was cached, remove it
               if (existingSession && !existingSession.isActive) {
+                rememberEndedPtySession(sessionKey, existingSession);
                 activePtySessions.delete(sessionKey);
               }
 
@@ -3765,6 +4239,7 @@ function ergoPtyPlugin(): Plugin {
                   isActive: true,
                   exitCode: null,
                   startedAt: new Date().toISOString(),
+                  spawnId,
                 };
                 activePtySessions.set(sessionKey, newSession);
 
@@ -3848,6 +4323,7 @@ function ergoPtyPlugin(): Plugin {
                   }
                 } catch {}
                 session.isActive = false;
+                rememberEndedPtySession(sessionKey, session);
                 activePtySessions.delete(sessionKey);
                 console.log(`[Ergo PTY] Session [${sessionKey}] explicitly killed by user.`);
               }

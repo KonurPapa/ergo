@@ -23,6 +23,10 @@ export interface CliPromptOption {
   label: string;
   isDefault?: boolean;
   isDestructive?: boolean;
+  /** False for un-numbered TUI menus ("❯ Yes"), which are answered with arrow keys instead of the key. */
+  numbered?: boolean;
+  /** Position in the menu (0-based). */
+  index?: number;
 }
 
 export interface CliDetectedPrompt {
@@ -50,6 +54,7 @@ export interface CliAgentNotesBridgeProps {
   sessionId?: string;
   env?: Record<string, string>;
   forceRestart?: boolean;
+  spawnId?: string;
   isActive?: boolean;
   onExit?: (code: number) => void;
   onRestartSession?: () => void;
@@ -69,190 +74,177 @@ export function stripAnsi(str: string): string {
     .replace(/\r/g, '\n');
 }
 
+/** Footer hints that interactive CLI menus print under their options. */
+const MENU_FOOTER_RE = /esc to (?:cancel|interrupt|exit|go back)|enter to (?:confirm|select|submit)|↑\/↓|↑↓|tab to amend|tab amend|ctrl\+[a-z] to/i;
+/** Questions CLIs ask before running a tool. */
+const APPROVAL_QUESTION_RE =
+  /do you want to|would you like to (?:proceed|run|allow|make|create|apply|continue)|allow (?:this|execution|command|edit|write|the|claude|agy|gemini|codex)|permission (?:needed|required|to|for)|needs? your (?:permission|approval)|\bapprove\b|run this command|proceed\?|apply (?:this|these) (?:edit|change)s?|make this edit|create (?:this )?file/i;
+/** Labels typical of approval menus (as opposed to a plan or checklist). */
+const APPROVAL_OPTION_RE = /^(?:yes|no|allow|deny|approve|reject|always|never|don'?t ask|cancel|abort|skip|proceed|continue|run|accept)\b/i;
+const CURSOR_OPTION_RE = /^[❯›>]\s+(?:(\d{1,2})[.)]\s+)?(.+)$/;
+const NUMBERED_OPTION_RE = /^(?:[❯›>]\s*)?(?:\[(\d{1,2})\]|(\d{1,2})[.)])\s+(.+)$/;
+
+/** Strips TUI box-drawing borders ("│ text │") so framed prompts parse like plain lines. */
+function unframe(line: string): string {
+  return line.replace(/^[\s│┃|╭╮╰╯─━]+/, '').replace(/[\s│┃|╭╮╰╯─━]+$/, '').trim();
+}
+
+function normalizeForEcho(line: string): string {
+  return unframe(line).replace(/^(?:[-*•]\s+|\[[ x]\]\s+|\d+[.)]\s+)+/i, '').toLowerCase();
+}
+
 /**
  * AI-agnostic parser for interactive CLI prompts (e.g. Gemini agy, Claude Code, OpenAI Codex, Aider).
- * Detects multiple-choice menus, yes/no approvals, and freeform queries waiting at the tail.
+ * Detects multiple-choice approval menus, yes/no confirmations, and a trailing question, ONLY at the very
+ * bottom of the output. Plain lists — the agent's plan, the echoed task checklist (`echoedText`), Gherkin
+ * steps — are never treated as choices: a menu needs an approval question above it and either a cursor
+ * marker, a key-hint footer, or approval-style labels.
  */
-export function parseCliInteractivePrompt(rawText: string): CliDetectedPrompt | null {
-  const clean = stripAnsi(rawText);
-  const allLines = clean
+export function parseCliInteractivePrompt(rawText: string, opts: { echoedText?: string } = {}): CliDetectedPrompt | null {
+  const echoed = new Set(
+    (opts.echoedText || '')
+      .split('\n')
+      .map(normalizeForEcho)
+      .filter((l) => l.length > 3)
+  );
+  const lines = stripAnsi(rawText)
     .split('\n')
-    .map((l) => l.trimEnd())
-    .filter(Boolean);
-  if (allLines.length === 0) return null;
+    .map(unframe)
+    .filter((l) => l.length > 0 && !echoed.has(normalizeForEcho(l)));
+  if (lines.length === 0) return null;
 
-  // Inspect the last 30 non-empty lines for active prompts waiting for user input
-  const tail = allLines.slice(-30);
+  const tail = lines.slice(-14);
   const tailText = tail.join('\n');
+  const lastLines = tail.slice(-6).join('\n');
 
-  // Check 0: Claude Code / CLI Error messages that terminated or blocked the session
-  // If credit balance or funds issue is detected in the tail, surface it cleanly as a prompt notice
-  if (/credit balance is too low|insufficient funds|insufficient credit|authentication failed|invalid api key/i.test(tailText)) {
-    const errorMatch = tailText.match(/(?:credit balance is too low|insufficient funds|insufficient credit|authentication failed|invalid api key[^\n]*)/i);
-    const errorMsg = errorMatch ? errorMatch[0].trim() : 'Insufficient credit balance or authentication issue.';
+  // Account / auth failures that stop the session
+  const accountErr = lastLines.match(/credit balance is too low|insufficient funds|insufficient credit|authentication failed|invalid api key[^\n]*/i);
+  if (accountErr) {
     return {
       type: 'freeform',
       title: 'AI Account Notice',
-      question: `${errorMsg} (Please check your API key in AI Credentials Settings or verify account balance).`,
+      question: `${accountErr[0].trim()} (Please check your API key in AI Credentials Settings or verify account balance).`,
       rawSnippet: tailText,
     };
   }
 
-  // 1. Locate the interactive prompt question (searching backwards from tail)
-  let questionIdx = -1;
+  // Walk up from the bottom past footer hints, then collect the contiguous option block.
+  let i = tail.length - 1;
+  let hasFooter = false;
+  while (i >= 0 && MENU_FOOTER_RE.test(tail[i])) {
+    hasFooter = true;
+    i--;
+  }
+  // Candidate menu lines: numbered ("2. No"), cursor-marked ("❯ Yes"), or short plain items of an arrow menu ("  Deny").
+  const candidates: { key: string; label: string; cursor: boolean; numbered: boolean; plain: boolean }[] = [];
+  while (i >= 0 && candidates.length < 7) {
+    const line = tail[i];
+    const numbered = line.match(NUMBERED_OPTION_RE);
+    const cursor = line.match(CURSOR_OPTION_RE);
+    if (numbered) {
+      candidates.unshift({ key: numbered[1] || numbered[2], label: numbered[3].trim(), cursor: /^[❯›>]/.test(line), numbered: true, plain: false });
+    } else if (cursor) {
+      candidates.unshift({ key: '', label: cursor[2].trim(), cursor: true, numbered: false, plain: false });
+    } else if (/^[A-Za-z]/.test(line) && line.length <= 80 && !/[?:.]$/.test(line) && !APPROVAL_QUESTION_RE.test(line)) {
+      candidates.unshift({ key: '', label: line, cursor: false, numbered: false, plain: true });
+    } else {
+      break;
+    }
+    i--;
+  }
+  // Numbered menus: the contiguous numbered block at the bottom (plain lines above it go back to the question
+  // search). Arrow menus: un-numbered items with exactly one cursor line. Anything else is not a menu.
+  let options: typeof candidates = [];
+  const firstNumbered = candidates.findIndex((o) => o.numbered);
+  if (firstNumbered !== -1) {
+    const block = candidates.slice(firstNumbered);
+    if (block.every((o) => o.numbered)) options = block;
+  } else if (candidates.filter((o) => o.cursor).length === 1) {
+    options = candidates;
+  }
+  i += candidates.length - options.length;
+  // The question sits directly above the options (allow one detail line between, e.g. the command).
   let question = '';
-  for (let i = tail.length - 1; i >= 0; i--) {
-    const line = tail[i].trim();
-    if (
-      (line.endsWith('?') ||
-        /run this command|do you want to|would you like to|choose an option|select an option|allow (?:this|execution|claude|\w+)|proceed|claude needs (?:your\s+)?permission|permission (?:needed|required|for|to)|approve/i.test(line)) &&
-      !/^\s*(?:[>❯›*•-]\s*)?(?:\[[0-9]+\]|[0-9]+[.)-])\s+/.test(line)
-    ) {
-      questionIdx = i;
-      question = line;
+  let questionIdx = -1;
+  for (let q = i; q >= Math.max(0, i - 2); q--) {
+    if (APPROVAL_QUESTION_RE.test(tail[q]) || tail[q].endsWith('?')) {
+      question = tail[q];
+      questionIdx = q;
       break;
     }
   }
 
-  // 2. Extract options ONLY from lines after questionIdx (or if no explicit question, the last contiguous group of choices)
-  // Supports numbers like: "1. ", "1)", "[1]", and Claude symbols like "❯ 1. ", "❯ Yes", "  2. No"
-  const choiceLineRegex = /^\s*(?:[>❯›*•-]\s*)?(?:\[([0-9a-zA-Z]+)\]|([0-9a-zA-Z]+)[.)-])\s+([^\n\r]+)/;
-  const arrowChoiceRegex = /^\s*([>❯›*•-])\s+([^\n\r]+)/;
-  let optionLines: { key: string; label: string; isDefault?: boolean; raw: string }[] = [];
-
-  if (questionIdx !== -1) {
-    // Collect choice lines following the question line
-    for (let i = questionIdx + 1; i < tail.length; i++) {
-      const line = tail[i];
-      const match = line.match(choiceLineRegex);
-      if (match) {
-        const key = match[1] || match[2];
-        const label = match[3].trim();
-        optionLines.push({ key, label, isDefault: /^\s*[>❯›*]/.test(line) || key === '1', raw: line });
-      } else {
-        const arrowMatch = line.match(arrowChoiceRegex);
-        if (arrowMatch && !/↑\/↓|tab Amend|ctrl\+|esc to/i.test(line)) {
-          const key = String(optionLines.length + 1);
-          optionLines.push({ key, label: arrowMatch[2].trim(), isDefault: true, raw: line });
-        } else if (optionLines.length > 0 && line.trim().length > 0) {
-          if (/↑\/↓|tab Amend|ctrl\+|esc to/i.test(line)) {
-            break;
-          }
-        }
+  const extractTargetCommand = (): string | undefined => {
+    const scanFrom = questionIdx !== -1 ? Math.max(0, questionIdx - 4) : Math.max(0, tail.length - 8);
+    for (let k = scanFrom; k < tail.length; k++) {
+      const line = tail[k];
+      const tick = line.match(/`([^`]+)`/);
+      if (tick && !MENU_FOOTER_RE.test(line)) return tick[1];
+      if (/^(?:bash command|shell command|command|run command)$/i.test(line) && tail[k + 1] && !APPROVAL_QUESTION_RE.test(tail[k + 1])) {
+        return tail[k + 1];
       }
+      const labelled = line.match(/(?:bash command|command|executing|execute|run|permission for(?: \w+)?):\s*(.+)$/i);
+      if (labelled && labelled[1].trim() && !/^(?:run this|choose|select)/i.test(labelled[1])) return labelled[1].trim();
     }
-  } else {
-    // Fallback: look from bottom up for the last contiguous block of choices
-    let bottomIdx = tail.length - 1;
-    while (
-      bottomIdx >= 0 &&
-      (/↑\/↓|tab Amend|ctrl\+|esc to/i.test(tail[bottomIdx]) || (!choiceLineRegex.test(tail[bottomIdx]) && !arrowChoiceRegex.test(tail[bottomIdx])))
-    ) {
-      bottomIdx--;
-    }
-    const tempChoices: { key: string; label: string; isDefault?: boolean; raw: string }[] = [];
-    while (bottomIdx >= 0) {
-      const line = tail[bottomIdx];
-      const match = line.match(choiceLineRegex);
-      if (match) {
-        const key = match[1] || match[2];
-        tempChoices.unshift({ key, label: match[3].trim(), isDefault: /^\s*[>❯›*]/.test(line), raw: line });
-        bottomIdx--;
-      } else {
-        const arrowMatch = line.match(arrowChoiceRegex);
-        if (arrowMatch && !/↑\/↓|tab Amend|ctrl\+|esc to/i.test(line)) {
-          tempChoices.unshift({ key: String(tempChoices.length + 1), label: arrowMatch[2].trim(), isDefault: true, raw: line });
-          bottomIdx--;
-        } else {
-          break;
-        }
-      }
-    }
-    optionLines = tempChoices;
-  }
-
-  // Helper to extract target command
-  const extractTargetCommand = () => {
-    let targetCommand = '';
-    for (let i = 0; i < tail.length; i++) {
-      const line = tail[i].trim();
-      const codeBacktick = line.match(/`([^`]+)`/);
-      if (codeBacktick && !line.includes('ctrl+') && !line.includes('esc to')) {
-        targetCommand = codeBacktick[1];
-        break;
-      }
-
-      if (/permission (?:for|to\s+\w+):|command:|action:|executing:|execute:/i.test(line)) {
-        const afterColon = line
-          .replace(/.*(?:permission (?:for|to\s+\w+):|command:|action:|executing:|execute:)\s*/i, '')
-          .trim();
-        if (afterColon && !/^(?:run this|choose|select)/i.test(afterColon)) {
-          targetCommand = afterColon;
-          break;
-        } else if (tail[i + 1] && !choiceLineRegex.test(tail[i + 1])) {
-          targetCommand = tail[i + 1].trim();
-          break;
-        }
-      }
-    }
-    return targetCommand;
+    return undefined;
   };
 
-  const targetCommand = extractTargetCommand();
+  const looksLikeApprovalMenu =
+    options.length >= 2 &&
+    options.length <= 6 &&
+    options.every((o) => o.label.length <= 120) &&
+    questionIdx !== -1 &&
+    (options.some((o) => o.cursor) || hasFooter || options.some((o) => APPROVAL_OPTION_RE.test(o.label)));
 
-  // Check 1: Multiple choice options (2 or more choices)
-  if (optionLines.length >= 2) {
-    const hasExplicitActiveMarker = optionLines.some((o) => /^\s*[>❯›*]/.test(o.raw));
-    const options: CliPromptOption[] = optionLines.map(({ key, label, raw }) => {
-      const isDefault = hasExplicitActiveMarker ? /^\s*[>❯›*]/.test(raw) : key === '1' || key.toLowerCase() === 'y';
-      return {
-        key,
-        label,
-        isDefault,
-        isDestructive: /\b(?:cancel|no\b|reject|abort|deny|never)\b/i.test(label),
-      };
-    });
-
+  if (looksLikeApprovalMenu) {
+    const cursorIdx = options.findIndex((o) => o.cursor);
+    const defaultIdx = cursorIdx !== -1 ? cursorIdx : 0;
     return {
       type: 'multiple_choice',
       title: 'Action Requires Approval',
-      targetCommand: targetCommand || undefined,
-      question: question || 'Run this command?',
-      options,
+      targetCommand: extractTargetCommand(),
+      question,
+      options: options.map((o, idx) => ({
+        key: o.numbered ? o.key : String(idx + 1),
+        label: o.label,
+        isDefault: idx === defaultIdx,
+        isDestructive: /\b(?:cancel|no\b|reject|abort|deny|never)\b/i.test(o.label),
+        numbered: o.numbered,
+        index: idx,
+      })),
       rawSnippet: tailText,
     };
   }
 
-  // Check 2: Yes / No confirmation (e.g. "[Y/n]", "(y/n)", "(y)es / (n)o", "Y/N", "❯ Yes")
-  const ynMatch = tailText.match(
-    /(?:\[([yYnN]\/[yYnN])\]|\(([yYnN]\/[yYnN])\)|\b\(y\)es[\/, ]+\(n\)o\b|\b(?:y\/n|Y\/n|y\/N)\b)/i
-  );
-  if (ynMatch) {
+  // Yes / No confirmation on the last lines ("[Y/n]", "(y/n)", "(y)es / (n)o")
+  const confirmLines = tail.slice(-3).join('\n');
+  if (/\[[yY]\/[nN]\]|\([yY]\/[nN]\)|\(y\)es[/, ]+\(n\)o/i.test(confirmLines)) {
     const options: CliPromptOption[] = [
-      { key: 'y', label: 'Approve / Yes', isDefault: true, isDestructive: false },
-      { key: 'n', label: 'Reject / No', isDefault: false, isDestructive: true },
+      { key: 'y', label: 'Approve / Yes', isDefault: true, isDestructive: false, numbered: true },
+      { key: 'n', label: 'Reject / No', isDefault: false, isDestructive: true, numbered: true },
     ];
-    if (/\(a\)lways|\balways\b/i.test(tailText)) {
-      options.splice(1, 0, { key: 'a', label: 'Always Allow', isDefault: false, isDestructive: false });
+    if (/\(a\)lways/i.test(confirmLines)) {
+      options.splice(1, 0, { key: 'a', label: 'Always Allow', isDefault: false, isDestructive: false, numbered: true });
     }
-
     return {
       type: 'confirmation',
       title: 'Confirmation Required',
-      targetCommand: targetCommand || undefined,
-      question: question || tail[tail.length - 1],
+      targetCommand: extractTargetCommand(),
+      question: tail.slice(-3).find((l) => /\?|\[[yY]\/[nN]\]|\([yY]\/[nN]\)/.test(l)) || tail[tail.length - 1],
       options,
       rawSnippet: tailText,
     };
   }
 
-  // Check 3: Freeform prompt question waiting for user input
-  if (questionIdx !== -1 && question) {
+  // The agent ended its turn with a question to the user (only the final line counts).
+  let last = tail.length - 1;
+  while (last >= 0 && MENU_FOOTER_RE.test(tail[last])) last--;
+  const finalLine = last >= 0 ? tail[last] : '';
+  if (finalLine.endsWith('?') && finalLine.length <= 240 && !/^(?:[-*•]|\d+[.)])\s/.test(finalLine)) {
     return {
       type: 'freeform',
       title: 'Clarification Needed',
-      targetCommand: targetCommand || undefined,
-      question,
+      question: finalLine,
       rawSnippet: tailText,
     };
   }
@@ -358,6 +350,7 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
   sessionId,
   env,
   forceRestart,
+  spawnId,
   isActive = true,
   onExit,
   onRestartSession,
@@ -375,6 +368,8 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
 
   const wsRef = useRef<WebSocket | null>(null);
   const rawBufferRef = useRef<string>('');
+  const detectedPromptRef = useRef<CliDetectedPrompt | null>(null);
+  const promptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const feedScrollRef = useRef<HTMLDivElement>(null);
 
   // Send data over WebSocket PTY bridge
@@ -424,9 +419,24 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
           cols: 120,
           rows: 40,
           forceRestart,
+          spawnId,
         })
       );
     });
+
+    // Interactive prompts block the CLI, so real ones leave the output quiet. Only look for a new prompt
+    // after a pause; streaming output (plans, checklists, the echoed task) never gets the chance to look like one.
+    const PROMPT_IDLE_MS = 650;
+    const echoedText = args.join('\n');
+    const evaluatePrompt = () => {
+      const prompt = parseCliInteractivePrompt(rawBufferRef.current.slice(-20000), { echoedText });
+      detectedPromptRef.current = prompt;
+      setDetectedPrompt(prompt);
+      if (prompt) {
+        setIsSubmittingOption(null);
+        setCurrentActivity(prompt.title || 'Action Requires Approval');
+      }
+    };
 
     const processIncomingText = (chunk: string, isFullReplay: boolean = false) => {
       if (isFullReplay) {
@@ -438,19 +448,18 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
         }
       }
 
-      const stripped = stripAnsi(rawBufferRef.current);
-
-      // Parse interactive prompts (e.g. multiple-choice approval or yes/no)
-      const prompt = parseCliInteractivePrompt(rawBufferRef.current);
-      setDetectedPrompt(prompt);
-      if (prompt) {
-        setIsSubmittingOption(null);
+      // New output after a prompt was shown usually means it was answered — hide it until things settle again.
+      if (detectedPromptRef.current && !isFullReplay) {
+        detectedPromptRef.current = null;
+        setDetectedPrompt(null);
       }
+      if (promptTimerRef.current) clearTimeout(promptTimerRef.current);
+      promptTimerRef.current = setTimeout(evaluatePrompt, isFullReplay ? 0 : PROMPT_IDLE_MS);
 
       // Extract activities and current thought
-      const { feed, currentActivity: latestActivity } = extractActivityEntries(stripped);
+      const { feed, currentActivity: latestActivity } = extractActivityEntries(stripAnsi(rawBufferRef.current.slice(-60000)));
       setActivityFeed(feed);
-      setCurrentActivity(prompt ? prompt.title || 'Action Requires Approval' : latestActivity);
+      setCurrentActivity(latestActivity);
     };
 
     ws.addEventListener('message', (ev) => {
@@ -468,6 +477,8 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
         processIncomingText(msg.data, false);
       } else if (msg.type === 'exit') {
         onExit?.(msg.code);
+        if (promptTimerRef.current) clearTimeout(promptTimerRef.current);
+        detectedPromptRef.current = null;
         setCurrentActivity(`Process exited with code ${msg.code}`);
         setDetectedPrompt(null);
       }
@@ -475,6 +486,7 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
 
     return () => {
       isDisposed = true;
+      if (promptTimerRef.current) clearTimeout(promptTimerRef.current);
       try {
         ws.close();
       } catch {}
@@ -491,10 +503,17 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
   // Handle Option Click
   const handleSelectOption = (option: CliPromptOption) => {
     setIsSubmittingOption(option.key);
-    // In Ink TUI menus (like Claude Code), pressing Enter on the active (default) item accepts it.
-    // Otherwise send the option key with carriage return.
-    if (option.isDefault && (option.key === '1' || option.key.toLowerCase() === 'y')) {
+    const defaultIdx = detectedPrompt?.options?.findIndex((o) => o.isDefault) ?? 0;
+    if (detectedPrompt?.type === 'confirmation') {
+      // [y/N]-style prompts: type the letter — Enter would pick whichever default the CLI chose.
+      sendInput(`${option.key}\r`);
+    } else if (option.isDefault) {
+      // Enter accepts the highlighted item in Ink-style menus (Claude Code, Antigravity).
       sendInput('\r');
+    } else if (option.numbered === false && typeof option.index === 'number') {
+      // Un-numbered arrow menu: move from the highlighted item to the chosen one, then confirm.
+      const delta = option.index - Math.max(0, defaultIdx);
+      sendInput((delta > 0 ? '\x1b[B' : '\x1b[A').repeat(Math.abs(delta)) + '\r');
     } else {
       sendInput(`${option.key}\r`);
     }

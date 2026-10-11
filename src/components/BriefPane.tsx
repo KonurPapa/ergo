@@ -9,13 +9,16 @@ import {
   type HumanInputPrompt,
   type OllamaFallbackPrompt,
   type OllamaFallbackChoice,
-  type MCPServer
+  type MCPServer,
+  type AgentPipelineOptions,
+  type PermissionDecision
 } from '../types';
 import { AgentTerminal } from './AgentTerminal';
 import { ResizableTerminalContainer } from './ResizableTerminalContainer';
 import { CliAgentNotesBridge } from './CliAgentNotesBridge';
 import { StepStatusIcon, StepUsageBadge, PieceChip, BiblePreview, BaselineContextPreview } from './ExecutionStepExtras';
 import { BvTokenCounterCard } from './BvTokenCounterCard';
+import { ExecutionSettingsBar } from './ExecutionSettingsBar';
 import {
   FileCode,
   Edit3,
@@ -49,7 +52,8 @@ import {
   PanelRightOpen,
   AlertTriangle,
   Calendar,
-  Clock
+  Clock,
+  SlidersHorizontal
 } from 'lucide-react';
 
 import { RichTextToolbar } from './RichTextToolbar';
@@ -201,10 +205,10 @@ interface BriefPaneProps {
   terminalSessions?: SpawnedSession[];
   executingTaskId?: string | number | null;
   taskExecutionSteps?: Record<string | number, ExecutionStep[]>;
-  pendingPermissions?: Record<string | number, { prompt: McpToolPermissionPrompt; resolve: (approved: boolean) => void }>;
+  pendingPermissions?: Record<string | number, { prompt: McpToolPermissionPrompt; resolve: (decision: PermissionDecision) => void }>;
   pendingHumanInputs?: Record<string | number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>;
   pendingOllamaFallbacks?: Record<string | number, { prompt: OllamaFallbackPrompt; resolve: (choice: OllamaFallbackChoice) => void }>;
-  onPermissionChoice?: (taskId: string | number, approved: boolean) => void;
+  onPermissionChoice?: (taskId: string | number, approved: PermissionDecision) => void;
   onHumanInputChoice?: (taskId: string | number, answer: string) => void;
   onOllamaFallbackChoice?: (taskId: string | number, choice: OllamaFallbackChoice) => void;
   onSessionExit?: (taskId: string | number, code: number) => void;
@@ -224,6 +228,9 @@ interface BriefPaneProps {
   onTogglePanel?: () => void;
   mcpServers?: MCPServer[];
   onUpdateTaskMcpTools?: (taskId: string | number, toolNames: string[]) => void;
+  // Execution settings (permission level + effort) shown in the header drop-down
+  agentPipelineOptions?: AgentPipelineOptions;
+  onSetAgentPipelineOptions?: (next: AgentPipelineOptions) => void;
 }
 
 interface AiTaskCardProps {
@@ -246,7 +253,7 @@ interface AiTaskCardProps {
   onExecuteTask: (task: TaskItem) => void;
   onUpdateBriefWithAi?: (task: TaskItem) => void;
   onSyncOverviewWithTask?: (task: TaskItem) => Promise<string | void>;
-  onPermissionChoice?: (approved: boolean) => void;
+  onPermissionChoice?: (approved: PermissionDecision) => void;
   onHumanInputChoice?: (answer: string) => void;
   onOllamaFallbackChoice?: (choice: OllamaFallbackChoice) => void;
   onSessionExit?: (code: number) => void;
@@ -1583,7 +1590,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                               <div style={{ background: 'rgba(0, 0, 0, 0.4)', padding: '0.55rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(255, 255, 255, 0.08)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.65rem' }}>
                                 {pendingPermission.summary}
                               </div>
-                              <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                              <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                                 <button
                                   className="btn btn-secondary"
                                   style={{ padding: '0.3rem 0.75rem', fontSize: '0.76rem', fontWeight: 600 }}
@@ -1591,6 +1598,16 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                                 >
                                   Skip / Reject
                                 </button>
+                                {pendingPermission.rememberLabel && (
+                                  <button
+                                    className="btn btn-secondary"
+                                    style={{ padding: '0.3rem 0.75rem', fontSize: '0.76rem', fontWeight: 600 }}
+                                    onClick={() => onPermissionChoice('always')}
+                                    title={`Approve this and ${pendingPermission.rememberLabel} for the rest of this task`}
+                                  >
+                                    Allow {pendingPermission.rememberLabel} for this task
+                                  </button>
+                                )}
                                 <button
                                   className="btn btn-emerald"
                                   style={{ padding: '0.3rem 0.85rem', fontSize: '0.76rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}
@@ -1751,6 +1768,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                                     cwd={terminalSession.cwd}
                                     env={terminalSession.env}
                                     forceRestart={terminalSession.forceRestart}
+                                spawnId={terminalSession.spawnId}
                                     taskId={task.id}
                                     sessionId={String(terminalSession.session.taskId)}
                                     onExit={(code) => onSessionExit?.(code)}
@@ -1884,6 +1902,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                                             cwd={terminalSession.cwd}
                                             env={terminalSession.env}
                                             forceRestart={terminalSession.forceRestart}
+                                spawnId={terminalSession.spawnId}
                                             taskId={task.id}
                                             sessionId={String(terminalSession.session.taskId)}
                                             onExit={(code) => onSessionExit?.(code)}
@@ -1919,6 +1938,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                                 cwd={terminalSession.cwd}
                                 env={terminalSession.env}
                                 forceRestart={terminalSession.forceRestart}
+                                spawnId={terminalSession.spawnId}
                                 taskId={task.id}
                                 sessionId={String(terminalSession.session.taskId)}
                                 isActive={terminalSession.session.isActive}
@@ -2090,8 +2110,11 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   onTogglePanel,
   mcpServers = [],
   onUpdateTaskMcpTools,
+  agentPipelineOptions,
+  onSetAgentPipelineOptions,
 }) => {
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
+  const [showExecSettings, setShowExecSettings] = useState(false);
   const [schedulingTask, setSchedulingTask] = useState<TaskItem | null>(null);
 
   const activeTaskRunningCount = runningTaskIds.length;
@@ -2197,6 +2220,20 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
               </span>
             )}
 
+            {/* Execution settings (permissions + effort) toggle — mirrors the formatting bar toggle */}
+            {agentPipelineOptions && onSetAgentPipelineOptions && (
+              <button
+                type="button"
+                className={`swimlane-menu-btn ${showExecSettings ? 'active' : ''}`}
+                onClick={() => setShowExecSettings((v) => !v)}
+                title={showExecSettings ? 'Hide execution settings' : 'Execution settings: permissions & effort'}
+                aria-label="Execution settings"
+                aria-expanded={showExecSettings}
+              >
+                <SlidersHorizontal size={14} />
+              </button>
+            )}
+
             {/* Archive Tasks Header Icon Button */}
             <button
               type="button"
@@ -2243,6 +2280,10 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
             )}
           </div>
         </div>
+
+        {showExecSettings && agentPipelineOptions && onSetAgentPipelineOptions && (
+          <ExecutionSettingsBar options={agentPipelineOptions} onChange={onSetAgentPipelineOptions} />
+        )}
 
         {/* ── Scrollable Multi-Task List ── */}
         <div className="brief-scrollable-workspace">

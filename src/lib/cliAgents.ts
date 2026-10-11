@@ -1,4 +1,4 @@
-import type { AIProviderId, CliAgentPreset, CliAgentConfig, UserApiKey, TaskItem, AgentContextItem } from '../types';
+import type { AIProviderId, CliAgentPreset, CliAgentConfig, UserApiKey, TaskItem, AgentContextItem, EffortLevel, PermissionLevel } from '../types';
 
 export const CLI_AGENT_PRESETS: CliAgentPreset[] = [
   {
@@ -161,6 +161,71 @@ export function buildTaskCliPrompt(task: TaskItem, brief?: AgentContextItem): st
   return sections.join('\n\n');
 }
 
+export interface CliLaunchPolicy {
+  permissionLevel?: PermissionLevel;
+  effort?: EffortLevel;
+  /** Model name in the CLI's own vocabulary (e.g. "sonnet" for claude, "gemini-3.1-pro-high" for agy). */
+  model?: string;
+  /** Claude Code session UUID, so Ergo can read token usage from its session log. */
+  sessionId?: string;
+}
+
+const PERMISSION_FLAGS = new Set([
+  '--permission-mode', '--dangerously-skip-permissions', '--allow-dangerously-skip-permissions', '--mode',
+  '-s', '--sandbox', '-a', '--ask-for-approval', '--dangerously-bypass-approvals-and-sandbox', '--full-auto',
+  '--approval-mode', '--yolo', '--yes', '--yes-always', '--force'
+]);
+
+/**
+ * CLI flags implementing an Ergo permission level for an interactive agent. Each CLI has its own vocabulary:
+ * claude --permission-mode, agy --mode / --dangerously-skip-permissions, codex --sandbox/--ask-for-approval,
+ * gemini --approval-mode. Returns [] when the user already set a permission flag in their extra args.
+ */
+export function permissionArgsForCli(baseCmd: string, level: PermissionLevel | undefined, userTokens: string[]): string[] {
+  if (!level || userTokens.some((t) => PERMISSION_FLAGS.has(t.split('=')[0]))) return [];
+  switch (baseCmd) {
+    case 'claude':
+      return level === 'bypass'
+        ? ['--dangerously-skip-permissions']
+        : ['--permission-mode', level === 'ask' ? 'manual' : level];
+    case 'agy':
+      if (level === 'plan') return ['--mode', 'plan'];
+      if (level === 'acceptEdits') return ['--mode', 'accept-edits'];
+      if (level === 'bypass') return ['--dangerously-skip-permissions'];
+      return [];
+    case 'codex':
+      if (level === 'plan') return ['--sandbox', 'read-only', '--ask-for-approval', 'on-request'];
+      if (level === 'bypass') return ['--dangerously-bypass-approvals-and-sandbox'];
+      return ['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request'];
+    case 'gemini':
+      if (level === 'acceptEdits') return ['--approval-mode', 'auto_edit'];
+      if (level === 'bypass') return ['--approval-mode', 'yolo'];
+      return ['--approval-mode', 'default'];
+    case 'aider':
+      return level === 'bypass' ? ['--yes-always'] : [];
+    case 'cursor':
+      return level === 'bypass' ? ['--force'] : [];
+    default:
+      return [];
+  }
+}
+
+function effortArgsForCli(baseCmd: string, effort: EffortLevel | undefined, userTokens: string[]): string[] {
+  if (!effort) return [];
+  if ((baseCmd === 'claude' || baseCmd === 'agy') && !userTokens.includes('--effort')) return ['--effort', effort];
+  if (baseCmd === 'codex' && !userTokens.some((t) => t.includes('model_reasoning_effort'))) {
+    const codexEffort = effort === 'low' ? 'low' : effort === 'medium' ? 'medium' : 'high';
+    return ['-c', `model_reasoning_effort="${codexEffort}"`];
+  }
+  return [];
+}
+
+function modelArgsForCli(baseCmd: string, model: string | undefined, userTokens: string[]): string[] {
+  if (!model || userTokens.includes('--model') || userTokens.includes('-m')) return [];
+  if (baseCmd === 'claude' || baseCmd === 'agy') return ['--model', model];
+  return [];
+}
+
 /**
  * Formats command-line arguments for launching a CLI coding agent with a task prompt.
  * Handles specific CLI flags:
@@ -168,22 +233,30 @@ export function buildTaskCliPrompt(task: TaskItem, brief?: AgentContextItem): st
  * - claude: uses positional prompt "<prompt>"
  * - aider: uses --message "<prompt>"
  * - codex / cursor / grok: uses positional prompt
+ * Policy flags (permission level, effort, model, session id) are added unless the user's extra args already set them.
  */
 export function buildCliArgsForTask(
   cmd: string,
   extraArgsString: string = '',
   prompt: string,
-  hasApiKey: boolean = false
+  hasApiKey: boolean = false,
+  policy: CliLaunchPolicy = {}
 ): string[] {
   // Parse extraArgsString into separate tokens, respecting quotes if present
-  const tokens: string[] = [];
+  const userTokens: string[] = [];
   const regex = /[^\s"']+|"([^"]*)"|'([^']*)'/g;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(extraArgsString.trim())) !== null) {
-    tokens.push(match[1] ?? match[2] ?? match[0]);
+    userTokens.push(match[1] ?? match[2] ?? match[0]);
   }
 
   const baseCmd = cmd.toLowerCase().trim().replace(/^.*[\\/]/, '');
+  const tokens = [
+    ...userTokens,
+    ...permissionArgsForCli(baseCmd, policy.permissionLevel, userTokens),
+    ...effortArgsForCli(baseCmd, policy.effort, userTokens),
+    ...modelArgsForCli(baseCmd, policy.model, userTokens)
+  ];
 
   if (baseCmd === 'agy') {
     // agy takes -i or --prompt-interactive to run initial prompt interactively and continue the session
@@ -201,6 +274,10 @@ export function buildCliArgsForTask(
     const claudeTokens = [...tokens];
     if (hasApiKey && !claudeTokens.includes('--settings')) {
       claudeTokens.push('--settings', '{"apiKeyHelper":""}');
+    }
+    const resumes = claudeTokens.some((t) => t === '--session-id' || t === '--resume' || t === '-r' || t === '--continue' || t === '-c');
+    if (policy.sessionId && !resumes) {
+      claudeTokens.push('--session-id', policy.sessionId);
     }
     return [...claudeTokens, prompt];
   }
@@ -220,4 +297,3 @@ export function buildCliArgsForTask(
   // Generic fallback
   return [...tokens, prompt];
 }
-

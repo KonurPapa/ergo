@@ -7,6 +7,7 @@ import {
   type AIProviderConfig,
   type ExecutionStep,
   type McpToolPermissionPrompt,
+  type PermissionDecision,
   type HumanInputPrompt,
   type HumanAiIntent,
   type HumanAiAssistantResult,
@@ -1242,7 +1243,7 @@ export async function runOfflineExecution(
   project: ProjectData | undefined,
   connectedMcps: MCPServer[],
   onStepUpdate: (step: ExecutionStep) => void,
-  onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<boolean>,
+  onRequestPermission?: (prompt: McpToolPermissionPrompt) => Promise<PermissionDecision>,
   onRequestHumanInput?: (prompt: HumanInputPrompt) => Promise<string>
 ): Promise<{ updatedBrief: AgentContextItem; updatedTask: TaskItem }> {
   console.log(
