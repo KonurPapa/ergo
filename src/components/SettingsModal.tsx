@@ -155,7 +155,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setIsTestingBridge(true);
     setBridgeNotice(null);
     try {
-      const res = await bridgeClient.checkConnection(bridgeUrlInput.trim());
+      const res = await bridgeClient.checkConnection(bridgeUrlInput.trim(), { exclusive: true });
       if (res.success) {
         setBridgeNotice({ type: 'success', text: `Connected successfully to ${bridgeUrlInput.trim()}` });
       } else {

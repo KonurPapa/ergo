@@ -79,6 +79,8 @@ ERGO_ALLOWED_ORIGINS=https://another-ergo-site.example.com
 
 Restart `npm run dev` after changing it. Requests from any other website are refused (and logged in the terminal).
 
+If the hosted app says it can't reach your local bridge: make sure `npm run dev` is running (the hosted app scans ports 5173–5180 and 3000, since Vite moves to the next free port when 5173 is busy), keep your local copy up to date (`git pull`), and allow the browser's "local network access" prompt for the hosted site (Brave: turn Shields off for it; Safari is not supported).
+
 ---
 
 ## 📄 License

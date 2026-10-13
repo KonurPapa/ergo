@@ -27,9 +27,14 @@ export interface BridgeStatus {
   lastHeartbeat?: string;
 }
 
+export type BridgeDiagnosis = 'ok' | 'unreachable' | 'origin-refused';
+
 const STORAGE_KEY_BRIDGE_URL = 'ergo_local_bridge_url';
 const STORAGE_KEY_AUTO_CONNECT = 'ergo_bridge_auto_connect';
 export const DEFAULT_BRIDGE_URL = 'http://localhost:5173';
+// Vite silently moves to the next free port when 5173 is taken, so the bridge is often on 5174, 5175, ...
+const FALLBACK_BRIDGE_PORTS = [5173, 5174, 5175, 5176, 5177, 5178, 5179, 5180, 3000];
+const PROBE_TIMEOUT_MS = 2500;
 
 /**
  * True when fetch() failed before getting any HTTP response (bridge offline, CORS rejection,
@@ -49,6 +54,8 @@ class BridgeClient {
   private homeDir: string = '';
   private lastError: string | null = null;
   private isMixedContentBlocked: boolean = false;
+  private lastDiagnosis: BridgeDiagnosis = 'unreachable';
+  private checkInFlight: Promise<{ success: boolean; error?: string; isMixedContentBlocked?: boolean }> | null = null;
   private lastCheckedAt: string = '';
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private listeners: Set<(status: BridgeStatus) => void> = new Set();
@@ -136,13 +143,21 @@ class BridgeClient {
 
   /**
    * Human-readable explanation for a request that never reached the bridge.
+   * `diagnosis` comes from checkConnection(); without it we can only list the possible causes.
    */
-  public describeUnreachable(): string {
+  public describeUnreachable(diagnosis: BridgeDiagnosis = this.lastDiagnosis): string {
     if (!this.isHostedWeb()) {
       return 'Unable to reach the local Ergo server. Make sure `npm run dev` is still running.';
     }
-    return `Unable to reach your local Ergo bridge at ${this.bridgeUrl}. Make sure Ergo is running on this device (npm run dev). ` +
-      `The bridge only accepts this site if ${window.location.origin} is in its allowed origins (HOSTED_APP_ORIGINS in vite.config.ts) — it refuses every other website.`;
+    const origin = window.location.origin;
+    if (diagnosis === 'origin-refused') {
+      return `A local server answered on this device, but it refuses requests from ${origin}. ` +
+        `Update your local Ergo copy (git pull), restart it (npm run dev), then try again. ` +
+        `If you host Ergo on another domain, add ${origin} to ERGO_ALLOWED_ORIGINS in .env.local.`;
+    }
+    return `Unable to reach your local Ergo bridge (tried ${this.bridgeUrl} and nearby ports). ` +
+      `Make sure Ergo is running on this device (npm run dev) and that your browser allows ${origin} to connect to localhost — ` +
+      `accept the "access other devices / local network" prompt in Chrome or Edge, or turn off Brave Shields for this site. Safari does not support this.`;
   }
 
   /**
@@ -184,88 +199,123 @@ class BridgeClient {
   }
 
   /**
-   * Check connection to the local bridge.
+   * Probe one candidate URL. Resolves with the bridge info if it's a reachable Ergo bridge,
+   * otherwise with why not: 'refused' (an HTTP error came back), 'origin-refused' (something is
+   * listening but the browser blocked the response, i.e. CORS), or 'unreachable'.
    */
-  public async checkConnection(targetUrl?: string): Promise<{ success: boolean; error?: string; isMixedContentBlocked?: boolean }> {
+  private async probe(baseUrl: string, relative: boolean): Promise<
+    | { ok: true; url: string; data: any }
+    | { ok: false; url: string; reason: 'refused' | 'origin-refused' | 'unreachable'; message: string }
+  > {
+    const endpoint = relative ? '/api/storage/config' : `${baseUrl}/api/storage/config`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+    try {
+      const res = await fetch(endpoint, { method: 'GET', signal: controller.signal });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        return { ok: true, url: baseUrl, data };
+      }
+      return { ok: false, url: baseUrl, reason: 'refused', message: `Device bridge at ${baseUrl} returned HTTP ${res.status}` };
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        return { ok: false, url: baseUrl, reason: 'unreachable', message: 'Connection timed out. Make sure Ergo is running locally on your device.' };
+      }
+      if (!isNetworkError(err)) {
+        return { ok: false, url: baseUrl, reason: 'unreachable', message: err?.message || 'Unable to reach local bridge' };
+      }
+      // A no-cors request resolves (opaque) whenever *something* answers, even if CORS would
+      // block reading the reply. That tells "server up but refusing us" apart from "nothing there".
+      try {
+        await fetch(endpoint, { method: 'GET', mode: 'no-cors', signal: controller.signal });
+        return { ok: false, url: baseUrl, reason: 'origin-refused', message: `A server at ${baseUrl} refused this site.` };
+      } catch {
+        return { ok: false, url: baseUrl, reason: 'unreachable', message: `Nothing answered at ${baseUrl}.` };
+      }
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /**
+   * Check connection to the local bridge. On hosted web every plausible local port is probed in
+   * parallel, because Vite moves to 5174+ when 5173 is busy. Pass `exclusive` to test only `targetUrl`.
+   */
+  public async checkConnection(targetUrl?: string, options: { exclusive?: boolean } = {}): Promise<{ success: boolean; error?: string; isMixedContentBlocked?: boolean }> {
+    if (this.checkInFlight && !targetUrl) return this.checkInFlight;
+    const run = this.runCheckConnection(targetUrl, options);
+    if (!targetUrl) {
+      this.checkInFlight = run;
+      run.finally(() => {
+        if (this.checkInFlight === run) this.checkInFlight = null;
+      });
+    }
+    return run;
+  }
+
+  private async runCheckConnection(targetUrl: string | undefined, options: { exclusive?: boolean }): Promise<{ success: boolean; error?: string; isMixedContentBlocked?: boolean }> {
     this.isChecking = true;
     this.notify();
 
-    const isSecureWeb = this.isHostedWeb() && this.isSecureContext();
+    const hosted = this.isHostedWeb();
+    const clean = (u: string) => u.replace(/\/+$/, '');
+    const preferred = targetUrl ? clean(targetUrl) : clean(this.bridgeUrl);
 
-    const candidateUrls = targetUrl
-      ? [targetUrl.replace(/\/+$/, '')]
-      : this.isHostedWeb()
-        ? Array.from(new Set([
-            this.bridgeUrl.replace(/\/+$/, ''),
-            'http://localhost:5173',
-            'http://127.0.0.1:5173',
-            'http://localhost:5174',
-            'http://127.0.0.1:5174',
-            'http://localhost:3000',
-            'http://127.0.0.1:3000'
-          ]))
-        : [this.bridgeUrl.replace(/\/+$/, '')];
-
-    let lastErrorMessage: string | null = null;
-    let mixedContentSuspected = false;
-
-    for (const testUrl of candidateUrls) {
-      const endpoint = !this.isHostedWeb() && !targetUrl
-        ? '/api/storage/config'
-        : `${testUrl}/api/storage/config`;
-
-      const isTargetHttp = testUrl.startsWith('http://');
-
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3500);
-
-        const res = await fetch(endpoint, {
-          method: 'GET',
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-
-        if (res.ok) {
-          const data = await res.json().catch(() => ({}));
-          this.isConnected = true;
-          this.isChecking = false;
-          this.lastError = null;
-          this.isMixedContentBlocked = false;
-          this.lastCheckedAt = new Date().toISOString();
-          if (data.resolvedPath) this.storageDir = data.resolvedPath;
-          if (data.homeDir) this.homeDir = data.homeDir;
-          this.setBridgeUrl(testUrl);
-          try {
-            localStorage.setItem(STORAGE_KEY_AUTO_CONNECT, 'true');
-          } catch {}
-          this.notify();
-          return { success: true };
-        } else {
-          lastErrorMessage = `Device bridge at ${testUrl} returned HTTP ${res.status}`;
-        }
-      } catch (err: any) {
-        if (isSecureWeb && isTargetHttp) {
-          mixedContentSuspected = true;
-        }
-        lastErrorMessage = err.name === 'AbortError'
-          ? 'Connection timed out. Make sure Ergo is running locally on your device.'
-          : isNetworkError(err)
-            ? this.describeUnreachable()
-            : (err.message || 'Unable to reach local bridge');
-      }
+    let candidateUrls: string[];
+    if (!hosted) {
+      candidateUrls = [preferred];
+    } else if (targetUrl && options.exclusive) {
+      candidateUrls = [preferred];
+    } else {
+      candidateUrls = Array.from(new Set([
+        preferred,
+        ...FALLBACK_BRIDGE_PORTS.map((port) => `http://localhost:${port}`),
+        'http://127.0.0.1:5173'
+      ]));
     }
+
+    const results = await Promise.all(
+      candidateUrls.map((url) => this.probe(url, !hosted && !targetUrl))
+    );
+
+    // Prefer the user's configured URL, then the lowest port that answered.
+    const hit = results.find((r) => r.ok);
+    if (hit && hit.ok) {
+      const data = hit.data;
+      this.isConnected = true;
+      this.isChecking = false;
+      this.lastError = null;
+      this.lastDiagnosis = 'ok';
+      this.isMixedContentBlocked = false;
+      this.lastCheckedAt = new Date().toISOString();
+      if (data.resolvedPath) this.storageDir = data.resolvedPath;
+      if (data.homeDir) this.homeDir = data.homeDir;
+      this.setBridgeUrl(hit.url);
+      try {
+        localStorage.setItem(STORAGE_KEY_AUTO_CONNECT, 'true');
+      } catch {}
+      this.notify();
+      return { success: true };
+    }
+
+    const failures = results.filter((r): r is Extract<typeof r, { ok: false }> => !r.ok);
+    const originRefused = failures.find((f) => f.reason === 'origin-refused');
+    const httpRefused = failures.find((f) => f.reason === 'refused');
+    this.lastDiagnosis = originRefused ? 'origin-refused' : 'unreachable';
 
     this.isConnected = false;
     this.isChecking = false;
-    this.isMixedContentBlocked = mixedContentSuspected;
+    this.isMixedContentBlocked = hosted && this.isSecureContext() && !originRefused;
 
-    if (mixedContentSuspected) {
-      // Chrome, Edge and Firefox allow HTTPS pages to reach http://localhost (Chrome asks for
-      // local network permission first); Safari blocks it outright as mixed content.
-      this.lastError = `${this.describeUnreachable()} If you're using Safari, it blocks HTTPS sites from reaching http://localhost. Use Chrome, Edge or Firefox, or open Ergo locally at http://localhost:5173.`;
+    if (httpRefused && !originRefused) {
+      this.lastError = httpRefused.message;
+    } else if (!hosted) {
+      this.lastError = failures[0]?.message || 'Unable to reach local bridge';
     } else {
-      this.lastError = lastErrorMessage || 'Unable to reach local bridge';
+      this.lastError = this.describeUnreachable(this.lastDiagnosis);
+      if (this.isMixedContentBlocked && !this.lastError.includes('Safari')) {
+        this.lastError += ' If you use Safari, open Ergo locally at http://localhost:5173 instead.';
+      }
     }
 
     this.lastCheckedAt = new Date().toISOString();
@@ -275,6 +325,23 @@ class BridgeClient {
       error: this.lastError || undefined,
       isMixedContentBlocked: this.isMixedContentBlocked
     };
+  }
+
+  /**
+   * fetch() against the bridge that re-discovers it once if the request never reached a server
+   * (e.g. the bridge moved to another port since the URL was saved), then retries.
+   */
+  public async fetch(endpoint: string, init?: RequestInit): Promise<Response> {
+    try {
+      return await fetch(this.getApiUrl(endpoint), init);
+    } catch (err: any) {
+      if (!this.isHostedWeb() || !isNetworkError(err)) throw err;
+      const before = this.bridgeUrl;
+      const res = await this.checkConnection();
+      if (!res.success) throw err;
+      if (this.bridgeUrl === before) throw err;
+      return fetch(this.getApiUrl(endpoint), init);
+    }
   }
 
   /**
