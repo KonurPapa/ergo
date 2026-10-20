@@ -19,6 +19,73 @@ export async function callAiEngine(
       ? (config.summaryModel || config.generalModel || config.model)
       : (config.generalModel || config.model);
 
+  // Subscription (CLI) profiles first: they can carry an API provider id (e.g. 'anthropic' for a Claude Code login)
+  // with a placeholder key, which the provider branches below would send to the API as if it were real.
+  if (provider === 'cli_subscription' || config.authMode === 'cli_subscription' || config.apiKey === 'cli_subscription_active') {
+    const cliTarget = config.cliCustomCommand || config.cliAgentId || (
+      config.provider === 'gemini' ? 'antigravity' :
+      config.provider === 'openai' ? 'codex' :
+      config.provider === 'cursor' ? 'cursor-cli' :
+      config.provider === 'grok' ? 'grok-cli' :
+      config.provider === 'ollama' ? 'aider' :
+      config.model || 'claude'
+    );
+    // Map preset IDs like 'claude-code' to binary 'claude'
+    const binary = cliTarget === 'claude-code'
+      ? 'claude'
+      : cliTarget === 'antigravity'
+        ? 'agy'
+        : cliTarget === 'cursor-cli'
+          ? 'cursor'
+          : cliTarget === 'grok-cli'
+            ? 'grok'
+            : cliTarget;
+
+    const env: Record<string, string> = {};
+    if (config.apiKey && config.apiKey !== 'cli_subscription_active') {
+      if (binary === 'claude') env['ANTHROPIC_API_KEY'] = config.apiKey.trim();
+      else if (binary === 'codex' || binary === 'openai') env['OPENAI_API_KEY'] = config.apiKey.trim();
+      else if (binary === 'agy' || binary === 'antigravity') env['GEMINI_API_KEY'] = config.apiKey.trim();
+      else if (binary === 'grok') env['XAI_API_KEY'] = config.apiKey.trim();
+    }
+    if (config.providerKeys) {
+      if (config.providerKeys.anthropic?.apiKey) env['ANTHROPIC_API_KEY'] = config.providerKeys.anthropic.apiKey.trim();
+      if (config.providerKeys.openai?.apiKey) env['OPENAI_API_KEY'] = config.providerKeys.openai.apiKey.trim();
+      if (config.providerKeys.gemini?.apiKey) env['GEMINI_API_KEY'] = config.providerKeys.gemini.apiKey.trim();
+      if (config.providerKeys.grok?.apiKey) env['XAI_API_KEY'] = config.providerKeys.grok.apiKey.trim();
+    }
+
+    const res = await fetch(bridgeClient.getApiUrl('/api/cli/execute'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cli: binary,
+        prompt,
+        systemPrompt,
+        // A one-shot answer, not agent work: the bridge runs the CLI without its tools, MCP servers, project memory and
+        // built-in system prompt (~25k tokens of overhead per call on Claude Code), with this system prompt instead.
+        mode: 'completion',
+        model: targetModel,
+        responseFormat,
+        timeoutMs: taskType === 'autocomplete' ? 12_000 : 60_000,
+        env
+      }),
+      signal
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `CLI bridge returned HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    if (!data.success && !data.output) {
+      throw new Error(data.stderr || data.error || `CLI execution failed with exit code ${data.exitCode}`);
+    }
+
+    return data.output || data.stderr || '';
+  }
+
   if (provider === 'openai') {
     if (!apiKey) throw new Error('OpenAI API key missing.');
     const reqBody: any = {
@@ -77,7 +144,7 @@ export async function callAiEngine(
     return data.choices?.[0]?.message?.content || '';
   }
 
-  if (provider === 'cursor' && config.authMode !== 'cli_subscription') {
+  if (provider === 'cursor') {
     // If API key is provided for Cursor, route through OpenAI-compatible endpoint or report configured state
     if (apiKey) {
       const reqBody: any = {
@@ -111,12 +178,10 @@ export async function callAiEngine(
 
   if (provider === 'anthropic') {
     if (!apiKey) throw new Error('Anthropic API key missing.');
-    let modelName = targetModel || (taskType === 'summary' ? 'claude-3-7-sonnet-20250219' : 'claude-3-7-sonnet-20250219');
-    if (modelName === 'claude-opus-5' || modelName === 'claude-opus') {
-      modelName = 'claude-3-7-sonnet-20250219';
-    } else if (modelName === 'claude-sonnet-5' || modelName === 'claude-sonnet') {
-      modelName = 'claude-3-7-sonnet-20250219';
-    }
+    // Bare family aliases (from older profiles) map to the current model of that family; real ids pass through.
+    const ANTHROPIC_ALIASES: Record<string, string> = { 'claude-opus': 'claude-opus-5-5', 'claude-sonnet': 'claude-sonnet-5-5', 'claude-haiku': 'claude-haiku-5-5' };
+    const requested = targetModel || 'claude-sonnet-5-5';
+    const modelName = ANTHROPIC_ALIASES[requested] || requested;
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -128,7 +193,8 @@ export async function callAiEngine(
       body: JSON.stringify({
         model: modelName,
         max_tokens: 4000,
-        system: systemPrompt,
+        // Prompt caching: the system prompt (skill docs, instructions) is the stable prefix across calls.
+        system: systemPrompt ? [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }] : undefined,
         messages: [{ role: 'user', content: prompt }]
       }),
       signal
@@ -143,7 +209,7 @@ export async function callAiEngine(
 
   if (provider === 'gemini') {
     if (!apiKey) throw new Error('Google Gemini API key missing.');
-    const geminiModel = targetModel || (taskType === 'summary' ? 'gemini-3.7-flash' : 'gemini-3.7-pro');
+    const geminiModel = targetModel || (taskType === 'summary' ? 'gemini-3.7-flash' : 'gemini-4-argon');
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`,
       {
@@ -193,68 +259,6 @@ export async function callAiEngine(
     }
     const data = await res.json();
     return data.message?.content || '';
-  }
-
-  if (provider === 'cli_subscription' || config.authMode === 'cli_subscription' || config.apiKey === 'cli_subscription_active') {
-    const cliTarget = config.cliCustomCommand || config.cliAgentId || (
-      config.provider === 'gemini' ? 'antigravity' :
-      config.provider === 'openai' ? 'codex' :
-      config.provider === 'cursor' ? 'cursor-cli' :
-      config.provider === 'grok' ? 'grok-cli' :
-      config.provider === 'ollama' ? 'aider' :
-      config.model || 'claude'
-    );
-    // Map preset IDs like 'claude-code' to binary 'claude'
-    const binary = cliTarget === 'claude-code'
-      ? 'claude'
-      : cliTarget === 'antigravity'
-        ? 'agy'
-        : cliTarget === 'cursor-cli'
-          ? 'cursor'
-          : cliTarget === 'grok-cli'
-            ? 'grok'
-            : cliTarget;
-
-    const env: Record<string, string> = {};
-    if (config.apiKey && config.apiKey !== 'cli_subscription_active') {
-      if (binary === 'claude') env['ANTHROPIC_API_KEY'] = config.apiKey.trim();
-      else if (binary === 'codex' || binary === 'openai') env['OPENAI_API_KEY'] = config.apiKey.trim();
-      else if (binary === 'agy' || binary === 'antigravity') env['GEMINI_API_KEY'] = config.apiKey.trim();
-      else if (binary === 'grok') env['XAI_API_KEY'] = config.apiKey.trim();
-    }
-    if (config.providerKeys) {
-      if (config.providerKeys.anthropic?.apiKey) env['ANTHROPIC_API_KEY'] = config.providerKeys.anthropic.apiKey.trim();
-      if (config.providerKeys.openai?.apiKey) env['OPENAI_API_KEY'] = config.providerKeys.openai.apiKey.trim();
-      if (config.providerKeys.gemini?.apiKey) env['GEMINI_API_KEY'] = config.providerKeys.gemini.apiKey.trim();
-      if (config.providerKeys.grok?.apiKey) env['XAI_API_KEY'] = config.providerKeys.grok.apiKey.trim();
-    }
-
-    const res = await fetch(bridgeClient.getApiUrl('/api/cli/execute'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        cli: binary,
-        prompt,
-        systemPrompt,
-        model: targetModel,
-        responseFormat,
-        timeoutMs: taskType === 'autocomplete' ? 12_000 : 60_000,
-        env
-      }),
-      signal
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || `CLI bridge returned HTTP ${res.status}`);
-    }
-
-    const data = await res.json();
-    if (!data.success && !data.output) {
-      throw new Error(data.stderr || data.error || `CLI execution failed with exit code ${data.exitCode}`);
-    }
-
-    return data.output || data.stderr || '';
   }
 
   throw new Error('Simulated engine active.');

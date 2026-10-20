@@ -15,13 +15,16 @@ import {
   type DiscoveryJobPayload,
   type DiscoveredTaskContextEntry,
   type OverviewDocument,
-  type ManagerBiblePayload
+  type ManagerBiblePayload,
+  type TaskRating
 } from '../types';
 import { callMcpTool, formatConnectionsForAiPrompt, getAllowedRoots } from './mcpClient';
 import { storageManager } from './storageManager';
 import { parseTodoMarkdown, parseAgentContextMarkdown } from './parser';
 import { callAiEngine, stripSkillFrontmatter, extractStringFromAiValue } from './llmClient';
 import { type SearchResult, runSessionRetrospective, type RetrospectiveInput } from './memory';
+import { extractTaskRatingLine } from './agentPipeline/taskRating';
+import { TASK_RATING_SCALES } from './agentPipeline/autoRouter';
 
 // The agent execution pipeline (Discovery → Summary → Manager → Cleaner → Hardener → Logger)
 // lives in ./agentPipeline. Re-exported here so existing imports keep working.
@@ -640,10 +643,45 @@ ${updatedTodoMarkdown}`;
   };
 }
 
+const RELATED_IDS_LINE_RE = /^[ \t>*_`-]*RELATED[_ ]TASK[_ ]IDS[*_`]*[ \t]*:[*_`]*[ \t]*(.*)$/gim;
+
+/**
+ * Splits the overview model's trailing `RELATED_TASK_IDS: a, b` line off its answer (every such line is removed,
+ * the last one wins). Ids are trimmed of brackets / `#` / quotes; "none" (or nothing) yields []. With
+ * `allowedIds`, ids not in that list are dropped (the model may only pick from the candidates it was shown).
+ */
+export function extractRelatedTaskIdsLine(
+  text: string,
+  allowedIds?: readonly string[]
+): { text: string; relatedTaskIds: string[]; found: boolean } {
+  let lastValue: string | null = null;
+  const stripped = String(text ?? '').replace(RELATED_IDS_LINE_RE, (_line, value: string) => {
+    lastValue = value;
+    return '';
+  });
+  if (lastValue === null) return { text: String(text ?? '').trim(), relatedTaskIds: [], found: false };
+  const allowed = allowedIds ? new Set(allowedIds.map(String)) : null;
+  const ids: string[] = [];
+  for (const raw of (lastValue as string).split(/[,;\s]+/)) {
+    const id = raw.replace(/^[\s[\]("'`#]+|[\s[\])"'`.]+$/g, '').trim();
+    if (!id || /^(none|n\/a|null|-)$/i.test(id)) continue;
+    if (allowed && !allowed.has(id)) continue;
+    if (!ids.includes(id)) ids.push(id);
+  }
+  return { text: stripped.replace(/\n{3,}/g, '\n\n').trim(), relatedTaskIds: ids, found: true };
+}
+
 /**
  * Runs AI Step 3 (Context Syncer & Overview Drafter) for a single task's Overview:
  * 1. Analyzes drift between the current Overview and the human task definition in TODO.md.
  * 2. Adds/edits missing pieces as necessary, ensuring rich Done-State, In Context, and Seams details.
+ *
+ * With `options.relatedCandidatesPrompt` (stage 1 of related-task matching), the model also picks the candidates
+ * that are genuinely useful context for this task (stage 2) and uses them while writing; they come back as
+ * `relatedTaskIds` (unvalidated against the candidate list — callers intersect them with their candidates).
+ *
+ * The model also rates the task on a final `TASK_RATING:` line (Auto model selection); it comes back as
+ * `taskRating`, undefined when the line is missing or invalid (and from the offline fallback).
  */
 export async function syncTaskOverviewWithAi(
   task: TaskItem,
@@ -652,8 +690,10 @@ export async function syncTaskOverviewWithAi(
   aiConfig: AIProviderConfig,
   connectedMcps: MCPServer[],
   todoMarkdown?: string,
-  _agentContextMarkdown?: string
-): Promise<string> {
+  _agentContextMarkdown?: string,
+  options: { relatedCandidatesPrompt?: string } = {}
+): Promise<{ overview: string; relatedTaskIds: string[]; relatedSelectionMade: boolean; taskRating?: TaskRating }> {
+  const relatedCandidatesPrompt = (options.relatedCandidatesPrompt || '').trim();
   const allowedRoots = await getAllowedRoots();
   const runtimeConnectionsPrompt = formatConnectionsForAiPrompt(connectedMcps, allowedRoots);
   const mcpNames = connectedMcps.filter((m) => m.status === 'connected').map((m) => m.name);
@@ -695,7 +735,15 @@ Synchronize the Overview for Task #${task.id}: "${task.title}".
    - **Seams**: Specific files, components, active MCP tools (${mcpNames.join(', ') || 'Local Workspace'}), or APIs involved.
 
 OUTPUT FORMAT:
-Output ONLY the final updated markdown content for this task's Overview. Do NOT output markdown code fences around the entire response, and do NOT include the task heading or other sections like Build & Verification / Completion.`;
+Output ONLY the final updated markdown content for this task's Overview. Do NOT output markdown code fences around the entire response, and do NOT include the task heading or other sections like Build & Verification / Completion.${relatedCandidatesPrompt ? `
+
+RELATED TASKS:
+The user message lists CANDIDATE RELATED TASKS found by a local similarity search of this project — many are only superficially similar. Pick the ones that are genuinely useful context for THIS task: a shared feature area, a dependency, prior work to build on, or a conflict to avoid. Use them in **In Context** and **Seams**, and to fill gaps when the task itself is sparse. Never copy their requirements into this task.
+After the overview, add exactly one line: RELATED_TASK_IDS: <comma-separated candidate ids> — or RELATED_TASK_IDS: none. 0–5 is typical.` : ''}
+
+TASK RATING:
+End your answer with exactly one line rating how demanding the task is: TASK_RATING: kind=<coding|writing|research|ops|data|other>; complexity=<1-5>; reasoning=<1-5>
+Scales — ${TASK_RATING_SCALES}`;
 
       const ai3UserPrompt = `HUMAN TASK IN TODO.md:
 \`\`\`markdown
@@ -709,10 +757,15 @@ CURRENT OVERVIEW:
 \`\`\`markdown
 ${currentOverview.trim() || '(Empty - no overview defined yet)'}
 \`\`\`
-${todoMarkdown ? `\nWORKSPACE TODO.md CONTEXT:\n\`\`\`markdown\n${todoMarkdown.slice(0, 1500)}\n\`\`\`` : ''}`;
+${todoMarkdown ? `\nWORKSPACE TODO.md CONTEXT:\n\`\`\`markdown\n${todoMarkdown.slice(0, 1500)}\n\`\`\`` : ''}${
+        relatedCandidatesPrompt ? `\n\nCANDIDATE RELATED TASKS (choose the useful ones; ids in brackets):\n${relatedCandidatesPrompt}` : ''
+      }`;
 
       const ai3Response = await callAiEngine(ai3UserPrompt, ai3SystemPrompt, aiConfig, 'general', 'text');
-      let cleanedOverview = ai3Response.trim();
+      // The selection line goes first: it may sit after a code fence the model wrapped the overview in.
+      const { text: withoutRelated, relatedTaskIds, found: relatedSelectionMade } = extractRelatedTaskIdsLine(ai3Response);
+      const { text: answerText, rating: taskRating } = extractTaskRatingLine(withoutRelated);
+      let cleanedOverview = answerText.trim();
 
       // Strip markdown code fence if wrapped
       const fenceMatch = cleanedOverview.match(/^```(?:markdown)?(?::|\s+)?(?:overview|AGENT_CONTEXT\.md|agent_context)?\s*\n([\s\S]*?)```$/i);
@@ -731,7 +784,9 @@ ${todoMarkdown ? `\nWORKSPACE TODO.md CONTEXT:\n\`\`\`markdown\n${todoMarkdown.s
       if (cleanedOverview) {
         console.log('%c[Ergo AI Assistant] ── Step 3: Synced Overview Output (AI 3) ──', 'color: #a78bfa; font-weight: bold;');
         console.log(cleanedOverview);
-        return cleanedOverview;
+        if (relatedCandidatesPrompt) console.log('[Ergo AI Assistant] Related tasks selected:', relatedTaskIds.join(', ') || 'none');
+        console.log('[Ergo AI Assistant] Task rating:', taskRating ? `${taskRating.kind} · complexity ${taskRating.complexity} · reasoning ${taskRating.reasoning}` : 'missing');
+        return { overview: cleanedOverview, relatedTaskIds, relatedSelectionMade, ...(taskRating ? { taskRating } : {}) };
       }
     } catch (e: any) {
       console.warn(`[Ergo AI Assistant] Live Step 3 notice (falling back to offline syncer):`, e.message);
@@ -773,7 +828,8 @@ ${todoMarkdown ? `\nWORKSPACE TODO.md CONTEXT:\n\`\`\`markdown\n${todoMarkdown.s
   console.log('%c[Ergo AI Assistant] ── Step 3: Synced Overview Output (Offline AI 3) ──', 'color: #a78bfa; font-weight: bold;');
   console.log(updatedOverview);
 
-  return updatedOverview;
+  // No model ran, so nothing was selected.
+  return { overview: updatedOverview, relatedTaskIds: [], relatedSelectionMade: false };
 }
 
 // ─── Task Execution Pipeline Helpers ────────────────────────────────────────

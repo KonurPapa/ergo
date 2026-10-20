@@ -818,13 +818,16 @@ export class StorageManager {
       localStorage.setItem('ergo_user_api_keys', JSON.stringify(secrets.userApiKeys));
     } catch {}
 
-    // Preserve existing mcpSecrets if not passed
+    // Preserve existing mcpSecrets / modelData if not passed
     let payload: AppSecrets = { ...secrets };
-    if (!payload.mcpSecrets) {
+    if (!payload.mcpSecrets || payload.modelData === undefined) {
       try {
         const existing = await this.loadSecrets();
-        if (existing?.mcpSecrets) {
+        if (!payload.mcpSecrets && existing?.mcpSecrets) {
           payload.mcpSecrets = existing.mcpSecrets;
+        }
+        if (payload.modelData === undefined && existing?.modelData) {
+          payload.modelData = existing.modelData;
         }
       } catch {}
     }
@@ -861,6 +864,62 @@ export class StorageManager {
     } catch {}
 
     return saved;
+  }
+
+  /**
+   * Load Auto mode's model calibration table (config/model-calibration.json). Null when there is none yet.
+   */
+  public async loadModelCalibration(): Promise<unknown | null> {
+    try {
+      const mcpRes = await callMcpTool('mcp-filesystem', 'read_file', { path: 'config/model-calibration.json' });
+      if (mcpRes.success && mcpRes.data?.content) return JSON.parse(mcpRes.data.content);
+    } catch {}
+    if (this.activeHandle && this.folderMetadata.status === 'connected') {
+      try {
+        const configDir = await getOrCreateSubdir(this.activeHandle, 'config');
+        const text = await readFileTextFromDir(configDir, 'model-calibration.json');
+        if (text) return JSON.parse(text);
+      } catch {}
+    }
+    try {
+      const res = await this.apiFetch('/api/config/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'model-calibration' })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.data) return data.data;
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
+   * Save Auto mode's model calibration table (config/model-calibration.json, next to the agent skills).
+   */
+  public async saveModelCalibration(data: unknown): Promise<boolean> {
+    const content = JSON.stringify(data, null, 2);
+    try {
+      const mcpRes = await callMcpTool('mcp-filesystem', 'write_file', { path: 'config/model-calibration.json', content });
+      if (mcpRes.success) return true;
+    } catch {}
+    if (this.activeHandle && this.folderMetadata.status === 'connected') {
+      try {
+        const configDir = await getOrCreateSubdir(this.activeHandle, 'config');
+        await writeFileTextToDir(configDir, 'model-calibration.json', content);
+        return true;
+      } catch {}
+    }
+    try {
+      const res = await this.apiFetch('/api/config/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'model-calibration', data })
+      });
+      if (res.ok) return true;
+    } catch {}
+    return false;
   }
 
   /**

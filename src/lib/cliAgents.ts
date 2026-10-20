@@ -1,4 +1,5 @@
 import type { AIProviderId, CliAgentPreset, CliAgentConfig, UserApiKey, TaskItem, AgentContextItem, EffortLevel, PermissionLevel } from '../types';
+import { hasUsableOverview } from './overviewUtils';
 
 export const CLI_AGENT_PRESETS: CliAgentPreset[] = [
   {
@@ -116,13 +117,11 @@ export function getEffectiveCliAgent(key?: UserApiKey | null, fallback?: CliAgen
   };
 }
 
-/**
- * Builds a clear, structured prompt for a CLI coding agent from a task and optional brief.
- */
-export function buildTaskCliPrompt(task: TaskItem, brief?: AgentContextItem): string {
+/** Task content shared by every CLI prompt: title, category, notes, objectives, checklist, Gherkin criteria. */
+function buildTaskContentSections(task: TaskItem, brief?: AgentContextItem, heading = 'TASK TO COMPLETE'): string[] {
   const sections: string[] = [];
 
-  sections.push(`TASK TO COMPLETE: "${task.title}"`);
+  sections.push(`${heading}: "${task.title}"`);
 
   if (task.category && task.category.trim()) {
     sections.push(`CATEGORY: ${task.category.trim()}`);
@@ -132,7 +131,13 @@ export function buildTaskCliPrompt(task: TaskItem, brief?: AgentContextItem): st
     sections.push(`SUMMARY NOTE:\n${task.summaryNote.trim()}`);
   }
 
-  const overview = brief?.overview || brief?.brief;
+  // A brief made from a freeform selection has no task text of its own beyond this.
+  if (brief?.sourceContent && brief.sourceContent.trim() && brief.sourceContent.trim() !== task.title.trim()) {
+    sections.push(`TASK DESCRIPTION:\n${brief.sourceContent.trim()}`);
+  }
+
+  // Only an overview a run generated (or the user wrote) — never text merely copied from the task.
+  const overview = hasUsableOverview(brief) ? brief?.overview || brief?.brief : undefined;
   if (overview && overview.trim()) {
     sections.push(`OBJECTIVES & CONTEXT:\n${overview.trim()}`);
   }
@@ -145,10 +150,26 @@ export function buildTaskCliPrompt(task: TaskItem, brief?: AgentContextItem): st
   }
 
   // Extract Gherkin criteria if embedded in brief
-  const gherkinMatch = overview ? overview.match(/```gherkin([\s\S]*?)```/) : null;
-  if (gherkinMatch) {
-    sections.push(`ACCEPTANCE CRITERIA (GHERKIN):\n${gherkinMatch[1].trim()}`);
+  const gherkin = extractGherkin(overview);
+  if (gherkin) {
+    sections.push(`ACCEPTANCE CRITERIA (GHERKIN):\n${gherkin}`);
   }
+
+  return sections;
+}
+
+function extractGherkin(text: string | undefined): string | null {
+  const match = text ? text.match(/```gherkin([\s\S]*?)```/) : null;
+  const body = match?.[1]?.trim();
+  return body ? body : null;
+}
+
+/**
+ * Builds a clear, structured prompt for a CLI coding agent from a task and optional brief.
+ * Single-agent prompt without Ergo's run protocol; task runs use buildManagerCliPrompt.
+ */
+export function buildTaskCliPrompt(task: TaskItem, brief?: AgentContextItem): string {
+  const sections = buildTaskContentSections(task, brief);
 
   sections.push(
     `INSTRUCTIONS:\n` +
@@ -161,6 +182,599 @@ export function buildTaskCliPrompt(task: TaskItem, brief?: AgentContextItem): st
   return sections.join('\n\n');
 }
 
+// ─── Multi-agent CLI runs (manager → workers → QA) ──────────────────────────
+//
+// Agents report milestones by writing files into `<cwd>/<runDirRel>/`; the bridge watches those files
+// (see vite.config.ts, ergo-pty plugin) and App orchestrates the next agent. Messages Ergo types into a
+// running agent's terminal must be ONE line: a newline would submit a half-typed message.
+//
+// The bridge also ingests those files into Ergo's vector memory (namespace agent-notes, doc id
+// `run:<runId>:<file name>`), and serves memory to the agents over its ergo-memory MCP server. Agents WRITE
+// the run files (they are Ergo's signals) but read each other's reports through memory, not the folder.
+
+export interface CliRunPromptContext {
+  runId: string;
+  /** Run dir relative to the agent's cwd, e.g. ".ergo/runs/<runId>" (see runDirRel() in cliRunClient). */
+  runDirRel: string;
+  /** Most workers the manager may delegate to (delegation is offered only when this is ≥ 2). */
+  maxWorkers: number;
+  /** A QA verifier agent checks the manager's work after it writes completion.md. */
+  qaEnabled: boolean;
+  /** Memory pre-fetched for this agent's prompt (RELEVANT MEMORY section; at most 4 are shown). */
+  memoryHits?: Array<{ id: string; label: string; text: string }>;
+  /** The ergo-memory MCP tools are registered for this agent (default true). False: agents use the run files. */
+  memoryToolsAvailable?: boolean;
+  /**
+   * Context for the related tasks the Summary step selected for this task (formatSelectedRelatedContext): shown to
+   * the manager and the workers as a RELATED TASKS section.
+   */
+  relatedContext?: string;
+}
+
+export interface CliWorkerPiece {
+  id: string;
+  title: string;
+  instructions: string;
+  files: string[];
+}
+
+/** Hard cap on workers per run, whatever the settings say. */
+const MAX_DELEGATED_WORKERS = 8;
+const WORKER_ID_RE = /^[A-Za-z0-9_-]{1,12}$/;
+/** Keep any single argv entry well under Linux's 128 KiB MAX_ARG_STRLEN. */
+const MAX_INSTRUCTIONS_CHARS = 12_000;
+const MAX_FILES_PER_WORKER = 60;
+const MAX_COMPLETION_IN_QA_PROMPT = 12_000;
+const MAX_OVERVIEW_IN_WORKER_PROMPT = 4_000;
+const MAX_MEMORY_HITS_IN_PROMPT = 4;
+const MAX_MEMORY_HIT_CHARS = 240;
+const MAX_RELATED_CONTEXT_CHARS = 1_600;
+
+function runFile(ctx: Pick<CliRunPromptContext, 'runDirRel'>, name: string): string {
+  return `${ctx.runDirRel.replace(/\/+$/, '')}/${name}`;
+}
+
+/** Memory doc id the bridge gives a run file it ingests (see vite.config.ts): `run:<runId>:<file name>`. */
+export function runMemoryDocId(runId: string, fileName: string): string {
+  return `run:${runId}:${fileName.replace(/^.*\//, '')}`;
+}
+
+function memoryOn(ctx: Pick<CliRunPromptContext, 'memoryToolsAvailable'>): boolean {
+  return ctx.memoryToolsAvailable !== false;
+}
+
+/**
+ * ERGO MEMORY (+ RELEVANT MEMORY) sections. Kept terse: the prompt is re-read on every agent turn.
+ * `reportFile` is the signal file this agent must still WRITE.
+ */
+function buildMemorySections(ctx: CliRunPromptContext, reportFile: string): string[] {
+  const sections: string[] = [];
+  const dir = ctx.runDirRel.replace(/\/+$/, '');
+  if (memoryOn(ctx)) {
+    sections.push(
+      `ERGO MEMORY (tools memory_search, memory_get, memory_save; pass run_id: "${ctx.runId}"):\n` +
+      `- Search memory before re-reading many files or redoing analysis; memory_get <id> gives the full text.\n` +
+      `- Save important findings, decisions and plans with memory_save, not note files. If the tools are unavailable, write notes under "${dir}/notes/".\n` +
+      `- Run reports (plan, workers, QA, completion) are in memory: never read files in "${dir}/" unless the tools are unavailable. Still WRITE "${reportFile}": it is Ergo's signal.`
+    );
+  }
+  const hits = (ctx.memoryHits || []).filter((h) => h && h.id && h.text).slice(0, MAX_MEMORY_HITS_IN_PROMPT);
+  if (hits.length > 0) {
+    sections.push(
+      `RELEVANT MEMORY (pre-fetched${memoryOn(ctx) ? '; memory_get <id> for the full text' : ''}):\n` +
+      hits.map((h) => `- [${oneLine(h.id, 120)}] ${oneLine(h.label, 80)} — ${oneLine(h.text, MAX_MEMORY_HIT_CHARS)}`).join('\n')
+    );
+  }
+  return sections;
+}
+
+/** RELATED TASKS section (empty when the run has no selected related tasks). */
+function buildRelatedSection(ctx: Pick<CliRunPromptContext, 'relatedContext'>): string[] {
+  const text = (ctx.relatedContext || '').trim();
+  if (!text) return [];
+  const capped = text.length > MAX_RELATED_CONTEXT_CHARS ? `${text.slice(0, MAX_RELATED_CONTEXT_CHARS - 1)}…` : text;
+  return [
+    `RELATED TASKS (context from this project — read before starting):\n` +
+    `Other tasks in this project judged useful context for this one (shared area, dependency, prior work, or a conflict to avoid). ` +
+    `Reference only — they are not part of this task's requirements.\n${capped}`,
+  ];
+}
+
+/** Collapse any whitespace (incl. newlines) so text can be typed into a TUI as one line. */
+function oneLine(text: string, max = 200): string {
+  const flat = String(text ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+const COMPLETION_FORMAT =
+  `**Summary:** <one or two plain sentences: what now works>\n\n` +
+  `**Changed:**\n` +
+  `- \`path/to/file.ext\` — a few words\n` +
+  `- (at most 5 bullets; group related files, e.g. "\`src/components/*\` — 4 files, menu wiring")\n\n` +
+  `**Verified:** <one line: what you ran or checked, and the result — or "Not verified: <why>">\n\n` +
+  `**Needs your review:**\n` +
+  `- [ ] <a concrete thing the user should check by hand> (at most 3; or write "None")`;
+
+/**
+ * Prompt for the manager agent of a CLI task run: the task itself plus Ergo's run protocol
+ * (optional delegation via delegate.json, final completion record in completion.md).
+ */
+export function buildManagerCliPrompt(task: TaskItem, brief: AgentContextItem | undefined, ctx: CliRunPromptContext): string {
+  const sections = buildTaskContentSections(task, brief);
+  const delegateFile = runFile(ctx, 'delegate.json');
+  const completionFile = runFile(ctx, 'completion.md');
+  const maxWorkers = Math.min(MAX_DELEGATED_WORKERS, Math.max(0, Math.floor(ctx.maxWorkers || 0)));
+  const canDelegate = maxWorkers >= 2;
+  const hasGherkin = Boolean(extractGherkin(brief?.overview || brief?.brief));
+
+  sections.push(...buildRelatedSection(ctx));
+
+  sections.push(
+    `YOUR ROLE:\n` +
+    `You are the MANAGER agent of an Ergo task run (run id ${ctx.runId}). Ergo is the app that launched you; it watches ` +
+    `files you write into the run folder "${ctx.runDirRel}/" (relative to your current working directory) to know what you are doing. ` +
+    `Ergo has already created that folder. You own this task end to end: understand it, get it implemented, verify it, and record the result.`
+  );
+
+  sections.push(...buildMemorySections(ctx, completionFile));
+
+  sections.push(
+    `HOW TO WORK:\n` +
+    `1. Inspect the repository first (structure, conventions, existing code, how tests/build/lint are run) before changing anything.\n` +
+    `2. Implement every change the task needs so that all objectives${hasGherkin ? ', acceptance criteria (Gherkin scenarios)' : ''} and checklist items are satisfied. Follow the project's existing style.\n` +
+    `3. Verify your work: run the relevant tests, build, type-check and/or lint commands that exist in this project and fix what fails. If nothing can be run, verify by re-reading the changed code against the requirements.\n` +
+    `4. Write the completion record (see FINAL STEP). That is the last thing you do.\n` +
+    `Do not ask the user for confirmation of the plan — proceed autonomously. Only stop to ask if the task is genuinely impossible to do without information you cannot find.`
+  );
+
+  if (canDelegate) {
+    sections.push(
+      `OPTIONAL — DELEGATING TO WORKER AGENTS:\n` +
+      `Ergo can run up to ${maxWorkers} worker agents in parallel for you. Each worker is a separate CLI agent process like you, started in the same working directory, that sees ONLY the instructions you write for it (not this prompt, not your conversation).\n` +
+      `- Delegate ONLY when the task clearly splits into independent pieces of real size, each touching a DISJOINT set of files (no file may appear in two pieces). For small or tightly coupled tasks, do all the work yourself and never create the delegation file.\n` +
+      `- Delegate at most ONCE per run. Anything left afterwards you do yourself.\n` +
+      `- To delegate, first finish your investigation, then use your normal file-write tool to create the file "${delegateFile}" containing ONLY valid JSON in exactly this shape:\n` +
+      `{"workers":[{"id":"W1","title":"Short title","instructions":"Complete, self-contained instructions…","files":["src/path/a.ts","src/path/b.ts"]}]}\n` +
+      `  • "id": short unique id using only letters, digits, "-" or "_" (max 12 characters), e.g. W1, W2.\n` +
+      `  • "instructions": everything the worker needs — what to build, relevant context and conventions, exact interfaces/function signatures it must match or provide for the other pieces, and how to verify its piece.\n` +
+      `  • "files": every file path (relative to the working directory) the worker may create or modify. The worker will touch nothing else.\n` +
+      `  • At most ${maxWorkers} workers.\n` +
+      `- Right after writing "${delegateFile}", END YOUR TURN and wait. Do not poll for results, do not run sleep or watch commands, and do not edit any file assigned to a worker while the workers run. ` +
+      (memoryOn(ctx)
+        ? `When all workers have finished, Ergo will type a message into this terminal starting with "Ergo:" that gives each worker's status and the memory id of its report. ` +
+          `Then read every report with memory_get, `
+        : `When all workers have finished, Ergo will type a message into this terminal starting with "Ergo:" that lists each worker's report file. ` +
+          `Then read every report, `) +
+      `review and integrate the workers' changes (fix anything incomplete or inconsistent yourself, and do any piece a worker failed), verify the whole task, and continue with the FINAL STEP.`
+    );
+  } else {
+    sections.push(
+      `WORKERS:\n` +
+      `Delegation to worker agents is not available in this run. Do all the work yourself and do not create "${delegateFile}".`
+    );
+  }
+
+  if (ctx.qaEnabled) {
+    sections.push(
+      `QA VERIFICATION:\n` +
+      `After you write the completion record, an independent QA verifier agent will check your work against the task. ` +
+      `If it finds problems, Ergo will type a message into this terminal starting with "Ergo:" that points to the QA findings${memoryOn(ctx) ? ' in memory' : ' file'}. ` +
+      `When that happens: read the findings, fix every issue it lists, re-verify, and then OVERWRITE "${completionFile}" with an updated, complete completion record as your last action again. ` +
+      `Until then (after writing the completion record) simply end your turn and wait.`
+    );
+  }
+
+  sections.push(
+    `FINAL STEP — COMPLETION RECORD (REQUIRED):\n` +
+    `When the work is implemented and verified, use your normal file-write tool to create the file "${completionFile}" as your LAST action. ` +
+    `Write it in one go, only once the work is really finished (Ergo treats the moment this file appears as "the manager is done"). ` +
+    `It is a short note for a human to scan in a few seconds and confirm the work — NOT a log. Use exactly these bold headings, in this order:\n\n` +
+    `${COMPLETION_FORMAT}\n\n` +
+    `Keep the whole file under 120 words. No code, no command output, no step-by-step narrative, no explanations of your process. ` +
+    `Be accurate: list only files you actually changed and checks you actually ran, with their real results. ` +
+    `If something is unfinished or failed, say so in one line under Needs your review. ` +
+    `If your current permission mode does not let you write files (e.g. plan / read-only mode), put the same short record in your final reply instead. ` +
+    `After writing the file, reply with one short sentence and end your turn.`
+  );
+
+  return sections.join('\n\n');
+}
+
+/** Prompt for one worker agent: its piece only, its files only, report in worker-<id>.md. */
+export function buildWorkerCliPrompt(
+  task: TaskItem,
+  brief: AgentContextItem | undefined,
+  piece: CliWorkerPiece,
+  ctx: CliRunPromptContext
+): string {
+  const reportFile = runFile(ctx, `worker-${piece.id}.md`);
+  const sections: string[] = [];
+  const overview = (brief?.overview || brief?.brief || '').trim();
+
+  sections.push(
+    `YOUR ROLE:\n` +
+    `You are WORKER ${piece.id} in an Ergo task run (run id ${ctx.runId}). A manager agent split the task "${task.title}" into pieces; ` +
+    `other workers are implementing the other pieces at the same time in this same working directory. You do ONLY your piece.`
+  );
+
+  sections.push(...buildMemorySections(ctx, reportFile));
+
+  sections.push(`YOUR PIECE: ${piece.id} — ${piece.title}\n\n${piece.instructions.trim()}`);
+
+  sections.push(
+    piece.files.length > 0
+      ? `FILES YOU MAY CREATE OR MODIFY (paths relative to your working directory; no others):\n${piece.files.map((f) => `- ${f}`).join('\n')}`
+      : `FILES:\nThe manager did not list files for this piece. Change only the smallest set of files your piece clearly needs, and do not edit files that belong to other parts of the task.`
+  );
+
+  if (overview) {
+    const excerpt = overview.length > MAX_OVERVIEW_IN_WORKER_PROMPT ? `${overview.slice(0, MAX_OVERVIEW_IN_WORKER_PROMPT)}\n…` : overview;
+    sections.push(`OVERALL TASK CONTEXT (for background only — do not work on anything outside your piece):\n${excerpt}`);
+  }
+
+  sections.push(...buildRelatedSection(ctx));
+
+  sections.push(
+    `RULES:\n` +
+    `- Read any file you need, but create, modify or delete ONLY the files listed above. Other workers own the other files; editing them would corrupt their work.\n` +
+    `- If your piece needs a change in a file you do not own, do not make it — describe the exact change needed in your report instead.\n` +
+    `- Do not delegate, do not start other agents, do not create git commits, and do not write any other file in "${ctx.runDirRel}/" besides your report${memoryOn(ctx) ? ' (and notes/, only if the memory tools are unavailable)' : ''}.\n` +
+    `- Work autonomously; do not ask the user questions. If something is ambiguous, make the most reasonable choice and note it in your report.\n` +
+    `- Verify your piece where you can (type-check, targeted tests, build) without editing files you don't own.`
+  );
+
+  sections.push(
+    `FINAL STEP — REPORT (REQUIRED):\n` +
+    `When your piece is done, use your normal file-write tool to create "${reportFile}" as your LAST action (Ergo treats its appearance as "worker ${piece.id} is done"). ` +
+    `A short report (under 100 words, no code or command output) with these sections:\n\n` +
+    `**What I did:** <one or two sentences>\n\n` +
+    `**Files touched:**\n- \`path/to/file\` — created / modified / deleted, a few words\n\n` +
+    `**Verified:** <one line: check and result, or "Not verified: <why>">\n\n` +
+    `**Left for the manager:**\n- unfinished parts or changes needed in files you don't own — or "Nothing"\n\n` +
+    `Then end your turn without a further summary.`
+  );
+
+  return sections.join('\n\n');
+}
+
+/** Prompt for the QA verifier agent: verify (never implement), write qa.md with the VERDICT line first. */
+export function buildQaCliPrompt(
+  task: TaskItem,
+  brief: AgentContextItem | undefined,
+  ctx: CliRunPromptContext & { completionMarkdown: string; attempt: number }
+): string {
+  const qaFile = runFile(ctx, 'qa.md');
+  const completionFile = runFile(ctx, 'completion.md');
+  const hasGherkin = Boolean(extractGherkin(brief?.overview || brief?.brief));
+  const sections: string[] = [];
+
+  sections.push(
+    `YOUR ROLE:\n` +
+    `You are the independent QA VERIFIER of an Ergo task run (run id ${ctx.runId}, QA round ${Math.max(1, ctx.attempt)}). ` +
+    `A manager agent says it finished the task below. Your job is to find out whether that is true. ` +
+    `You VERIFY ONLY: do NOT implement fixes, do NOT edit, create or delete project files, and do NOT create git commits. ` +
+    `The only file you write is your report "${qaFile}".`
+  );
+
+  sections.push(...buildMemorySections(ctx, qaFile));
+
+  sections.push(...buildTaskContentSections(task, brief, 'TASK UNDER REVIEW'));
+
+  const completion = (ctx.completionMarkdown || '').trim();
+  const completionSource = memoryOn(ctx)
+    ? `memory_get "${runMemoryDocId(ctx.runId, 'completion.md')}"`
+    : `read ${completionFile}`;
+  const completionExcerpt = completion.length > MAX_COMPLETION_IN_QA_PROMPT
+    ? `${completion.slice(0, MAX_COMPLETION_IN_QA_PROMPT)}\n… (truncated — ${completionSource} for the full record)`
+    : completion || `(empty — ${completionSource} if it exists)`;
+  sections.push(`MANAGER'S COMPLETION RECORD (${completionFile}):\n${completionExcerpt}`);
+
+  if (ctx.attempt > 1) {
+    sections.push(
+      `PREVIOUS QA ROUND:\n` +
+      `This is a re-check after the manager tried to fix earlier QA findings. ` +
+      (memoryOn(ctx)
+        ? `Get the previous report with memory_get "${runMemoryDocId(ctx.runId, 'qa.md')}" first, `
+        : `"${qaFile}" may still hold the previous report: read it first, `) +
+      `confirm each earlier finding is really fixed, then look for new problems. Overwrite "${qaFile}" completely with your new report.`
+    );
+  }
+
+  sections.push(
+    `HOW TO VERIFY:\n` +
+    `1. Inspect the changed files listed in the completion record (and anything else the task touches) and compare them with the task requirements.\n` +
+    `2. Run the project's relevant checks that exist — tests, build, type-check, lint — and note the exact commands and results. Running them may create build output; that's fine, but do not change source files.\n` +
+    `3. Check every ${hasGherkin ? 'acceptance criterion (each Gherkin scenario) and ' : ''}checklist item, and whether each claim in the completion record is true (files really exist and contain what is claimed, commands really pass).\n` +
+    `4. Be strict but fair: FAIL only for real problems (a requirement not met, a broken build/test, a bug, a false claim, missing files). Style nits alone are not a failure; mention them as notes.\n` +
+    `Work autonomously; do not ask the user questions.`
+  );
+
+  sections.push(
+    `FINAL STEP — QA REPORT (REQUIRED):\n` +
+    `Use your normal file-write tool to create "${qaFile}" as your LAST action (Ergo reads the verdict from it). ` +
+    `The FIRST line must be exactly "VERDICT: PASS" or "VERDICT: FAIL" (nothing before it). Then markdown:\n\n` +
+    `VERDICT: <PASS or FAIL>\n\n` +
+    `**Checks run:** <one line: commands / checks and their results>\n\n` +
+    `**Findings:**\n- [ ] <problem> — where (file:line) — the fix (one line each, at most 5)\n\n` +
+    `Keep it under 150 words, no command output. For a PASS, write "None" under Findings. Each FAIL finding must be specific enough for the manager to fix without guessing. ` +
+    `After writing the file, end your turn without a further summary.`
+  );
+
+  return sections.join('\n\n');
+}
+
+/**
+ * One-line message Ergo types into the manager's terminal once every delegated worker has finished
+ * (or failed). Contains no newlines; Ergo sends Enter separately.
+ */
+export function buildWorkersDoneMessage(
+  results: Array<{ pieceId: string; title: string; fileRel: string; ok: boolean }>,
+  ctx: CliRunPromptContext
+): string {
+  const completionFile = runFile(ctx, 'completion.md');
+  if (results.length === 0) {
+    return oneLine(
+      `Ergo: no valid workers could be started from ${runFile(ctx, 'delegate.json')} (it was empty or invalid), so nothing was delegated. ` +
+      `Do all of the remaining work yourself (do not delegate again), verify it, then write ${completionFile} as your final action.`,
+      1500
+    );
+  }
+  const failed = results.filter((r) => !r.ok);
+  const head = failed.length === 0
+    ? `Ergo: all ${results.length} worker${results.length === 1 ? ' has' : 's have'} finished.`
+    : `Ergo: all workers have stopped — ${results.length - failed.length} of ${results.length} finished, ${failed.length} failed.`;
+  const integrate =
+    `review and integrate the workers' changes${failed.length > 0 ? ', complete the failed piece(s) yourself' : ''}, ` +
+    `fix anything incomplete or inconsistent, verify the whole task, then write ${completionFile} as your final action.`;
+  if (!memoryOn(ctx)) {
+    const parts = results.map((r) =>
+      r.ok
+        ? `${oneLine(r.pieceId, 12)} "${oneLine(r.title, 60)}" finished, report in ${oneLine(r.fileRel, 160)}`
+        : `${oneLine(r.pieceId, 12)} "${oneLine(r.title, 60)}" FAILED (stopped without a report; ${oneLine(r.fileRel, 160)} may be missing or partial)`
+    );
+    return oneLine(`${head} ${parts.join('; ')}. Read each report, ${integrate}`, 4000);
+  }
+  const parts = results.map((r) => {
+    const id = runMemoryDocId(ctx.runId, oneLine(r.fileRel, 160));
+    return r.ok
+      ? `${oneLine(r.pieceId, 12)} "${oneLine(r.title, 60)}" done (report: ${id})`
+      : `${oneLine(r.pieceId, 12)} "${oneLine(r.title, 60)}" FAILED (stopped; report ${id} may be missing or partial)`;
+  });
+  return oneLine(
+    `${head} ${parts.join('; ')}. Read the reports with memory_get (or memory_search kinds=["worker"] scope="run" run_id="${ctx.runId}"); ` +
+    `only if the memory tool is unavailable, read the worker-<id>.md files in ${ctx.runDirRel}/. Then ${integrate}`,
+    4000
+  );
+}
+
+/**
+ * One-line message Ergo types into the manager's terminal after a QA FAIL that still has fix rounds left.
+ * Points to the findings in memory (the file only as a fallback); without `ctx.runId` it is read from the path.
+ */
+export function buildQaFailMessage(
+  qaFileRel: string,
+  attempt: number,
+  maxRetries: number,
+  ctx: Partial<Pick<CliRunPromptContext, 'runId' | 'memoryToolsAvailable'>> = {}
+): string {
+  const qa = oneLine(qaFileRel, 200);
+  const slash = qa.lastIndexOf('/');
+  const completionFile = slash >= 0 ? `${qa.slice(0, slash)}/completion.md` : 'completion.md';
+  const round = Math.max(1, Math.floor(attempt) || 1);
+  const max = Math.max(round, Math.floor(maxRetries) || round);
+  const runId = ctx.runId || (slash > 0 ? qa.slice(0, slash).replace(/^.*\//, '') : '');
+  const findings = runId && memoryOn(ctx)
+    ? `Get the findings with memory_get "${runMemoryDocId(runId, qa)}" (only if the memory tool is unavailable, read ${qa})`
+    : `Read the findings in ${qa}`;
+  return oneLine(
+    `Ergo: the QA verifier FAILED your work (fix round ${round} of ${max}). ${findings}, fix every issue listed, ` +
+    `re-run the relevant checks, then overwrite ${completionFile} with an updated complete completion record as your final action; ` +
+    `QA will check again after that.`,
+    1500
+  );
+}
+
+/** Most characters of a user's follow-up message typed into an agent's terminal. */
+const MAX_FOLLOW_UP_CHARS = 3000;
+
+/**
+ * One-line message Ergo types into (or resumes) the manager with when the user sends a follow-up after the run
+ * finished: the user's words first, then a short reminder of the run protocol so Ergo can tell when it is done again.
+ */
+export function buildFollowUpMessage(userMessage: string, ctx: Pick<CliRunPromptContext, 'runDirRel' | 'qaEnabled' | 'maxWorkers'>): string {
+  const completionFile = runFile(ctx, 'completion.md');
+  const delegation =
+    Math.floor(ctx.maxWorkers || 0) >= 2
+      ? ` If it is large and splits into independent pieces you may delegate again by writing a new ${runFile(ctx, 'delegate.json')}.`
+      : '';
+  return oneLine(
+    `${oneLine(userMessage, MAX_FOLLOW_UP_CHARS)} ` +
+    `(Ergo: this is a follow-up from the user on the task you already finished — continue from where you left off, do not start over.${delegation} ` +
+    `When it is done and verified, overwrite ${completionFile} with an updated completion record covering this follow-up as your final action${ctx.qaEnabled ? '; QA will check it again' : ''}.)`,
+    MAX_FOLLOW_UP_CHARS + 900
+  );
+}
+
+/**
+ * Prompt for a NEW manager that continues a finished run whose own conversation can't be resumed (the CLI has no
+ * resumable session id, or the process and its id are gone): the task, what was done so far (the completion log and
+ * files), the user's follow-up and the run protocol. Compact on purpose — the original task prompt is not repeated.
+ */
+export function buildContinuationPrompt(
+  task: TaskItem,
+  ctx: CliRunPromptContext,
+  prior: { userMessage: string; completionLog?: string; createdFiles?: string[] }
+): string {
+  const completionFile = runFile(ctx, 'completion.md');
+  const delegateFile = runFile(ctx, 'delegate.json');
+  const sections: string[] = [];
+  sections.push(`TASK (already worked on — this is a continuation): "${task.title}"`);
+  const subtasks = (task.subtasks || []).filter((s) => !s.isHumanReview).map((s) => `- [${s.isDone ? 'x' : ' '}] ${oneLine(s.text, 200)}`);
+  if (subtasks.length) sections.push(`CHECKLIST:\n${subtasks.slice(0, 20).join('\n')}`);
+  const log = (prior.completionLog || '').replace(/<!--[\s\S]*?-->/g, '').trim();
+  sections.push(
+    `WHAT WAS DONE SO FAR (Ergo's completion log for this task):\n${log ? (log.length > 2500 ? `…${log.slice(-2500)}` : log) : '(no completion log was written)'}`
+  );
+  const files = (prior.createdFiles || []).filter(Boolean).slice(0, 30);
+  if (files.length) sections.push(`FILES CREATED OR CHANGED SO FAR:\n${files.map((f) => `- ${f}`).join('\n')}`);
+  sections.push(`THE USER'S FOLLOW-UP (what to do now):\n${String(prior.userMessage || '').trim().slice(0, MAX_FOLLOW_UP_CHARS)}`);
+  sections.push(...buildRelatedSection(ctx));
+  sections.push(
+    `YOUR ROLE:\n` +
+    `You are the MANAGER agent continuing an Ergo task run (run id ${ctx.runId}). The earlier work is already in the repository: ` +
+    `inspect the files above before changing anything, keep what works, and do only what the follow-up asks (plus fixing anything it reveals). Do not start the task over. ` +
+    `Ergo watches the run folder "${ctx.runDirRel}/" (relative to your working directory).`
+  );
+  sections.push(...buildMemorySections(ctx, completionFile));
+  if (Math.floor(ctx.maxWorkers || 0) >= 2) {
+    sections.push(
+      `OPTIONAL — WORKERS: only if the follow-up is large and splits into independent pieces with DISJOINT files, write "${delegateFile}" ` +
+      `as {"workers":[{"id":"W1","title":"…","instructions":"complete, self-contained instructions","files":["path"]}]} (at most ${Math.min(MAX_DELEGATED_WORKERS, Math.floor(ctx.maxWorkers))} workers), then end your turn; ` +
+      `Ergo types a message starting with "Ergo:" when they finish.`
+    );
+  }
+  if (ctx.qaEnabled) {
+    sections.push(
+      `QA: after you write the completion record a QA verifier checks your work; if it fails, Ergo types a message starting with "Ergo:" — fix the findings and overwrite "${completionFile}" again.`
+    );
+  }
+  sections.push(
+    `FINAL STEP — COMPLETION RECORD (REQUIRED):\n` +
+    `When the follow-up is implemented and verified, write "${completionFile}" (overwrite it) as your LAST action, covering this follow-up, in exactly this format:\n\n` +
+    `${COMPLETION_FORMAT}\n\n` +
+    `Under 120 words; only files you actually changed and checks you actually ran. Then reply with one short sentence and end your turn.`
+  );
+  return sections.join('\n\n');
+}
+
+/**
+ * The CLI's own resumable session id, read from what it prints when it exits — Claude Code "claude --resume <id>",
+ * Codex "codex resume <id>", Antigravity "agy --conversation=<id>". Null when none is found.
+ */
+export function parseCliResumeId(cmd: string, transcript: string): string | null {
+  const base = cliBaseName(cmd);
+  const text = String(transcript || '');
+  const patterns: RegExp[] =
+    base === 'agy'
+      ? [/--conversation[= ]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi]
+      : base === 'codex'
+        ? [/codex\s+resume\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi]
+        : base === 'claude'
+          ? [/--resume\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi]
+          : [];
+  let found: string | null = null;
+  for (const re of patterns) {
+    for (const m of text.matchAll(re)) found = m[1]; // the last one printed is the latest session
+  }
+  return found;
+}
+
+function sanitizeRelPath(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  let p = raw.trim().replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/{2,}/g, '/');
+  if (!p || p.length > 300 || /[\0\r\n]/.test(p)) return null;
+  p = p.replace(/\/+$/, '');
+  return p || null;
+}
+
+function sanitizeWorkerId(raw: unknown): string {
+  const s = typeof raw === 'string' || typeof raw === 'number' ? String(raw).trim() : '';
+  const cleaned = s.replace(/\s+/g, '-').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 12);
+  return WORKER_ID_RE.test(cleaned) ? cleaned : '';
+}
+
+function mergePiece(into: CliWorkerPiece, from: CliWorkerPiece, reason: string): void {
+  into.title = `${into.title} + ${from.title}`.slice(0, 160);
+  into.instructions = `${into.instructions}\n\nALSO DO (piece "${from.title}", merged into yours because ${reason}):\n${from.instructions}`.slice(0, MAX_INSTRUCTIONS_CHARS);
+  for (const f of from.files) {
+    if (!into.files.includes(f) && into.files.length < MAX_FILES_PER_WORKER) into.files.push(f);
+  }
+}
+
+/**
+ * Validate the manager's delegate.json. Accepts `{"workers":[…]}` (or a bare array), drops entries
+ * without usable instructions, sanitizes ids to /^[A-Za-z0-9_-]{1,12}$/ (re-numbering invalid or
+ * duplicate ones), and keeps file sets disjoint: a piece that shares a file with an earlier piece is
+ * merged into it instead of being run in parallel. Pieces beyond min(maxWorkers, 8) are merged into
+ * the last allowed piece so no delegated work is silently lost. Returns [] for unusable input.
+ */
+export function parseDelegatePlan(json: string, maxWorkers: number): CliWorkerPiece[] {
+  let data: unknown;
+  try {
+    const text = String(json ?? '')
+      .replace(/^﻿/, '')
+      .trim()
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/```\s*$/, '')
+      .trim();
+    data = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  const rawList: unknown[] = Array.isArray(data)
+    ? data
+    : data && typeof data === 'object' && Array.isArray((data as any).workers)
+      ? (data as any).workers
+      : data && typeof data === 'object' && Array.isArray((data as any).pieces)
+        ? (data as any).pieces
+        : [];
+
+  const candidates: CliWorkerPiece[] = [];
+  for (const entry of rawList) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as Record<string, unknown>;
+    const instructionsRaw = typeof e.instructions === 'string' ? e.instructions
+      : typeof e.task === 'string' ? e.task
+      : typeof e.description === 'string' ? e.description
+      : '';
+    const titleRaw = typeof e.title === 'string' ? e.title : typeof e.name === 'string' ? e.name : '';
+    const instructions = instructionsRaw.trim() || titleRaw.trim();
+    if (!instructions) continue;
+    const title = oneLine(titleRaw.trim() || instructions, 120);
+    const filesRaw = Array.isArray(e.files) ? e.files : typeof e.files === 'string' ? [e.files] : [];
+    const files: string[] = [];
+    for (const f of filesRaw) {
+      const p = sanitizeRelPath(f);
+      if (p && !files.includes(p) && files.length < MAX_FILES_PER_WORKER) files.push(p);
+    }
+    candidates.push({
+      id: sanitizeWorkerId(e.id),
+      title,
+      instructions: instructions.slice(0, MAX_INSTRUCTIONS_CHARS),
+      files
+    });
+  }
+
+  // Keep file sets disjoint: merge a piece into the first earlier piece it shares a file with.
+  const disjoint: CliWorkerPiece[] = [];
+  for (const piece of candidates) {
+    const overlap = disjoint.find((p) => p.files.some((f) => piece.files.includes(f)));
+    if (overlap) mergePiece(overlap, piece, 'both pieces edit the same file(s)');
+    else disjoint.push({ ...piece, files: [...piece.files] });
+  }
+
+  const limit = Math.min(MAX_DELEGATED_WORKERS, Math.max(1, Math.floor(Number(maxWorkers)) || 1));
+  const kept = disjoint.slice(0, limit);
+  for (const extra of disjoint.slice(limit)) {
+    mergePiece(kept[kept.length - 1], extra, `the run allows at most ${limit} worker${limit === 1 ? '' : 's'}`);
+  }
+
+  // Unique, valid ids (W<n> for missing / invalid / duplicate ones).
+  const used = new Set<string>();
+  kept.forEach((piece, idx) => {
+    let id = piece.id;
+    if (!id || used.has(id.toLowerCase())) {
+      let n = idx + 1;
+      id = `W${n}`;
+      while (used.has(id.toLowerCase())) id = `W${++n}`;
+    }
+    used.add(id.toLowerCase());
+    piece.id = id;
+  });
+
+  return kept;
+}
+
 export interface CliLaunchPolicy {
   permissionLevel?: PermissionLevel;
   effort?: EffortLevel;
@@ -168,26 +782,87 @@ export interface CliLaunchPolicy {
   model?: string;
   /** Claude Code session UUID, so Ergo can read token usage from its session log. */
   sessionId?: string;
+  /**
+   * Resume this CLI conversation instead of starting a new one (the prompt becomes its next user message):
+   * claude --resume <id> · codex resume <id> · agy --conversation <id>. Other CLIs ignore it.
+   */
+  resumeSessionId?: string;
 }
 
-const PERMISSION_FLAGS = new Set([
-  '--permission-mode', '--dangerously-skip-permissions', '--allow-dangerously-skip-permissions', '--mode',
-  '-s', '--sandbox', '-a', '--ask-for-approval', '--dangerously-bypass-approvals-and-sandbox', '--full-auto',
-  '--approval-mode', '--yolo', '--yes', '--yes-always', '--force'
-]);
+/**
+ * Flags that set each CLI's approval / sandbox mode — the ones permissionArgsForCli would otherwise add.
+ * Per CLI, because short flags mean different things across CLIs (gemini's -s / --sandbox is a container
+ * sandbox, not an approval flag). CLIs Ergo adds no permission flags for have no entry.
+ */
+const PERMISSION_FLAGS_BY_CLI: Record<string, ReadonlySet<string>> = {
+  claude: new Set(['--permission-mode', '--dangerously-skip-permissions', '--allow-dangerously-skip-permissions']),
+  agy: new Set(['--mode', '--dangerously-skip-permissions']),
+  codex: new Set(['-s', '--sandbox', '-a', '--ask-for-approval', '--dangerously-bypass-approvals-and-sandbox', '--full-auto', '--yolo']),
+  gemini: new Set(['--approval-mode', '--yolo', '-y']),
+  aider: new Set(['--yes-always', '--yes']),
+  cursor: new Set(['--force', '-f'])
+};
+
+/** Lower-case executable name without its directory ("/usr/bin/Claude" → "claude"), as the switches below expect. */
+function cliBaseName(cmd: string): string {
+  return (cmd || '').toLowerCase().trim().replace(/^.*[\\/]/, '');
+}
+
+/** Split a user's extra-args string into argv tokens, honouring "double" and 'single' quotes. */
+function tokenizeExtraArgs(extraArgsString: string): string[] {
+  const tokens: string[] = [];
+  const regex = /[^\s"']+|"([^"]*)"|'([^']*)'/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec((extraArgsString || '').trim())) !== null) {
+    tokens.push(match[1] ?? match[2] ?? match[0]);
+  }
+  return tokens;
+}
+
+function hasPermissionFlag(baseCmd: string, userTokens: string[]): boolean {
+  const flags = PERMISSION_FLAGS_BY_CLI[baseCmd];
+  if (!flags) return false;
+  return userTokens.some((t, i) => {
+    if (flags.has(t.split('=')[0])) return true;
+    // A short flag with its value attached (codex `-sread-only`, `-anever`).
+    if (/^-[A-Za-z]./.test(t) && flags.has(t.slice(0, 2))) return true;
+    // codex config overrides: -c approval_policy=… / -c sandbox_mode=… (or --config).
+    return baseCmd === 'codex' && i > 0 && (userTokens[i - 1] === '-c' || userTokens[i - 1] === '--config') && /^\s*(approval_policy|sandbox_mode)\s*=/.test(t);
+  });
+}
+
+/**
+ * True when the user's extra args for CLI `cmd` already set one of that CLI's permission flags. Ergo then adds
+ * none of its own, so the Permissions slider has no effect on that CLI's launch mode (App warns about this once).
+ * Without `cmd`, any CLI's permission flag counts (less precise; pass the command).
+ */
+export function hasUserPermissionOverride(extraArgs: string, cmd?: string): boolean {
+  const tokens = tokenizeExtraArgs(extraArgs);
+  if (cmd !== undefined) return hasPermissionFlag(cliBaseName(cmd), tokens);
+  return Object.keys(PERMISSION_FLAGS_BY_CLI).some((cli) => hasPermissionFlag(cli, tokens));
+}
+
+const CLAUDE_PERMISSION_MODES: Record<PermissionLevel, string> = {
+  ask: 'manual',
+  acceptEdits: 'acceptEdits',
+  plan: 'plan',
+  bypass: 'bypassPermissions'
+};
 
 /**
  * CLI flags implementing an Ergo permission level for an interactive agent. Each CLI has its own vocabulary:
  * claude --permission-mode, agy --mode / --dangerously-skip-permissions, codex --sandbox/--ask-for-approval,
  * gemini --approval-mode. Returns [] when the user already set a permission flag in their extra args.
+ *
+ * Claude always gets --allow-dangerously-skip-permissions so bypass stays reachable in its shift+tab mode
+ * cycle: the bridge switches a running session's mode live when the user moves Ergo's Permissions slider
+ * (Ergo's slider is the only thing that selects bypass).
  */
 export function permissionArgsForCli(baseCmd: string, level: PermissionLevel | undefined, userTokens: string[]): string[] {
-  if (!level || userTokens.some((t) => PERMISSION_FLAGS.has(t.split('=')[0]))) return [];
+  if (!level || hasPermissionFlag(baseCmd, userTokens)) return [];
   switch (baseCmd) {
     case 'claude':
-      return level === 'bypass'
-        ? ['--dangerously-skip-permissions']
-        : ['--permission-mode', level === 'ask' ? 'manual' : level];
+      return ['--allow-dangerously-skip-permissions', '--permission-mode', CLAUDE_PERMISSION_MODES[level] || 'acceptEdits'];
     case 'agy':
       if (level === 'plan') return ['--mode', 'plan'];
       if (level === 'acceptEdits') return ['--mode', 'accept-edits'];
@@ -198,6 +873,7 @@ export function permissionArgsForCli(baseCmd: string, level: PermissionLevel | u
       if (level === 'bypass') return ['--dangerously-bypass-approvals-and-sandbox'];
       return ['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request'];
     case 'gemini':
+      if (level === 'plan') return ['--approval-mode', 'plan'];
       if (level === 'acceptEdits') return ['--approval-mode', 'auto_edit'];
       if (level === 'bypass') return ['--approval-mode', 'yolo'];
       return ['--approval-mode', 'default'];
@@ -243,14 +919,9 @@ export function buildCliArgsForTask(
   policy: CliLaunchPolicy = {}
 ): string[] {
   // Parse extraArgsString into separate tokens, respecting quotes if present
-  const userTokens: string[] = [];
-  const regex = /[^\s"']+|"([^"]*)"|'([^']*)'/g;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(extraArgsString.trim())) !== null) {
-    userTokens.push(match[1] ?? match[2] ?? match[0]);
-  }
+  const userTokens = tokenizeExtraArgs(extraArgsString);
 
-  const baseCmd = cmd.toLowerCase().trim().replace(/^.*[\\/]/, '');
+  const baseCmd = cliBaseName(cmd);
   const tokens = [
     ...userTokens,
     ...permissionArgsForCli(baseCmd, policy.permissionLevel, userTokens),
@@ -258,7 +929,11 @@ export function buildCliArgsForTask(
     ...modelArgsForCli(baseCmd, policy.model, userTokens)
   ];
 
+  const resumeId = policy.resumeSessionId && /^[A-Za-z0-9-]{8,64}$/.test(policy.resumeSessionId) ? policy.resumeSessionId : undefined;
+  const userResumes = (flags: string[]) => userTokens.some((t) => flags.includes(t.split('=')[0]));
+
   if (baseCmd === 'agy') {
+    if (resumeId && !userResumes(['--conversation', '--continue', '-c'])) tokens.push('--conversation', resumeId);
     // agy takes -i or --prompt-interactive to run initial prompt interactively and continue the session
     const hasPromptFlag = tokens.some(
       (t) => t === '-i' || t === '--prompt-interactive' || t === '-p' || t === '--print' || t === '--prompt'
@@ -276,7 +951,10 @@ export function buildCliArgsForTask(
       claudeTokens.push('--settings', '{"apiKeyHelper":""}');
     }
     const resumes = claudeTokens.some((t) => t === '--session-id' || t === '--resume' || t === '-r' || t === '--continue' || t === '-c');
-    if (policy.sessionId && !resumes) {
+    if (resumeId && !resumes) {
+      // Same session id: the conversation (and its session log) continues where it stopped.
+      claudeTokens.push('--resume', resumeId);
+    } else if (policy.sessionId && !resumes) {
       claudeTokens.push('--session-id', policy.sessionId);
     }
     return [...claudeTokens, prompt];
@@ -288,6 +966,11 @@ export function buildCliArgsForTask(
       return [...tokens, prompt];
     }
     return [...tokens, '--message', prompt];
+  }
+
+  if (baseCmd === 'codex' && resumeId && !userTokens.includes('resume')) {
+    // `codex resume <id> [options] [prompt]` takes the same launch options as `codex`.
+    return ['resume', resumeId, ...tokens, prompt];
   }
 
   if (baseCmd === 'codex' || baseCmd === 'cursor' || baseCmd === 'grok') {

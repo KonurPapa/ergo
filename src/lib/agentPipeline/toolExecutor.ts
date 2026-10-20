@@ -9,7 +9,7 @@
  * Results are trimmed to TOOL_RESULT_CHAR_CAP (pass pointers over payloads); the model is told how
  * to narrow the request when that happens.
  */
-import { type ExecutionStep, type HumanInputPrompt, type AgentRole, type PermissionLevel } from '../../types';
+import { type ExecutionStep, type HumanInputPrompt, type AgentRole, type McpToolPermissionPrompt, type PermissionDecision, type PermissionLevel } from '../../types';
 import { callMcpTool } from '../mcpClient';
 import {
   TOOL_RESULT_CHAR_CAP,
@@ -35,53 +35,358 @@ export interface ToolExecutorOptions {
 
 // ─── Permission policy ──────────────────────────────────────────────────────
 
-/** Commands that only read state; anything that writes, deletes, installs or executes project code is excluded. */
-const READ_ONLY_COMMANDS = new Set([
-  'ls', 'cat', 'head', 'tail', 'pwd', 'echo', 'wc', 'grep', 'rg', 'tree', 'which', 'whoami', 'date', 'file', 'stat',
-  'du', 'df', 'uname', 'sort', 'uniq', 'cut', 'realpath', 'dirname', 'basename', 'diff', 'printenv', 'type'
-]);
-const READ_ONLY_GIT = new Set(['status', 'diff', 'log', 'show', 'rev-parse', 'ls-files', 'blame', 'shortlog', 'describe']);
-const FIND_WRITE_FLAGS = new Set(['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprintf', '-fls']);
+/*
+ * Read-only shell detection. The command is parsed with POSIX sh quoting rules (exec() runs it through
+ * /bin/sh) into `;`/`&&`-separated pipelines of simple commands, and every simple command must be a known
+ * read-only invocation. Anything the parser is not certain about — unbalanced quotes, `$` expansions,
+ * backticks, subshells, `||`, backgrounding, `&>`, here-docs, process substitution, any redirection other
+ * than `2>&1` / `>&2` / `>/dev/null` / `2>/dev/null`, comments, control characters — makes the whole command "not read-only",
+ * so it goes through the normal approval flow. Fail closed: when in doubt, ask.
+ */
 
-function isReadOnlySegment(segment: string): boolean {
-  const tokens = segment.trim().split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) return false;
-  const [cmd, ...rest] = tokens;
-  const name = cmd.replace(/^.*\//, '');
-  if (rest.length === 1 && /^(--version|-v|-V|--help)$/.test(rest[0])) return true;
-  if (READ_ONLY_COMMANDS.has(name)) return true;
-  if (name === 'find') return !rest.some((t) => FIND_WRITE_FLAGS.has(t));
-  if (name === 'git') {
-    const sub = rest.find((t) => !t.startsWith('-'));
-    if (sub === 'branch' || sub === 'remote') return rest.length <= 2 && rest.every((t) => t === sub || t === '-v' || t === '-a' || t === '--list');
-    return Boolean(sub && READ_ONLY_GIT.has(sub));
-  }
-  if (name === 'sed') return rest[0] === '-n' && !rest.some((t) => t.startsWith('-i'));
+/** Commands whose arguments can't make them write, delete or execute anything (any args, globs included). */
+const ARGS_SAFE_COMMANDS = new Set([
+  'ls', 'cat', 'head', 'tail', 'pwd', 'echo', 'wc', 'grep', 'which', 'whoami', 'stat', 'du', 'df', 'uname',
+  'cut', 'realpath', 'dirname', 'basename', 'diff', 'printenv', 'type', 'cd'
+]);
+/** Read commands with an option that writes or executes; checked per command, and never with unquoted globs. */
+const FLAG_CHECKED_COMMANDS = new Set(['sort', 'tree', 'uniq', 'find', 'git', 'sed', 'rg', 'date', 'file']);
+const READ_ONLY_GIT = new Set(['status', 'diff', 'log', 'show', 'rev-parse', 'ls-files', 'blame', 'shortlog', 'describe']);
+/** Global git options allowed before the subcommand (`-c`, `--exec-path`, `--git-dir`… can run arbitrary code). */
+const SAFE_GIT_GLOBAL_OPTIONS = new Set(['--no-pager', '-P', '--no-optional-locks']);
+const FIND_WRITE_FLAGS = new Set(['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprint0', '-fprintf', '-fls']);
+/**
+ * Tools whose `--version` / `--help` only prints; an arbitrary program might treat those flags differently.
+ * Left out on purpose: launchers that pick the program to run from files in the project, which an agent can
+ * write with auto-approved edits (yarn's yarnPath, pnpm's packageManager switch, rustup's rust-toolchain.toml
+ * for cargo / rustc, go.mod's toolchain line, bun).
+ */
+const VERSION_PROBE_TOOLS = new Set([
+  'node', 'npm', 'npx', 'deno', 'tsc', 'python', 'python3', 'pip', 'pip3',
+  'java', 'javac', 'gcc', 'g++', 'clang', 'make', 'cmake', 'docker', 'ruby', 'php', 'git'
+]);
+/** `<tool> -v` / `-V` is a version probe for these only (python -v is verbose mode, pytest -v runs tests…). */
+const SHORT_VERSION_FLAG: Record<string, string> = { node: '-v', npm: '-v', npx: '-v', python: '-V', python3: '-V' };
+/** sed scripts that only print: line / `$` / `/regex/` addresses and ranges, each followed by `p`. */
+const SED_ADDRESS = String.raw`(?:\d+|\$|/[^/\\]*/)`;
+const SED_PRINT_CMD = String.raw`${SED_ADDRESS}(?:\s*,\s*(?:${SED_ADDRESS}|[+~]\d+))?\s*p`;
+const SAFE_SED_SCRIPT_RE = new RegExp(String.raw`^\s*${SED_PRINT_CMD}(?:\s*;\s*${SED_PRINT_CMD})*\s*;?\s*$`);
+
+interface ShellWord {
+  /** The word after quote removal. */
+  value: string;
+  /** Contains an unquoted glob or brace character (`* ? [ ] { }`), so the shell may expand it into other words. */
+  expands: boolean;
+  /** Some part of the word was quoted or backslash-escaped. */
+  quoted: boolean;
+}
+/** `;`/`&&`-separated pipelines, each a list of `|`-separated simple commands (their words). */
+type ParsedShell = ShellWord[][][];
+
+const isWindowsHost = (): boolean => {
+  try {
+    // Runs in the browser and in Node; read `process` off globalThis so neither environment's types are required.
+    if ((globalThis as any).process?.platform === 'win32') return true;
+    if (typeof navigator !== 'undefined') {
+      const nav = navigator as any;
+      return /^win/i.test(String(nav.userAgentData?.platform || nav.platform || '')) || /windows/i.test(String(nav.userAgent || ''));
+    }
+  } catch {}
   return false;
+};
+
+/**
+ * Parse a command with POSIX sh quoting, accepting only plain words, `|`, `&&`, `;` and the harmless
+ * redirections. Returns null for anything else.
+ */
+function parseSimpleShell(command: string): ParsedShell | null {
+  const pipelines: ParsedShell = [];
+  let stages: ShellWord[][] = [];
+  let words: ShellWord[] = [];
+  let word: ShellWord = { value: '', expands: false, quoted: false };
+  let inWord = false;
+  /** After `|` or `&&` a command must follow (`ls &&` is a syntax error). */
+  let needCommand = false;
+
+  const endWord = () => {
+    if (inWord) {
+      words.push(word);
+      needCommand = false;
+    }
+    word = { value: '', expands: false, quoted: false };
+    inWord = false;
+  };
+  const endStage = (): boolean => {
+    endWord();
+    if (words.length === 0) return false;
+    stages.push(words);
+    words = [];
+    return true;
+  };
+  const endPipeline = (): boolean => {
+    if (!endStage()) return false;
+    pipelines.push(stages);
+    stages = [];
+    return true;
+  };
+  const isDelimiter = (c: string | undefined) => c === undefined || c === ' ' || c === '\t' || c === ';' || c === '&' || c === '|';
+  /** Parse the target of `>` / `>>` starting at `j`: only `/dev/null` is allowed. Returns the last index used. */
+  const devNullTarget = (j: number): number | null => {
+    while (command[j] === ' ' || command[j] === '\t') j++;
+    if (command.slice(j, j + 9) !== '/dev/null' || !isDelimiter(command[j + 9])) return null;
+    return j + 8;
+  };
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    const code = ch.charCodeAt(0);
+    // Newlines separate commands and other control characters are never needed: refuse them all.
+    if ((code < 0x20 && ch !== '\t') || code === 0x7f) return null;
+    if (ch === ' ' || ch === '\t') {
+      endWord();
+      continue;
+    }
+    if (ch === "'") {
+      const close = command.indexOf("'", i + 1);
+      if (close === -1) return null;
+      word.value += command.slice(i + 1, close);
+      word.quoted = true;
+      inWord = true;
+      i = close;
+      continue;
+    }
+    if (ch === '"') {
+      let j = i + 1;
+      for (; j < command.length && command[j] !== '"'; j++) {
+        const c = command[j];
+        if (c === '$' || c === '`') return null; // expansions still run inside double quotes
+        if (c === '\\') {
+          const next = command[j + 1];
+          if (next === undefined) return null;
+          // Inside double quotes a backslash only escapes $ ` " \ (and newline, refused above).
+          if (next === '$' || next === '`' || next === '"' || next === '\\') {
+            word.value += next;
+            j++;
+            continue;
+          }
+          word.value += '\\';
+          continue;
+        }
+        if (c.charCodeAt(0) < 0x20 && c !== '\t') return null;
+        word.value += c;
+      }
+      if (j >= command.length) return null;
+      word.quoted = true;
+      inWord = true;
+      i = j;
+      continue;
+    }
+    if (ch === '\\') {
+      // Outside quotes a backslash makes the next character literal (\' and \" do NOT open a quote).
+      const next = command[i + 1];
+      if (next === undefined) return null;
+      if (next.charCodeAt(0) < 0x20 || next === '\x7f') return null;
+      word.value += next;
+      word.quoted = true;
+      inWord = true;
+      i++;
+      continue;
+    }
+    if (ch === '$' || ch === '`' || ch === '(' || ch === ')' || ch === '<') return null;
+    if (ch === '#' && !inWord) return null; // comment: keep it simple and ask
+    if (ch === '>') {
+      // An unquoted number right before `>` is the fd being redirected: only stdout (1) or stderr (2).
+      if (inWord) {
+        if (!word.quoted && /^\d+$/.test(word.value)) {
+          if (word.value !== '1' && word.value !== '2') return null;
+          word = { value: '', expands: false, quoted: false };
+          inWord = false;
+        } else {
+          endWord();
+        }
+      }
+      let j = i + 1;
+      if (command[j] === '&') {
+        // N>&M duplicates an fd: only to stdout/stderr.
+        const target = command[j + 1];
+        if ((target !== '1' && target !== '2') || !isDelimiter(command[j + 2])) return null;
+        i = j + 1;
+        continue;
+      }
+      if (command[j] === '>') j++;
+      else if (command[j] === '|') return null;
+      const end = devNullTarget(j);
+      if (end === null) return null;
+      i = end;
+      continue;
+    }
+    if (ch === '&') {
+      if (command[i + 1] === '&') {
+        if (!endPipeline()) return null;
+        needCommand = true;
+        i++;
+        continue;
+      }
+      // A lone `&` backgrounds. `&>` too: bash reads it as a redirection, but dash (/bin/sh on Debian/Ubuntu)
+      // reads `a &> /dev/null b` as `a &` then `b` — a second command the words after it would hide.
+      return null;
+    }
+    if (ch === '|') {
+      if (command[i + 1] === '|' || command[i + 1] === '&') return null;
+      if (!endStage()) return null;
+      needCommand = true;
+      continue;
+    }
+    if (ch === ';') {
+      if (command[i + 1] === ';' || command[i + 1] === '&') return null;
+      if (!endPipeline()) return null;
+      continue;
+    }
+    if ('*?[]{}'.includes(ch)) word.expands = true;
+    word.value += ch;
+    inWord = true;
+  }
+  endWord();
+  if (needCommand) return null;
+  if (words.length > 0 || stages.length > 0) {
+    if (!endPipeline()) return null;
+  } else if (pipelines.length === 0) {
+    return null; // nothing but whitespace / redirections
+  }
+  // (a trailing `;` leaves nothing pending and is fine)
+  return pipelines;
+}
+
+/** `--name[=value]` that is `option` or a GNU-style abbreviation of it (`--out` for `--output`). */
+function longOptionMatches(token: string, options: string[]): boolean {
+  if (!token.startsWith('--') || token.length < 3) return false;
+  const eq = token.indexOf('=');
+  const name = eq === -1 ? token : token.slice(0, eq);
+  return options.some((opt) => opt.startsWith(name) || name.startsWith(opt));
+}
+/** A bundle of short options (`-ro`) that includes any of `letters`. */
+const shortOptionHas = (token: string, letters: string): boolean =>
+  /^-[^-]/.test(token) && [...token.slice(1)].some((c) => letters.includes(c));
+
+function isReadOnlyInvocation(words: ShellWord[]): boolean {
+  const [cmdWord, ...argWords] = words;
+  // Command name: a plain name looked up on PATH (no path, no assignment, no expansion).
+  if (!cmdWord || cmdWord.expands || !/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(cmdWord.value)) return false;
+  const name = cmdWord.value;
+  const args = argWords.map((w) => w.value);
+  if (ARGS_SAFE_COMMANDS.has(name)) return true;
+  if (args.length === 1 && VERSION_PROBE_TOOLS.has(name) && (args[0] === '--version' || args[0] === '--help' || SHORT_VERSION_FLAG[name] === args[0])) {
+    return !argWords[0].expands;
+  }
+  if (!FLAG_CHECKED_COMMANDS.has(name)) return false;
+  // A glob or brace expansion could turn into an option (a file named "-delete" or "--output=x").
+  if (argWords.some((w) => w.expands)) return false;
+  switch (name) {
+    case 'sort':
+      return !args.some((t) => t === '--' || shortOptionHas(t, 'o') || longOptionMatches(t, ['--output', '--compress-program']));
+    case 'tree':
+      // -o writes the listing to a file; -R re-runs tree with -o 00Tree.html in every directory.
+      return !args.some((t) => shortOptionHas(t, 'oR') || longOptionMatches(t, ['--output']));
+    case 'uniq':
+      // uniq [INPUT [OUTPUT]]: a second operand is written.
+      return !args.includes('--') && args.filter((t) => t === '-' || !t.startsWith('-')).length < 2;
+    case 'find':
+      return !args.some((t) => FIND_WRITE_FLAGS.has(t));
+    case 'date':
+      return !args.some((t) => shortOptionHas(t, 's') || longOptionMatches(t, ['--set']));
+    case 'file':
+      return !args.some((t) => shortOptionHas(t, 'C') || longOptionMatches(t, ['--compile']));
+    case 'rg':
+      // --pre and --hostname-bin run a program.
+      return !args.some((t) => longOptionMatches(t, ['--pre', '--hostname-bin']));
+    case 'sed':
+      // Only `sed -n '<addresses>p' [files]`: sed scripts can write (w) or execute (e), and -i edits in place.
+      return args[0] === '-n' && args.length >= 2 && SAFE_SED_SCRIPT_RE.test(args[1]) && args.slice(2).every((t) => !t.startsWith('-'));
+    case 'git': {
+      let idx = 0;
+      while (idx < args.length && SAFE_GIT_GLOBAL_OPTIONS.has(args[idx])) idx++;
+      const sub = args[idx];
+      if (!sub || sub.startsWith('-')) return false;
+      const subArgs = args.slice(idx + 1);
+      if (sub === 'branch' || sub === 'remote') {
+        return subArgs.length <= 1 && subArgs.every((t) => t === '-v' || t === '-vv' || t === '-a' || t === '-r' || t === '--list');
+      }
+      if (!READ_ONLY_GIT.has(sub)) return false;
+      // --output writes a file; --ext-diff runs a configured program. Paths after `--` are only pathspecs.
+      const end = subArgs.indexOf('--');
+      const options = end === -1 ? subArgs : subArgs.slice(0, end);
+      return !options.some((t) => longOptionMatches(t, ['--output', '--ext-diff', '--exec', '--upload-pack', '--receive-pack']));
+    }
+    default:
+      return false;
+  }
 }
 
 /**
  * True for shell commands that can't change anything (ls, cat, grep, git status, find without -exec, …).
- * Redirection, command substitution, chaining and backgrounding disqualify a command; pipes are fine when
- * every stage is read-only. Errs on the side of asking.
+ * Pipes, `&&` and `;` chains are fine when every command is read-only; `2>&1`, `>&2`, `>/dev/null` and
+ * `2>/dev/null` are allowed. Anything else — other redirections, `$` expansions, command substitution,
+ * subshells, `||`, backgrounding, env assignments, explicit paths to programs — disqualifies the command.
+ * Errs on the side of asking.
  */
 export function isReadOnlyCommand(command: unknown): boolean {
   if (typeof command !== 'string' || !command.trim()) return false;
-  if (/[;&`<>]|\$\(|\|\|/.test(command)) return false;
-  return command.split('|').every(isReadOnlySegment);
+  if (isWindowsHost()) {
+    // cmd.exe has different quoting (^ escapes, ' is not a quote, %VAR% expands) and its own sort /O and date.
+    // It also treats `\` as a plain character, so the sh-style escapes below don't hold there: any
+    // backslash-adjacent operator (`echo \& calc`) would run. Refuse operators and backslashes outright.
+    if (/['"^%!\\&|<>\r\n;]/.test(command)) return false;
+  }
+  const parsed = parseSimpleShell(command);
+  if (!parsed) return false;
+  const windows = isWindowsHost();
+  return parsed.every((pipeline) =>
+    pipeline.every((words) => isReadOnlyInvocation(words) && !(windows && (words[0].value === 'sort' || words[0].value === 'date')))
+  );
+}
+
+/**
+ * A path inside a `.git` directory (or a `.git` file), or a global git config file. git reads these on the
+ * "read-only" commands auto-allowed above (core.fsmonitor runs on `git status`, diff textconv / external
+ * drivers on `git diff`/`log`/`show`), so an auto-approved edit there would turn into running any command.
+ */
+function isGitConfigPath(target: string | undefined): boolean {
+  if (!target) return false;
+  // Lower-case (case-insensitive filesystems) and drop Windows' ignored trailing dots / spaces.
+  const segments = target
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((s) => (/^[. ]*$/.test(s) ? s : s.toLowerCase().replace(/[. ]+$/, '')));
+  if (segments.some((s) => s === '.git' || /^git~\d+$/.test(s))) return true;
+  const base = segments[segments.length - 1] || '';
+  const parent = segments[segments.length - 2] || '';
+  return base === '.gitconfig' || (parent === 'git' && (base === 'config' || base === 'attributes'));
 }
 
 /** Rule key an "allow for this task" answer grants: per command name for shell, one rule for all file edits. */
 export function permissionRuleKey(def: ToolDefinition, call: ToolCallRequest): { key: string; label: string } {
   if (call.name === 'run_command') {
-    const first = String(call.args?.command || '').trim().split(/\s+/)[0]?.replace(/^.*\//, '') || 'shell';
-    return { key: `run_command:${first}`, label: `all "${first}" commands` };
+    const command = String(call.args?.command || '').trim();
+    // Only a single plain command generalizes to "all <name> commands"; a chain, pipe, expansion or explicit
+    // path would otherwise let a later `ls; rm -rf x` ride on an "all ls commands" grant.
+    const parsed = parseSimpleShell(command);
+    const words = parsed && parsed.length === 1 && parsed[0].length === 1 ? parsed[0][0] : null;
+    const first = words?.[0];
+    if (first && !first.expands && /^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(first.value)) {
+      return { key: `run_command:${first.value}`, label: `all "${first.value}" commands` };
+    }
+    return { key: `run_command:exact:${command}`, label: 'this exact command' };
   }
-  if (FILE_MUTATING_TOOL_NAMES.has(call.name)) return { key: 'files:edit', label: 'all file edits' };
+  if (FILE_MUTATING_TOOL_NAMES.has(call.name)) {
+    // A git config edit is never covered by "all file edits" (see isGitConfigPath): it gets its own exact rule.
+    const target = extractTargetPath(call.name, call.args);
+    if (isGitConfigPath(target)) return { key: `files:git-config:${call.name}:${normalizePath(String(target))}`, label: 'this git config file' };
+    return { key: 'files:edit', label: 'all file edits' };
+  }
   return { key: `${def.serverId}:${call.name}`, label: `all ${def.serverName} / ${call.name} calls` };
 }
 
-type PermissionVerdict = 'allow' | 'prompt' | 'block';
+export type PermissionVerdict = 'allow' | 'prompt' | 'block';
 
 const TRUSTED_SERVERS = new Set(['mcp-filesystem', 'builtin', 'ergo-workspace']);
 const READ_STYLE_TOOL_RE = /^(get|list|read|search|fetch|find|view|describe|query|show|lookup|stat|count|check)(_|[A-Z]|$)/;
@@ -110,9 +415,33 @@ export function permissionVerdict(level: PermissionLevel, def: ToolDefinition, c
       return 'prompt';
     case 'acceptEdits':
     default:
-      if (FILE_MUTATING_TOOL_NAMES.has(call.name)) return 'allow';
+      if (FILE_MUTATING_TOOL_NAMES.has(call.name)) return isGitConfigPath(extractTargetPath(call.name, call.args)) ? 'prompt' : 'allow';
       return def.autoApprove ? 'allow' : 'prompt';
   }
+}
+
+/** Live re-check for each prompt waiting on the user, keyed by the prompt object handed to onRequestPermission. */
+const pendingPromptChecks = new WeakMap<McpToolPermissionPrompt, () => PermissionVerdict>();
+/** Prompts settled because the permission level now blocks the call (the rejection gets the plan-mode message). */
+const planBlockedPrompts = new WeakSet<McpToolPermissionPrompt>();
+
+/**
+ * Re-evaluate a waiting permission prompt under the run's current permission level, with the same
+ * permissionVerdict the executor uses (it knows the tool definition). Returns null for prompts this module
+ * did not issue. On 'block', resolve the prompt with false: the executor then reports the plan-mode reason
+ * instead of "rejected by user".
+ */
+export function reevaluatePendingPermission(prompt: McpToolPermissionPrompt): PermissionVerdict | null {
+  const check = pendingPromptChecks.get(prompt);
+  if (!check) return null;
+  let verdict: PermissionVerdict;
+  try {
+    verdict = check();
+  } catch {
+    return 'prompt';
+  }
+  if (verdict === 'block') planBlockedPrompts.add(prompt);
+  return verdict;
 }
 
 /**
@@ -136,6 +465,45 @@ export function summarizeToolArgsForPermission(name: string, args: Record<string
   if (name === 'git_commit') return `git commit -m "${args.message}"${args.cwd ? ` in ${args.cwd}` : ''}`;
   const compact = JSON.stringify(args ?? {});
   return `Execute tool "${name}" with ${compact.length > 300 ? compact.slice(0, 300) + '…' : compact}`;
+}
+
+const PLAN_MODE_BLOCKED = (toolName: string): string =>
+  `"${toolName}" is not allowed: the run is in Plan (read-only) permission mode, so files can't be changed and commands that modify state can't run. Inspect with read-only tools and describe the changes you would make instead.`;
+
+const DIFF_PREVIEW_MAX_LINES = 40;
+
+/** At most `budget` lines; when cut, the last kept line becomes a "… (n more lines)" marker. */
+function fitLines(lines: string[], budget: number): string[] {
+  if (lines.length <= budget) return lines;
+  if (budget <= 0) return [];
+  const kept = lines.slice(0, budget - 1);
+  const more = lines.length - kept.length;
+  return [...kept, `… (${more} more line${more === 1 ? '' : 's'})`];
+}
+
+/**
+ * Short preview of what a file write/edit will change, shown in the approval prompt:
+ * edit_file → "-old" / "+new" lines, write_file → the first lines of the new content. At most 40 lines.
+ */
+export function buildDiffPreview(name: string, args: Record<string, any>): string | undefined {
+  if (name === 'edit_file') {
+    const oldText = typeof args.old_string === 'string' ? args.old_string : '';
+    const newText = typeof args.new_string === 'string' ? args.new_string : '';
+    if (!oldText && !newText) return undefined;
+    const oldLines = oldText ? oldText.split('\n').map((l: string) => `-${l}`) : [];
+    const newLines = newText ? newText.split('\n').map((l: string) => `+${l}`) : [];
+    const total = DIFF_PREVIEW_MAX_LINES;
+    if (oldLines.length + newLines.length <= total) return [...oldLines, ...newLines].join('\n');
+    // Over budget: share it so both sides stay visible (a short side keeps all its lines).
+    const oldBudget = Math.min(oldLines.length, Math.max(Math.floor(total / 2), total - newLines.length));
+    return [...fitLines(oldLines, oldBudget), ...fitLines(newLines, total - oldBudget)].join('\n');
+  }
+  if (name === 'write_file') {
+    const content = typeof args.content === 'string' ? args.content : '';
+    if (!content) return '(empty file)';
+    return fitLines(content.split('\n'), DIFF_PREVIEW_MAX_LINES).join('\n');
+  }
+  return undefined;
 }
 
 function stringifyResultData(data: any): string {
@@ -178,6 +546,14 @@ export function createToolExecutor(opts: ToolExecutorOptions): (calls: ToolCallR
   const emit = (partial: Omit<ExecutionStep, 'time' | 'taskId'>) => ctx.emit({ ...partial, agentRole, pieceId });
 
   const err = (call: ToolCallRequest, message: string): ToolCallResult => ({ id: call.id, name: call.name, content: `ERROR: ${message}`, isError: true });
+
+  const currentLevel = (): PermissionLevel => {
+    try {
+      return ctx.getPermissionLevel?.() || ctx.options.permissionLevel || 'acceptEdits';
+    } catch {
+      return ctx.options.permissionLevel || 'acceptEdits';
+    }
+  };
 
   async function handleAskHuman(call: ToolCallRequest): Promise<ToolCallResult> {
     const n = ++counter;
@@ -264,11 +640,10 @@ export function createToolExecutor(opts: ToolExecutorOptions): (calls: ToolCallR
     if (missing.length > 0) {
       return err(call, `"${call.name}" is missing required argument(s): ${missing.join(', ')}.`);
     }
-    const level: PermissionLevel = ctx.options.permissionLevel || 'acceptEdits';
+    // Read the level live on every call: the user may change it while the run is in flight.
+    const level: PermissionLevel = currentLevel();
     const verdict = permissionVerdict(level, def, call);
-    const scopeError = verdict === 'block'
-      ? `"${call.name}" is not allowed: the run is in Plan (read-only) permission mode, so files can't be changed and commands that modify state can't run. Inspect with read-only tools and describe the changes you would make instead.`
-      : checkScope(call, def);
+    const scopeError = verdict === 'block' ? PLAN_MODE_BLOCKED(call.name) : checkScope(call, def);
     if (scopeError) {
       const n = ++counter;
       emit({
@@ -294,23 +669,49 @@ export function createToolExecutor(opts: ToolExecutorOptions): (calls: ToolCallR
     });
 
     let approved = true;
+    let blockedByPlan = false;
     if (verdict === 'prompt' && ctx.onRequestPermission) {
       const rule = permissionRuleKey(def, call);
       const requestPermission = ctx.onRequestPermission;
       approved = await withPermissionLock(ctx, async () => {
         if (ctx.sessionAllowedTools.has(rule.key)) return true;
-        const decision = await requestPermission({
+        // The level may have changed while this call queued behind another prompt: re-check before asking.
+        const now = permissionVerdict(currentLevel(), def, call);
+        if (now === 'allow') return true;
+        if (now === 'block') {
+          blockedByPlan = true;
+          return false;
+        }
+        const prompt: McpToolPermissionPrompt = {
           id: `perm-${Date.now()}-${n}`,
           serverId: def.serverId,
           serverName: def.serverName,
           toolName: call.name,
           args,
           summary: summarizeToolArgsForPermission(call.name, args),
+          diffPreview: buildDiffPreview(call.name, args),
           rememberLabel: rule.label
-        });
+        };
+        pendingPromptChecks.set(prompt, () => permissionVerdict(currentLevel(), def, call));
+        let decision: PermissionDecision;
+        try {
+          decision = await requestPermission(prompt);
+        } finally {
+          pendingPromptChecks.delete(prompt);
+        }
+        const granted = decision === true || decision === 'always';
+        if (!granted && planBlockedPrompts.has(prompt)) {
+          blockedByPlan = true;
+          return false;
+        }
         if (decision === 'always') ctx.sessionAllowedTools.add(rule.key);
-        return decision === true || decision === 'always';
+        return granted;
       });
+    }
+    if (blockedByPlan) {
+      const message = PLAN_MODE_BLOCKED(call.name);
+      emit({ id: stepId, stage: 'mcp_call', title: `${scope.actorLabel}: ${call.name}() blocked`, detail: message, mcpToolUsed: call.name, status: 'warning' });
+      return err(call, message);
     }
     if (!approved) {
       emit({ id: stepId, stage: 'mcp_call', title: `${scope.actorLabel}: ${call.name}()`, detail: 'Tool call skipped / rejected by user.', mcpToolUsed: call.name, status: 'warning' });

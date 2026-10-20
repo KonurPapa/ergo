@@ -1980,6 +1980,9 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         Select custom providers & models per agent role. Click ℹ️ for performance benchmarks.
                       </span>
                     </div>
+                    <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', margin: '-0.3rem 0 0.6rem' }}>
+                      Used when Models is set to Manual. In Auto, Ergo picks these per task.
+                    </p>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
                       {AGENT_ROLES.map((role) => {

@@ -39,7 +39,7 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
     description: 'Synthesizes discovery evidence and task brief into a structured, executable specification (the "Bible") with Gherkin acceptance criteria.',
     defaultModels: {
       openai: 'gpt-5',
-      anthropic: 'claude-3-7-sonnet-20250219',
+      anthropic: 'claude-sonnet-5-5',
       gemini: 'gemini-3.7-flash',
       grok: 'grok-3',
       cursor: 'cursor-agent',
@@ -56,8 +56,8 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
     description: 'Frontier brain: plans puzzle pieces, directs workers, verifies execution against criteria, and remediates failed scenarios. Requires peak reasoning and architectural capability.',
     defaultModels: {
       openai: 'gpt-5.4',
-      anthropic: 'claude-opus-5',
-      gemini: 'gemini-3.7-pro',
+      anthropic: 'claude-opus-5-5',
+      gemini: 'gemini-4-argon',
       grok: 'grok-3',
       cursor: 'cursor-agent',
       ollama: 'qwen2.5-coder',
@@ -73,7 +73,7 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
     description: 'Subagents executing concrete puzzle pieces, writing code, editing files, and running local tools/commands according to specifications.',
     defaultModels: {
       openai: 'gpt-5',
-      anthropic: 'claude-sonnet-5',
+      anthropic: 'claude-sonnet-5-5',
       gemini: 'gemini-3.7-flash',
       grok: 'grok-3',
       cursor: 'cursor-agent',
@@ -90,7 +90,7 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
     description: 'Post-execution code cleanup: runs linter, fixes formatting, and tidies newly created files without modifying functionality.',
     defaultModels: {
       openai: 'gpt-5-mini',
-      anthropic: 'claude-3-5-haiku-20241022',
+      anthropic: 'claude-haiku-5-5',
       gemini: 'gemini-2.5-flash',
       grok: 'grok-3-mini',
       cursor: 'cursor-agent',
@@ -107,8 +107,8 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
     description: 'Adversarial quality assurance harness: tests edge cases, verifies contract scenarios via browser/commands, and catches regressions before completion.',
     defaultModels: {
       openai: 'gpt-5.4',
-      anthropic: 'claude-opus-5',
-      gemini: 'gemini-3.7-pro',
+      anthropic: 'claude-opus-5-5',
+      gemini: 'gemini-4-argon',
       grok: 'grok-3',
       cursor: 'cursor-agent',
       ollama: 'qwen2.5-coder',
@@ -124,7 +124,7 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
     description: 'Documents the build and verification journey, records artifacts and file diffs, and evaluates human review requirements for TODO.md.',
     defaultModels: {
       openai: 'gpt-5',
-      anthropic: 'claude-3-5-haiku-20241022',
+      anthropic: 'claude-haiku-5-5',
       gemini: 'gemini-3.7-flash',
       grok: 'grok-3-mini',
       cursor: 'cursor-agent',
@@ -141,7 +141,7 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
     description: 'Real-time VS Code style ghost text suggestions and typo/grammar completions. Requires sub-second, cheap, lightweight models.',
     defaultModels: {
       openai: 'gpt-5-mini',
-      anthropic: 'claude-3-5-haiku-20241022',
+      anthropic: 'claude-haiku-5-5',
       gemini: 'gemini-3.8-flash-low',
       grok: 'grok-3-mini',
       cursor: 'cursor-agent',
@@ -221,10 +221,10 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     badgeColor: '#D97757',
     requiresKey: true,
     requiresBaseUrl: false,
-    defaultModel: 'claude-opus-5',
-    defaultDiscoveryModel: 'claude-3-5-haiku-20241022',
-    defaultSummaryModel: 'claude-3-7-sonnet-20250219',
-    defaultGeneralModel: 'claude-opus-5',
+    defaultModel: 'claude-opus-5-5',
+    defaultDiscoveryModel: 'claude-haiku-5-5',
+    defaultSummaryModel: 'claude-sonnet-5-5',
+    defaultGeneralModel: 'claude-opus-5-5',
     keyPlaceholder: 'sk-ant-api03-...',
     keyDocUrl: 'https://console.anthropic.com/settings/keys',
     models: [
@@ -238,10 +238,7 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
       { id: 'claude-mythos-5', name: 'Claude Mythos 5', description: 'High-assurance cybersecurity & specialized reasoning', tier: 'reasoning', contextWindow: 200000 },
       { id: 'claude-opus-4-8', name: 'Claude Opus 4.8', description: 'Deep analysis and advanced agentic execution', tier: 'advanced', contextWindow: 200000 },
       { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', description: 'High capability model with extended output support', tier: 'advanced', contextWindow: 200000 },
-      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', description: 'High performance coding and workflow execution', tier: 'standard', contextWindow: 200000 },
-      { id: 'claude-3-7-sonnet-20250219', name: 'Claude 3.7 Sonnet', description: 'Hybrid standard and extended thinking reasoning', tier: 'standard', contextWindow: 200000 },
-      { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', description: 'Previous-generation workhorse coding model', tier: 'standard', contextWindow: 200000 },
-      { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', description: 'Fast, lightweight responsiveness', tier: 'light', contextWindow: 200000 }
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', description: 'High performance coding and workflow execution', tier: 'standard', contextWindow: 200000 }
     ]
   },
   {
@@ -257,7 +254,7 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
     defaultModel: 'gemini-3.7-flash',
     defaultDiscoveryModel: 'gemini-2.0-flash',
     defaultSummaryModel: 'gemini-3.7-flash',
-    defaultGeneralModel: 'gemini-3.7-pro',
+    defaultGeneralModel: 'gemini-4-argon',
     keyPlaceholder: 'AIzaSy...',
     keyDocUrl: 'https://aistudio.google.com/app/apikey',
     models: [
@@ -265,9 +262,8 @@ export const SUPPORTED_AI_PROVIDERS: ProviderMeta[] = [
       { id: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash (Medium)', description: 'Balanced speed and intelligence frontier flash model', tier: 'standard', contextWindow: 1000000 },
       { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)', description: 'Full reasoning effort frontier Flash model', tier: 'standard', contextWindow: 1000000 },
       { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', description: 'Next-gen flagship hybrid reasoning and ultra-fast generation', tier: 'standard', contextWindow: 1000000 },
-      { id: 'gemini-3.7-pro', name: 'Gemini 3.7 Pro', description: 'Deep reasoning, agentic coding and complex logic', tier: 'advanced', contextWindow: 2000000 },
+      { id: 'gemini-4-argon', name: 'Gemini 4 Argon', description: 'Deep reasoning, agentic coding and complex logic', tier: 'advanced', contextWindow: 2000000 },
       { id: 'gemini-3.7-flash-thinking', name: 'Gemini 3.7 Flash Thinking', description: 'Explicit thinking process with adjustable budget', tier: 'reasoning', contextWindow: 1000000 },
-      { id: 'gemini-3.5-pro', name: 'Gemini 3.5 Pro', description: 'Advanced reasoning and multi-modal architecture', tier: 'advanced', contextWindow: 2000000 },
       { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', description: 'Ultra-fast frontier intelligence', tier: 'light', contextWindow: 1000000 },
       { id: 'gemini-3.0-flash', name: 'Gemini 3.0 Flash', description: 'High-speed modern multimodal generation', tier: 'light', contextWindow: 1000000 },
       { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Deep complex reasoning with 2M+ token context', tier: 'advanced', contextWindow: 2000000 },
@@ -630,6 +626,7 @@ export async function fetchGeminiModels(apiKey: string): Promise<ProviderModel[]
   // Sort prioritizing newer 3.7, 3.5, 3.0, 2.5 and 2.0 models
   geminiModels.sort((a, b) => {
     const score = (id: string) => {
+      if (id.includes('gemini-4')) return 145;
       if (id.includes('3.7-pro')) return 140;
       if (id.includes('3.7-flash-thinking')) return 135;
       if (id.includes('3.7-flash')) return 130;
@@ -830,7 +827,7 @@ export async function testAiConnection(
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        // If claude-sonnet-5 is not accessible, test with claude-3-5-haiku
+        // If the first model is not accessible on this key, test with the current Haiku
         const fallbackRes = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: {
@@ -840,7 +837,7 @@ export async function testAiConnection(
             'anthropic-dangerous-direct-browser-access': 'true'
           },
           body: JSON.stringify({
-            model: 'claude-3-5-haiku-20241022',
+            model: 'claude-haiku-5-5',
             max_tokens: 5,
             messages: [{ role: 'user', content: 'Ping' }]
           })

@@ -1,0 +1,2730 @@
+[
+ {
+  "id": 0,
+  "isSubtask": true,
+  "prefixText": "it also doesn’t seem to be correctly pulling in knowledge from other tasks ",
+  "truth": "/ freeform text in the project — make sure it’s able to read from human workspace",
+  "taskText": "it also doesn’t seem to be correctly pulling in knowledge from other tasks ",
+  "contextBefore": "- AI workspace execution\n  - ‘related tasks’ card needs to move to before ‘overview’",
+  "nextLine": "  - task overview still isn’t populated on task startup",
+  "parentTaskTitle": "AI workspace execution",
+  "related": [
+   "AI workspace execution",
+   "AI workspace execution: Running tasks still seem to have broken functionality/UI",
+   "AI workspace execution: task overview still isn’t populated on task startup",
+   "AI workspace execution: ‘related tasks’ card needs to move to before ‘overview’"
+  ],
+  "localRag": {
+   "text": "",
+   "ms": 192
+  },
+  "cloudRag": {
+   "text": "tasks",
+   "kind": "rewrite",
+   "ms": 1948,
+   "usage": {
+    "inputTokens": 935,
+    "outputTokens": 29,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 933,
+    "calls": 1,
+    "costUsd": 0.00020130000000000001
+   }
+  },
+  "cloudRagCont": {
+   "text": "from the related tasks",
+   "kind": "suffix",
+   "ms": 2043,
+   "usage": {
+    "inputTokens": 817,
+    "outputTokens": 8,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 815,
+    "calls": 1,
+    "costUsd": 0.0001672
+   }
+  }
+ },
+ {
+  "id": 1,
+  "isSubtask": true,
+  "prefixText": "Running tasks still ",
+  "truth": "seem to have broken functionality/UI",
+  "taskText": "Running tasks still ",
+  "contextBefore": "- AI workspace execution\n  - ‘related tasks’ card needs to move to before ‘overview’\n  - it also doesn’t seem to be correctly pulling in knowledge from other tasks / freeform text in the project — make sure it’s able to read from human workspace\n  - task overview still isn’t populated on task startup",
+  "nextLine": "  - command approval still seems to be too frequent, even on ‘full access’ mode — at the very least, switching approval mode mid-task need to take affect immediately if possible",
+  "parentTaskTitle": "AI workspace execution",
+  "related": [
+   "AI workspace execution",
+   "AI workspace execution: this is especially weird and detrimental because the tasks don’t indicate they’re running, and thus have no way to stop them once they a",
+   "AI workspace execution: finished tasks still have a bug where they start themselves back up again when the user opens their AI workspace card",
+   "AI workspace execution: task overview still isn’t populated on task startup"
+  ],
+  "localRag": {
+   "text": "indicate they’re running",
+   "ms": 281
+  },
+  "cloudRag": {
+   "text": "don't indicate they're running, so there's no way to stop them once started",
+   "kind": "suffix",
+   "ms": 2186,
+   "usage": {
+    "inputTokens": 945,
+    "outputTokens": 28,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 943,
+    "calls": 1,
+    "costUsd": 0.00020280000000000002
+   }
+  },
+  "cloudRagCont": {
+   "text": "aren't showing as running, so they can't be stopped",
+   "kind": "suffix",
+   "ms": 2157,
+   "usage": {
+    "inputTokens": 827,
+    "outputTokens": 18,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 825,
+    "calls": 1,
+    "costUsd": 0.0001742
+   }
+  }
+ },
+ {
+  "id": 2,
+  "isSubtask": true,
+  "prefixText": "command approval still seems to be too frequent, even on ‘full access’ mode — at the ",
+  "truth": "very least, switching approval mode mid-task need to take affect immediately if possible",
+  "taskText": "command approval still seems to be too frequent, even on ‘full access’ mode — at the ",
+  "contextBefore": "- AI workspace execution\n  - ‘related tasks’ card needs to move to before ‘overview’\n  - it also doesn’t seem to be correctly pulling in knowledge from other tasks / freeform text in the project — make sure it’s able to read from human workspace\n  - task overview still isn’t populated on task startup\n  - Running tasks still seem to have broken functionality/UI",
+  "nextLine": "  - when an action requires approval and the prompt pops up, it doesn’t display what that command is, so the user doesn’t know what they’re being asked to accept",
+  "parentTaskTitle": "AI workspace execution",
+  "related": [
+   "AI workspace execution: when an action requires approval and the prompt pops up, it doesn’t display what that command is, so the user doesn’t know what they’re ",
+   "AI workspace execution",
+   "AI workspace execution: Running tasks still seem to have broken functionality/UI",
+   "AI workspace execution: this is especially weird and detrimental because the tasks don’t indicate they’re running, and thus have no way to stop them once they a"
+  ],
+  "localRag": {
+   "text": "least once per day",
+   "ms": 286
+  },
+  "cloudRag": {
+   "text": "moment, it's blocking routine actions the user has already authorized.",
+   "kind": "rewrite",
+   "ms": 2338,
+   "usage": {
+    "inputTokens": 981,
+    "outputTokens": 46,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 979,
+    "calls": 1,
+    "costUsd": 0.000219
+   }
+  },
+  "cloudRagCont": {
+   "text": "full access\" mode is still too strict, prompting for every command",
+   "kind": "suffix",
+   "ms": 2238,
+   "usage": {
+    "inputTokens": 863,
+    "outputTokens": 20,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 861,
+    "calls": 1,
+    "costUsd": 0.00018240000000000002
+   }
+  }
+ },
+ {
+  "id": 3,
+  "isSubtask": true,
+  "prefixText": "when an action requires approval and the prompt pops up, ",
+  "truth": "it doesn’t display what that command is, so the user doesn’t know what they’re being asked to accept",
+  "taskText": "when an action requires approval and the prompt pops up, ",
+  "contextBefore": "- AI workspace execution\n  - ‘related tasks’ card needs to move to before ‘overview’\n  - it also doesn’t seem to be correctly pulling in knowledge from other tasks / freeform text in the project — make sure it’s able to read from human workspace\n  - task overview still isn’t populated on task startup\n  - Running tasks still seem to have broken functionality/UI\n  - command approval still seems to be too frequent, even on ‘full access’ mode — at the very least, switching approval mode mid-task need to take affect immediately if possible",
+  "nextLine": "  - completion logs aren’t piped from the embedded terminal CLI into the completion logs",
+  "parentTaskTitle": "AI workspace execution",
+  "related": [
+   "AI workspace execution: command approval still seems to be too frequent, even on ‘full access’ mode — at the very least, switching approval mode mid-task need t",
+   "AI workspace execution",
+   "AI workspace execution: this is especially weird and detrimental because the tasks don’t indicate they’re running, and thus have no way to stop them once they a",
+   "AI workspace execution: finished tasks still have a bug where they start themselves back up again when the user opens their AI workspace card"
+  ],
+  "localRag": {
+   "text": "the approval mode is not activated, and the task is not running, and thus the task is not stopped",
+   "ms": 502
+  },
+  "cloudRag": {
+   "text": "the task should visibly show that it is waiting for user input so it can be approved or stopped",
+   "kind": "suffix",
+   "ms": 2207,
+   "usage": {
+    "inputTokens": 983,
+    "outputTokens": 44,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 981,
+    "calls": 1,
+    "costUsd": 0.00021840000000000002
+   }
+  },
+  "cloudRagCont": {
+   "text": "the prompt should show what's being requested and let the user approve or deny it",
+   "kind": "suffix",
+   "ms": 2053,
+   "usage": {
+    "inputTokens": 865,
+    "outputTokens": 23,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 863,
+    "calls": 1,
+    "costUsd": 0.00018430000000000003
+   }
+  }
+ },
+ {
+  "id": 4,
+  "isSubtask": true,
+  "prefixText": "completion logs aren’t piped from the embedded ",
+  "truth": "terminal CLI into the completion logs",
+  "taskText": "completion logs aren’t piped from the embedded ",
+  "contextBefore": "  - ‘related tasks’ card needs to move to before ‘overview’\n  - it also doesn’t seem to be correctly pulling in knowledge from other tasks / freeform text in the project — make sure it’s able to read from human workspace\n  - task overview still isn’t populated on task startup\n  - Running tasks still seem to have broken functionality/UI\n  - command approval still seems to be too frequent, even on ‘full access’ mode — at the very least, switching approval mode mid-task need to take affect immediately if possible\n  - when an action requires approval and the prompt pops up, it doesn’t display what that command is, so the user doesn’t know what they’re being asked to accept",
+  "nextLine": "  - A ‘full-auto’ mode that selects the most appropriate model for the task, based on the selected provider’s available models, each model’s strengths, and the task’s type & complexity",
+  "parentTaskTitle": "AI workspace execution",
+  "related": [
+   "AI workspace execution",
+   "AI workspace execution: Running tasks still seem to have broken functionality/UI",
+   "AI workspace execution: task overview still isn’t populated on task startup",
+   "AI workspace execution: finished tasks still have a bug where they start themselves back up again when the user opens their AI workspace card"
+  ],
+  "localRag": {
+   "text": "AI workspace to the UI",
+   "ms": 184
+  },
+  "cloudRag": {
+   "text": "terminal to the AI workspace card",
+   "kind": "rewrite",
+   "ms": 2125,
+   "usage": {
+    "inputTokens": 932,
+    "outputTokens": 27,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 930,
+    "calls": 1,
+    "costUsd": 0.00019970000000000003
+   }
+  },
+  "cloudRagCont": {
+   "text": "terminal session (the embedded terminal)",
+   "kind": "suffix",
+   "ms": 1877,
+   "usage": {
+    "inputTokens": 814,
+    "outputTokens": 15,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 812,
+    "calls": 1,
+    "costUsd": 0.00017010000000000001
+   }
+  }
+ },
+ {
+  "id": 5,
+  "isSubtask": true,
+  "prefixText": "A ‘full-auto’ mode that selects the most appropriate model for the task, based ",
+  "truth": "on the selected provider’s available models, each model’s strengths, and the task’s type & complexity",
+  "taskText": "A ‘full-auto’ mode that selects the most appropriate model for the task, based ",
+  "contextBefore": "  - it also doesn’t seem to be correctly pulling in knowledge from other tasks / freeform text in the project — make sure it’s able to read from human workspace\n  - task overview still isn’t populated on task startup\n  - Running tasks still seem to have broken functionality/UI\n  - command approval still seems to be too frequent, even on ‘full access’ mode — at the very least, switching approval mode mid-task need to take affect immediately if possible\n  - when an action requires approval and the prompt pops up, it doesn’t display what that command is, so the user doesn’t know what they’re being asked to accept\n  - completion logs aren’t piped from the embedded terminal CLI into the completion logs",
+  "nextLine": "  - Periodic “how did this task do?” surveys for the tasks Ergo suspects might be able to use a cheaper model, or where it doesn’t have enough information about the sort of task to know whether it performed well",
+  "parentTaskTitle": "AI workspace execution",
+  "related": [
+   "AI workspace execution",
+   "AI workspace execution: This will be an easy but valuable metric directly from the user, to help Ergo better determine on the next run whether it should route u",
+   "AI workspace execution: For tasks where Ergo already has a good idea of how they perform, surveying the user isn’t necessary",
+   "AI workspace execution: Periodic “how did this task do?” surveys for the tasks Ergo suspects might be able to use a cheaper model, or where it doesn’t have enou"
+  ],
+  "localRag": {
+   "text": "on the user’s knowledge and experience",
+   "ms": 344
+  },
+  "cloudRag": {
+   "text": "on past performance data and task complexity, without requiring user input",
+   "kind": "rewrite",
+   "ms": 2159,
+   "usage": {
+    "inputTokens": 1001,
+    "outputTokens": 44,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 999,
+    "calls": 1,
+    "costUsd": 0.00022200000000000003
+   }
+  },
+  "cloudRagCont": {
+   "text": "on the task's inputs to pick the best available model, weighing cost against quality per task",
+   "kind": "suffix",
+   "ms": 2202,
+   "usage": {
+    "inputTokens": 883,
+    "outputTokens": 27,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 881,
+    "calls": 1,
+    "costUsd": 0.0001899
+   }
+  }
+ },
+ {
+  "id": 6,
+  "isSubtask": true,
+  "prefixText": "Periodic “how did this task do?” surveys for the tasks Ergo suspects might be ",
+  "truth": "able to use a cheaper model, or where it doesn’t have enough information about the sort of task to know whether it performed well",
+  "taskText": "Periodic “how did this task do?” surveys for the tasks Ergo suspects might be ",
+  "contextBefore": "  - task overview still isn’t populated on task startup\n  - Running tasks still seem to have broken functionality/UI\n  - command approval still seems to be too frequent, even on ‘full access’ mode — at the very least, switching approval mode mid-task need to take affect immediately if possible\n  - when an action requires approval and the prompt pops up, it doesn’t display what that command is, so the user doesn’t know what they’re being asked to accept\n  - completion logs aren’t piped from the embedded terminal CLI into the completion logs\n  - A ‘full-auto’ mode that selects the most appropriate model for the task, based on the selected provider’s available models, each model’s strengths, and the task’s type & complexity",
+  "nextLine": "  - We just need simple good/bad button answers",
+  "parentTaskTitle": "AI workspace execution",
+  "related": [
+   "AI workspace execution: For tasks where Ergo already has a good idea of how they perform, surveying the user isn’t necessary",
+   "AI workspace execution",
+   "AI workspace execution: A ‘full-auto’ mode that selects the most appropriate model for the task, based on the selected provider’s available models, each model’s",
+   "AI workspace execution: this is especially weird and detrimental because the tasks don’t indicate they’re running, and thus have no way to stop them once they a"
+  ],
+  "localRag": {
+   "text": "",
+   "ms": 264
+  },
+  "cloudRag": {
+   "text": "stuck or failing",
+   "kind": "rewrite",
+   "ms": 2016,
+   "usage": {
+    "inputTokens": 998,
+    "outputTokens": 37,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 996,
+    "calls": 1,
+    "costUsd": 0.00021789999999999998
+   }
+  },
+  "cloudRagCont": {
+   "text": "need to be nearby",
+   "kind": "suffix",
+   "ms": 2102,
+   "usage": {
+    "inputTokens": 880,
+    "outputTokens": 8,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 878,
+    "calls": 1,
+    "costUsd": 0.0001798
+   }
+  }
+ },
+ {
+  "id": 7,
+  "isSubtask": true,
+  "prefixText": "We just need simple ",
+  "truth": "good/bad button answers",
+  "taskText": "We just need simple ",
+  "contextBefore": "  - Running tasks still seem to have broken functionality/UI\n  - command approval still seems to be too frequent, even on ‘full access’ mode — at the very least, switching approval mode mid-task need to take affect immediately if possible\n  - when an action requires approval and the prompt pops up, it doesn’t display what that command is, so the user doesn’t know what they’re being asked to accept\n  - completion logs aren’t piped from the embedded terminal CLI into the completion logs\n  - A ‘full-auto’ mode that selects the most appropriate model for the task, based on the selected provider’s available models, each model’s strengths, and the task’s type & complexity\n  - Periodic “how did this task do?” surveys for the tasks Ergo suspects might be able to use a cheaper model, or where it doesn’t have enough information about the sort of task to know whether it performed well",
+  "nextLine": "  - This will be an easy but valuable metric directly from the user, to help Ergo better determine on the next run whether it should route up/down the model choice for similar tasks",
+  "parentTaskTitle": "AI workspace execution",
+  "related": [
+   "AI workspace execution",
+   "AI workspace execution: For tasks where Ergo already has a good idea of how they perform, surveying the user isn’t necessary",
+   "AI workspace execution: A ‘full-auto’ mode that selects the most appropriate model for the task, based on the selected provider’s available models, each model’s",
+   "AI workspace execution: This will be an easy but valuable metric directly from the user, to help Ergo better determine on the next run whether it should route u"
+  ],
+  "localRag": {
+   "text": "",
+   "ms": 240
+  },
+  "cloudRag": {
+   "text": "automated task routing that picks the best model for each task and keeps the user out of the loop unless we truly need their input",
+   "kind": "suffix",
+   "ms": 2346,
+   "usage": {
+    "inputTokens": 971,
+    "outputTokens": 40,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 969,
+    "calls": 1,
+    "costUsd": 0.00021400000000000002
+   }
+  },
+  "cloudRagCont": {
+   "text": "survey the user before routing",
+   "kind": "suffix",
+   "ms": 2129,
+   "usage": {
+    "inputTokens": 853,
+    "outputTokens": 9,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 851,
+    "calls": 1,
+    "costUsd": 0.00017490000000000002
+   }
+  }
+ },
+ {
+  "id": 8,
+  "isSubtask": true,
+  "prefixText": "This will be an easy but valuable metric directly from the user, ",
+  "truth": "to help Ergo better determine on the next run whether it should route up/down the model choice for similar tasks",
+  "taskText": "This will be an easy but valuable metric directly from the user, ",
+  "contextBefore": "  - command approval still seems to be too frequent, even on ‘full access’ mode — at the very least, switching approval mode mid-task need to take affect immediately if possible\n  - when an action requires approval and the prompt pops up, it doesn’t display what that command is, so the user doesn’t know what they’re being asked to accept\n  - completion logs aren’t piped from the embedded terminal CLI into the completion logs\n  - A ‘full-auto’ mode that selects the most appropriate model for the task, based on the selected provider’s available models, each model’s strengths, and the task’s type & complexity\n  - Periodic “how did this task do?” surveys for the tasks Ergo suspects might be able to use a cheaper model, or where it doesn’t have enough information about the sort of task to know whether it performed well\n  - We just need simple good/bad button answers",
+  "nextLine": "  - For tasks where Ergo already has a good idea of how they perform, surveying the user isn’t necessary",
+  "parentTaskTitle": "AI workspace execution",
+  "related": [
+   "AI workspace execution",
+   "AI workspace execution: For tasks where Ergo already has a good idea of how they perform, surveying the user isn’t necessary",
+   "AI workspace execution: A ‘full-auto’ mode that selects the most appropriate model for the task, based on the selected provider’s available models, each model’s",
+   "AI workspace execution: Periodic “how did this task do?” surveys for the tasks Ergo suspects might be able to use a cheaper model, or where it doesn’t have enou"
+  ],
+  "localRag": {
+   "text": "",
+   "ms": 171
+  },
+  "cloudRag": {
+   "text": "such as a simple thumbs up or down rating after each task completes.",
+   "kind": "suffix",
+   "ms": 2096,
+   "usage": {
+    "inputTokens": 997,
+    "outputTokens": 40,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 995,
+    "calls": 1,
+    "costUsd": 0.00021920000000000002
+   }
+  },
+  "cloudRagCont": {
+   "text": ">the user's own style, continuing the sentence about a metric directly from the user.",
+   "kind": "suffix",
+   "ms": 2563,
+   "usage": {
+    "inputTokens": 879,
+    "outputTokens": 107,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 877,
+    "calls": 1,
+    "costUsd": 0.0002291
+   }
+  }
+ },
+ {
+  "id": 9,
+  "isSubtask": true,
+  "prefixText": "For tasks where Ergo already has a good idea ",
+  "truth": "of how they perform, surveying the user isn’t necessary",
+  "taskText": "For tasks where Ergo already has a good idea ",
+  "contextBefore": "  - when an action requires approval and the prompt pops up, it doesn’t display what that command is, so the user doesn’t know what they’re being asked to accept\n  - completion logs aren’t piped from the embedded terminal CLI into the completion logs\n  - A ‘full-auto’ mode that selects the most appropriate model for the task, based on the selected provider’s available models, each model’s strengths, and the task’s type & complexity\n  - Periodic “how did this task do?” surveys for the tasks Ergo suspects might be able to use a cheaper model, or where it doesn’t have enough information about the sort of task to know whether it performed well\n  - We just need simple good/bad button answers\n  - This will be an easy but valuable metric directly from the user, to help Ergo better determine on the next run whether it should route up/down the model choice for similar tasks",
+  "nextLine": "  - finished tasks still have a bug where they start themselves back up again when the user opens their AI workspace card",
+  "parentTaskTitle": "AI workspace execution",
+  "related": [
+   "AI workspace execution: Periodic “how did this task do?” surveys for the tasks Ergo suspects might be able to use a cheaper model, or where it doesn’t have enou",
+   "AI workspace execution",
+   "AI workspace execution: This will be an easy but valuable metric directly from the user, to help Ergo better determine on the next run whether it should route u",
+   "AI workspace execution: A ‘full-auto’ mode that selects the most appropriate model for the task, based on the selected provider’s available models, each model’s"
+  ],
+  "localRag": {
+   "text": "of the model, it will use that idea.",
+   "ms": 455
+  },
+  "cloudRag": {
+   "text": "of the expected outcome, skip the survey and route directly to the most cost-effective model",
+   "kind": "suffix",
+   "ms": 2143,
+   "usage": {
+    "inputTokens": 998,
+    "outputTokens": 43,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 996,
+    "calls": 1,
+    "costUsd": 0.0002209
+   }
+  },
+  "cloudRagCont": {
+   "text": "the user's preference, or the task's requirements, are clear",
+   "kind": "suffix",
+   "ms": 2056,
+   "usage": {
+    "inputTokens": 880,
+    "outputTokens": 19,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 878,
+    "calls": 1,
+    "costUsd": 0.0001853
+   }
+  }
+ },
+ {
+  "id": 10,
+  "isSubtask": true,
+  "prefixText": "also the header truncation ",
+  "truth": "in the AI Workspace tag name",
+  "taskText": "also the header truncation ",
+  "contextBefore": "  - For tasks where Ergo already has a good idea of how they perform, surveying the user isn’t necessary\n  - finished tasks still have a bug where they start themselves back up again when the user opens their AI workspace card\n  - this is especially weird and detrimental because the tasks don’t indicate they’re running, and thus have no way to stop them once they automatically restart\n- UI/UX\n  - Light mode needs to be enforced by default\n  - header coloring",
+  "nextLine": "  - AI Workspace actions card has too much visual clutter — reduce the buttons and weird element wrapping",
+  "parentTaskTitle": "UI/UX",
+  "related": [
+   "UI/UX: header coloring",
+   "UI/UX",
+   "task headers / grouping: figure out how to represent this in the markdown file so it translates back into the UI"
+  ],
+  "localRag": {
+   "text": "",
+   "ms": 146
+  },
+  "cloudRag": {
+   "text": "issue in long task titles should be fixed so headers display fully or ellipsize cleanly",
+   "kind": "suffix",
+   "ms": 2133,
+   "usage": {
+    "inputTokens": 871,
+    "outputTokens": 36,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 869,
+    "calls": 1,
+    "costUsd": 0.000192
+   }
+  },
+  "cloudRagCont": {
+   "text": "cut off by the time the header gets truncated",
+   "kind": "suffix",
+   "ms": 2060,
+   "usage": {
+    "inputTokens": 753,
+    "outputTokens": 15,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 751,
+    "calls": 1,
+    "costUsd": 0.00015790000000000002
+   }
+  }
+ },
+ {
+  "id": 11,
+  "isSubtask": true,
+  "prefixText": "AI Workspace actions card has too ",
+  "truth": "much visual clutter — reduce the buttons and weird element wrapping",
+  "taskText": "AI Workspace actions card has too ",
+  "contextBefore": "  - finished tasks still have a bug where they start themselves back up again when the user opens their AI workspace card\n  - this is especially weird and detrimental because the tasks don’t indicate they’re running, and thus have no way to stop them once they automatically restart\n- UI/UX\n  - Light mode needs to be enforced by default\n  - header coloring\n  - also the header truncation in the AI Workspace tag name",
+  "nextLine": "  - subtask formatting",
+  "parentTaskTitle": "UI/UX",
+  "related": [
+   "AI workspace execution: ‘related tasks’ card needs to move to before ‘overview’",
+   "AI workspace execution: finished tasks still have a bug where they start themselves back up again when the user opens their AI workspace card",
+   "AI workspace execution: Running tasks still seem to have broken functionality/UI",
+   "Execution cards in the AI workspace need to be archived if the user deletes the corresponding card from the human side: There also seems to be a related bug whe"
+  ],
+  "localRag": {
+   "text": "many buttons",
+   "ms": 297
+  },
+  "cloudRag": {
+   "text": "many buttons and options cluttering the interface",
+   "kind": "suffix",
+   "ms": 2116,
+   "usage": {
+    "inputTokens": 973,
+    "outputTokens": 26,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 971,
+    "calls": 1,
+    "costUsd": 0.0002074
+   }
+  },
+  "cloudRagCont": {
+   "text": "on too many buttons",
+   "kind": "suffix",
+   "ms": 2152,
+   "usage": {
+    "inputTokens": 855,
+    "outputTokens": 8,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 853,
+    "calls": 1,
+    "costUsd": 0.00017480000000000002
+   }
+  }
+ },
+ {
+  "id": 12,
+  "isSubtask": true,
+  "prefixText": "checked subtasks are pushed ",
+  "truth": "down strangely with top padding",
+  "taskText": "checked subtasks are pushed ",
+  "contextBefore": "- UI/UX\n  - Light mode needs to be enforced by default\n  - header coloring\n  - also the header truncation in the AI Workspace tag name\n  - AI Workspace actions card has too much visual clutter — reduce the buttons and weird element wrapping\n  - subtask formatting",
+  "nextLine": "  - this also happens with formatted tasks, specifically bolded",
+  "parentTaskTitle": "UI/UX",
+  "related": [
+   "UI/UX: sub-subtasks seem to unindent themselves when the page/project is reloaded",
+   "UI/UX: subtask formatting",
+   "Tasks that are completely checked should collapse the task section by default",
+   "a way in the UI to specify fallback conditions for tasks/subtasks"
+  ],
+  "localRag": {
+   "text": "to the bottom of the task section",
+   "ms": 292
+  },
+  "cloudRag": {
+   "text": "to the bottom of the list automatically",
+   "kind": "suffix",
+   "ms": 2039,
+   "usage": {
+    "inputTokens": 918,
+    "outputTokens": 23,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 916,
+    "calls": 1,
+    "costUsd": 0.00019490000000000002
+   }
+  },
+  "cloudRagCont": {
+   "text": "to the bottom of the list when all children are done",
+   "kind": "suffix",
+   "ms": 1987,
+   "usage": {
+    "inputTokens": 800,
+    "outputTokens": 17,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 798,
+    "calls": 1,
+    "costUsd": 0.0001683
+   }
+  }
+ },
+ {
+  "id": 13,
+  "isSubtask": true,
+  "prefixText": "this also happens with formatted ",
+  "truth": "tasks, specifically bolded",
+  "taskText": "this also happens with formatted ",
+  "contextBefore": "  - Light mode needs to be enforced by default\n  - header coloring\n  - also the header truncation in the AI Workspace tag name\n  - AI Workspace actions card has too much visual clutter — reduce the buttons and weird element wrapping\n  - subtask formatting\n  - checked subtasks are pushed down strangely with top padding",
+  "nextLine": "  - sub-subtasks seem to unindent themselves when the page/project is reloaded",
+  "parentTaskTitle": "UI/UX",
+  "related": [
+   "UI/UX: subtask formatting",
+   "UI/UX",
+   "UI/UX: sub-subtasks seem to unindent themselves when the page/project is reloaded",
+   "UI/UX: checked subtasks are pushed down strangely with top padding"
+  ],
+  "localRag": {
+   "text": "subtasks",
+   "ms": 170
+  },
+  "cloudRag": {
+   "text": "subtask formatting",
+   "kind": "suffix",
+   "ms": 2150,
+   "usage": {
+    "inputTokens": 902,
+    "outputTokens": 16,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 900,
+    "calls": 1,
+    "costUsd": 0.00018820000000000002
+   }
+  },
+  "cloudRagCont": {
+   "text": "subtasks",
+   "kind": "suffix",
+   "ms": 2663,
+   "usage": {
+    "inputTokens": 784,
+    "outputTokens": 170,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 782,
+    "calls": 1,
+    "costUsd": 0.00024160000000000002
+   }
+  }
+ },
+ {
+  "id": 14,
+  "isSubtask": true,
+  "prefixText": "sub-subtasks seem to unindent ",
+  "truth": "themselves when the page/project is reloaded",
+  "taskText": "sub-subtasks seem to unindent ",
+  "contextBefore": "  - header coloring\n  - also the header truncation in the AI Workspace tag name\n  - AI Workspace actions card has too much visual clutter — reduce the buttons and weird element wrapping\n  - subtask formatting\n  - checked subtasks are pushed down strangely with top padding\n  - this also happens with formatted tasks, specifically bolded",
+  "nextLine": "  - When the page is reloaded, the project changes to the first one in the list — should resume to the last-worked-on project",
+  "parentTaskTitle": "UI/UX",
+  "related": [
+   "UI/UX: checked subtasks are pushed down strangely with top padding",
+   "UI/UX: subtask formatting",
+   "UI/UX: this also happens with formatted tasks, specifically bolded",
+   "Collapsed tasks that have 1 or more subtasks completed should show a little muted (n/n) hint after the task name"
+  ],
+  "localRag": {
+   "text": "",
+   "ms": 193
+  },
+  "cloudRag": {
+   "text": "when parent subtask is collapsed or checked, causing misalignment",
+   "kind": "suffix",
+   "ms": 2209,
+   "usage": {
+    "inputTokens": 932,
+    "outputTokens": 36,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 930,
+    "calls": 1,
+    "costUsd": 0.00020420000000000003
+   }
+  },
+  "cloudRagCont": {
+   "text": "when it's nested under the parent",
+   "kind": "suffix",
+   "ms": 2210,
+   "usage": {
+    "inputTokens": 814,
+    "outputTokens": 11,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 812,
+    "calls": 1,
+    "costUsd": 0.00016810000000000002
+   }
+  }
+ },
+ {
+  "id": 15,
+  "isSubtask": true,
+  "prefixText": "When the page is reloaded, the project changes to ",
+  "truth": "the first one in the list — should resume to the last-worked-on project",
+  "taskText": "When the page is reloaded, the project changes to ",
+  "contextBefore": "  - also the header truncation in the AI Workspace tag name\n  - AI Workspace actions card has too much visual clutter — reduce the buttons and weird element wrapping\n  - subtask formatting\n  - checked subtasks are pushed down strangely with top padding\n  - this also happens with formatted tasks, specifically bolded\n  - sub-subtasks seem to unindent themselves when the page/project is reloaded",
+  "nextLine": "- The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with",
+  "parentTaskTitle": "UI/UX",
+  "related": [
+   "the last-used project needs to be the one that restores when the user returns to the page again / reloads",
+   "UI/UX: sub-subtasks seem to unindent themselves when the page/project is reloaded",
+   "the AI profile and project need to be synced, so that if the user last used a different AI profile on a different project, switching projects automatically swit",
+   "UI/UX"
+  ],
+  "localRag": {
+   "text": "the last used project",
+   "ms": 284
+  },
+  "cloudRag": {
+   "text": "the last-used project instead of staying on the project the user was viewing",
+   "kind": "suffix",
+   "ms": 2148,
+   "usage": {
+    "inputTokens": 939,
+    "outputTokens": 35,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 937,
+    "calls": 1,
+    "costUsd": 0.0002051
+   }
+  },
+  "cloudRagCont": {
+   "text": "the previous project restores",
+   "kind": "suffix",
+   "ms": 1937,
+   "usage": {
+    "inputTokens": 821,
+    "outputTokens": 8,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 819,
+    "calls": 1,
+    "costUsd": 0.000168
+   }
+  }
+ },
+ {
+  "id": 16,
+  "isSubtask": false,
+  "prefixText": "The AI should have the ability to add new tasks to the user's TODO list, ",
+  "truth": "if it discovers something important that the user didn't explicitly task it with",
+  "taskText": "The AI should have the ability to add new tasks to the user's TODO list, ",
+  "contextBefore": "  - AI Workspace actions card has too much visual clutter — reduce the buttons and weird element wrapping\n  - subtask formatting\n  - checked subtasks are pushed down strangely with top padding\n  - this also happens with formatted tasks, specifically bolded\n  - sub-subtasks seem to unindent themselves when the page/project is reloaded\n  - When the page is reloaded, the project changes to the first one in the list — should resume to the last-worked-on project",
+  "nextLine": "  - but it should always tell the user what it added (and maybe the task is indicated with a 'review' tag or something)",
+  "parentTaskTitle": null,
+  "related": [
+   "rework the 'new task' button for using the AI to perform general tasks on the human workspace: create new task w/ subtasks",
+   "rework the 'new task' button for using the AI to perform general tasks on the human workspace",
+   "rework the 'new task' button for using the AI to perform general tasks on the human workspace: refine existing tasks (remove, replace, or edit wording)"
+  ],
+  "localRag": {
+   "text": "remove tasks, and edit tasks.",
+   "ms": 297
+  },
+  "cloudRag": {
+   "text": "including subtasks and optional details.",
+   "kind": "suffix",
+   "ms": 4044,
+   "usage": {
+    "inputTokens": 939,
+    "outputTokens": 35,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 937,
+    "calls": 1,
+    "costUsd": 0.0002051
+   }
+  },
+  "cloudRagCont": {
+   "text": "edit subtasks, remove or replace items, and rephrase tasks in the list",
+   "kind": "suffix",
+   "ms": 2098,
+   "usage": {
+    "inputTokens": 821,
+    "outputTokens": 27,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 819,
+    "calls": 1,
+    "costUsd": 0.0001775
+   }
+  }
+ },
+ {
+  "id": 17,
+  "isSubtask": true,
+  "prefixText": "but it should always tell the user what it added (and maybe the task ",
+  "truth": "is indicated with a 'review' tag or something)",
+  "taskText": "but it should always tell the user what it added (and maybe the task ",
+  "contextBefore": "  - subtask formatting\n  - checked subtasks are pushed down strangely with top padding\n  - this also happens with formatted tasks, specifically bolded\n  - sub-subtasks seem to unindent themselves when the page/project is reloaded\n  - When the page is reloaded, the project changes to the first one in the list — should resume to the last-worked-on project\n- The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with",
+  "nextLine": "  - these should be clearly marked as AI-generated so the user can approve/dismiss them",
+  "parentTaskTitle": "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with",
+  "related": [
+   "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with",
+   "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with: this ",
+   "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with: these",
+   "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with: make "
+  ],
+  "localRag": {
+   "text": "was important)",
+   "ms": 412
+  },
+  "cloudRag": {
+   "text": "'s priority or why it was added)",
+   "kind": "suffix",
+   "ms": 2112,
+   "usage": {
+    "inputTokens": 1057,
+    "outputTokens": 29,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 1055,
+    "calls": 1,
+    "costUsd": 0.0002257
+   }
+  },
+  "cloudRagCont": {
+   "text": "be or the user's ID",
+   "kind": "suffix",
+   "ms": 2058,
+   "usage": {
+    "inputTokens": 939,
+    "outputTokens": 9,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 937,
+    "calls": 1,
+    "costUsd": 0.0001921
+   }
+  }
+ },
+ {
+  "id": 18,
+  "isSubtask": true,
+  "prefixText": "these should be clearly marked as AI-generated ",
+  "truth": "so the user can approve/dismiss them",
+  "taskText": "these should be clearly marked as AI-generated ",
+  "contextBefore": "  - checked subtasks are pushed down strangely with top padding\n  - this also happens with formatted tasks, specifically bolded\n  - sub-subtasks seem to unindent themselves when the page/project is reloaded\n  - When the page is reloaded, the project changes to the first one in the list — should resume to the last-worked-on project\n- The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with\n  - but it should always tell the user what it added (and maybe the task is indicated with a 'review' tag or something)",
+  "nextLine": "  - this should happen primarily when it finds something along the way that's out of scope for its current task",
+  "parentTaskTitle": "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with",
+  "related": [
+   "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with",
+   "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with: this ",
+   "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with: but i",
+   "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with: make "
+  ],
+  "localRag": {
+   "text": "",
+   "ms": 228
+  },
+  "cloudRag": {
+   "text": "",
+   "kind": "suffix",
+   "ms": 1909,
+   "usage": {
+    "inputTokens": 1054,
+    "outputTokens": 16,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 1052,
+    "calls": 1,
+    "costUsd": 0.00021860000000000003
+   }
+  },
+  "cloudRagCont": {
+   "text": ", and it should be flagged as coming from the AI, not from the user",
+   "kind": "suffix",
+   "ms": 2035,
+   "usage": {
+    "inputTokens": 936,
+    "outputTokens": 22,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 934,
+    "calls": 1,
+    "costUsd": 0.00019800000000000002
+   }
+  }
+ },
+ {
+  "id": 19,
+  "isSubtask": true,
+  "prefixText": "this should happen primarily when it finds something along ",
+  "truth": "the way that's out of scope for its current task",
+  "taskText": "this should happen primarily when it finds something along ",
+  "contextBefore": "  - this also happens with formatted tasks, specifically bolded\n  - sub-subtasks seem to unindent themselves when the page/project is reloaded\n  - When the page is reloaded, the project changes to the first one in the list — should resume to the last-worked-on project\n- The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with\n  - but it should always tell the user what it added (and maybe the task is indicated with a 'review' tag or something)\n  - these should be clearly marked as AI-generated so the user can approve/dismiss them",
+  "nextLine": "  - make sure what's put in the human task list is always succinct, clear and easily readable - make sure what it stores in its vector DB is verbose enough to be useful for the AI",
+  "parentTaskTitle": "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with",
+  "related": [
+   "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with",
+   "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with: but i",
+   "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with: make ",
+   "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with: these"
+  ],
+  "localRag": {
+   "text": "the way that the user didn't explicitly task it with.",
+   "ms": 479
+  },
+  "cloudRag": {
+   "text": "the way that is directly related to the task at hand and would otherwise be missed",
+   "kind": "suffix",
+   "ms": 2172,
+   "usage": {
+    "inputTokens": 1052,
+    "outputTokens": 37,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 1050,
+    "calls": 1,
+    "costUsd": 0.0002287
+   }
+  },
+  "cloudRagCont": {
+   "text": "the user's own work, the user's TODO list, or the user's current request",
+   "kind": "suffix",
+   "ms": 2172,
+   "usage": {
+    "inputTokens": 934,
+    "outputTokens": 22,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 932,
+    "calls": 1,
+    "costUsd": 0.0001976
+   }
+  }
+ },
+ {
+  "id": 20,
+  "isSubtask": true,
+  "prefixText": "make sure what's put in the human task list is always succinct, clear and easily readable - make sure what it stores in ",
+  "truth": "its vector DB is verbose enough to be useful for the AI",
+  "taskText": "make sure what's put in the human task list is always succinct, clear and easily readable - make sure what it stores in ",
+  "contextBefore": "  - sub-subtasks seem to unindent themselves when the page/project is reloaded\n  - When the page is reloaded, the project changes to the first one in the list — should resume to the last-worked-on project\n- The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with\n  - but it should always tell the user what it added (and maybe the task is indicated with a 'review' tag or something)\n  - these should be clearly marked as AI-generated so the user can approve/dismiss them\n  - this should happen primarily when it finds something along the way that's out of scope for its current task",
+  "nextLine": "- Autocomplete",
+  "parentTaskTitle": "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with",
+  "related": [
+   "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with",
+   "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with: this ",
+   "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with: but i",
+   "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with: these"
+  ],
+  "localRag": {
+   "text": "the AI task list is also succinct, clear and easily readable - make sure what it stores in the AI task list is",
+   "ms": 426
+  },
+  "cloudRag": {
+   "text": "the list is accurate and free of unnecessary detail",
+   "kind": "rewrite",
+   "ms": 2323,
+   "usage": {
+    "inputTokens": 1072,
+    "outputTokens": 53,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 1070,
+    "calls": 1,
+    "costUsd": 0.0002407
+   }
+  },
+  "cloudRagCont": {
+   "text": "is exactly what it stores",
+   "kind": "suffix",
+   "ms": 2147,
+   "usage": {
+    "inputTokens": 954,
+    "outputTokens": 10,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 952,
+    "calls": 1,
+    "costUsd": 0.0001956
+   }
+  }
+ },
+ {
+  "id": 21,
+  "isSubtask": true,
+  "prefixText": "Terminal session history is in-memory — when you close or reload the app, the PTY process is ",
+  "truth": "killed and the tab is gone. The config (which agent to use) persists. Reconnecting to a live PTY after a page reload would require a full server-side session registry",
+  "taskText": "Terminal session history is in-memory — when you close or reload the app, the PTY process is ",
+  "contextBefore": "  - refine existing tasks (remove, replace, or edit wording)\n- CLI mode for coding agents\n  - connection to coding CLIs like Claude Code, Antigravity, Cursor, Codex, etc.\n  - when the user clicks 'execute' on a task, it spawns a CLI agent that performs the task in a windowed terminal in the AI side\n  - then on completion it writes back to the AI and user's side, and updates the task and subtasks to reflect what happened; the user can then also look back at the terminal to see more details\n  - terminal persistence",
+  "nextLine": "  - can it write out to the user's IDE?",
+  "parentTaskTitle": "CLI mode for coding agents",
+  "related": [
+   "CLI mode for coding agents: terminal persistence",
+   "CLI mode for coding agents: then on completion it writes back to the AI and user's side, and updates the task and subtasks to reflect what happened; the user ca",
+   "CLI mode for coding agents: when the user clicks 'execute' on a task, it spawns a CLI agent that performs the task in a windowed terminal in the AI side",
+   "CLI mode for coding agents"
+  ],
+  "localRag": {
+   "text": "restarted",
+   "ms": 269
+  },
+  "cloudRag": {
+   "text": "terminated and the session history is lost",
+   "kind": "rewrite",
+   "ms": 2108,
+   "usage": {
+    "inputTokens": 984,
+    "outputTokens": 40,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 982,
+    "calls": 1,
+    "costUsd": 0.0002166
+   }
+  },
+  "cloudRagCont": {
+   "text": "killed, and the session's scrollback is lost with it",
+   "kind": "suffix",
+   "ms": 2272,
+   "usage": {
+    "inputTokens": 866,
+    "outputTokens": 18,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 864,
+    "calls": 1,
+    "costUsd": 0.000182
+   }
+  }
+ },
+ {
+  "id": 22,
+  "isSubtask": true,
+  "prefixText": "can it write out to ",
+  "truth": "the user's IDE?",
+  "taskText": "can it write out to ",
+  "contextBefore": "- CLI mode for coding agents\n  - connection to coding CLIs like Claude Code, Antigravity, Cursor, Codex, etc.\n  - when the user clicks 'execute' on a task, it spawns a CLI agent that performs the task in a windowed terminal in the AI side\n  - then on completion it writes back to the AI and user's side, and updates the task and subtasks to reflect what happened; the user can then also look back at the terminal to see more details\n  - terminal persistence\n  - Terminal session history is in-memory — when you close or reload the app, the PTY process is killed and the tab is gone. The config (which agent to use) persists. Reconnecting to a live PTY after a page reload would require a full server-side session registry",
+  "nextLine": "  - if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)",
+  "parentTaskTitle": "CLI mode for coding agents",
+  "related": [
+   "CLI mode for coding agents",
+   "CLI mode for coding agents: connection to coding CLIs like Claude Code, Antigravity, Cursor, Codex, etc.",
+   "CLI mode for coding agents: terminal persistence",
+   "CLI mode for coding agents: when the user clicks 'execute' on a task, it spawns a CLI agent that performs the task in a windowed terminal in the AI side"
+  ],
+  "localRag": {
+   "text": "a file",
+   "ms": 243
+  },
+  "cloudRag": {
+   "text": "the task's terminal output file so the user can review the agent's progress",
+   "kind": "suffix",
+   "ms": 2254,
+   "usage": {
+    "inputTokens": 957,
+    "outputTokens": 26,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 955,
+    "calls": 1,
+    "costUsd": 0.0002042
+   }
+  },
+  "cloudRagCont": {
+   "text": "”stream output to the subtask's terminal",
+   "kind": "suffix",
+   "ms": 2006,
+   "usage": {
+    "inputTokens": 839,
+    "outputTokens": 16,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 837,
+    "calls": 1,
+    "costUsd": 0.0001756
+   }
+  }
+ },
+ {
+  "id": 23,
+  "isSubtask": true,
+  "prefixText": "if so, it needs to have a way to ",
+  "truth": "jump to the files that were changed (and ideally a diff log)",
+  "taskText": "if so, it needs to have a way to ",
+  "contextBefore": "  - connection to coding CLIs like Claude Code, Antigravity, Cursor, Codex, etc.\n  - when the user clicks 'execute' on a task, it spawns a CLI agent that performs the task in a windowed terminal in the AI side\n  - then on completion it writes back to the AI and user's side, and updates the task and subtasks to reflect what happened; the user can then also look back at the terminal to see more details\n  - terminal persistence\n  - Terminal session history is in-memory — when you close or reload the app, the PTY process is killed and the tab is gone. The config (which agent to use) persists. Reconnecting to a live PTY after a page reload would require a full server-side session registry\n  - can it write out to the user's IDE?",
+  "nextLine": "- local AI should auto-compact by detault (configurable in AI profile panel advanced settings, under the Ollama section)",
+  "parentTaskTitle": "CLI mode for coding agents",
+  "related": [
+   "CLI mode for coding agents",
+   "CLI mode for coding agents: can it write out to the user's IDE?",
+   "CLI mode for coding agents: connection to coding CLIs like Claude Code, Antigravity, Cursor, Codex, etc.",
+   "CLI mode for coding agents: terminal persistence"
+  ],
+  "localRag": {
+   "text": "save the state of the agent's code",
+   "ms": 254
+  },
+  "cloudRag": {
+   "text": "write out to the user's IDE directly from the CLI session",
+   "kind": "suffix",
+   "ms": 2118,
+   "usage": {
+    "inputTokens": 932,
+    "outputTokens": 30,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 930,
+    "calls": 1,
+    "costUsd": 0.0002012
+   }
+  },
+  "cloudRagCont": {
+   "text": "hook into the coding CLI's session",
+   "kind": "suffix",
+   "ms": 1927,
+   "usage": {
+    "inputTokens": 814,
+    "outputTokens": 13,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 812,
+    "calls": 1,
+    "costUsd": 0.00016910000000000002
+   }
+  }
+ },
+ {
+  "id": 24,
+  "isSubtask": false,
+  "prefixText": "local AI should auto-compact by detault (configurable ",
+  "truth": "in AI profile panel advanced settings, under the Ollama section)",
+  "taskText": "local AI should auto-compact by detault (configurable ",
+  "contextBefore": "  - when the user clicks 'execute' on a task, it spawns a CLI agent that performs the task in a windowed terminal in the AI side\n  - then on completion it writes back to the AI and user's side, and updates the task and subtasks to reflect what happened; the user can then also look back at the terminal to see more details\n  - terminal persistence\n  - Terminal session history is in-memory — when you close or reload the app, the PTY process is killed and the tab is gone. The config (which agent to use) persists. Reconnecting to a live PTY after a page reload would require a full server-side session registry\n  - can it write out to the user's IDE?\n  - if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)",
+  "nextLine": "- look for an `AGENTS.md` or `CLAUDE.md` file at the project folder and use it as the AI's baseline agent context if found",
+  "parentTaskTitle": null,
+  "related": [
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: the AI should select the best mode",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: these effort-levels should be auto",
+   "needs a /remember skill that the user can call to force the AI to store that knowledge in its vector DB",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work"
+  ],
+  "localRag": {
+   "text": ")",
+   "ms": 285
+  },
+  "cloudRag": {
+   "text": "",
+   "kind": "rewrite",
+   "ms": 1916,
+   "usage": {
+    "inputTokens": 987,
+    "outputTokens": 18,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 985,
+    "calls": 1,
+    "costUsd": 0.00020620000000000002
+   }
+  },
+  "cloudRagCont": {
+   "text": "and make it a toggle in the settings",
+   "kind": "suffix",
+   "ms": 2087,
+   "usage": {
+    "inputTokens": 869,
+    "outputTokens": 13,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 867,
+    "calls": 1,
+    "costUsd": 0.00018010000000000001
+   }
+  }
+ },
+ {
+  "id": 25,
+  "isSubtask": false,
+  "prefixText": "look for an `AGENTS.md` or `CLAUDE.md` file at ",
+  "truth": "the project folder and use it as the AI's baseline agent context if found",
+  "taskText": "look for an `AGENTS.md` or `CLAUDE.md` file at ",
+  "contextBefore": "  - then on completion it writes back to the AI and user's side, and updates the task and subtasks to reflect what happened; the user can then also look back at the terminal to see more details\n  - terminal persistence\n  - Terminal session history is in-memory — when you close or reload the app, the PTY process is killed and the tab is gone. The config (which agent to use) persists. Reconnecting to a live PTY after a page reload would require a full server-side session registry\n  - can it write out to the user's IDE?\n  - if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)\n- local AI should auto-compact by detault (configurable in AI profile panel advanced settings, under the Ollama section)",
+  "nextLine": "- an undo button to revert back to the previous diff",
+  "parentTaskTitle": null,
+  "related": [
+   "We need an AGENTS.md / CLAUDE.md / etc. that are all duplicates of each other, set from a “global rules” document the user can create",
+   "global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also ",
+   "global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also ",
+   "some sort of master list of which files in a codebase are being accessed and by which agents"
+  ],
+  "localRag": {
+   "text": "the root of the codebase, and if it exists, it should be added to the [AGENTS.md](http",
+   "ms": 615
+  },
+  "cloudRag": {
+   "text": "the project root and, if found, merge its contents with the global rules document",
+   "kind": "suffix",
+   "ms": 2151,
+   "usage": {
+    "inputTokens": 1035,
+    "outputTokens": 46,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 1033,
+    "calls": 1,
+    "costUsd": 0.00022980000000000003
+   }
+  },
+  "cloudRagCont": {
+   "text": "in the repo root, or in each project subfolder, and check whether it already exists before creating one",
+   "kind": "suffix",
+   "ms": 2499,
+   "usage": {
+    "inputTokens": 917,
+    "outputTokens": 29,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 915,
+    "calls": 1,
+    "costUsd": 0.0001977
+   }
+  }
+ },
+ {
+  "id": 26,
+  "isSubtask": false,
+  "prefixText": "an undo button to ",
+  "truth": "revert back to the previous diff",
+  "taskText": "an undo button to ",
+  "contextBefore": "  - terminal persistence\n  - Terminal session history is in-memory — when you close or reload the app, the PTY process is killed and the tab is gone. The config (which agent to use) persists. Reconnecting to a live PTY after a page reload would require a full server-side session registry\n  - can it write out to the user's IDE?\n  - if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)\n- local AI should auto-compact by detault (configurable in AI profile panel advanced settings, under the Ollama section)\n- look for an `AGENTS.md` or `CLAUDE.md` file at the project folder and use it as the AI's baseline agent context if found",
+  "nextLine": "  - how is this handled for non-code tasks?",
+  "parentTaskTitle": null,
+  "related": [
+   "a right-click context menu should show up in the human side task list, with options for (along w/ keybinds): Undo (Ctrl+Z)",
+   "Help bot that’s basically just a normal chatbot, but has access to the internal MCP and can read/write across the entire app: Needs to have an undo — if the use"
+  ],
+  "localRag": {
+   "text": "be added to the context menu, and a way to add undo buttons to the MCP. The MCP should be able to",
+   "ms": 447
+  },
+  "cloudRag": {
+   "text": "revert the last change made by the Help bot across the app",
+   "kind": "suffix",
+   "ms": 2396,
+   "usage": {
+    "inputTokens": 900,
+    "outputTokens": 22,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 898,
+    "calls": 1,
+    "costUsd": 0.00019080000000000003
+   }
+  },
+  "cloudRagCont": {
+   "text": "sitewide",
+   "kind": "suffix",
+   "ms": 2214,
+   "usage": {
+    "inputTokens": 782,
+    "outputTokens": 6,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 780,
+    "calls": 1,
+    "costUsd": 0.0001592
+   }
+  }
+ },
+ {
+  "id": 27,
+  "isSubtask": true,
+  "prefixText": "how is this handled ",
+  "truth": "for non-code tasks?",
+  "taskText": "how is this handled ",
+  "contextBefore": "  - Terminal session history is in-memory — when you close or reload the app, the PTY process is killed and the tab is gone. The config (which agent to use) persists. Reconnecting to a live PTY after a page reload would require a full server-side session registry\n  - can it write out to the user's IDE?\n  - if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)\n- local AI should auto-compact by detault (configurable in AI profile panel advanced settings, under the Ollama section)\n- look for an `AGENTS.md` or `CLAUDE.md` file at the project folder and use it as the AI's baseline agent context if found\n- an undo button to revert back to the previous diff",
+  "nextLine": "  - maybe this starts out in V1 just for code",
+  "parentTaskTitle": "an undo button to revert back to the previous diff",
+  "related": [
+   "an undo button to revert back to the previous diff",
+   "an undo button to revert back to the previous diff: maybe this starts out in V1 just for code",
+   "an undo button to revert back to the previous diff: also this means we need a proper diff list to be able to inspect when work is done",
+   "a right-click context menu should show up in the human side task list, with options for (along w/ keybinds): Undo (Ctrl+Z)"
+  ],
+  "localRag": {
+   "text": "",
+   "ms": 280
+  },
+  "cloudRag": {
+   "text": "for undo, including how the previous diff gets reverted and how the diff list is tracked",
+   "kind": "suffix",
+   "ms": 2196,
+   "usage": {
+    "inputTokens": 958,
+    "outputTokens": 33,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 956,
+    "calls": 1,
+    "costUsd": 0.0002079
+   }
+  },
+  "cloudRagCont": {
+   "text": "Undo should be handled by reverting the working tree to the last saved snapshot in the diff list",
+   "kind": "suffix",
+   "ms": 2236,
+   "usage": {
+    "inputTokens": 840,
+    "outputTokens": 31,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 838,
+    "calls": 1,
+    "costUsd": 0.0001833
+   }
+  }
+ },
+ {
+  "id": 28,
+  "isSubtask": true,
+  "prefixText": "maybe this starts out ",
+  "truth": "in V1 just for code",
+  "taskText": "maybe this starts out ",
+  "contextBefore": "  - can it write out to the user's IDE?\n  - if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)\n- local AI should auto-compact by detault (configurable in AI profile panel advanced settings, under the Ollama section)\n- look for an `AGENTS.md` or `CLAUDE.md` file at the project folder and use it as the AI's baseline agent context if found\n- an undo button to revert back to the previous diff\n  - how is this handled for non-code tasks?",
+  "nextLine": "  - also this means we need a proper diff list to be able to inspect when work is done",
+  "parentTaskTitle": "an undo button to revert back to the previous diff",
+  "related": [
+   "an undo button to revert back to the previous diff",
+   "an undo button to revert back to the previous diff: also this means we need a proper diff list to be able to inspect when work is done",
+   "an undo button to revert back to the previous diff: how is this handled for non-code tasks?",
+   "CLI mode for coding agents: if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)"
+  ],
+  "localRag": {
+   "text": "as a button that can be pressed to revert back to the previous diff",
+   "ms": 375
+  },
+  "cloudRag": {
+   "text": "as a prototype limited to code tasks, and we expand to non-code tasks once the undo/diff model is proven",
+   "kind": "suffix",
+   "ms": 2182,
+   "usage": {
+    "inputTokens": 957,
+    "outputTokens": 44,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 955,
+    "calls": 1,
+    "costUsd": 0.0002132
+   }
+  },
+  "cloudRagCont": {
+   "text": "as a starting point, it might be a diff list rather than a full undo",
+   "kind": "suffix",
+   "ms": 2127,
+   "usage": {
+    "inputTokens": 839,
+    "outputTokens": 22,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 837,
+    "calls": 1,
+    "costUsd": 0.0001786
+   }
+  }
+ },
+ {
+  "id": 29,
+  "isSubtask": true,
+  "prefixText": "also this means we need a proper diff list ",
+  "truth": "to be able to inspect when work is done",
+  "taskText": "also this means we need a proper diff list ",
+  "contextBefore": "  - if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)\n- local AI should auto-compact by detault (configurable in AI profile panel advanced settings, under the Ollama section)\n- look for an `AGENTS.md` or `CLAUDE.md` file at the project folder and use it as the AI's baseline agent context if found\n- an undo button to revert back to the previous diff\n  - how is this handled for non-code tasks?\n  - maybe this starts out in V1 just for code",
+  "nextLine": "- some sort of master list of which files in a codebase are being accessed and by which agents",
+  "parentTaskTitle": "an undo button to revert back to the previous diff",
+  "related": [
+   "an undo button to revert back to the previous diff",
+   "an undo button to revert back to the previous diff: maybe this starts out in V1 just for code",
+   "an undo button to revert back to the previous diff: how is this handled for non-code tasks?",
+   "CLI mode for coding agents: if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)"
+  ],
+  "localRag": {
+   "text": "",
+   "ms": 159
+  },
+  "cloudRag": {
+   "text": "to browse and revert individual changes",
+   "kind": "suffix",
+   "ms": 2309,
+   "usage": {
+    "inputTokens": 953,
+    "outputTokens": 23,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 951,
+    "calls": 1,
+    "costUsd": 0.00020190000000000003
+   }
+  },
+  "cloudRagCont": {
+   "text": "to-do items for a diff list, e.g. \"that shows each change with timestamp and the task that made it",
+   "kind": "suffix",
+   "ms": 2258,
+   "usage": {
+    "inputTokens": 835,
+    "outputTokens": 34,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 833,
+    "calls": 1,
+    "costUsd": 0.00018380000000000002
+   }
+  }
+ },
+ {
+  "id": 30,
+  "isSubtask": false,
+  "prefixText": "some sort of master list of which files in a ",
+  "truth": "codebase are being accessed and by which agents",
+  "taskText": "some sort of master list of which files in a ",
+  "contextBefore": "- local AI should auto-compact by detault (configurable in AI profile panel advanced settings, under the Ollama section)\n- look for an `AGENTS.md` or `CLAUDE.md` file at the project folder and use it as the AI's baseline agent context if found\n- an undo button to revert back to the previous diff\n  - how is this handled for non-code tasks?\n  - maybe this starts out in V1 just for code\n  - also this means we need a proper diff list to be able to inspect when work is done",
+  "nextLine": "  - this would give the user a view of what's actually being edited",
+  "parentTaskTitle": null,
+  "related": [
+   "can we index local files into the vector DB, so the AI can search through them to find relevant data?",
+   "user needs to be able to reference files with '@': does this open a modal to select the file, which is a deep link to the file on disk?"
+  ],
+  "localRag": {
+   "text": "project are relevant to the AI search, so the AI can search through them to find relevant data?",
+   "ms": 425
+  },
+  "cloudRag": {
+   "text": "local directory are indexed in the vector DB and available for the AI to search",
+   "kind": "suffix",
+   "ms": 2194,
+   "usage": {
+    "inputTokens": 877,
+    "outputTokens": 34,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 875,
+    "calls": 1,
+    "costUsd": 0.00019220000000000004
+   }
+  },
+  "cloudRagCont": {
+   "text": "are indexed for search, and which are referenced with '@",
+   "kind": "suffix",
+   "ms": 2252,
+   "usage": {
+    "inputTokens": 759,
+    "outputTokens": 19,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 757,
+    "calls": 1,
+    "costUsd": 0.00016109999999999999
+   }
+  }
+ },
+ {
+  "id": 31,
+  "isSubtask": true,
+  "prefixText": "this would give the user a ",
+  "truth": "view of what's actually being edited",
+  "taskText": "this would give the user a ",
+  "contextBefore": "- look for an `AGENTS.md` or `CLAUDE.md` file at the project folder and use it as the AI's baseline agent context if found\n- an undo button to revert back to the previous diff\n  - how is this handled for non-code tasks?\n  - maybe this starts out in V1 just for code\n  - also this means we need a proper diff list to be able to inspect when work is done\n- some sort of master list of which files in a codebase are being accessed and by which agents",
+  "nextLine": "  - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts",
+  "parentTaskTitle": "some sort of master list of which files in a codebase are being accessed and by which agents",
+  "related": [
+   "some sort of master list of which files in a codebase are being accessed and by which agents",
+   "some sort of master list of which files in a codebase are being accessed and by which agents: more importantly, this can be used for the agents to coordinate am",
+   "An agent tree, to see each worker agent of a task and what it’s doing",
+   "We need an AGENTS.md / CLAUDE.md / etc. that are all duplicates of each other, set from a “global rules” document the user can create"
+  ],
+  "localRag": {
+   "text": "way to see which files are being accessed and by which agents",
+   "ms": 459
+  },
+  "cloudRag": {
+   "text": "clear, real-time view of which agents are reading or editing each file, so they can spot conflicts before they happen",
+   "kind": "suffix",
+   "ms": 2155,
+   "usage": {
+    "inputTokens": 984,
+    "outputTokens": 41,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 982,
+    "calls": 1,
+    "costUsd": 0.00021710000000000002
+   }
+  },
+  "cloudRagCont": {
+   "text": "view of which files are being touched by each agent",
+   "kind": "suffix",
+   "ms": 1997,
+   "usage": {
+    "inputTokens": 866,
+    "outputTokens": 14,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 864,
+    "calls": 1,
+    "costUsd": 0.00018
+   }
+  }
+ },
+ {
+  "id": 32,
+  "isSubtask": true,
+  "prefixText": "more importantly, this can be used for the agents ",
+  "truth": "to coordinate amongst each other to prevent write/edit conflicts",
+  "taskText": "more importantly, this can be used for the agents ",
+  "contextBefore": "- an undo button to revert back to the previous diff\n  - how is this handled for non-code tasks?\n  - maybe this starts out in V1 just for code\n  - also this means we need a proper diff list to be able to inspect when work is done\n- some sort of master list of which files in a codebase are being accessed and by which agents\n  - this would give the user a view of what's actually being edited",
+  "nextLine": "- global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing",
+  "parentTaskTitle": "some sort of master list of which files in a codebase are being accessed and by which agents",
+  "related": [
+   "some sort of master list of which files in a codebase are being accessed and by which agents",
+   "some sort of master list of which files in a codebase are being accessed and by which agents: this would give the user a view of what's actually being edited",
+   "CLI mode for coding agents",
+   "CLI mode for coding agents: terminal persistence"
+  ],
+  "localRag": {
+   "text": "to see what's actually being edited",
+   "ms": 258
+  },
+  "cloudRag": {
+   "text": "to avoid editing the same files at the same time and to coordinate their work.",
+   "kind": "rewrite",
+   "ms": 2198,
+   "usage": {
+    "inputTokens": 944,
+    "outputTokens": 37,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 942,
+    "calls": 1,
+    "costUsd": 0.00020710000000000002
+   }
+  },
+  "cloudRagCont": {
+   "text": "be able to track what's happening in real time",
+   "kind": "suffix",
+   "ms": 1907,
+   "usage": {
+    "inputTokens": 826,
+    "outputTokens": 13,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 824,
+    "calls": 1,
+    "costUsd": 0.0001715
+   }
+  }
+ },
+ {
+  "id": 33,
+  "isSubtask": false,
+  "prefixText": "global rules markdown file needs to be added at execution ",
+  "truth": "runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing",
+  "taskText": "global rules markdown file needs to be added at execution ",
+  "contextBefore": "  - how is this handled for non-code tasks?\n  - maybe this starts out in V1 just for code\n  - also this means we need a proper diff list to be able to inspect when work is done\n- some sort of master list of which files in a codebase are being accessed and by which agents\n  - this would give the user a view of what's actually being edited\n  - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts",
+  "nextLine": "  - these files also need to be exportable so the user can take them elsewhere if they want",
+  "parentTaskTitle": null,
+  "related": [
+   "ability to create a code-formatting doc: is this just part of global rules?"
+  ],
+  "localRag": {
+   "text": "",
+   "ms": 96
+  },
+  "cloudRag": {
+   "text": ", so the code-formatting doc can be enforced automatically",
+   "kind": "suffix",
+   "ms": 2081,
+   "usage": {
+    "inputTokens": 836,
+    "outputTokens": 35,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 834,
+    "calls": 1,
+    "costUsd": 0.0001845
+   }
+  },
+  "cloudRagCont": {
+   "text": "be added at execution, so the code-formatting doc can live there too",
+   "kind": "suffix",
+   "ms": 2343,
+   "usage": {
+    "inputTokens": 718,
+    "outputTokens": 21,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 716,
+    "calls": 1,
+    "costUsd": 0.00015389999999999997
+   }
+  }
+ },
+ {
+  "id": 34,
+  "isSubtask": true,
+  "prefixText": "these files also need to be ",
+  "truth": "exportable so the user can take them elsewhere if they want",
+  "taskText": "these files also need to be ",
+  "contextBefore": "  - maybe this starts out in V1 just for code\n  - also this means we need a proper diff list to be able to inspect when work is done\n- some sort of master list of which files in a codebase are being accessed and by which agents\n  - this would give the user a view of what's actually being edited\n  - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts\n- global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing",
+  "nextLine": "- user needs to easily be able to create skills, and call them in tasks with '/'",
+  "parentTaskTitle": "global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing",
+  "related": [
+   "global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also ",
+   "look for an AGENTS.md or CLAUDE.md file at the project folder and use it as the AI's baseline agent context if found",
+   "We need an AGENTS.md / CLAUDE.md / etc. that are all duplicates of each other, set from a “global rules” document the user can create",
+   "We need an AGENTS.md / CLAUDE.md / etc. that are all duplicates of each other, set from a “global rules” document the user can create: User should also be able "
+  ],
+  "localRag": {
+   "text": "used as the AI's baseline agent context if found",
+   "ms": 601
+  },
+  "cloudRag": {
+   "text": "kept in sync with each other, so any update to the global rules document is reflected across all of them",
+   "kind": "suffix",
+   "ms": 2426,
+   "usage": {
+    "inputTokens": 1104,
+    "outputTokens": 34,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 1102,
+    "calls": 1,
+    "costUsd": 0.0002376
+   }
+  },
+  "cloudRagCont": {
+   "text": "kept in sync with the global rules document and the model routing list",
+   "kind": "suffix",
+   "ms": 2291,
+   "usage": {
+    "inputTokens": 986,
+    "outputTokens": 19,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 984,
+    "calls": 1,
+    "costUsd": 0.0002065
+   }
+  }
+ },
+ {
+  "id": 35,
+  "isSubtask": false,
+  "prefixText": "user needs to easily be able to ",
+  "truth": "create skills, and call them in tasks with '/'",
+  "taskText": "user needs to easily be able to ",
+  "contextBefore": "  - also this means we need a proper diff list to be able to inspect when work is done\n- some sort of master list of which files in a codebase are being accessed and by which agents\n  - this would give the user a view of what's actually being edited\n  - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts\n- global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing\n  - these files also need to be exportable so the user can take them elsewhere if they want",
+  "nextLine": "- user needs to be able to reference files with '@'",
+  "parentTaskTitle": null,
+  "related": [
+   "give the user a 'how-to' of best practices"
+  ],
+  "localRag": {
+   "text": "generate a random password",
+   "ms": 116
+  },
+  "cloudRag": {
+   "text": "find and follow best practices on how to use the platform without leaving their current workflow",
+   "kind": "suffix",
+   "ms": 2373,
+   "usage": {
+    "inputTokens": 822,
+    "outputTokens": 34,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 820,
+    "calls": 1,
+    "costUsd": 0.0001812
+   }
+  },
+  "cloudRagCont": {
+   "text": "find the right guide or documentation",
+   "kind": "suffix",
+   "ms": 1932,
+   "usage": {
+    "inputTokens": 704,
+    "outputTokens": 11,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 702,
+    "calls": 1,
+    "costUsd": 0.00014610000000000003
+   }
+  }
+ },
+ {
+  "id": 36,
+  "isSubtask": false,
+  "prefixText": "user needs to be able to ",
+  "truth": "reference files with '@'",
+  "taskText": "user needs to be able to ",
+  "contextBefore": "- some sort of master list of which files in a codebase are being accessed and by which agents\n  - this would give the user a view of what's actually being edited\n  - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts\n- global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing\n  - these files also need to be exportable so the user can take them elsewhere if they want\n- user needs to easily be able to create skills, and call them in tasks with '/'",
+  "nextLine": "  - does this open a modal to select the file, which is a deep link to the file on disk?",
+  "parentTaskTitle": null,
+  "related": [
+   "Help bot that’s basically just a normal chatbot, but has access to the internal MCP and can read/write across the entire app: Needs to have access to the intern"
+  ],
+  "localRag": {
+   "text": "access the MCP and can read/write across the entire app: Needs to have access to the internal MCP and can read/write",
+   "ms": 400
+  },
+  "cloudRag": {
+   "text": "use the help bot to read and write across the entire app through the internal MCP",
+   "kind": "suffix",
+   "ms": 2146,
+   "usage": {
+    "inputTokens": 855,
+    "outputTokens": 30,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 853,
+    "calls": 1,
+    "costUsd": 0.00018580000000000002
+   }
+  },
+  "cloudRagCont": {
+   "text": "access the internal MCP and read/write across the app",
+   "kind": "suffix",
+   "ms": 1993,
+   "usage": {
+    "inputTokens": 737,
+    "outputTokens": 16,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 735,
+    "calls": 1,
+    "costUsd": 0.0001552
+   }
+  }
+ },
+ {
+  "id": 37,
+  "isSubtask": true,
+  "prefixText": "does this open a modal to select the file, ",
+  "truth": "which is a deep link to the file on disk?",
+  "taskText": "does this open a modal to select the file, ",
+  "contextBefore": "  - this would give the user a view of what's actually being edited\n  - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts\n- global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing\n  - these files also need to be exportable so the user can take them elsewhere if they want\n- user needs to easily be able to create skills, and call them in tasks with '/'\n- user needs to be able to reference files with '@'",
+  "nextLine": "- needs a `/remember` skill that the user can call to force the AI to store that knowledge in its vector DB",
+  "parentTaskTitle": "user needs to be able to reference files with '@'",
+  "related": [
+   "user needs to be able to reference files with '@'"
+  ],
+  "localRag": {
+   "text": "or does it open a file dialog?",
+   "ms": 210
+  },
+  "cloudRag": {
+   "text": "when the user types '@'?",
+   "kind": "rewrite",
+   "ms": 2164,
+   "usage": {
+    "inputTokens": 849,
+    "outputTokens": 20,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 847,
+    "calls": 1,
+    "costUsd": 0.0001796
+   }
+  },
+  "cloudRagCont": {
+   "text": "show a file picker when the user types '@",
+   "kind": "suffix",
+   "ms": 1971,
+   "usage": {
+    "inputTokens": 731,
+    "outputTokens": 14,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 729,
+    "calls": 1,
+    "costUsd": 0.00015300000000000003
+   }
+  }
+ },
+ {
+  "id": 38,
+  "isSubtask": false,
+  "prefixText": "needs a `/remember` skill that the user can call ",
+  "truth": "to force the AI to store that knowledge in its vector DB",
+  "taskText": "needs a `/remember` skill that the user can call ",
+  "contextBefore": "  - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts\n- global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing\n  - these files also need to be exportable so the user can take them elsewhere if they want\n- user needs to easily be able to create skills, and call them in tasks with '/'\n- user needs to be able to reference files with '@'\n  - does this open a modal to select the file, which is a deep link to the file on disk?",
+  "nextLine": "- can we use a lightweight AI for scanning files (i.e. Sonnet), and then pass that to a more powerful AI that actually does the work (i.e. Opus)?",
+  "parentTaskTitle": null,
+  "related": [
+   "user needs to easily be able to create skills, and call them in tasks with '/'",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: we should use the same model throu",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: maybe implement an 'assistance' sl",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work"
+  ],
+  "localRag": {
+   "text": "to remember their tasks and skills",
+   "ms": 335
+  },
+  "cloudRag": {
+   "text": "to save important facts, preferences, and decisions for future tasks",
+   "kind": "suffix",
+   "ms": 2091,
+   "usage": {
+    "inputTokens": 982,
+    "outputTokens": 36,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 980,
+    "calls": 1,
+    "costUsd": 0.0002142
+   }
+  },
+  "cloudRagCont": {
+   "text": "verb in the way",
+   "kind": "suffix",
+   "ms": 2172,
+   "usage": {
+    "inputTokens": 864,
+    "outputTokens": 7,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 862,
+    "calls": 1,
+    "costUsd": 0.00017610000000000002
+   }
+  }
+ },
+ {
+  "id": 39,
+  "isSubtask": false,
+  "prefixText": "can we use a lightweight AI for scanning files (i.e. Sonnet), and then pass ",
+  "truth": "that to a more powerful AI that actually does the work (i.e. Opus)?",
+  "taskText": "can we use a lightweight AI for scanning files (i.e. Sonnet), and then pass ",
+  "contextBefore": "- global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing\n  - these files also need to be exportable so the user can take them elsewhere if they want\n- user needs to easily be able to create skills, and call them in tasks with '/'\n- user needs to be able to reference files with '@'\n  - does this open a modal to select the file, which is a deep link to the file on disk?\n- needs a `/remember` skill that the user can call to force the AI to store that knowledge in its vector DB",
+  "nextLine": "  - see if we can do this w/ Laya instead",
+  "parentTaskTitle": null,
+  "related": [
+   "can we index local files into the vector DB, so the AI can search through them to find relevant data?",
+   "Help bot that’s basically just a normal chatbot, but has access to the internal MCP and can read/write across the entire app: Needs to use the vector DB & Laya ",
+   "we need a screen for reading what the AI has saved in vector storage, and modifying as the user wants",
+   "Help bot that’s basically just a normal chatbot, but has access to the internal MCP and can read/write across the entire app: Determine which level of AI model "
+  ],
+  "localRag": {
+   "text": "the AI to the vector DB?",
+   "ms": 314
+  },
+  "cloudRag": {
+   "text": "the relevant results to a more capable model (i.e. Opus) for final analysis and answers",
+   "kind": "suffix",
+   "ms": 2317,
+   "usage": {
+    "inputTokens": 995,
+    "outputTokens": 60,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 993,
+    "calls": 1,
+    "costUsd": 0.0002288
+   }
+  },
+  "cloudRagCont": {
+   "text": "the summaries and extract the relevant facts into the vector DB",
+   "kind": "suffix",
+   "ms": 2404,
+   "usage": {
+    "inputTokens": 877,
+    "outputTokens": 21,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 875,
+    "calls": 1,
+    "costUsd": 0.00018570000000000001
+   }
+  }
+ },
+ {
+  "id": 40,
+  "isSubtask": true,
+  "prefixText": "see if we can ",
+  "truth": "do this w/ Laya instead",
+  "taskText": "see if we can ",
+  "contextBefore": "  - these files also need to be exportable so the user can take them elsewhere if they want\n- user needs to easily be able to create skills, and call them in tasks with '/'\n- user needs to be able to reference files with '@'\n  - does this open a modal to select the file, which is a deep link to the file on disk?\n- needs a `/remember` skill that the user can call to force the AI to store that knowledge in its vector DB\n- can we use a lightweight AI for scanning files (i.e. Sonnet), and then pass that to a more powerful AI that actually does the work (i.e. Opus)?",
+  "nextLine": "- Run as...",
+  "parentTaskTitle": "can we use a lightweight AI for scanning files (i.e. Sonnet), and then pass that to a more powerful AI that actually does the work (i.e. Opus)?",
+  "related": [
+   "can we use a lightweight AI for scanning files (i.e. Sonnet), and then pass that to a more powerful AI that actually does the work (i.e. Opus)?",
+   "can we index local files into the vector DB, so the AI can search through them to find relevant data?",
+   "AI workspace execution",
+   "AI workspace execution: For tasks where Ergo already has a good idea of how they perform, surveying the user isn’t necessary"
+  ],
+  "localRag": {
+   "text": "use a lightweight AI for scanning files (i.e. Sonnet), and then pass that to a more powerful AI",
+   "ms": 586
+  },
+  "cloudRag": {
+   "text": "use a lightweight model like Sonnet to scan files and hand off the results to Opus for the actual work",
+   "kind": "suffix",
+   "ms": 2311,
+   "usage": {
+    "inputTokens": 1005,
+    "outputTokens": 38,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 1003,
+    "calls": 1,
+    "costUsd": 0.0002198
+   }
+  },
+  "cloudRagCont": {
+   "text": "ready to pair them with a cheaper model that just triages",
+   "kind": "suffix",
+   "ms": 2301,
+   "usage": {
+    "inputTokens": 887,
+    "outputTokens": 19,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 885,
+    "calls": 1,
+    "costUsd": 0.0001867
+   }
+  }
+ },
+ {
+  "id": 41,
+  "isSubtask": false,
+  "prefixText": "when the autosave triggers, this needs to ",
+  "truth": "update the local vector DB automatically as well",
+  "taskText": "when the autosave triggers, this needs to ",
+  "contextBefore": "  - see if we can do this w/ Laya instead\n- Run as...\n  - Single task\n  - Tasks in sequence\n  - Tasks in parallel\n  - Schedule tasks...",
+  "nextLine": "- AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "parentTaskTitle": null,
+  "related": [
+   "Autocomplete: autocomplete should never start on an empty task",
+   "Autocomplete: should be able to be toggled on/off completely in settings",
+   "Autocomplete",
+   "AI workspace execution: this is especially weird and detrimental because the tasks don’t indicate they’re running, and thus have no way to stop them once they a"
+  ],
+  "localRag": {
+   "text": "be handled properly",
+   "ms": 244
+  },
+  "cloudRag": {
+   "text": "not start on an empty task and should be skipped if autocomplete is toggled off in settings",
+   "kind": "suffix",
+   "ms": 2134,
+   "usage": {
+    "inputTokens": 915,
+    "outputTokens": 42,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 913,
+    "calls": 1,
+    "costUsd": 0.0002038
+   }
+  },
+  "cloudRagCont": {
+   "text": "be saved without blocking the editor",
+   "kind": "suffix",
+   "ms": 2233,
+   "usage": {
+    "inputTokens": 797,
+    "outputTokens": 12,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 795,
+    "calls": 1,
+    "costUsd": 0.0001652
+   }
+  }
+ },
+ {
+  "id": 42,
+  "isSubtask": false,
+  "prefixText": "AI should run /grill-me type skill when first working on a task, to ",
+  "truth": "fill any uncertainty gaps before it actually starts work",
+  "taskText": "AI should run /grill-me type skill when first working on a task, to ",
+  "contextBefore": "- Run as...\n  - Single task\n  - Tasks in sequence\n  - Tasks in parallel\n  - Schedule tasks...\n- when the autosave triggers, this needs to update the local vector DB automatically as well",
+  "nextLine": "  - maybe implement an 'assistance' slider, which determines how much it asks for clarification and details vs. just autonomously assuming",
+  "parentTaskTitle": null,
+  "related": [],
+  "localRag": {
+   "text": "improve its performance and efficiency.",
+   "ms": 142
+  },
+  "cloudRag": {
+   "text": "stress-test assumptions and clarify requirements before writing any code",
+   "kind": "suffix",
+   "ms": 2610,
+   "usage": {
+    "inputTokens": 809,
+    "outputTokens": 42,
+    "cachedInputTokens": 807,
+    "cacheWriteTokens": 0,
+    "calls": 1,
+    "costUsd": 0.000029270000000000003
+   }
+  },
+  "cloudRagCont": {
+   "text": "ask clarifying questions and surface assumptions before writing code",
+   "kind": "suffix",
+   "ms": 2049,
+   "usage": {
+    "inputTokens": 691,
+    "outputTokens": 21,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 689,
+    "calls": 1,
+    "costUsd": 0.0001485
+   }
+  }
+ },
+ {
+  "id": 43,
+  "isSubtask": true,
+  "prefixText": "maybe implement an 'assistance' slider, which determines how much it asks ",
+  "truth": "for clarification and details vs. just autonomously assuming",
+  "taskText": "maybe implement an 'assistance' slider, which determines how much it asks ",
+  "contextBefore": "  - Single task\n  - Tasks in sequence\n  - Tasks in parallel\n  - Schedule tasks...\n- when the autosave triggers, this needs to update the local vector DB automatically as well\n- AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "nextLine": "  - there should also be an 'effort' slider, which will automatically use less/more powerful models depending on what the user sets that task to",
+  "parentTaskTitle": "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "related": [
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: there should also be an 'effort' s",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: these effort-levels should be auto",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: “Tell me what you think I want you"
+  ],
+  "localRag": {
+   "text": "",
+   "ms": 364
+  },
+  "cloudRag": {
+   "text": "clarifying questions before starting work",
+   "kind": "suffix",
+   "ms": 2013,
+   "usage": {
+    "inputTokens": 1064,
+    "outputTokens": 35,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 1062,
+    "calls": 1,
+    "costUsd": 0.0002301
+   }
+  },
+  "cloudRagCont": {
+   "text": "...how much it asks before acting, and when it should just proceed on its own",
+   "kind": "suffix",
+   "ms": 2189,
+   "usage": {
+    "inputTokens": 946,
+    "outputTokens": 23,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 944,
+    "calls": 1,
+    "costUsd": 0.0002005
+   }
+  }
+ },
+ {
+  "id": 44,
+  "isSubtask": true,
+  "prefixText": "there should also be an 'effort' slider, which will automatically ",
+  "truth": "use less/more powerful models depending on what the user sets that task to",
+  "taskText": "there should also be an 'effort' slider, which will automatically ",
+  "contextBefore": "  - Tasks in sequence\n  - Tasks in parallel\n  - Schedule tasks...\n- when the autosave triggers, this needs to update the local vector DB automatically as well\n- AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work\n  - maybe implement an 'assistance' slider, which determines how much it asks for clarification and details vs. just autonomously assuming",
+  "nextLine": "  - the AI should select the best model for the job by default, unless the user explicitly sets it",
+  "parentTaskTitle": "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "related": [
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: these effort-levels should be auto",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: the AI should select the best mode",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: we should use the same model throu"
+  ],
+  "localRag": {
+   "text": "be auto",
+   "ms": 365
+  },
+  "cloudRag": {
+   "text": "adjust the effort level based on task complexity, and the AI should select the best mode for each task",
+   "kind": "suffix",
+   "ms": 2151,
+   "usage": {
+    "inputTokens": 1054,
+    "outputTokens": 47,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 1052,
+    "calls": 1,
+    "costUsd": 0.00023410000000000003
+   }
+  },
+  "cloudRagCont": {
+   "text": "automatically adjusts to the task's complexity",
+   "kind": "suffix",
+   "ms": 1907,
+   "usage": {
+    "inputTokens": 936,
+    "outputTokens": 16,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 934,
+    "calls": 1,
+    "costUsd": 0.00019500000000000002
+   }
+  }
+ },
+ {
+  "id": 45,
+  "isSubtask": true,
+  "prefixText": "the AI should select the best model for the ",
+  "truth": "job by default, unless the user explicitly sets it",
+  "taskText": "the AI should select the best model for the ",
+  "contextBefore": "  - Tasks in parallel\n  - Schedule tasks...\n- when the autosave triggers, this needs to update the local vector DB automatically as well\n- AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work\n  - maybe implement an 'assistance' slider, which determines how much it asks for clarification and details vs. just autonomously assuming\n  - there should also be an 'effort' slider, which will automatically use less/more powerful models depending on what the user sets that task to",
+  "nextLine": "  - these effort-levels should be automatically created when the user sets up a new AI profile, and configurable from the advanced settings in the AI profile panel",
+  "parentTaskTitle": "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "related": [
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: there should also be an 'effort' s",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: we should use the same model throu",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: “Interview me to determine the goa"
+  ],
+  "localRag": {
+   "text": "task based on the uncertainty gaps it encounters",
+   "ms": 377
+  },
+  "cloudRag": {
+   "text": "specific task at hand, balancing complexity and cost, when starting work after the grill-me interview",
+   "kind": "suffix",
+   "ms": 2337,
+   "usage": {
+    "inputTokens": 1049,
+    "outputTokens": 41,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 1047,
+    "calls": 1,
+    "costUsd": 0.0002301
+   }
+  },
+  "cloudRagCont": {
+   "text": "Current task context is in the subtask: \"the AI should select the best model for the\" — the continuation is the next few words to finish that line.",
+   "kind": "suffix",
+   "ms": 2322,
+   "usage": {
+    "inputTokens": 931,
+    "outputTokens": 64,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 929,
+    "calls": 1,
+    "costUsd": 0.000218
+   }
+  }
+ },
+ {
+  "id": 46,
+  "isSubtask": true,
+  "prefixText": "these effort-levels should be automatically created when the user sets up a new ",
+  "truth": "AI profile, and configurable from the advanced settings in the AI profile panel",
+  "taskText": "these effort-levels should be automatically created when the user sets up a new ",
+  "contextBefore": "  - Schedule tasks...\n- when the autosave triggers, this needs to update the local vector DB automatically as well\n- AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work\n  - maybe implement an 'assistance' slider, which determines how much it asks for clarification and details vs. just autonomously assuming\n  - there should also be an 'effort' slider, which will automatically use less/more powerful models depending on what the user sets that task to\n  - the AI should select the best model for the job by default, unless the user explicitly sets it",
+  "nextLine": "  - we should use the same model throughout work tasks, so we can cache tokens",
+  "parentTaskTitle": "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "related": [
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: there should also be an 'effort' s",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: we should use the same model throu",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: the AI should select the best mode"
+  ],
+  "localRag": {
+   "text": "AI",
+   "ms": 144
+  },
+  "cloudRag": {
+   "text": "project",
+   "kind": "suffix",
+   "ms": 2042,
+   "usage": {
+    "inputTokens": 1057,
+    "outputTokens": 23,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 1055,
+    "calls": 1,
+    "costUsd": 0.0002227
+   }
+  },
+  "cloudRagCont": {
+   "text": "(effort) \"levels\" are a default part of the project setup",
+   "kind": "suffix",
+   "ms": 1964,
+   "usage": {
+    "inputTokens": 939,
+    "outputTokens": 19,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 937,
+    "calls": 1,
+    "costUsd": 0.0001971
+   }
+  }
+ },
+ {
+  "id": 47,
+  "isSubtask": true,
+  "prefixText": "we should use the same model throughout work tasks, ",
+  "truth": "so we can cache tokens",
+  "taskText": "we should use the same model throughout work tasks, ",
+  "contextBefore": "- when the autosave triggers, this needs to update the local vector DB automatically as well\n- AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work\n  - maybe implement an 'assistance' slider, which determines how much it asks for clarification and details vs. just autonomously assuming\n  - there should also be an 'effort' slider, which will automatically use less/more powerful models depending on what the user sets that task to\n  - the AI should select the best model for the job by default, unless the user explicitly sets it\n  - these effort-levels should be automatically created when the user sets up a new AI profile, and configurable from the advanced settings in the AI profile panel",
+  "nextLine": "  - “Interview me to determine the goal of the task.”",
+  "parentTaskTitle": "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "related": [
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: the AI should select the best mode",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: there should also be an 'effort' s",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: “Interview me to determine the goa"
+  ],
+  "localRag": {
+   "text": "",
+   "ms": 277
+  },
+  "cloudRag": {
+   "text": "so the grill-me session and the actual work are consistent",
+   "kind": "suffix",
+   "ms": 2082,
+   "usage": {
+    "inputTokens": 1054,
+    "outputTokens": 32,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 1052,
+    "calls": 1,
+    "costUsd": 0.00022660000000000003
+   }
+  },
+  "cloudRagCont": {
+   "text": "throughout the same model for all work tasks, so the grill-me step and the actual work don't drift in quality or behavior",
+   "kind": "suffix",
+   "ms": 2501,
+   "usage": {
+    "inputTokens": 936,
+    "outputTokens": 38,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 934,
+    "calls": 1,
+    "costUsd": 0.00020600000000000002
+   }
+  }
+ },
+ {
+  "id": 48,
+  "isSubtask": true,
+  "prefixText": "“Interview me to determine the ",
+  "truth": "goal of the task.”",
+  "taskText": "“Interview me to determine the ",
+  "contextBefore": "- AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work\n  - maybe implement an 'assistance' slider, which determines how much it asks for clarification and details vs. just autonomously assuming\n  - there should also be an 'effort' slider, which will automatically use less/more powerful models depending on what the user sets that task to\n  - the AI should select the best model for the job by default, unless the user explicitly sets it\n  - these effort-levels should be automatically created when the user sets up a new AI profile, and configurable from the advanced settings in the AI profile panel\n  - we should use the same model throughout work tasks, so we can cache tokens",
+  "nextLine": "  - “Tell me what you think I want you to do, and place specific emphasis in your question(s) to me on the areas you’re least clear on.”",
+  "parentTaskTitle": "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "related": [
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: “Tell me what you think I want you",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: the AI should select the best mode",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: these effort-levels should be auto"
+  ],
+  "localRag": {
+   "text": "level of effort you are working on”",
+   "ms": 356
+  },
+  "cloudRag": {
+   "text": "best mode and effort level for this task, and fill any uncertainty gaps before starting work",
+   "kind": "suffix",
+   "ms": 2190,
+   "usage": {
+    "inputTokens": 1048,
+    "outputTokens": 39,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 1046,
+    "calls": 1,
+    "costUsd": 0.0002289
+   }
+  },
+  "cloudRagCont": {
+   "text": "determine the scope and constraints before starting",
+   "kind": "suffix",
+   "ms": 2125,
+   "usage": {
+    "inputTokens": 930,
+    "outputTokens": 14,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 928,
+    "calls": 1,
+    "costUsd": 0.00019280000000000002
+   }
+  }
+ },
+ {
+  "id": 49,
+  "isSubtask": true,
+  "prefixText": "“Tell me what you think I want you to do, and ",
+  "truth": "place specific emphasis in your question(s) to me on the areas you’re least clear on.”",
+  "taskText": "“Tell me what you think I want you to do, and ",
+  "contextBefore": "  - maybe implement an 'assistance' slider, which determines how much it asks for clarification and details vs. just autonomously assuming\n  - there should also be an 'effort' slider, which will automatically use less/more powerful models depending on what the user sets that task to\n  - the AI should select the best model for the job by default, unless the user explicitly sets it\n  - these effort-levels should be automatically created when the user sets up a new AI profile, and configurable from the advanced settings in the AI profile panel\n  - we should use the same model throughout work tasks, so we can cache tokens\n  - “Interview me to determine the goal of the task.”",
+  "nextLine": "  - “You should not make any assumptions. If you’re about to implement a feature / execute a task, and that thing is not &gt;50% grounded in fact from something the user either said or corroborating docs/files, you should ask for clarification or not do that thing at all.”",
+  "parentTaskTitle": "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "related": [
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: “Interview me to determine the goa",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: there should also be an 'effort' s",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: the AI should select the best mode"
+  ],
+  "localRag": {
+   "text": "I will do it for you.”",
+   "ms": 357
+  },
+  "cloudRag": {
+   "text": "I'll confirm or correct your understanding before you start any work.",
+   "kind": "rewrite",
+   "ms": 2129,
+   "usage": {
+    "inputTokens": 1055,
+    "outputTokens": 35,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 1053,
+    "calls": 1,
+    "costUsd": 0.0002283
+   }
+  },
+  "cloudRagCont": {
+   "text": ", I'll tell you what I think you want, and then you can correct me if I'm off",
+   "kind": "suffix",
+   "ms": 2165,
+   "usage": {
+    "inputTokens": 937,
+    "outputTokens": 27,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 935,
+    "calls": 1,
+    "costUsd": 0.0002007
+   }
+  }
+ },
+ {
+  "id": 50,
+  "isSubtask": true,
+  "prefixText": "“You should not make any assumptions. If you’re about to implement a feature / execute a task, and that thing is not &gt;50% grounded in fact from something the user ",
+  "truth": "either said or corroborating docs/files, you should ask for clarification or not do that thing at all.”",
+  "taskText": "“You should not make any assumptions. If you’re about to implement a feature / execute a task, and that thing is not &gt;50% grounded in fact from something the user ",
+  "contextBefore": "  - there should also be an 'effort' slider, which will automatically use less/more powerful models depending on what the user sets that task to\n  - the AI should select the best model for the job by default, unless the user explicitly sets it\n  - these effort-levels should be automatically created when the user sets up a new AI profile, and configurable from the advanced settings in the AI profile panel\n  - we should use the same model throughout work tasks, so we can cache tokens\n  - “Interview me to determine the goal of the task.”\n  - “Tell me what you think I want you to do, and place specific emphasis in your question(s) to me on the areas you’re least clear on.”",
+  "nextLine": "- can we index local files into the vector DB, so the AI can search through them to find relevant data?",
+  "parentTaskTitle": "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "related": [
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: the AI should select the best mode",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: “Tell me what you think I want you",
+   "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work: we should use the same model throu"
+  ],
+  "localRag": {
+   "text": "has seen, then you should not make any assumptions. If you’re about to implement a feature / execute a task,",
+   "ms": 531
+  },
+  "cloudRag": {
+   "text": "the user has said or provided, you should run the /grill-me skill first to fill the gaps before starting work.",
+   "kind": "rewrite",
+   "ms": 2663,
+   "usage": {
+    "inputTokens": 1087,
+    "outputTokens": 79,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 1085,
+    "calls": 1,
+    "costUsd": 0.0002567
+   }
+  },
+  "cloudRagCont": {
+   "text": "need to verify the facts it's asked to be grounded in",
+   "kind": "suffix",
+   "ms": 2116,
+   "usage": {
+    "inputTokens": 969,
+    "outputTokens": 19,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 967,
+    "calls": 1,
+    "costUsd": 0.0002031
+   }
+  }
+ },
+ {
+  "id": 51,
+  "isSubtask": false,
+  "prefixText": "can we index local files into the vector ",
+  "truth": "DB, so the AI can search through them to find relevant data?",
+  "taskText": "can we index local files into the vector ",
+  "contextBefore": "  - the AI should select the best model for the job by default, unless the user explicitly sets it\n  - these effort-levels should be automatically created when the user sets up a new AI profile, and configurable from the advanced settings in the AI profile panel\n  - we should use the same model throughout work tasks, so we can cache tokens\n  - “Interview me to determine the goal of the task.”\n  - “Tell me what you think I want you to do, and place specific emphasis in your question(s) to me on the areas you’re least clear on.”\n  - “You should not make any assumptions. If you’re about to implement a feature / execute a task, and that thing is not &gt;50% grounded in fact from something the user either said or corroborating docs/files, you should ask for clarification or not do that thing at all.”",
+  "nextLine": "- Major task-execution bugs",
+  "parentTaskTitle": null,
+  "related": [
+   "can we use a lightweight AI for scanning files (i.e. Sonnet), and then pass that to a more powerful AI that actually does the work (i.e. Opus)?: see if we can d",
+   "we need a screen for reading what the AI has saved in vector storage, and modifying as the user wants",
+   "can we use a lightweight AI for scanning files (i.e. Sonnet), and then pass that to a more powerful AI that actually does the work (i.e. Opus)?"
+  ],
+  "localRag": {
+   "text": "storage, and then pass that to the more powerful AI that actually does the work (i.e. Opus)?",
+   "ms": 492
+  },
+  "cloudRag": {
+   "text": "storage so the AI can search them later",
+   "kind": "suffix",
+   "ms": 2060,
+   "usage": {
+    "inputTokens": 958,
+    "outputTokens": 21,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 956,
+    "calls": 1,
+    "costUsd": 0.0002019
+   }
+  },
+  "cloudRagCont": {
+   "text": "sources",
+   "kind": "suffix",
+   "ms": 2105,
+   "usage": {
+    "inputTokens": 840,
+    "outputTokens": 4,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 838,
+    "calls": 1,
+    "costUsd": 0.0001698
+   }
+  }
+ },
+ {
+  "id": 52,
+  "isSubtask": true,
+  "prefixText": "Token usage isn’t displaying ",
+  "truth": "in the AI execution pane",
+  "taskText": "Token usage isn’t displaying ",
+  "contextBefore": "  - we should use the same model throughout work tasks, so we can cache tokens\n  - “Interview me to determine the goal of the task.”\n  - “Tell me what you think I want you to do, and place specific emphasis in your question(s) to me on the areas you’re least clear on.”\n  - “You should not make any assumptions. If you’re about to implement a feature / execute a task, and that thing is not &gt;50% grounded in fact from something the user either said or corroborating docs/files, you should ask for clarification or not do that thing at all.”\n- can we index local files into the vector DB, so the AI can search through them to find relevant data?\n- Major task-execution bugs",
+  "nextLine": "  - The permissions prompt during task execution is buggy",
+  "parentTaskTitle": "Major task-execution bugs",
+  "related": [
+   "Major task-execution bugs",
+   "Major task-execution bugs: The permissions prompt during task execution is buggy",
+   "AI workspace execution: Running tasks still seem to have broken functionality/UI",
+   "Major task-execution bugs: It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice selections; obviously there’s still some"
+  ],
+  "localRag": {
+   "text": "correctly",
+   "ms": 239
+  },
+  "cloudRag": {
+   "text": "during task execution",
+   "kind": "rewrite",
+   "ms": 1990,
+   "usage": {
+    "inputTokens": 948,
+    "outputTokens": 16,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 946,
+    "calls": 1,
+    "costUsd": 0.00019740000000000003
+   }
+  },
+  "cloudRagCont": {
+   "text": "not showing up in the task view*",
+   "kind": "suffix",
+   "ms": 2225,
+   "usage": {
+    "inputTokens": 830,
+    "outputTokens": 12,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 828,
+    "calls": 1,
+    "costUsd": 0.0001718
+   }
+  }
+ },
+ {
+  "id": 53,
+  "isSubtask": true,
+  "prefixText": "The permissions prompt during task ",
+  "truth": "execution is buggy",
+  "taskText": "The permissions prompt during task ",
+  "contextBefore": "  - “Interview me to determine the goal of the task.”\n  - “Tell me what you think I want you to do, and place specific emphasis in your question(s) to me on the areas you’re least clear on.”\n  - “You should not make any assumptions. If you’re about to implement a feature / execute a task, and that thing is not &gt;50% grounded in fact from something the user either said or corroborating docs/files, you should ask for clarification or not do that thing at all.”\n- can we index local files into the vector DB, so the AI can search through them to find relevant data?\n- Major task-execution bugs\n  - Token usage isn’t displaying in the AI execution pane",
+  "nextLine": "  - It prompts for WAY too much — this may have to do with Antigravity’s settings, but if so we need a way to be more permissive",
+  "parentTaskTitle": "Major task-execution bugs",
+  "related": [
+   "Major task-execution bugs",
+   "Major task-execution bugs: It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice selections; obviously there’s still some",
+   "Major task-execution bugs: It prompts for WAY too much — this may have to do with Antigravity’s settings, but if so we need a way to be more permissive",
+   "Major task-execution bugs: Token usage isn’t displaying in the AI execution pane"
+  ],
+  "localRag": {
+   "text": "execution are not being displayed",
+   "ms": 305
+  },
+  "cloudRag": {
+   "text": "execution asks for approval too often and should be configurable to allow more permissive behavior",
+   "kind": "suffix",
+   "ms": 2098,
+   "usage": {
+    "inputTokens": 974,
+    "outputTokens": 36,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 972,
+    "calls": 1,
+    "costUsd": 0.00021260000000000002
+   }
+  },
+  "cloudRagCont": {
+   "text": "appears for every single step, not just risky ones",
+   "kind": "suffix",
+   "ms": 3131,
+   "usage": {
+    "inputTokens": 856,
+    "outputTokens": 214,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 854,
+    "calls": 1,
+    "costUsd": 0.00027800000000000004
+   }
+  }
+ },
+ {
+  "id": 54,
+  "isSubtask": true,
+  "prefixText": "It prompts for WAY too much — this may have ",
+  "truth": "to do with Antigravity’s settings, but if so we need a way to be more permissive",
+  "taskText": "It prompts for WAY too much — this may have ",
+  "contextBefore": "  - “Tell me what you think I want you to do, and place specific emphasis in your question(s) to me on the areas you’re least clear on.”\n  - “You should not make any assumptions. If you’re about to implement a feature / execute a task, and that thing is not &gt;50% grounded in fact from something the user either said or corroborating docs/files, you should ask for clarification or not do that thing at all.”\n- can we index local files into the vector DB, so the AI can search through them to find relevant data?\n- Major task-execution bugs\n  - Token usage isn’t displaying in the AI execution pane\n  - The permissions prompt during task execution is buggy",
+  "nextLine": "  - It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice selections; obviously there’s still some weird bleed-over between the overview and the actions steps",
+  "parentTaskTitle": "Major task-execution bugs",
+  "related": [
+   "Major task-execution bugs",
+   "Major task-execution bugs: The permissions prompt during task execution is buggy",
+   "Major task-execution bugs: It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice selections; obviously there’s still some",
+   "Major task-execution bugs: Token usage isn’t displaying in the AI execution pane"
+  ],
+  "localRag": {
+   "text": "been fixed in the latest version",
+   "ms": 227
+  },
+  "cloudRag": {
+   "text": "been caused by the permissions prompt logic firing on every step instead of only on risky actions",
+   "kind": "suffix",
+   "ms": 2145,
+   "usage": {
+    "inputTokens": 954,
+    "outputTokens": 43,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 952,
+    "calls": 1,
+    "costUsd": 0.00021210000000000003
+   }
+  },
+  "cloudRagCont": {
+   "text": "the bug is that it asks for permission on routine, read-only actions that don't need it",
+   "kind": "suffix",
+   "ms": 2356,
+   "usage": {
+    "inputTokens": 836,
+    "outputTokens": 27,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 834,
+    "calls": 1,
+    "costUsd": 0.00018050000000000002
+   }
+  }
+ },
+ {
+  "id": 55,
+  "isSubtask": true,
+  "prefixText": "It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice ",
+  "truth": "selections; obviously there’s still some weird bleed-over between the overview and the actions steps",
+  "taskText": "It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice ",
+  "contextBefore": "  - “You should not make any assumptions. If you’re about to implement a feature / execute a task, and that thing is not &gt;50% grounded in fact from something the user either said or corroborating docs/files, you should ask for clarification or not do that thing at all.”\n- can we index local files into the vector DB, so the AI can search through them to find relevant data?\n- Major task-execution bugs\n  - Token usage isn’t displaying in the AI execution pane\n  - The permissions prompt during task execution is buggy\n  - It prompts for WAY too much — this may have to do with Antigravity’s settings, but if so we need a way to be more permissive",
+  "nextLine": "- Manager AI needs to never execute agents in its own instance, since agents will be spun off of it if need be",
+  "parentTaskTitle": "Major task-execution bugs",
+  "related": [
+   "Major task-execution bugs: The permissions prompt during task execution is buggy",
+   "Major task-execution bugs",
+   "Major task-execution bugs: Token usage isn’t displaying in the AI execution pane",
+   "Major task-execution bugs: It prompts for WAY too much — this may have to do with Antigravity’s settings, but if so we need a way to be more permissive"
+  ],
+  "localRag": {
+   "text": "",
+   "ms": 256
+  },
+  "cloudRag": {
+   "text": "options instead of plain text",
+   "kind": "rewrite",
+   "ms": 2111,
+   "usage": {
+    "inputTokens": 969,
+    "outputTokens": 40,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 967,
+    "calls": 1,
+    "costUsd": 0.00021360000000000001
+   }
+  },
+  "cloudRagCont": {
+   "text": "remove the \"phantom prompts\" by suppressing overview steps from multiple-choice rendering",
+   "kind": "suffix",
+   "ms": 2180,
+   "usage": {
+    "inputTokens": 851,
+    "outputTokens": 32,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 849,
+    "calls": 1,
+    "costUsd": 0.00018600000000000002
+   }
+  }
+ },
+ {
+  "id": 56,
+  "isSubtask": false,
+  "prefixText": "Manager AI needs to never execute agents in ",
+  "truth": "its own instance, since agents will be spun off of it if need be",
+  "taskText": "Manager AI needs to never execute agents in ",
+  "contextBefore": "- can we index local files into the vector DB, so the AI can search through them to find relevant data?\n- Major task-execution bugs\n  - Token usage isn’t displaying in the AI execution pane\n  - The permissions prompt during task execution is buggy\n  - It prompts for WAY too much — this may have to do with Antigravity’s settings, but if so we need a way to be more permissive\n  - It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice selections; obviously there’s still some weird bleed-over between the overview and the actions steps",
+  "nextLine": "  - Or do we let providers handle agentic tasks themselves, and simply never spin off agents at all?",
+  "parentTaskTitle": null,
+  "related": [
+   "CLI mode for coding agents: when the user clicks 'execute' on a task, it spawns a CLI agent that performs the task in a windowed terminal in the AI side",
+   "look for an AGENTS.md or CLAUDE.md file at the project folder and use it as the AI's baseline agent context if found",
+   "AI workspace execution",
+   "AI workspace execution: this is especially weird and detrimental because the tasks don’t indicate they’re running, and thus have no way to stop them once they a"
+  ],
+  "localRag": {
+   "text": "the workspace",
+   "ms": 291
+  },
+  "cloudRag": {
+   "text": "the background without the user's explicit approval",
+   "kind": "suffix",
+   "ms": 2096,
+   "usage": {
+    "inputTokens": 969,
+    "outputTokens": 27,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 967,
+    "calls": 1,
+    "costUsd": 0.00020710000000000002
+   }
+  },
+  "cloudRagCont": {
+   "text": "won't",
+   "kind": "suffix",
+   "ms": 2086,
+   "usage": {
+    "inputTokens": 851,
+    "outputTokens": 4,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 849,
+    "calls": 1,
+    "costUsd": 0.000172
+   }
+  }
+ },
+ {
+  "id": 57,
+  "isSubtask": true,
+  "prefixText": "Or do we let providers handle agentic tasks themselves, ",
+  "truth": "and simply never spin off agents at all?",
+  "taskText": "Or do we let providers handle agentic tasks themselves, ",
+  "contextBefore": "- Major task-execution bugs\n  - Token usage isn’t displaying in the AI execution pane\n  - The permissions prompt during task execution is buggy\n  - It prompts for WAY too much — this may have to do with Antigravity’s settings, but if so we need a way to be more permissive\n  - It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice selections; obviously there’s still some weird bleed-over between the overview and the actions steps\n- Manager AI needs to never execute agents in its own instance, since agents will be spun off of it if need be",
+  "nextLine": "- write a function, then write the test for that function",
+  "parentTaskTitle": "Manager AI needs to never execute agents in its own instance, since agents will be spun off of it if need be",
+  "related": [
+   "Manager AI needs to never execute agents in its own instance, since agents will be spun off of it if need be",
+   "CLI mode for coding agents: when the user clicks 'execute' on a task, it spawns a CLI agent that performs the task in a windowed terminal in the AI side",
+   "look for an AGENTS.md or CLAUDE.md file at the project folder and use it as the AI's baseline agent context if found",
+   "Implementing Agile framework for agents: maybe this looks like implementation plans by multiple agents, and then a judge AI decides which plan is the best"
+  ],
+  "localRag": {
+   "text": "or do we need to implement a custom framework for agents?",
+   "ms": 530
+  },
+  "cloudRag": {
+   "text": "without the Manager AI getting involved?",
+   "kind": "suffix",
+   "ms": 1944,
+   "usage": {
+    "inputTokens": 1041,
+    "outputTokens": 33,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 1039,
+    "calls": 1,
+    "costUsd": 0.0002245
+   }
+  },
+  "cloudRagCont": {
+   "text": "to let the agents run in their own CLI processes, separate from the manager",
+   "kind": "suffix",
+   "ms": 1977,
+   "usage": {
+    "inputTokens": 923,
+    "outputTokens": 23,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 921,
+    "calls": 1,
+    "costUsd": 0.00019590000000000005
+   }
+  }
+ },
+ {
+  "id": 58,
+  "isSubtask": false,
+  "prefixText": "write a function, then write the ",
+  "truth": "test for that function",
+  "taskText": "write a function, then write the ",
+  "contextBefore": "  - Token usage isn’t displaying in the AI execution pane\n  - The permissions prompt during task execution is buggy\n  - It prompts for WAY too much — this may have to do with Antigravity’s settings, but if so we need a way to be more permissive\n  - It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice selections; obviously there’s still some weird bleed-over between the overview and the actions steps\n- Manager AI needs to never execute agents in its own instance, since agents will be spun off of it if need be\n  - Or do we let providers handle agentic tasks themselves, and simply never spin off agents at all?",
+  "nextLine": "  - once it passes the test(s), the agent can move on",
+  "parentTaskTitle": null,
+  "related": [],
+  "localRag": {
+   "text": "function, then write the function, then write the function, then write the function, then write",
+   "ms": 309
+  },
+  "cloudRag": {
+   "text": "unit tests to verify its behavior",
+   "kind": "suffix",
+   "ms": 2095,
+   "usage": {
+    "inputTokens": 796,
+    "outputTokens": 20,
+    "cachedInputTokens": 794,
+    "cacheWriteTokens": 0,
+    "calls": 1,
+    "costUsd": 0.00001814
+   }
+  },
+  "cloudRagCont": {
+   "text": ".",
+   "kind": "suffix",
+   "ms": 1992,
+   "usage": {
+    "inputTokens": 678,
+    "outputTokens": 3,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 676,
+    "calls": 1,
+    "costUsd": 0.0001369
+   }
+  }
+ },
+ {
+  "id": 59,
+  "isSubtask": true,
+  "prefixText": "once it passes the test(s), ",
+  "truth": "the agent can move on",
+  "taskText": "once it passes the test(s), ",
+  "contextBefore": "  - The permissions prompt during task execution is buggy\n  - It prompts for WAY too much — this may have to do with Antigravity’s settings, but if so we need a way to be more permissive\n  - It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice selections; obviously there’s still some weird bleed-over between the overview and the actions steps\n- Manager AI needs to never execute agents in its own instance, since agents will be spun off of it if need be\n  - Or do we let providers handle agentic tasks themselves, and simply never spin off agents at all?\n- write a function, then write the test for that function",
+  "nextLine": "- Implementing Agile framework for agents",
+  "parentTaskTitle": "write a function, then write the test for that function",
+  "related": [
+   "write a function, then write the test for that function"
+  ],
+  "localRag": {
+   "text": "then write a function, then write the test for that function",
+   "ms": 226
+  },
+  "cloudRag": {
+   "text": "mark the subtask as complete and move on to the next item",
+   "kind": "suffix",
+   "ms": 2084,
+   "usage": {
+    "inputTokens": 841,
+    "outputTokens": 27,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 839,
+    "calls": 1,
+    "costUsd": 0.00018150000000000002
+   }
+  },
+  "cloudRagCont": {
+   "text": "move on to the next step",
+   "kind": "suffix",
+   "ms": 1961,
+   "usage": {
+    "inputTokens": 723,
+    "outputTokens": 8,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 721,
+    "calls": 1,
+    "costUsd": 0.0001484
+   }
+  }
+ }
+]

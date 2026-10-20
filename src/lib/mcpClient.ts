@@ -611,15 +611,6 @@ export function guessRelevantToolsWithDetails(
       reasons[tool.id] = 'Relevant for Salesforce CRM records.';
     }
 
-    // 10. Laya Local Decisions
-    if (
-      (combined.includes('classify') || combined.includes('triage') || combined.includes('score') || combined.includes('evaluate') || combined.includes('fast decision')) &&
-      tool.serverId === 'mcp-laya'
-    ) {
-      selected.add(tool.id);
-      reasons[tool.id] = 'Local System-1 micro-decision evaluation.';
-    }
-
     // Generic match on custom MCP tool name keyword overlap
     const words = tName.split(/[_\s-]+/).concat(tDesc.split(/[_\s-]+/)).filter((w) => w.length >= 4);
     for (const w of words) {

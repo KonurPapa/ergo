@@ -18,6 +18,7 @@ import Image from '@tiptap/extension-image';
 import Typography from '@tiptap/extension-typography';
 import { Markdown } from 'tiptap-markdown';
 import { stripHeaderComments, parseSwimLaneMarkdown } from '../lib/parser';
+import { HEADER_COLORS, HEADER_COLOR_TOKEN_RE, randomHeaderColorId, resolveHeaderColor, splitHeaderColor } from '../lib/headerColors';
 import { storageManager } from '../lib/storageManager';
 import { bridgeClient } from '../lib/bridgeClient';
 import { HumanAiAssistantModal } from './HumanAiAssistantModal';
@@ -25,7 +26,7 @@ import { ArchivedTasksModal } from './ArchivedTasksModal';
 import { BatchRunModal } from './BatchRunModal';
 import { BetaFeature, useBeta } from '../context/BetaContext';
 import { ScheduleTaskModal } from './ScheduleTaskModal';
-import { getAutocompleteSuggestion } from '../lib/autocompleteService';
+import { getAutocompleteSuggestion, listContextAround } from '../lib/autocompleteService';
 
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state';
@@ -324,18 +325,10 @@ const CustomListKeymapExtension = Extension.create({
                 (depth < 2 || $from.node(depth - 2)?.type.name !== 'listItem');
 
               if (isTopLevelCard) {
-                let hasContent = false;
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                node.forEach((child: any) => {
-                  if (child.textContent.trim() !== '') {
-                    hasContent = true;
-                  }
-                });
-
-                if (hasContent) {
-                  insertSubtaskAtCardPos(editor, $from.before(depth));
-                  return true;
-                }
+                // Nest under the previous task (its children sink one level with it).
+                // The first task has no previous sibling, so Tab does nothing.
+                editor.commands.sinkListItem('listItem');
+                return true;
               }
               break;
             }
@@ -1819,6 +1812,91 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
     }
   });
 
+  // Header color menu state (right-click on a group header in the editor)
+  const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number; pos: number; current: string } | null>(null);
+
+  const setHeadingColor = useCallback((view: any, pos: number, colorId: string) => {
+    const node = view.state.doc.nodeAt(pos);
+    if (!node || node.type.name !== 'heading') return;
+    const end = pos + node.nodeSize - 1;
+    const m = node.textContent.match(HEADER_COLOR_TOKEN_RE);
+    const from = m ? end - m[0].length : end;
+    const text = ` {color=${colorId}}`;
+    const tr = view.state.tr.replaceWith(from, end, view.state.schema.text(text));
+    view.dispatch(tr);
+    flushMarkdownChange();
+  }, [flushMarkdownChange]);
+
+  // Extension: group header colors — hides the `{color=id}` token, tints the heading,
+  // auto-assigns a random palette color to newly written headers, and opens a recolor menu on right-click.
+  const HeaderColorExtension = Extension.create({
+    name: 'headerColor',
+    addProseMirrorPlugins() {
+      return [
+        new Plugin({
+          key: new PluginKey(`headerColor_${lane.id}`),
+          appendTransaction: (transactions, oldState, newState) => {
+            if (!transactions.some((t) => t.docChanged && !t.getMeta('preventUpdate'))) return null;
+            const sel = newState.selection;
+            const oldNodes = new Set<any>();
+            oldState.doc.descendants((n) => { if (n.type.name === 'heading') oldNodes.add(n); });
+            const inserts: { at: number; text: string }[] = [];
+            newState.doc.descendants((node, pos) => {
+              if (node.type.name !== 'heading') return;
+              if (oldNodes.has(node)) return;
+              const { name, colorId } = splitHeaderColor(node.textContent);
+              if (colorId || !name.trim()) return;
+              const end = pos + node.nodeSize - 1;
+              if (sel.from >= pos && sel.to <= end + 1) return; // still typing in it
+              inserts.push({ at: end, text: ` {color=${randomHeaderColorId()}}` });
+            });
+            if (!inserts.length) return null;
+            const tr = newState.tr;
+            for (const ins of inserts.reverse()) tr.insertText(ins.text, ins.at);
+            return tr;
+          },
+          props: {
+            decorations: (state) => {
+              const decos: Decoration[] = [];
+              state.doc.descendants((node, pos) => {
+                if (node.type.name !== 'heading') return;
+                const { name, colorId } = splitHeaderColor(node.textContent);
+                if (!name.trim()) return;
+                const color = resolveHeaderColor(name, colorId);
+                decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'hdr-colored', style: `--hdr-color: ${color.hex}` }));
+                if (colorId) {
+                  const end = pos + node.nodeSize - 1;
+                  const m = node.textContent.match(HEADER_COLOR_TOKEN_RE);
+                  if (m) decos.push(Decoration.inline(end - m[0].length, end, { class: 'hdr-color-token' }));
+                }
+              });
+              return DecorationSet.create(state.doc, decos);
+            },
+            handleDOMEvents: {
+              contextmenu: (view, event) => {
+                const target = event.target as HTMLElement | null;
+                if (!target?.closest('h1,h2,h3,h4,h5,h6')) return false;
+                const hit = view.posAtCoords({ left: event.clientX, top: event.clientY });
+                if (!hit) return false;
+                const $pos = view.state.doc.resolve(hit.pos);
+                for (let d = $pos.depth; d > 0; d--) {
+                  const n = $pos.node(d);
+                  if (n.type.name === 'heading') {
+                    const { name, colorId } = splitHeaderColor(n.textContent);
+                    event.preventDefault();
+                    setHeaderMenu({ x: event.clientX, y: event.clientY, pos: $pos.before(d), current: resolveHeaderColor(name, colorId).id });
+                    return true;
+                  }
+                }
+                return false;
+              },
+            },
+          },
+        }),
+      ];
+    },
+  });
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -1861,6 +1939,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       AutoSurroundExtension,
       TaskAutocompleteExtension,
       MarkdownHoverSyntaxExtension,
+      HeaderColorExtension,
     ],
     content: stripHeaderComments(lane.markdown),
     editorProps: {
@@ -2000,6 +2079,8 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         abortControllerRef.current = controller;
 
         try {
+          // Neighbouring list lines: context for the local model's fill-in-the-middle completion.
+          const { contextBefore, nextLine } = listContextAround(currentEditor.state.doc, sel.$from.before());
           const suggestion = await getAutocompleteSuggestion(
             {
               taskText: lineText,
@@ -2008,6 +2089,8 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
               isSubtask,
               parentTaskTitle,
               projectId: projectRef.current?.id,
+              contextBefore,
+              nextLine,
             },
             aiConfigRef.current,
             controller.signal
@@ -2448,6 +2531,31 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         }}
       >
         <EditorContent editor={editor} className="tiptap-editor-root" />
+        {headerMenu && (
+          <>
+            <div className="hdr-menu-backdrop" onClick={() => setHeaderMenu(null)} onContextMenu={(e) => { e.preventDefault(); setHeaderMenu(null); }} />
+            <div className="hdr-color-menu" style={{ left: headerMenu.x, top: headerMenu.y }} role="menu">
+              <div className="hdr-color-menu-title">Header color</div>
+              <div className="hdr-color-menu-swatches">
+                {HEADER_COLORS.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    role="menuitem"
+                    title={c.label}
+                    aria-label={c.label}
+                    className={`hdr-color-swatch ${headerMenu.current === c.id ? 'is-active' : ''}`}
+                    style={{ background: c.hex }}
+                    onClick={() => {
+                      if (editor) setHeadingColor(editor.view, headerMenu.pos, c.id);
+                      setHeaderMenu(null);
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* ── Human AI Assistant Slide-up Bar / Drawer (rendered only within selected lane) ── */}

@@ -3,6 +3,7 @@ import {
   Terminal,
   Sparkles,
   ShieldAlert,
+  ShieldCheck,
   Send,
   RotateCcw,
   Square,
@@ -15,390 +16,406 @@ import {
   MessageSquare,
   Command,
   Loader2,
+  HelpCircle,
+  AlertTriangle,
+  Users,
 } from 'lucide-react';
 import { bridgeClient } from '../lib/bridgeClient';
-
-export interface CliPromptOption {
-  key: string;
-  label: string;
-  isDefault?: boolean;
-  isDestructive?: boolean;
-  /** False for un-numbered TUI menus ("❯ Yes"), which are answered with arrow keys instead of the key. */
-  numbered?: boolean;
-  /** Position in the menu (0-based). */
-  index?: number;
-}
-
-export interface CliDetectedPrompt {
-  type: 'multiple_choice' | 'confirmation' | 'freeform';
-  title?: string;
-  targetCommand?: string;
-  question: string;
-  options?: CliPromptOption[];
-  rawSnippet: string;
-}
+import { sendAgentInput } from '../lib/cliRunClient';
+import { TerminalScreen, ScreenTranscript } from '../lib/cliScreen';
+import { keystrokesForOption, promptSummary, isBypassAcceptanceDialog } from '../lib/cliPromptParser';
+import type {
+  AgentSessionRole,
+  AgentSessionStatus,
+  CliDetectedPrompt,
+  CliPromptOption,
+  PermissionLevel,
+} from '../types';
+import { AgentRoleBadge } from './AgentSessionTabs';
+import { describeTaskMessage, type TaskMessageOptions, type TaskMessageResult } from '../lib/taskMessages';
 
 export interface ActivityFeedItem {
   id: string;
-  type: 'thought' | 'tool' | 'user' | 'status';
+  type: 'thought' | 'tool' | 'user' | 'status' | 'approval';
   text: string;
   detail?: string;
   timestamp: string;
 }
 
 export interface CliAgentNotesBridgeProps {
+  /** Bridge PTY key of the agent (SpawnedSession.ptySessionId). The view only attaches; App owns the process. */
+  sessionId: string;
+  role: AgentSessionRole;
+  /** Human label, e.g. "Manager", "Worker W2 · Login form", "QA Verifier". */
+  label: string;
+  /** The prompt the agent was launched with (filtered out of the activity feed when the CLI echoes it). */
+  launchPrompt?: string;
+  pieceId?: string;
   cmd: string;
-  args?: string[];
-  cwd: string;
-  taskId: string | number;
-  sessionId?: string;
-  env?: Record<string, string>;
-  forceRestart?: boolean;
-  spawnId?: string;
   isActive?: boolean;
-  onExit?: (code: number) => void;
-  onRestartSession?: () => void;
-  onKillSession?: () => void;
+  status?: AgentSessionStatus;
+  permissionLevel?: PermissionLevel;
+  /** The prompt App already knows about (SpawnedSession.pendingPrompt), shown until the bridge reports otherwise. */
+  initialPrompt?: CliDetectedPrompt | null;
   onSwitchToSteps?: () => void;
+  /** Stop this agent. */
+  onKill?: () => void;
+  /** Restart the task run (offered on the manager only). */
+  onRestart?: () => void;
+  /**
+   * The task prompt box (App routes it: mid-run to this agent — held while a permission prompt is open — and after the
+   * run finished as a follow-up that continues it). Without it, the box types straight into this terminal.
+   */
+  onSendMessage?: (text: string, opts: TaskMessageOptions) => Promise<TaskMessageResult>;
+  /** The task's run is working (false: it finished, and a message continues it). */
+  runActive?: boolean;
+}
+
+/** Screen size the Notes view renders the agent's output at until the bridge reports the PTY's real size. */
+const DEFAULT_COLS = 120;
+const DEFAULT_ROWS = 40;
+/** How often rendered rows are folded into the transcript / activity feed while output streams. */
+const OBSERVE_THROTTLE_MS = 250;
+/** Replays are fed through the screen in slices so repaints of alt-screen TUIs still reach the transcript. */
+const REPLAY_SLICE = 4096;
+
+const nowTime = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+/** Box-drawing frame characters at the edges of TUI rows ("│ text │"). */
+const FRAME_EDGE_RE = /^[\s│┃║▌▎|╭╮╰╯╔╗╚╝]+|[\s│┃║▌▎|╭╮╰╯╔╗╚╝]+$/g;
+/** Rows made only of rule characters. */
+const RULE_ROW_RE = /^[\s─━═╌╍┄┅┈┉_\-–—▔▁]+$/;
+/** Footer / key-hint / mode rows every CLI repaints under its input box. */
+const FOOTER_RE =
+  /esc to (?:cancel|exit|go back)|enter to (?:confirm|select|submit)|↑\/↓|↑↓|tab to amend|ctrl\+[a-z] to|\? for shortcuts|shift\+tab to cycle|(?:accept edits|bypass permissions|plan mode|auto mode|manual mode) on|auto-accept edits|YOLO mode|context left|tokens? (?:used|left)|^\s*>\s*$|^Try "/i;
+/** Rows that show a menu option ("❯ 1. Yes", "2. No"). */
+const MENU_OPTION_RE = /^(?:[❯›>●◉▸▶→]\s*)?(?:\[\d{1,2}\]|\d{1,2}[.)])\s+/;
+/** Live status rows (spinners): they describe what the agent is doing right now, not something it did. */
+const SPINNER_RE = /\(?[^()]*\besc to (?:interrupt|cancel)\b[^()]*\)?/i;
+const SPINNER_GLYPHS_RE = /^[✻✶✳✢✽·*⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒⣾⣽⣻⢿⡿⣟⣯⣷•]\s*/;
+/** Spinner rows without an inline key hint ("✢ Gallivanting…", "✻ Crunching… (12s · ↓ 1.2k tokens)"). */
+const SPINNER_WORD_RE = /^[✻✶✳✢✽·*⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]\s+[^\s…][^…]{0,60}…/;
+
+function isSpinnerRow(row: string): boolean {
+  return /esc to (?:interrupt|cancel)/i.test(row) || SPINNER_WORD_RE.test(row);
+}
+
+const TOOL_NAMES =
+  'Bash|Read|Edit|MultiEdit|Write|Update|Create|Glob|Grep|LS|List|Search|Task|Agent|WebFetch|WebSearch|Fetch|NotebookEdit|NotebookRead|TodoWrite|Shell|ReadFile|WriteFile|ReadManyFiles|ReadFolder|FindFiles|SearchText|Replace|GoogleSearch|SaveMemory';
+/** "● Bash(npm test)", "⏺ Read(src/a.ts)", "✓ ReadFile src/a.ts" (Claude / Gemini tool rows). */
+const TOOL_CALL_RE = new RegExp(`^(?:[●⏺•✓✔✗×✦⊷○◆]\\s*)?(${TOOL_NAMES})\\s*\\((.*?)\\)?\\s*$`);
+const TOOL_ROW_RE = new RegExp(`^[✓✔✗×⊷○]\\s+(${TOOL_NAMES})\\s+(.+)$`);
+/** Codex-style action rows: "• Ran npm test", "• Edited src/a.ts (+3 -1)". */
+const ACTION_VERB_RE =
+  /^[•●⏺]\s*(Ran|Running|Explored|Exploring|Edited|Editing|Added|Deleted|Updated|Wrote|Created|Searched|Searching|Called|Read|Reading|Applied patch)\b\s*(.*)$/;
+/** A command shown under a tool row ("⎿  $ npm test") or on its own ("$ npm test"). */
+const COMMAND_ROW_RE = /^(?:⎿|└)?\s*\$\s+(\S.*)$/;
+/** Older "label: value" tool rows. */
+const LABELLED_TOOL_RE = /^(?:permission for|bash command|running|tool\s+call|executing|calling tool)\s*:\s*(.+)$/i;
+/** Assistant text rows ("● I'll start by…", "✦ Looking at…", "• Updated the plan"). */
+const NARRATIVE_RE = /^[●⏺✦•]\s+(.+)$/;
+const THINKING_RE = /^(?:[✻∴]\s*)?thinking\b[:\s…]*(.*)$/i;
+
+function cleanRow(row: string): string {
+  return row.replace(FRAME_EDGE_RE, '').trim();
+}
+
+function normalizeEcho(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function stripSpinner(row: string): string {
+  return row.replace(SPINNER_RE, '').replace(SPINNER_GLYPHS_RE, '').replace(/[\s·•]+$/, '').trim();
 }
 
 /**
- * Strips terminal ANSI escape sequences, OSC codes, and carriage returns.
+ * Builds the Notes activity feed from rendered terminal rows (a ScreenTranscript, so TUI repaints are already
+ * collapsed and words keep their spacing). Recognises tool calls, shell commands, sub-agent launches and the agent's
+ * own narration across Claude Code, Codex and Gemini layouts; the live spinner row becomes `currentActivity`.
  */
-export function stripAnsi(str: string): string {
-  return str
-    .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
-    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
-    .replace(/\x1b[@-Z\\-_]/g, '')
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n');
-}
-
-/** Footer hints that interactive CLI menus print under their options. */
-const MENU_FOOTER_RE = /esc to (?:cancel|interrupt|exit|go back)|enter to (?:confirm|select|submit)|↑\/↓|↑↓|tab to amend|tab amend|ctrl\+[a-z] to/i;
-/** Questions CLIs ask before running a tool. */
-const APPROVAL_QUESTION_RE =
-  /do you want to|would you like to (?:proceed|run|allow|make|create|apply|continue)|allow (?:this|execution|command|edit|write|the|claude|agy|gemini|codex)|permission (?:needed|required|to|for)|needs? your (?:permission|approval)|\bapprove\b|run this command|proceed\?|apply (?:this|these) (?:edit|change)s?|make this edit|create (?:this )?file/i;
-/** Labels typical of approval menus (as opposed to a plan or checklist). */
-const APPROVAL_OPTION_RE = /^(?:yes|no|allow|deny|approve|reject|always|never|don'?t ask|cancel|abort|skip|proceed|continue|run|accept)\b/i;
-const CURSOR_OPTION_RE = /^[❯›>]\s+(?:(\d{1,2})[.)]\s+)?(.+)$/;
-const NUMBERED_OPTION_RE = /^(?:[❯›>]\s*)?(?:\[(\d{1,2})\]|(\d{1,2})[.)])\s+(.+)$/;
-
-/** Strips TUI box-drawing borders ("│ text │") so framed prompts parse like plain lines. */
-function unframe(line: string): string {
-  return line.replace(/^[\s│┃|╭╮╰╯─━]+/, '').replace(/[\s│┃|╭╮╰╯─━]+$/, '').trim();
-}
-
-function normalizeForEcho(line: string): string {
-  return unframe(line).replace(/^(?:[-*•]\s+|\[[ x]\]\s+|\d+[.)]\s+)+/i, '').toLowerCase();
-}
-
-/**
- * AI-agnostic parser for interactive CLI prompts (e.g. Gemini agy, Claude Code, OpenAI Codex, Aider).
- * Detects multiple-choice approval menus, yes/no confirmations, and a trailing question, ONLY at the very
- * bottom of the output. Plain lists — the agent's plan, the echoed task checklist (`echoedText`), Gherkin
- * steps — are never treated as choices: a menu needs an approval question above it and either a cursor
- * marker, a key-hint footer, or approval-style labels.
- */
-export function parseCliInteractivePrompt(rawText: string, opts: { echoedText?: string } = {}): CliDetectedPrompt | null {
-  const echoed = new Set(
-    (opts.echoedText || '')
-      .split('\n')
-      .map(normalizeForEcho)
-      .filter((l) => l.length > 3)
-  );
-  const lines = stripAnsi(rawText)
-    .split('\n')
-    .map(unframe)
-    .filter((l) => l.length > 0 && !echoed.has(normalizeForEcho(l)));
-  if (lines.length === 0) return null;
-
-  const tail = lines.slice(-14);
-  const tailText = tail.join('\n');
-  const lastLines = tail.slice(-6).join('\n');
-
-  // Account / auth failures that stop the session
-  const accountErr = lastLines.match(/credit balance is too low|insufficient funds|insufficient credit|authentication failed|invalid api key[^\n]*/i);
-  if (accountErr) {
-    return {
-      type: 'freeform',
-      title: 'AI Account Notice',
-      question: `${accountErr[0].trim()} (Please check your API key in AI Credentials Settings or verify account balance).`,
-      rawSnippet: tailText,
-    };
-  }
-
-  // Walk up from the bottom past footer hints, then collect the contiguous option block.
-  let i = tail.length - 1;
-  let hasFooter = false;
-  while (i >= 0 && MENU_FOOTER_RE.test(tail[i])) {
-    hasFooter = true;
-    i--;
-  }
-  // Candidate menu lines: numbered ("2. No"), cursor-marked ("❯ Yes"), or short plain items of an arrow menu ("  Deny").
-  const candidates: { key: string; label: string; cursor: boolean; numbered: boolean; plain: boolean }[] = [];
-  while (i >= 0 && candidates.length < 7) {
-    const line = tail[i];
-    const numbered = line.match(NUMBERED_OPTION_RE);
-    const cursor = line.match(CURSOR_OPTION_RE);
-    if (numbered) {
-      candidates.unshift({ key: numbered[1] || numbered[2], label: numbered[3].trim(), cursor: /^[❯›>]/.test(line), numbered: true, plain: false });
-    } else if (cursor) {
-      candidates.unshift({ key: '', label: cursor[2].trim(), cursor: true, numbered: false, plain: false });
-    } else if (/^[A-Za-z]/.test(line) && line.length <= 80 && !/[?:.]$/.test(line) && !APPROVAL_QUESTION_RE.test(line)) {
-      candidates.unshift({ key: '', label: line, cursor: false, numbered: false, plain: true });
-    } else {
-      break;
-    }
-    i--;
-  }
-  // Numbered menus: the contiguous numbered block at the bottom (plain lines above it go back to the question
-  // search). Arrow menus: un-numbered items with exactly one cursor line. Anything else is not a menu.
-  let options: typeof candidates = [];
-  const firstNumbered = candidates.findIndex((o) => o.numbered);
-  if (firstNumbered !== -1) {
-    const block = candidates.slice(firstNumbered);
-    if (block.every((o) => o.numbered)) options = block;
-  } else if (candidates.filter((o) => o.cursor).length === 1) {
-    options = candidates;
-  }
-  i += candidates.length - options.length;
-  // The question sits directly above the options (allow one detail line between, e.g. the command).
-  let question = '';
-  let questionIdx = -1;
-  for (let q = i; q >= Math.max(0, i - 2); q--) {
-    if (APPROVAL_QUESTION_RE.test(tail[q]) || tail[q].endsWith('?')) {
-      question = tail[q];
-      questionIdx = q;
-      break;
-    }
-  }
-
-  const extractTargetCommand = (): string | undefined => {
-    const scanFrom = questionIdx !== -1 ? Math.max(0, questionIdx - 4) : Math.max(0, tail.length - 8);
-    for (let k = scanFrom; k < tail.length; k++) {
-      const line = tail[k];
-      const tick = line.match(/`([^`]+)`/);
-      if (tick && !MENU_FOOTER_RE.test(line)) return tick[1];
-      if (/^(?:bash command|shell command|command|run command)$/i.test(line) && tail[k + 1] && !APPROVAL_QUESTION_RE.test(tail[k + 1])) {
-        return tail[k + 1];
-      }
-      const labelled = line.match(/(?:bash command|command|executing|execute|run|permission for(?: \w+)?):\s*(.+)$/i);
-      if (labelled && labelled[1].trim() && !/^(?:run this|choose|select)/i.test(labelled[1])) return labelled[1].trim();
-    }
-    return undefined;
-  };
-
-  const looksLikeApprovalMenu =
-    options.length >= 2 &&
-    options.length <= 6 &&
-    options.every((o) => o.label.length <= 120) &&
-    questionIdx !== -1 &&
-    (options.some((o) => o.cursor) || hasFooter || options.some((o) => APPROVAL_OPTION_RE.test(o.label)));
-
-  if (looksLikeApprovalMenu) {
-    const cursorIdx = options.findIndex((o) => o.cursor);
-    const defaultIdx = cursorIdx !== -1 ? cursorIdx : 0;
-    return {
-      type: 'multiple_choice',
-      title: 'Action Requires Approval',
-      targetCommand: extractTargetCommand(),
-      question,
-      options: options.map((o, idx) => ({
-        key: o.numbered ? o.key : String(idx + 1),
-        label: o.label,
-        isDefault: idx === defaultIdx,
-        isDestructive: /\b(?:cancel|no\b|reject|abort|deny|never)\b/i.test(o.label),
-        numbered: o.numbered,
-        index: idx,
-      })),
-      rawSnippet: tailText,
-    };
-  }
-
-  // Yes / No confirmation on the last lines ("[Y/n]", "(y/n)", "(y)es / (n)o")
-  const confirmLines = tail.slice(-3).join('\n');
-  if (/\[[yY]\/[nN]\]|\([yY]\/[nN]\)|\(y\)es[/, ]+\(n\)o/i.test(confirmLines)) {
-    const options: CliPromptOption[] = [
-      { key: 'y', label: 'Approve / Yes', isDefault: true, isDestructive: false, numbered: true },
-      { key: 'n', label: 'Reject / No', isDefault: false, isDestructive: true, numbered: true },
-    ];
-    if (/\(a\)lways/i.test(confirmLines)) {
-      options.splice(1, 0, { key: 'a', label: 'Always Allow', isDefault: false, isDestructive: false, numbered: true });
-    }
-    return {
-      type: 'confirmation',
-      title: 'Confirmation Required',
-      targetCommand: extractTargetCommand(),
-      question: tail.slice(-3).find((l) => /\?|\[[yY]\/[nN]\]|\([yY]\/[nN]\)/.test(l)) || tail[tail.length - 1],
-      options,
-      rawSnippet: tailText,
-    };
-  }
-
-  // The agent ended its turn with a question to the user (only the final line counts).
-  let last = tail.length - 1;
-  while (last >= 0 && MENU_FOOTER_RE.test(tail[last])) last--;
-  const finalLine = last >= 0 ? tail[last] : '';
-  if (finalLine.endsWith('?') && finalLine.length <= 240 && !/^(?:[-*•]|\d+[.)])\s/.test(finalLine)) {
-    return {
-      type: 'freeform',
-      title: 'Clarification Needed',
-      question: finalLine,
-      rawSnippet: tailText,
-    };
-  }
-
-  return null;
-}
-
-/**
- * Extracts chronological activity and thought entries from the cleaned CLI text.
- */
-export function extractActivityEntries(cleanText: string): {
+export function extractActivityEntries(
+  lines: string[],
+  label: string = 'Agent',
+  /** Rows currently on screen; when given, only these can supply the live spinner status. */
+  liveRows?: string[],
+  /** The prompt Ergo launched the agent with: CLIs echo it back, and those rows aren't the agent's activity. */
+  launchPrompt?: string
+): {
   feed: ActivityFeedItem[];
   currentActivity: string;
 } {
-  const lines = cleanText.split('\n').map((l) => l.trim()).filter(Boolean);
+  const idle = `${label} is active`;
   const feed: ActivityFeedItem[] = [];
-  let currentActivity = 'Manager AI is active';
-
   const seen = new Set<string>();
+  let currentActivity = idle;
+  let liveStatus = '';
+  let lastMeaningful = '';
+
+  const push = (type: ActivityFeedItem['type'], text: string, detail?: string) => {
+    const clipped = text.length > 220 ? `${text.slice(0, 219)}…` : text;
+    const key = detail ? `${clipped}\u0000${detail}` : clipped;
+    if (seen.has(key)) return;
+    seen.add(key);
+    feed.push({ id: `act:${key}`, type, text: clipped, detail, timestamp: nowTime() });
+    currentActivity = detail ? `${clipped}: ${detail}` : clipped;
+  };
+
+  // Whitespace-collapsed, so rows the CLI wrapped the echoed prompt into still match as substrings.
+  const echoed = launchPrompt ? normalizeEcho(launchPrompt) : '';
+  const isEcho = (row: string) => {
+    if (!echoed) return false;
+    const norm = normalizeEcho(row.replace(/^[●○⏺✦•│>❯]\s*/, ''));
+    return norm.length >= 8 && echoed.includes(norm);
+  };
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    const line = cleanRow(lines[i] ?? '');
+    if (!line || RULE_ROW_RE.test(line)) continue;
+    if (isEcho(line)) continue;
+    if (MENU_OPTION_RE.test(line)) continue;
+    if (/^(?:run this command\?|choose an option|do you want to proceed\?)/i.test(line)) continue;
 
-    // Filter out menu choices and navigation keys from general activity feed
-    if (/^[>*•-]?\s*(?:\[[0-9]+\]|[0-9]+[.)])\s+/.test(line)) continue;
-    if (/↑\/↓|tab Amend|ctrl\+g|esc to cancel/i.test(line)) continue;
-    if (/^Run this command\?/i.test(line)) continue;
-    if (/^Choose an option/i.test(line)) continue;
+    // The spinner row: "✻ Crunching… (12s · ↑ 1.2k tokens · esc to interrupt)"
+    if (isSpinnerRow(line)) {
+      const status = stripSpinner(line);
+      if (status) liveStatus = status;
+      continue;
+    }
+    if (FOOTER_RE.test(line)) continue;
+    // Echo of what the user typed / the task prompt.
+    if (/^[❯>]\s/.test(line)) continue;
 
-    // Detect Tool calls & CLI operations
-    if (
-      /permission for:\s*(.*)/i.test(line) ||
-      /bash command:\s*(.*)/i.test(line) ||
-      /^running:\s*(.*)/i.test(line) ||
-      /^(?:tool\s+call|executing|command|calling tool|tool):\s*(.*)/i.test(line) ||
-      /^(?:●|○|\*|❯)\s*(?:Bash|Read|Edit|Write|Glob|Grep|View|Search)\b\s*(.*)/i.test(line)
-    ) {
-      const match = line.match(/(?:permission for:|bash command:|running:|tool\s+call:|executing:|command:|calling tool:|tool:|(?:●|○|\*|❯)\s*(?:Bash|Read|Edit|Write|Glob|Grep|View|Search)\b)\s*(.*)/i);
-      const cmdStr = (match?.[1] || lines[i + 1] || '').trim();
-      const text = cmdStr ? `Action: ${cmdStr}` : line;
-      if (!seen.has(text)) {
-        seen.add(text);
-        feed.push({
-          id: `item-${i}`,
-          type: 'tool',
-          text,
-          detail: cmdStr || line,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        });
-        currentActivity = text;
+    const call = line.match(TOOL_CALL_RE) || line.match(TOOL_ROW_RE);
+    if (call) {
+      const tool = call[1];
+      const arg = (call[2] || '').trim();
+      if (/^(?:Task|Agent)$/.test(tool)) {
+        push('tool', 'Sub-agent', arg || undefined);
+      } else {
+        push('tool', tool, arg || undefined);
       }
+      lastMeaningful = line;
       continue;
     }
 
-    // Detect Thinking / Reasoning
-    if (/^\|\s*(.*)/i.test(line) || /^thinking[:\s]*(.*)/i.test(line) || /claude is thinking|model is thinking/i.test(line) || /^(?:●|○)\s*thinking/i.test(line)) {
-      const text = line.replace(/^[|●○]\s*/, '').replace(/^thinking[:\s]*/i, '').trim();
-      if (text && text.length > 3 && !seen.has(text) && !text.includes('esc to dismiss')) {
-        seen.add(text);
-        feed.push({
-          id: `item-${i}`,
-          type: 'thought',
-          text,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        });
-        currentActivity = text;
-      }
+    const command = line.match(COMMAND_ROW_RE);
+    if (command) {
+      push('tool', 'Command', command[1].trim());
+      lastMeaningful = line;
       continue;
     }
 
-    // Detect File actions
-    if (/(?:edit|read|inspect|write|created)\s+(?:file\s+)?([a-zA-Z0-9_\-\.\/]+)/i.test(line)) {
-      const text = line;
-      if (!seen.has(text)) {
-        seen.add(text);
-        feed.push({
-          id: `item-${i}`,
-          type: 'tool',
-          text,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        });
-        currentActivity = text;
+    const action = line.match(ACTION_VERB_RE);
+    if (action) {
+      const detail = action[2].replace(/^`|`$/g, '').trim();
+      push('tool', detail ? `${action[1]} ${detail}` : action[1]);
+      lastMeaningful = line;
+      continue;
+    }
+
+    const labelled = line.match(LABELLED_TOOL_RE);
+    if (labelled) {
+      const value = labelled[1].trim();
+      push('tool', 'Action', value);
+      lastMeaningful = line;
+      continue;
+    }
+
+    const thinking = line.match(THINKING_RE);
+    if (thinking) {
+      const text = thinking[1].trim();
+      if (text.length > 3) push('thought', text);
+      continue;
+    }
+
+    const narrative = line.match(NARRATIVE_RE);
+    if (narrative) {
+      const text = narrative[1].trim();
+      if (text.length > 2) push('thought', text);
+      lastMeaningful = line;
+      continue;
+    }
+
+    // Tool results ("⎿ Read 20 lines") and wrapped continuation text are context only.
+    if (!/^(?:⎿|└)/.test(line) && line.length < 90) lastMeaningful = line;
+  }
+
+  if (liveRows) {
+    // History keeps every old spinner frame; only a spinner that is on screen now describes current work.
+    liveStatus = '';
+    for (const raw of liveRows) {
+      const row = cleanRow(raw ?? '');
+      if (row && isSpinnerRow(row)) {
+        const status = stripSpinner(row);
+        if (status) liveStatus = status;
       }
     }
   }
-
-  // Fallback to latest non-empty line if needed
-  if (lines.length > 0 && currentActivity === 'Manager AI is active') {
-    const lastLine = lines[lines.length - 1];
-    if (lastLine.length < 90 && !lastLine.startsWith('>')) {
-      currentActivity = lastLine;
-    }
+  if (liveStatus) {
+    currentActivity = liveStatus;
+  } else if (currentActivity === idle && lastMeaningful) {
+    currentActivity = cleanRow(lastMeaningful);
   }
 
-  return { feed: feed.slice(-15), currentActivity };
+  return { feed: feed.slice(-20), currentActivity };
+}
+
+function feedSignature(feed: ActivityFeedItem[]): string {
+  return feed.map((f) => f.id).join('\u0000');
 }
 
 export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
-  cmd,
-  args = [],
-  cwd,
-  taskId,
   sessionId,
-  env,
-  forceRestart,
-  spawnId,
+  role,
+  label,
+  launchPrompt,
+  pieceId,
+  cmd,
   isActive = true,
-  onExit,
-  onRestartSession,
-  onKillSession,
+  status,
+  permissionLevel,
+  initialPrompt = null,
   onSwitchToSteps,
+  onKill,
+  onRestart,
+  onSendMessage,
+  runActive = true,
 }) => {
-  const [detectedPrompt, setDetectedPrompt] = useState<CliDetectedPrompt | null>(null);
-  const [currentActivity, setCurrentActivity] = useState<string>('Initializing AI agent...');
+  const [detectedPrompt, setDetectedPrompt] = useState<CliDetectedPrompt | null>(initialPrompt);
+  const [currentActivity, setCurrentActivity] = useState<string>(`Connecting to ${label}…`);
   const [activityFeed, setActivityFeed] = useState<ActivityFeedItem[]>([]);
-  const [userMessages, setUserMessages] = useState<ActivityFeedItem[]>([]);
+  const [localEntries, setLocalEntries] = useState<ActivityFeedItem[]>([]);
   const [steerInput, setSteerInput] = useState('');
+  const [promptAnswer, setPromptAnswer] = useState('');
   const [isCopiedCommand, setIsCopiedCommand] = useState(false);
-  const [isSubmittingOption, setIsSubmittingOption] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState<{ signature: string; key: string } | null>(null);
   const [isFeedCollapsed, setIsFeedCollapsed] = useState(false);
+  const [exitCode, setExitCode] = useState<number | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const rawBufferRef = useRef<string>('');
-  const detectedPromptRef = useRef<CliDetectedPrompt | null>(null);
-  const promptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const feedScrollRef = useRef<HTMLDivElement>(null);
+  const labelRef = useRef(label);
+  const launchPromptRef = useRef(launchPrompt);
+  launchPromptRef.current = launchPrompt;
+  labelRef.current = label;
+  // Stable first-seen time + order for every feed entry (the extractor re-derives the feed on each repaint).
+  const firstSeenRef = useRef<Map<string, { time: string; seq: number }>>(new Map());
+  const seqRef = useRef(0);
 
-  // Send data over WebSocket PTY bridge
+  const nextSeq = () => ++seqRef.current;
+
+  const addLocalEntry = useCallback((type: ActivityFeedItem['type'], text: string, detail?: string): string => {
+    const seq = ++seqRef.current;
+    const id = `local-${seq}`;
+    const time = nowTime();
+    firstSeenRef.current.set(id, { time, seq });
+    setLocalEntries((prev) => [...prev.slice(-40), { id, type, text, detail, timestamp: time }]);
+    return id;
+  }, []);
+
+  const patchLocalEntry = useCallback((id: string, detail: string) => {
+    setLocalEntries((prev) => prev.map((e) => (e.id === id ? { ...e, detail } : e)));
+  }, []);
+
   const sendInput = useCallback(
-    (data: string) => {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        try {
-          wsRef.current.send(
-            JSON.stringify({
-              type: 'input',
-              taskId,
-              sessionId: sessionId || (taskId ? String(taskId) : undefined),
-              data,
-            })
-          );
-        } catch (err) {
-          console.warn('[Ergo Notes Bridge] Send error:', err);
-        }
-      }
+    async (data: string): Promise<boolean> => {
+      const ok = await sendAgentInput(sessionId, data);
+      if (!ok) addLocalEntry('status', `Could not reach ${labelRef.current}'s terminal — is the agent still running?`);
+      return ok;
     },
-    [taskId, sessionId]
+    [sessionId, addLocalEntry]
   );
 
-  // Connect WebSocket to /api/pty
+  /** Types a message and submits it a moment later (TUIs treat text + Enter in one write as a paste). */
+  const sendMessage = useCallback(
+    async (message: string): Promise<boolean> => {
+      const ok = await sendInput(message);
+      if (!ok) return false;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return sendInput('\r');
+    },
+    [sendInput]
+  );
+
+  // App learns about prompts from the bridge's event stream; mirror it in case it arrives before this view's socket.
+  const initialSignature = initialPrompt?.signature ?? null;
+  useEffect(() => {
+    setDetectedPrompt(initialPrompt ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSignature]);
+
+  // A new (or cleared) prompt ends any pending answer.
+  useEffect(() => {
+    setSubmitting(null);
+    setPromptAnswer('');
+  }, [detectedPrompt?.signature]);
+
+  // Attach (observe only — never resizes the agent's PTY) and render its output on a client-side screen.
   useEffect(() => {
     let isDisposed = false;
+    let screen = new TerminalScreen(DEFAULT_COLS, DEFAULT_ROWS);
+    let transcript = new ScreenTranscript();
+    let observeTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastFeedSig = '';
+    let lastActivity = '';
+
+    const observeScreen = () => {
+      transcript.observe(screen.isAltScreen() ? screen.visibleRows() : screen.tailRows(screen.rows * 2));
+    };
+
+    const publishFeed = () => {
+      const { feed, currentActivity: latest } = extractActivityEntries(
+        transcript.tail(400),
+        labelRef.current,
+        screen.visibleRows(),
+        launchPromptRef.current
+      );
+      if (firstSeenRef.current.size > 3000) {
+        // Keep the map bounded on very long sessions: only entries that can still be shown need their first-seen time.
+        const keep = new Set(feed.map((f) => f.id));
+        for (const id of firstSeenRef.current.keys()) {
+          if (!keep.has(id) && !id.startsWith('local-')) firstSeenRef.current.delete(id);
+        }
+      }
+      const stamped = feed.map((item) => {
+        let seen = firstSeenRef.current.get(item.id);
+        if (!seen) {
+          seen = { time: item.timestamp, seq: nextSeq() };
+          firstSeenRef.current.set(item.id, seen);
+        }
+        return { ...item, timestamp: seen.time };
+      });
+      const sig = feedSignature(stamped);
+      if (sig !== lastFeedSig) {
+        lastFeedSig = sig;
+        setActivityFeed(stamped);
+      }
+      if (latest !== lastActivity) {
+        lastActivity = latest;
+        setCurrentActivity(latest);
+      }
+    };
+
+    const scheduleObserve = () => {
+      if (observeTimer) return;
+      observeTimer = setTimeout(() => {
+        observeTimer = null;
+        if (isDisposed) return;
+        observeScreen();
+        publishFeed();
+      }, OBSERVE_THROTTLE_MS);
+    };
+
+    const applySize = (msg: any) => {
+      const cols = Number(msg?.cols);
+      const rows = Number(msg?.rows);
+      if (Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0 && (cols !== screen.cols || rows !== screen.rows)) {
+        screen.resize(cols, rows);
+      }
+    };
+
     const wsUrl = bridgeClient.getWsUrl('/api/pty');
     const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
 
     ws.addEventListener('open', () => {
       if (isDisposed) {
@@ -407,60 +424,12 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
         } catch {}
         return;
       }
-      ws.send(
-        JSON.stringify({
-          type: 'spawn',
-          taskId,
-          sessionId: sessionId || (taskId ? String(taskId) : undefined),
-          cmd,
-          args,
-          cwd,
-          env,
-          cols: 120,
-          rows: 40,
-          forceRestart,
-          spawnId,
-        })
-      );
+      try {
+        ws.send(JSON.stringify({ type: 'attach', sessionId, cols: DEFAULT_COLS, rows: DEFAULT_ROWS, observe: true }));
+      } catch (err) {
+        console.warn('[Ergo Notes Bridge] Attach send error:', err);
+      }
     });
-
-    // Interactive prompts block the CLI, so real ones leave the output quiet. Only look for a new prompt
-    // after a pause; streaming output (plans, checklists, the echoed task) never gets the chance to look like one.
-    const PROMPT_IDLE_MS = 650;
-    const echoedText = args.join('\n');
-    const evaluatePrompt = () => {
-      const prompt = parseCliInteractivePrompt(rawBufferRef.current.slice(-20000), { echoedText });
-      detectedPromptRef.current = prompt;
-      setDetectedPrompt(prompt);
-      if (prompt) {
-        setIsSubmittingOption(null);
-        setCurrentActivity(prompt.title || 'Action Requires Approval');
-      }
-    };
-
-    const processIncomingText = (chunk: string, isFullReplay: boolean = false) => {
-      if (isFullReplay) {
-        rawBufferRef.current = chunk;
-      } else {
-        rawBufferRef.current += chunk;
-        if (rawBufferRef.current.length > 250000) {
-          rawBufferRef.current = rawBufferRef.current.slice(-200000);
-        }
-      }
-
-      // New output after a prompt was shown usually means it was answered — hide it until things settle again.
-      if (detectedPromptRef.current && !isFullReplay) {
-        detectedPromptRef.current = null;
-        setDetectedPrompt(null);
-      }
-      if (promptTimerRef.current) clearTimeout(promptTimerRef.current);
-      promptTimerRef.current = setTimeout(evaluatePrompt, isFullReplay ? 0 : PROMPT_IDLE_MS);
-
-      // Extract activities and current thought
-      const { feed, currentActivity: latestActivity } = extractActivityEntries(stripAnsi(rawBufferRef.current.slice(-60000)));
-      setActivityFeed(feed);
-      setCurrentActivity(latestActivity);
-    };
 
     ws.addEventListener('message', (ev) => {
       if (isDisposed) return;
@@ -471,130 +440,260 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
         return;
       }
 
-      if (msg.type === 'replay') {
-        processIncomingText(msg.data, true);
+      if (msg.type === 'ready') {
+        setConnectionError(null);
+        applySize(msg);
+        // A 'ready' for a live process (first attach, reattach, or a relaunch under a reused key) supersedes any
+        // exit/prompt we showed for an earlier process on this key — e.g. one replayed from endedPtySessions
+        // because this view attached before the relaunch's spawn landed. The bridge follows with the live
+        // session's own prompt/exit, if any. An ended replay ('ended') is followed by its 'exit' instead.
+        if (!msg.ended) {
+          setExitCode(null);
+          setDetectedPrompt(null);
+          if (msg.restarted) {
+            lastActivity = '';
+            setCurrentActivity(`${labelRef.current} is starting…`);
+          }
+        }
+      } else if (msg.type === 'resized') {
+        // The Steps terminal refit the agent's PTY; keep our copy of the screen the same size.
+        applySize(msg);
+      } else if (msg.type === 'replay') {
+        // The whole output so far: rebuild screen + transcript from scratch, observing as we go so history that
+        // an alt-screen TUI repainted away still lands in the transcript.
+        const cols = screen.cols;
+        const rows = screen.rows;
+        screen = new TerminalScreen(cols, rows);
+        transcript = new ScreenTranscript();
+        applySize(msg);
+        const data: string = typeof msg.data === 'string' ? msg.data : '';
+        let pos = 0;
+        while (pos < data.length) {
+          let end = Math.min(data.length, pos + REPLAY_SLICE);
+          // Never split a surrogate pair.
+          const code = data.charCodeAt(end - 1);
+          if (end < data.length && code >= 0xd800 && code <= 0xdbff) end += 1;
+          screen.write(data.slice(pos, end));
+          observeScreen();
+          pos = end;
+        }
+        observeScreen();
+        publishFeed();
       } else if (msg.type === 'data') {
-        processIncomingText(msg.data, false);
+        if (typeof msg.data === 'string') {
+          screen.write(msg.data);
+          scheduleObserve();
+        }
+      } else if (msg.type === 'prompt') {
+        setDetectedPrompt(msg.prompt ?? null);
+      } else if (msg.type === 'auto-approved') {
+        const summary = typeof msg.summary === 'string' && msg.summary.trim() ? msg.summary.trim() : 'approval prompt';
+        addLocalEntry('approval', `Auto-approved: ${summary}`);
       } else if (msg.type === 'exit') {
-        onExit?.(msg.code);
-        if (promptTimerRef.current) clearTimeout(promptTimerRef.current);
-        detectedPromptRef.current = null;
-        setCurrentActivity(`Process exited with code ${msg.code}`);
+        const code = typeof msg.code === 'number' ? msg.code : -1;
+        setExitCode(code);
         setDetectedPrompt(null);
+        observeScreen();
+        publishFeed();
+        lastActivity = `Process exited with code ${code}`;
+        setCurrentActivity(lastActivity);
+      } else if (msg.type === 'error') {
+        const message = typeof msg.message === 'string' ? msg.message : 'Terminal bridge error';
+        setConnectionError(message);
       }
+    });
+
+    ws.addEventListener('error', () => {
+      if (isDisposed) return;
+      setConnectionError('Could not connect to the terminal bridge. Is the dev server running?');
     });
 
     return () => {
       isDisposed = true;
-      if (promptTimerRef.current) clearTimeout(promptTimerRef.current);
+      if (observeTimer) clearTimeout(observeTimer);
       try {
         ws.close();
       } catch {}
     };
-  }, [cmd, cwd, taskId, sessionId, env, onExit]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
+  // Combine extracted activity with local entries (your replies, auto-approvals) in first-seen order.
+  const allEntries = React.useMemo(() => {
+    const order = (item: ActivityFeedItem) => firstSeenRef.current.get(item.id)?.seq ?? 0;
+    return [...activityFeed, ...localEntries].sort((a, b) => order(a) - order(b));
+  }, [activityFeed, localEntries]);
 
   // Auto-scroll feed to bottom when entries update
   useEffect(() => {
     if (feedScrollRef.current) {
       feedScrollRef.current.scrollTop = feedScrollRef.current.scrollHeight;
     }
-  }, [activityFeed, userMessages, detectedPrompt]);
+  }, [allEntries, detectedPrompt]);
 
-  // Handle Option Click
-  const handleSelectOption = (option: CliPromptOption) => {
-    setIsSubmittingOption(option.key);
-    const defaultIdx = detectedPrompt?.options?.findIndex((o) => o.isDefault) ?? 0;
-    if (detectedPrompt?.type === 'confirmation') {
-      // [y/N]-style prompts: type the letter — Enter would pick whichever default the CLI chose.
-      sendInput(`${option.key}\r`);
-    } else if (option.isDefault) {
-      // Enter accepts the highlighted item in Ink-style menus (Claude Code, Antigravity).
-      sendInput('\r');
-    } else if (option.numbered === false && typeof option.index === 'number') {
-      // Un-numbered arrow menu: move from the highlighted item to the chosen one, then confirm.
-      const delta = option.index - Math.max(0, defaultIdx);
-      sendInput((delta > 0 ? '\x1b[B' : '\x1b[A').repeat(Math.abs(delta)) + '\r');
-    } else {
-      sendInput(`${option.key}\r`);
-    }
-
-    // Log user response into feed
-    const userEntry: ActivityFeedItem = {
-      id: `user-opt-${Date.now()}`,
-      type: 'user',
-      text: `Selected: [${option.key}] ${option.label}`,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-    };
-    setUserMessages((prev) => [...prev, userEntry]);
-
-    // Safety timeout in case CLI takes a moment to process and emit next output
+  const handleSelectOption = async (option: CliPromptOption) => {
+    const prompt = detectedPrompt;
+    if (!prompt) return;
+    setSubmitting({ signature: prompt.signature, key: option.key });
+    const sent = await sendInput(keystrokesForOption(prompt, option));
+    if (sent) addLocalEntry('user', `Selected: [${option.key}] ${option.label}`, promptSummary(prompt));
+    // The bridge clears the prompt once the CLI moves on; re-enable the buttons if it does not.
     setTimeout(() => {
-      setIsSubmittingOption((current) => (current === option.key ? null : current));
-    }, 2500);
+      setSubmitting((current) => (current && current.signature === prompt.signature && current.key === option.key ? null : current));
+    }, sent ? 4000 : 0);
   };
 
-  // Handle Mid-Task Steering Input Submission
-  const handleSteerSubmit = (e: React.FormEvent) => {
+  const handlePromptAnswer = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!steerInput.trim()) return;
-
-    const message = steerInput.trim();
-    // Send message + carriage return to PTY stdin
-    sendInput(`${message}\r`);
-
-    const userEntry: ActivityFeedItem = {
-      id: `user-msg-${Date.now()}`,
-      type: 'user',
-      text: message,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-    };
-    setUserMessages((prev) => [...prev, userEntry]);
-    setSteerInput('');
+    const answer = promptAnswer.trim();
+    if (!answer || !detectedPrompt) return;
+    setSubmitting({ signature: detectedPrompt.signature, key: '__answer__' });
+    const sent = await sendMessage(answer);
+    if (sent) {
+      addLocalEntry('user', `Replied: ${answer}`);
+      setPromptAnswer('');
+    } else {
+      setSubmitting(null);
+    }
   };
 
-  // Copy command helper
+  const handleSteerSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const message = steerInput.trim();
+    if (!message) return;
+    setSteerInput('');
+    if (!onSendMessage) {
+      const sent = await sendMessage(message);
+      if (sent) addLocalEntry('user', message);
+      else setSteerInput(message);
+      return;
+    }
+    // Shown as the user's message right away; its status follows the delivery.
+    const entryId = addLocalEntry('user', message, runActive ? 'Sending…' : 'Continuing the task…');
+    const res = await onSendMessage(message, {
+      onDelivered: () => patchLocalEntry(entryId, 'Delivered'),
+      onDropped: () => patchLocalEntry(entryId, 'Not delivered — the agent ended first'),
+    });
+    patchLocalEntry(entryId, describeTaskMessage(res));
+    if (!res.ok) setSteerInput((cur) => cur || message);
+  };
+
   const handleCopyCommand = (text: string) => {
     if (!text) return;
-    navigator.clipboard.writeText(text);
+    navigator.clipboard?.writeText(text).catch(() => {});
     setIsCopiedCommand(true);
     setTimeout(() => setIsCopiedCommand(false), 2000);
   };
 
-  // Combine feed entries chronologically
-  const allEntries = [...activityFeed, ...userMessages].sort((a, b) =>
-    a.timestamp.localeCompare(b.timestamp)
-  );
+  const isBypassDialog = detectedPrompt ? isBypassAcceptanceDialog(detectedPrompt) : false;
+  // The bridge auto-answers Full-access approvals before they reach any view, so an approval prompt that is still
+  // shown under Full access is one it deliberately handed back (no safe "allow once" option, repeated attempts did
+  // not clear it, or the live session is not yet on Full access) — the user has to answer it.
+  const autoApproveSkipped =
+    Boolean(detectedPrompt) && detectedPrompt!.kind === 'approval' && permissionLevel === 'bypass' && !isBypassDialog;
+  const hasExited = exitCode !== null && (status === undefined || status === 'running' || status === 'starting');
+
+  const statusBadge = (() => {
+    if (detectedPrompt && detectedPrompt.kind !== 'notice') {
+      return (
+        <span className="status-badge is-waiting">
+          <span className="pulse-dot-amber" />
+          <span>{detectedPrompt.kind === 'approval' ? 'Needs approval' : 'Needs your answer'}</span>
+        </span>
+      );
+    }
+    if (hasExited) {
+      return (
+        <span className="status-badge is-idle">
+          <span className="dot-gray" />
+          <span>Exited</span>
+        </span>
+      );
+    }
+    switch (status) {
+      case 'starting':
+      case 'running':
+      case 'awaiting_approval':
+        return (
+          <span className="status-badge is-running">
+            <span className="pulse-dot-emerald" />
+            <span>{status === 'starting' ? 'Starting' : 'Working'}</span>
+          </span>
+        );
+      case 'waiting':
+        return (
+          <span className="status-badge is-waiting-agents">
+            <span className="dot-violet" />
+            <span>{role === 'manager' ? 'Waiting on agents' : 'Waiting'}</span>
+          </span>
+        );
+      case 'done':
+        return (
+          <span className="status-badge is-done">
+            <Check size={10} />
+            <span>Done</span>
+          </span>
+        );
+      case 'failed':
+        return (
+          <span className="status-badge is-failed">
+            <span className="dot-rose" />
+            <span>Failed</span>
+          </span>
+        );
+      case 'cancelled':
+        return (
+          <span className="status-badge is-idle">
+            <span className="dot-gray" />
+            <span>Stopped</span>
+          </span>
+        );
+      default:
+        return isActive ? (
+          <span className="status-badge is-running">
+            <span className="pulse-dot-emerald" />
+            <span>Working</span>
+          </span>
+        ) : (
+          <span className="status-badge is-idle">
+            <span className="dot-gray" />
+            <span>Idle</span>
+          </span>
+        );
+    }
+  })();
+
+  const promptTitle = detectedPrompt
+    ? detectedPrompt.toolLabel ||
+      (detectedPrompt.kind === 'approval'
+        ? 'Action Requires Approval'
+        : detectedPrompt.kind === 'notice'
+        ? detectedPrompt.title || 'Notice'
+        : 'Agent is asking')
+    : '';
+  const hasOptions = Boolean(detectedPrompt?.options && detectedPrompt.options.length > 0);
 
   return (
-    <div className="cli-notes-bridge">
-      {/* ── Top Bar: AI Agent Status & Power-User Switch ── */}
+    <div className={`cli-notes-bridge role-${role}`}>
+      {/* ── Top Bar: which agent this is, its status & controls ── */}
       <div className="cli-notes-bridge-header">
         <div className="bridge-header-left">
-          <div className="bridge-ai-avatar">
-            <Brain size={14} className="avatar-icon" />
+          <div className={`bridge-ai-avatar role-${role}`}>
+            {role === 'qa' ? (
+              <ShieldCheck size={14} className="avatar-icon" />
+            ) : role === 'worker' ? (
+              <Users size={14} className="avatar-icon" />
+            ) : (
+              <Brain size={14} className="avatar-icon" />
+            )}
           </div>
           <div className="bridge-title-group">
             <div className="bridge-main-title">
-              <span>Manager AI</span>
+              <AgentRoleBadge role={role} pieceId={pieceId} label={label} size="md" />
               <span className="bridge-cmd-tag">{cmd}</span>
             </div>
             <div className="bridge-status-line">
-              {detectedPrompt ? (
-                <span className="status-badge is-waiting">
-                  <span className="pulse-dot-amber" />
-                  <span>Action Required</span>
-                </span>
-              ) : isActive ? (
-                <span className="status-badge is-running">
-                  <span className="pulse-dot-emerald" />
-                  <span>Working</span>
-                </span>
-              ) : (
-                <span className="status-badge is-idle">
-                  <span className="dot-gray" />
-                  <span>Idle</span>
-                </span>
-              )}
+              {statusBadge}
               <span className="bridge-current-thought" title={currentActivity}>
                 {currentActivity}
               </span>
@@ -608,7 +707,7 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
               type="button"
               className="bridge-terminal-switch-btn"
               onClick={onSwitchToSteps}
-              title="Open the Steps tab to interact directly with the raw embedded terminal"
+              title={`Open the Steps tab to use ${label}'s raw embedded terminal`}
             >
               <Terminal size={11} />
               <span>Raw Terminal</span>
@@ -616,45 +715,61 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
             </button>
           )}
 
-          {onRestartSession && (
-            <button
-              type="button"
-              className="bridge-ctrl-btn"
-              onClick={onRestartSession}
-              title="Restart AI agent process"
-            >
+          {onRestart && (
+            <button type="button" className="bridge-ctrl-btn" onClick={onRestart} title="Restart the whole task run">
               <RotateCcw size={11} />
             </button>
           )}
 
-          {isActive && onKillSession && (
-            <button
-              type="button"
-              className="bridge-ctrl-btn is-danger"
-              onClick={onKillSession}
-              title="Stop AI agent"
-            >
+          {isActive && exitCode === null && onKill && (
+            <button type="button" className="bridge-ctrl-btn is-danger" onClick={onKill} title={`Stop ${label}`}>
               <Square size={11} />
             </button>
           )}
         </div>
       </div>
 
-      {/* ── Interactive Approval / Permission GUI Card ── */}
+      {connectionError && (
+        <div className="bridge-connection-error">
+          <AlertTriangle size={12} />
+          <span>{connectionError}</span>
+        </div>
+      )}
+
+      {/* ── Interactive Approval / Question Card (detected by the bridge on the agent's rendered screen) ── */}
       {detectedPrompt && (
-        <div className="cli-notes-prompt-card">
+        <div className={`cli-notes-prompt-card kind-${detectedPrompt.kind}`}>
           <div className="prompt-card-header">
             <div className="prompt-header-title">
-              <ShieldAlert size={15} color="var(--accent-amber)" />
-              <span>{detectedPrompt.title || 'Permission Request'}</span>
+              {detectedPrompt.kind === 'question' ? (
+                <HelpCircle size={15} color="var(--accent-amber)" />
+              ) : (
+                <ShieldAlert size={15} color="var(--accent-amber)" />
+              )}
+              <span>{promptTitle}</span>
             </div>
-            <span className="prompt-interactive-pill">Requires Input</span>
+            <span className="prompt-interactive-pill">
+              <AgentRoleBadge role={role} pieceId={pieceId} label={label} />
+            </span>
           </div>
+
+          {autoApproveSkipped && (
+            <div className="prompt-auto-note is-warning">
+              <AlertTriangle size={12} />
+              <span>Full access is on, but Ergo didn't approve this one automatically — please answer it.</span>
+            </div>
+          )}
+          {isBypassDialog && (
+            <div className="prompt-auto-note is-warning">
+              <AlertTriangle size={12} />
+              <span>The CLI asks once to confirm Full access (bypass permissions) mode. Ergo never answers this for you.</span>
+            </div>
+          )}
 
           {detectedPrompt.targetCommand && (
             <div className="prompt-command-container">
               <div className="prompt-command-header">
-                <span className="command-label">Command to execute:</span>
+                <span className="command-label">Command to execute</span>
                 <button
                   type="button"
                   className="command-copy-btn"
@@ -665,28 +780,40 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
                   <span>{isCopiedCommand ? 'Copied' : 'Copy'}</span>
                 </button>
               </div>
-              <div className="prompt-command-snippet">
-                <code>$ {detectedPrompt.targetCommand}</code>
-              </div>
+              <pre className="prompt-command-pre">$ {detectedPrompt.targetCommand}</pre>
             </div>
+          )}
+
+          {detectedPrompt.description && <p className="prompt-description-text">{detectedPrompt.description}</p>}
+
+          {detectedPrompt.detailLines && detectedPrompt.detailLines.length > 0 && (
+            <pre className="prompt-detail-lines">
+              {detectedPrompt.detailLines.map((line, idx) => (
+                <div
+                  key={idx}
+                  className={/^\s*\+/.test(line) ? 'diff-line-add' : /^\s*-/.test(line) ? 'diff-line-del' : undefined}
+                >
+                  {line || ' '}
+                </div>
+              ))}
+            </pre>
           )}
 
           <p className="prompt-question-text">{detectedPrompt.question}</p>
 
-          {/* Multiple-Choice or Confirmation Options */}
-          {detectedPrompt.options && detectedPrompt.options.length > 0 ? (
+          {hasOptions ? (
             <div className="prompt-options-grid">
-              {detectedPrompt.options.map((opt) => {
-                const isSubmitting = isSubmittingOption === opt.key;
+              {detectedPrompt.options!.map((opt) => {
+                const isSubmitting = submitting?.signature === detectedPrompt.signature && submitting.key === opt.key;
                 return (
                   <button
-                    key={opt.key}
+                    key={`${opt.key}-${opt.index ?? ''}`}
                     type="button"
                     className={`prompt-option-btn ${opt.isDefault ? 'is-default' : ''} ${
                       opt.isDestructive ? 'is-destructive' : ''
                     } ${isSubmitting ? 'is-submitting' : ''}`}
                     onClick={() => handleSelectOption(opt)}
-                    disabled={isSubmittingOption !== null}
+                    disabled={submitting !== null}
                   >
                     <span className="opt-key-badge">{opt.key}</span>
                     <span className="opt-label-text">{opt.label}</span>
@@ -695,55 +822,56 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
                 );
               })}
             </div>
-          ) : detectedPrompt.type === 'freeform' && !/credit balance|insufficient/i.test(detectedPrompt.question) ? (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                const inputEl = (e.currentTarget.elements.namedItem('promptAnswer') as HTMLInputElement);
-                const answer = inputEl?.value?.trim();
-                if (answer) {
-                  sendInput(`${answer}\r`);
-                  setUserMessages((prev) => [
-                    ...prev,
-                    {
-                      id: `user-reply-${Date.now()}`,
-                      type: 'user',
-                      text: `Replied: ${answer}`,
-                      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-                    },
-                  ]);
-                  inputEl.value = '';
-                }
-              }}
-              style={{ display: 'flex', gap: '0.45rem', marginTop: '0.4rem' }}
-            >
+          ) : detectedPrompt.kind === 'question' || (detectedPrompt.type === 'freeform' && detectedPrompt.kind !== 'notice') ? (
+            <form onSubmit={handlePromptAnswer} style={{ display: 'flex', gap: '0.45rem', marginTop: '0.2rem' }}>
               <input
                 type="text"
-                name="promptAnswer"
-                placeholder="Type your reply to the AI prompt..."
-                className="steer-input-field"
+                placeholder={`Type your reply to ${label}…`}
+                className="steer-input-field prompt-answer-input"
                 style={{ flex: 1 }}
+                value={promptAnswer}
+                onChange={(e) => setPromptAnswer(e.target.value)}
                 autoFocus
               />
-              <button type="submit" className="btn btn-primary" style={{ padding: '0.35rem 0.85rem', fontSize: '0.78rem' }}>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                style={{ padding: '0.35rem 0.85rem', fontSize: '0.78rem' }}
+                disabled={!promptAnswer.trim() || submitting !== null}
+              >
                 <Send size={12} />
                 <span>Submit</span>
               </button>
             </form>
           ) : null}
+
+          <div className="prompt-card-footer">
+            {detectedPrompt.rawSnippet && (
+              <details className="prompt-raw-details">
+                <summary>Show what the agent is asking</summary>
+                <pre>{detectedPrompt.rawSnippet}</pre>
+              </details>
+            )}
+            {onSwitchToSteps && (
+              <button type="button" className="prompt-raw-terminal-link" onClick={onSwitchToSteps}>
+                <Terminal size={11} />
+                <span>Raw Terminal</span>
+              </button>
+            )}
+          </div>
         </div>
       )}
 
-      {/* ── AI Thinking & Activity Stream ── */}
+      {/* ── Activity Stream ── */}
       <div className={`cli-notes-feed-container ${isFeedCollapsed ? 'is-collapsed' : ''}`}>
         <div
           className="feed-container-header"
           onClick={() => setIsFeedCollapsed((v) => !v)}
-          title={isFeedCollapsed ? 'Expand AI Activity Stream' : 'Collapse AI Activity Stream'}
+          title={isFeedCollapsed ? 'Expand activity stream' : 'Collapse activity stream'}
         >
           <div className="feed-header-left">
             <Sparkles size={12} color="var(--accent-cyan)" />
-            <span>AI Activity Stream</span>
+            <span>{label} · Activity</span>
             {allEntries.length > 0 && <span className="feed-count-badge">{allEntries.length}</span>}
           </div>
           <button type="button" className="feed-toggle-btn" aria-label="Toggle feed">
@@ -755,7 +883,7 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
           <div className="feed-scroll-body" ref={feedScrollRef}>
             {allEntries.length === 0 ? (
               <div className="feed-empty-hint">
-                <span>Watching AI progress... actions and thoughts will stream here in real time.</span>
+                <span>Watching {label}… actions and thoughts will stream here in real time.</span>
               </div>
             ) : (
               allEntries.map((item) => (
@@ -764,11 +892,12 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
                     {item.type === 'tool' && <Command size={11} color="var(--accent-cyan)" />}
                     {item.type === 'thought' && <Brain size={11} color="var(--accent-violet)" />}
                     {item.type === 'user' && <MessageSquare size={11} color="var(--accent-emerald)" />}
+                    {item.type === 'approval' && <ShieldCheck size={11} color="var(--accent-emerald)" />}
                     {item.type === 'status' && <Sparkles size={11} color="var(--text-muted)" />}
                   </div>
                   <div className="feed-item-content">
                     <span className="feed-item-text">{item.text}</span>
-                    {item.detail && <code className="feed-item-detail">{item.detail}</code>}
+                    {item.detail && item.detail !== item.text && <code className="feed-item-detail">{item.detail}</code>}
                   </div>
                   <span className="feed-item-time">{item.timestamp}</span>
                 </div>
@@ -784,7 +913,11 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
           <input
             type="text"
             className="steer-input-field"
-            placeholder="Steer the AI mid-task (e.g. 'focus on tests', 'skip this step', 'use TypeScript')..."
+            placeholder={
+              runActive
+                ? `Message ${label} while it works — it takes it in at its next step…`
+                : 'Send a follow-up — continues this task from where it left off…'
+            }
             value={steerInput}
             onChange={(e) => setSteerInput(e.target.value)}
           />
@@ -792,10 +925,10 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
             type="submit"
             className="steer-send-btn"
             disabled={!steerInput.trim()}
-            title="Send instruction to the AI agent"
+            title={runActive ? `Send this to ${label}` : 'Continue the task with this message'}
           >
             <Send size={12} />
-            <span>Send</span>
+            <span>{runActive ? 'Send' : 'Continue'}</span>
           </button>
         </div>
       </form>

@@ -1,0 +1,2732 @@
+[
+ {
+  "id": 0,
+  "isSubtask": true,
+  "prefixText": "it also doesn’t seem to be correctly pulling in knowledge from other tasks ",
+  "truth": "/ freeform text in the project — make sure it’s able to read from human workspace",
+  "taskText": "it also doesn’t seem to be correctly pulling in knowledge from other tasks ",
+  "contextBefore": "- AI workspace execution\n  - ‘related tasks’ card needs to move to before ‘overview’",
+  "nextLine": "  - task overview still isn’t populated on task startup",
+  "parentTaskTitle": "AI workspace execution",
+  "local": {
+   "text": "",
+   "ms": 191
+  },
+  "cloud": {
+   "text": "",
+   "kind": "rewrite",
+   "full": "it also doesn't seem to be correctly pulling in knowledge from other tasks",
+   "ms": 2125,
+   "usage": {
+    "inputTokens": 834,
+    "outputTokens": 28,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 832,
+    "calls": 1,
+    "costUsd": 0.0001806
+   }
+  }
+ },
+ {
+  "id": 1,
+  "isSubtask": true,
+  "prefixText": "Running tasks still ",
+  "truth": "seem to have broken functionality/UI",
+  "taskText": "Running tasks still ",
+  "contextBefore": "- AI workspace execution\n  - ‘related tasks’ card needs to move to before ‘overview’\n  - it also doesn’t seem to be correctly pulling in knowledge from other tasks / freeform text in the project — make sure it’s able to read from human workspace\n  - task overview still isn’t populated on task startup",
+  "nextLine": "  - command approval still seems to be too frequent, even on ‘full access’ mode — at the very least, switching approval mode mid-task need to take affect immediately if possible",
+  "parentTaskTitle": "AI workspace execution",
+  "local": {
+   "text": "doesn’t seem to be working as expected",
+   "ms": 400
+  },
+  "cloud": {
+   "text": "need to be checked",
+   "kind": "suffix",
+   "full": "Running tasks still need to be checked",
+   "ms": 2263,
+   "usage": {
+    "inputTokens": 813,
+    "outputTokens": 13,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 811,
+    "calls": 1,
+    "costUsd": 0.0001689
+   }
+  }
+ },
+ {
+  "id": 2,
+  "isSubtask": true,
+  "prefixText": "command approval still seems to be too frequent, even on ‘full access’ mode — at the ",
+  "truth": "very least, switching approval mode mid-task need to take affect immediately if possible",
+  "taskText": "command approval still seems to be too frequent, even on ‘full access’ mode — at the ",
+  "contextBefore": "- AI workspace execution\n  - ‘related tasks’ card needs to move to before ‘overview’\n  - it also doesn’t seem to be correctly pulling in knowledge from other tasks / freeform text in the project — make sure it’s able to read from human workspace\n  - task overview still isn’t populated on task startup\n  - Running tasks still seem to have broken functionality/UI",
+  "nextLine": "  - when an action requires approval and the prompt pops up, it doesn’t display what that command is, so the user doesn’t know what they’re being asked to accept",
+  "parentTaskTitle": "AI workspace execution",
+  "local": {
+   "text": "time",
+   "ms": 152
+  },
+  "cloud": {
+   "text": "moment, it's blocking routine commands that should run without prompting",
+   "kind": "rewrite",
+   "full": "command approval still seems to be too frequent, even in \"full access\" mode — at the moment, it's blocking routine commands that should run without prompting",
+   "ms": 2637,
+   "usage": {
+    "inputTokens": 834,
+    "outputTokens": 45,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 832,
+    "calls": 1,
+    "costUsd": 0.00018910000000000002
+   }
+  }
+ },
+ {
+  "id": 3,
+  "isSubtask": true,
+  "prefixText": "when an action requires approval and the prompt pops up, ",
+  "truth": "it doesn’t display what that command is, so the user doesn’t know what they’re being asked to accept",
+  "taskText": "when an action requires approval and the prompt pops up, ",
+  "contextBefore": "- AI workspace execution\n  - ‘related tasks’ card needs to move to before ‘overview’\n  - it also doesn’t seem to be correctly pulling in knowledge from other tasks / freeform text in the project — make sure it’s able to read from human workspace\n  - task overview still isn’t populated on task startup\n  - Running tasks still seem to have broken functionality/UI\n  - command approval still seems to be too frequent, even on ‘full access’ mode — at the very least, switching approval mode mid-task need to take affect immediately if possible",
+  "nextLine": "  - completion logs aren’t piped from the embedded terminal CLI into the completion logs",
+  "parentTaskTitle": "AI workspace execution",
+  "local": {
+   "text": "the completion logs are not piped from the embedded terminal CLI into the completion logs",
+   "ms": 301
+  },
+  "cloud": {
+   "text": "the user should be able to review the details and approve or deny it before execution continues",
+   "kind": "suffix",
+   "full": "when an action requires approval and the prompt pops up, the user should be able to review the details and approve or deny it before execution continues",
+   "ms": 2074,
+   "usage": {
+    "inputTokens": 823,
+    "outputTokens": 39,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 821,
+    "calls": 1,
+    "costUsd": 0.0001839
+   }
+  }
+ },
+ {
+  "id": 4,
+  "isSubtask": true,
+  "prefixText": "completion logs aren’t piped from the embedded ",
+  "truth": "terminal CLI into the completion logs",
+  "taskText": "completion logs aren’t piped from the embedded ",
+  "contextBefore": "  - ‘related tasks’ card needs to move to before ‘overview’\n  - it also doesn’t seem to be correctly pulling in knowledge from other tasks / freeform text in the project — make sure it’s able to read from human workspace\n  - task overview still isn’t populated on task startup\n  - Running tasks still seem to have broken functionality/UI\n  - command approval still seems to be too frequent, even on ‘full access’ mode — at the very least, switching approval mode mid-task need to take affect immediately if possible\n  - when an action requires approval and the prompt pops up, it doesn’t display what that command is, so the user doesn’t know what they’re being asked to accept",
+  "nextLine": "  - A ‘full-auto’ mode that selects the most appropriate model for the task, based on the selected provider’s available models, each model’s strengths, and the task’s type & complexity",
+  "parentTaskTitle": "AI workspace execution",
+  "local": {
+   "text": "logs, so the user doesn’t know what they’re being asked to accept",
+   "ms": 568
+  },
+  "cloud": {
+   "text": "terminal to the workspace output panel",
+   "kind": "rewrite",
+   "full": "completion logs aren't piped from the embedded terminal to the workspace output panel",
+   "ms": 2081,
+   "usage": {
+    "inputTokens": 822,
+    "outputTokens": 27,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 820,
+    "calls": 1,
+    "costUsd": 0.0001777
+   }
+  }
+ },
+ {
+  "id": 5,
+  "isSubtask": true,
+  "prefixText": "A ‘full-auto’ mode that selects the most appropriate model for the task, based ",
+  "truth": "on the selected provider’s available models, each model’s strengths, and the task’s type & complexity",
+  "taskText": "A ‘full-auto’ mode that selects the most appropriate model for the task, based ",
+  "contextBefore": "  - it also doesn’t seem to be correctly pulling in knowledge from other tasks / freeform text in the project — make sure it’s able to read from human workspace\n  - task overview still isn’t populated on task startup\n  - Running tasks still seem to have broken functionality/UI\n  - command approval still seems to be too frequent, even on ‘full access’ mode — at the very least, switching approval mode mid-task need to take affect immediately if possible\n  - when an action requires approval and the prompt pops up, it doesn’t display what that command is, so the user doesn’t know what they’re being asked to accept\n  - completion logs aren’t piped from the embedded terminal CLI into the completion logs",
+  "nextLine": "  - Periodic “how did this task do?” surveys for the tasks Ergo suspects might be able to use a cheaper model, or where it doesn’t have enough information about the sort of task to know whether it performed well",
+  "parentTaskTitle": "AI workspace execution",
+  "local": {
+   "text": "on the task type",
+   "ms": 644
+  },
+  "cloud": {
+   "text": "on task complexity, cost, and latency requirements",
+   "kind": "rewrite",
+   "full": "A 'full-auto' mode that selects the most appropriate model for the task, based on task complexity, cost, and latency requirements",
+   "ms": 2401,
+   "usage": {
+    "inputTokens": 834,
+    "outputTokens": 42,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 832,
+    "calls": 1,
+    "costUsd": 0.0001876
+   }
+  }
+ },
+ {
+  "id": 6,
+  "isSubtask": true,
+  "prefixText": "Periodic “how did this task do?” surveys for the tasks Ergo suspects might be ",
+  "truth": "able to use a cheaper model, or where it doesn’t have enough information about the sort of task to know whether it performed well",
+  "taskText": "Periodic “how did this task do?” surveys for the tasks Ergo suspects might be ",
+  "contextBefore": "  - task overview still isn’t populated on task startup\n  - Running tasks still seem to have broken functionality/UI\n  - command approval still seems to be too frequent, even on ‘full access’ mode — at the very least, switching approval mode mid-task need to take affect immediately if possible\n  - when an action requires approval and the prompt pops up, it doesn’t display what that command is, so the user doesn’t know what they’re being asked to accept\n  - completion logs aren’t piped from the embedded terminal CLI into the completion logs\n  - A ‘full-auto’ mode that selects the most appropriate model for the task, based on the selected provider’s available models, each model’s strengths, and the task’s type & complexity",
+  "nextLine": "  - We just need simple good/bad button answers",
+  "parentTaskTitle": "AI workspace execution",
+  "local": {
+   "text": "to be implemented",
+   "ms": 463
+  },
+  "cloud": {
+   "text": "incomplete or stalled",
+   "kind": "rewrite",
+   "full": "Periodic \"how did this task do?\" surveys for the tasks Ergo suspects might be incomplete or stalled",
+   "ms": 2130,
+   "usage": {
+    "inputTokens": 836,
+    "outputTokens": 39,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 834,
+    "calls": 1,
+    "costUsd": 0.0001865
+   }
+  }
+ },
+ {
+  "id": 7,
+  "isSubtask": true,
+  "prefixText": "We just need simple ",
+  "truth": "good/bad button answers",
+  "taskText": "We just need simple ",
+  "contextBefore": "  - Running tasks still seem to have broken functionality/UI\n  - command approval still seems to be too frequent, even on ‘full access’ mode — at the very least, switching approval mode mid-task need to take affect immediately if possible\n  - when an action requires approval and the prompt pops up, it doesn’t display what that command is, so the user doesn’t know what they’re being asked to accept\n  - completion logs aren’t piped from the embedded terminal CLI into the completion logs\n  - A ‘full-auto’ mode that selects the most appropriate model for the task, based on the selected provider’s available models, each model’s strengths, and the task’s type & complexity\n  - Periodic “how did this task do?” surveys for the tasks Ergo suspects might be able to use a cheaper model, or where it doesn’t have enough information about the sort of task to know whether it performed well",
+  "nextLine": "  - This will be an easy but valuable metric directly from the user, to help Ergo better determine on the next run whether it should route up/down the model choice for similar tasks",
+  "parentTaskTitle": "AI workspace execution",
+  "local": {
+   "text": "to use a cheaper model, or where it doesn’t have enough information about the sort of task to know whether it performed",
+   "ms": 985
+  },
+  "cloud": {
+   "text": "enough tooling to get the AI workspace running locally.",
+   "kind": "suffix",
+   "full": "We just need simple enough tooling to get the AI workspace running locally.",
+   "ms": 2227,
+   "usage": {
+    "inputTokens": 812,
+    "outputTokens": 24,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 810,
+    "calls": 1,
+    "costUsd": 0.0001742
+   }
+  }
+ },
+ {
+  "id": 8,
+  "isSubtask": true,
+  "prefixText": "This will be an easy but valuable metric directly from the user, ",
+  "truth": "to help Ergo better determine on the next run whether it should route up/down the model choice for similar tasks",
+  "taskText": "This will be an easy but valuable metric directly from the user, ",
+  "contextBefore": "  - command approval still seems to be too frequent, even on ‘full access’ mode — at the very least, switching approval mode mid-task need to take affect immediately if possible\n  - when an action requires approval and the prompt pops up, it doesn’t display what that command is, so the user doesn’t know what they’re being asked to accept\n  - completion logs aren’t piped from the embedded terminal CLI into the completion logs\n  - A ‘full-auto’ mode that selects the most appropriate model for the task, based on the selected provider’s available models, each model’s strengths, and the task’s type & complexity\n  - Periodic “how did this task do?” surveys for the tasks Ergo suspects might be able to use a cheaper model, or where it doesn’t have enough information about the sort of task to know whether it performed well\n  - We just need simple good/bad button answers",
+  "nextLine": "  - For tasks where Ergo already has a good idea of how they perform, surveying the user isn’t necessary",
+  "parentTaskTitle": "AI workspace execution",
+  "local": {
+   "text": "but for tasks where Ergo doesn’t have a good idea of how they perform, surveying the user is necessary",
+   "ms": 1044
+  },
+  "cloud": {
+   "text": "user",
+   "kind": "rewrite",
+   "full": "This will be an easy but valuable metric collected directly from the user",
+   "ms": 2094,
+   "usage": {
+    "inputTokens": 825,
+    "outputTokens": 21,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 823,
+    "calls": 1,
+    "costUsd": 0.00017529999999999998
+   }
+  }
+ },
+ {
+  "id": 9,
+  "isSubtask": true,
+  "prefixText": "For tasks where Ergo already has a good idea ",
+  "truth": "of how they perform, surveying the user isn’t necessary",
+  "taskText": "For tasks where Ergo already has a good idea ",
+  "contextBefore": "  - when an action requires approval and the prompt pops up, it doesn’t display what that command is, so the user doesn’t know what they’re being asked to accept\n  - completion logs aren’t piped from the embedded terminal CLI into the completion logs\n  - A ‘full-auto’ mode that selects the most appropriate model for the task, based on the selected provider’s available models, each model’s strengths, and the task’s type & complexity\n  - Periodic “how did this task do?” surveys for the tasks Ergo suspects might be able to use a cheaper model, or where it doesn’t have enough information about the sort of task to know whether it performed well\n  - We just need simple good/bad button answers\n  - This will be an easy but valuable metric directly from the user, to help Ergo better determine on the next run whether it should route up/down the model choice for similar tasks",
+  "nextLine": "  - finished tasks still have a bug where they start themselves back up again when the user opens their AI workspace card",
+  "parentTaskTitle": "AI workspace execution",
+  "local": {
+   "text": ", we need to make sure that Ergo can handle the situation where the user has already completed a task and then restart",
+   "ms": 951
+  },
+  "cloud": {
+   "text": "of the approach, skip the planning step and execute directly",
+   "kind": "suffix",
+   "full": "For tasks where Ergo already has a good idea of the approach, skip the planning step and execute directly",
+   "ms": 2215,
+   "usage": {
+    "inputTokens": 822,
+    "outputTokens": 33,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 820,
+    "calls": 1,
+    "costUsd": 0.0001807
+   }
+  }
+ },
+ {
+  "id": 10,
+  "isSubtask": true,
+  "prefixText": "also the header truncation ",
+  "truth": "in the AI Workspace tag name",
+  "taskText": "also the header truncation ",
+  "contextBefore": "  - For tasks where Ergo already has a good idea of how they perform, surveying the user isn’t necessary\n  - finished tasks still have a bug where they start themselves back up again when the user opens their AI workspace card\n  - this is especially weird and detrimental because the tasks don’t indicate they’re running, and thus have no way to stop them once they automatically restart\n- UI/UX\n  - Light mode needs to be enforced by default\n  - header coloring",
+  "nextLine": "  - AI Workspace actions card has too much visual clutter — reduce the buttons and weird element wrapping",
+  "parentTaskTitle": "UI/UX",
+  "local": {
+   "text": "",
+   "ms": 317
+  },
+  "cloud": {
+   "text": "issue in the table view",
+   "kind": "suffix",
+   "full": "also the header truncation issue in the table view",
+   "ms": 2008,
+   "usage": {
+    "inputTokens": 811,
+    "outputTokens": 14,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 809,
+    "calls": 1,
+    "costUsd": 0.00016900000000000004
+   }
+  }
+ },
+ {
+  "id": 11,
+  "isSubtask": true,
+  "prefixText": "AI Workspace actions card has too ",
+  "truth": "much visual clutter — reduce the buttons and weird element wrapping",
+  "taskText": "AI Workspace actions card has too ",
+  "contextBefore": "  - finished tasks still have a bug where they start themselves back up again when the user opens their AI workspace card\n  - this is especially weird and detrimental because the tasks don’t indicate they’re running, and thus have no way to stop them once they automatically restart\n- UI/UX\n  - Light mode needs to be enforced by default\n  - header coloring\n  - also the header truncation in the AI Workspace tag name",
+  "nextLine": "  - subtask formatting",
+  "parentTaskTitle": "UI/UX",
+  "local": {
+   "text": "o be more flexible",
+   "ms": 273
+  },
+  "cloud": {
+   "text": "many buttons and cramped spacing",
+   "kind": "suffix",
+   "full": "AI Workspace actions card has too many buttons and cramped spacing",
+   "ms": 2065,
+   "usage": {
+    "inputTokens": 816,
+    "outputTokens": 24,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 814,
+    "calls": 1,
+    "costUsd": 0.00017500000000000003
+   }
+  }
+ },
+ {
+  "id": 12,
+  "isSubtask": true,
+  "prefixText": "checked subtasks are pushed ",
+  "truth": "down strangely with top padding",
+  "taskText": "checked subtasks are pushed ",
+  "contextBefore": "- UI/UX\n  - Light mode needs to be enforced by default\n  - header coloring\n  - also the header truncation in the AI Workspace tag name\n  - AI Workspace actions card has too much visual clutter — reduce the buttons and weird element wrapping\n  - subtask formatting",
+  "nextLine": "  - this also happens with formatted tasks, specifically bolded",
+  "parentTaskTitle": "UI/UX",
+  "local": {
+   "text": "to the bottom of the list",
+   "ms": 252
+  },
+  "cloud": {
+   "text": "to the remote repository",
+   "kind": "suffix",
+   "full": "checked subtasks are pushed to the remote repository",
+   "ms": 2089,
+   "usage": {
+    "inputTokens": 815,
+    "outputTokens": 18,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 813,
+    "calls": 1,
+    "costUsd": 0.00017180000000000003
+   }
+  }
+ },
+ {
+  "id": 13,
+  "isSubtask": true,
+  "prefixText": "this also happens with formatted ",
+  "truth": "tasks, specifically bolded",
+  "taskText": "this also happens with formatted ",
+  "contextBefore": "  - Light mode needs to be enforced by default\n  - header coloring\n  - also the header truncation in the AI Workspace tag name\n  - AI Workspace actions card has too much visual clutter — reduce the buttons and weird element wrapping\n  - subtask formatting\n  - checked subtasks are pushed down strangely with top padding",
+  "nextLine": "  - sub-subtasks seem to unindent themselves when the page/project is reloaded",
+  "parentTaskTitle": "UI/UX",
+  "local": {
+   "text": "subtasks",
+   "ms": 243
+  },
+  "cloud": {
+   "text": "text",
+   "kind": "suffix",
+   "full": "this also happens with formatted text",
+   "ms": 2340,
+   "usage": {
+    "inputTokens": 813,
+    "outputTokens": 11,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 811,
+    "calls": 1,
+    "costUsd": 0.00016790000000000002
+   }
+  }
+ },
+ {
+  "id": 14,
+  "isSubtask": true,
+  "prefixText": "sub-subtasks seem to unindent ",
+  "truth": "themselves when the page/project is reloaded",
+  "taskText": "sub-subtasks seem to unindent ",
+  "contextBefore": "  - header coloring\n  - also the header truncation in the AI Workspace tag name\n  - AI Workspace actions card has too much visual clutter — reduce the buttons and weird element wrapping\n  - subtask formatting\n  - checked subtasks are pushed down strangely with top padding\n  - this also happens with formatted tasks, specifically bolded",
+  "nextLine": "  - When the page is reloaded, the project changes to the first one in the list — should resume to the last-worked-on project",
+  "parentTaskTitle": "UI/UX",
+  "local": {
+   "text": "ly",
+   "ms": 267
+  },
+  "cloud": {
+   "text": "unindented incorrectly",
+   "kind": "rewrite",
+   "full": "Sub-subtasks seem to be unindented incorrectly",
+   "ms": 2068,
+   "usage": {
+    "inputTokens": 818,
+    "outputTokens": 22,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 816,
+    "calls": 1,
+    "costUsd": 0.0001744
+   }
+  }
+ },
+ {
+  "id": 15,
+  "isSubtask": true,
+  "prefixText": "When the page is reloaded, the project changes to ",
+  "truth": "the first one in the list — should resume to the last-worked-on project",
+  "taskText": "When the page is reloaded, the project changes to ",
+  "contextBefore": "  - also the header truncation in the AI Workspace tag name\n  - AI Workspace actions card has too much visual clutter — reduce the buttons and weird element wrapping\n  - subtask formatting\n  - checked subtasks are pushed down strangely with top padding\n  - this also happens with formatted tasks, specifically bolded\n  - sub-subtasks seem to unindent themselves when the page/project is reloaded",
+  "nextLine": "- The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with",
+  "parentTaskTitle": "UI/UX",
+  "local": {
+   "text": "the user's TODO list",
+   "ms": 304
+  },
+  "cloud": {
+   "text": "the last selected project",
+   "kind": "rewrite",
+   "full": "When the page is reloaded, the project resets to the last selected project",
+   "ms": 2994,
+   "usage": {
+    "inputTokens": 819,
+    "outputTokens": 21,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 817,
+    "calls": 1,
+    "costUsd": 0.0001741
+   }
+  }
+ },
+ {
+  "id": 16,
+  "isSubtask": false,
+  "prefixText": "The AI should have the ability to add new tasks to the user's TODO list, ",
+  "truth": "if it discovers something important that the user didn't explicitly task it with",
+  "taskText": "The AI should have the ability to add new tasks to the user's TODO list, ",
+  "contextBefore": "  - AI Workspace actions card has too much visual clutter — reduce the buttons and weird element wrapping\n  - subtask formatting\n  - checked subtasks are pushed down strangely with top padding\n  - this also happens with formatted tasks, specifically bolded\n  - sub-subtasks seem to unindent themselves when the page/project is reloaded\n  - When the page is reloaded, the project changes to the first one in the list — should resume to the last-worked-on project",
+  "nextLine": "  - but it should always tell the user what it added (and maybe the task is indicated with a 'review' tag or something)",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "",
+   "ms": 326
+  },
+  "cloud": {
+   "text": "including task descriptions, due dates, and priority levels.",
+   "kind": "suffix",
+   "full": "The AI should have the ability to add new tasks to the user's TODO list, including task descriptions, due dates, and priority levels.",
+   "ms": 2210,
+   "usage": {
+    "inputTokens": 812,
+    "outputTokens": 42,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 810,
+    "calls": 1,
+    "costUsd": 0.0001832
+   }
+  }
+ },
+ {
+  "id": 17,
+  "isSubtask": true,
+  "prefixText": "but it should always tell the user what it added (and maybe the task ",
+  "truth": "is indicated with a 'review' tag or something)",
+  "taskText": "but it should always tell the user what it added (and maybe the task ",
+  "contextBefore": "  - subtask formatting\n  - checked subtasks are pushed down strangely with top padding\n  - this also happens with formatted tasks, specifically bolded\n  - sub-subtasks seem to unindent themselves when the page/project is reloaded\n  - When the page is reloaded, the project changes to the first one in the list — should resume to the last-worked-on project\n- The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with",
+  "nextLine": "  - these should be clearly marked as AI-generated so the user can approve/dismiss them",
+  "parentTaskTitle": "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with",
+  "local": {
+   "text": "s are not yet completed)",
+   "ms": 446
+  },
+  "cloud": {
+   "text": "should include why it was added)",
+   "kind": "suffix",
+   "full": "but it should always tell the user what it added (and maybe the task should include why it was added)",
+   "ms": 2185,
+   "usage": {
+    "inputTokens": 861,
+    "outputTokens": 27,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 859,
+    "calls": 1,
+    "costUsd": 0.0001855
+   }
+  }
+ },
+ {
+  "id": 18,
+  "isSubtask": true,
+  "prefixText": "these should be clearly marked as AI-generated ",
+  "truth": "so the user can approve/dismiss them",
+  "taskText": "these should be clearly marked as AI-generated ",
+  "contextBefore": "  - checked subtasks are pushed down strangely with top padding\n  - this also happens with formatted tasks, specifically bolded\n  - sub-subtasks seem to unindent themselves when the page/project is reloaded\n  - When the page is reloaded, the project changes to the first one in the list — should resume to the last-worked-on project\n- The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with\n  - but it should always tell the user what it added (and maybe the task is indicated with a 'review' tag or something)",
+  "nextLine": "  - this should happen primarily when it finds something along the way that's out of scope for its current task",
+  "parentTaskTitle": "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with",
+  "local": {
+   "text": "",
+   "ms": 412
+  },
+  "cloud": {
+   "text": "so the user can easily tell them apart from their own tasks.",
+   "kind": "rewrite",
+   "full": "These should be clearly marked as AI-generated so the user can easily tell them apart from their own tasks.",
+   "ms": 2226,
+   "usage": {
+    "inputTokens": 857,
+    "outputTokens": 34,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 855,
+    "calls": 1,
+    "costUsd": 0.00018820000000000002
+   }
+  }
+ },
+ {
+  "id": 19,
+  "isSubtask": true,
+  "prefixText": "this should happen primarily when it finds something along ",
+  "truth": "the way that's out of scope for its current task",
+  "taskText": "this should happen primarily when it finds something along ",
+  "contextBefore": "  - this also happens with formatted tasks, specifically bolded\n  - sub-subtasks seem to unindent themselves when the page/project is reloaded\n  - When the page is reloaded, the project changes to the first one in the list — should resume to the last-worked-on project\n- The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with\n  - but it should always tell the user what it added (and maybe the task is indicated with a 'review' tag or something)\n  - these should be clearly marked as AI-generated so the user can approve/dismiss them",
+  "nextLine": "  - make sure what's put in the human task list is always succinct, clear and easily readable - make sure what it stores in its vector DB is verbose enough to be useful for the AI",
+  "parentTaskTitle": "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with",
+  "local": {
+   "text": "with something important that the user didn't explicitly task it with",
+   "ms": 696
+  },
+  "cloud": {
+   "text": "the lines of a security vulnerability, a broken build, or a blocking dependency issue that the user would want to know about",
+   "kind": "suffix",
+   "full": "this should happen primarily when it finds something along the lines of a security vulnerability, a broken build, or a blocking dependency issue that the user would want to know about",
+   "ms": 2329,
+   "usage": {
+    "inputTokens": 856,
+    "outputTokens": 50,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 854,
+    "calls": 1,
+    "costUsd": 0.00019600000000000005
+   }
+  }
+ },
+ {
+  "id": 20,
+  "isSubtask": true,
+  "prefixText": "make sure what's put in the human task list is always succinct, clear and easily readable - make sure what it stores in ",
+  "truth": "its vector DB is verbose enough to be useful for the AI",
+  "taskText": "make sure what's put in the human task list is always succinct, clear and easily readable - make sure what it stores in ",
+  "contextBefore": "  - sub-subtasks seem to unindent themselves when the page/project is reloaded\n  - When the page is reloaded, the project changes to the first one in the list — should resume to the last-worked-on project\n- The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with\n  - but it should always tell the user what it added (and maybe the task is indicated with a 'review' tag or something)\n  - these should be clearly marked as AI-generated so the user can approve/dismiss them\n  - this should happen primarily when it finds something along the way that's out of scope for its current task",
+  "nextLine": "- Autocomplete",
+  "parentTaskTitle": "The AI should have the ability to add new tasks to the user's TODO list, if it discovers something important that the user didn't explicitly task it with",
+  "local": {
+   "text": "the AI-generated tasks is also succinct, clear and easily readable - make sure what it stores in the human task list is",
+   "ms": 917
+  },
+  "cloud": {
+   "text": "the human task list is accurate and free of raw tool output or internal reasoning",
+   "kind": "suffix",
+   "full": "make sure what's put in the human task list is always succinct, clear and easily readable - make sure what it stores in the human task list is accurate and free of raw tool output or internal reasoning",
+   "ms": 2619,
+   "usage": {
+    "inputTokens": 876,
+    "outputTokens": 58,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 874,
+    "calls": 1,
+    "costUsd": 0.00020400000000000003
+   }
+  }
+ },
+ {
+  "id": 21,
+  "isSubtask": true,
+  "prefixText": "Terminal session history is in-memory — when you close or reload the app, the PTY process is ",
+  "truth": "killed and the tab is gone. The config (which agent to use) persists. Reconnecting to a live PTY after a page reload would require a full server-side session registry",
+  "taskText": "Terminal session history is in-memory — when you close or reload the app, the PTY process is ",
+  "contextBefore": "  - refine existing tasks (remove, replace, or edit wording)\n- CLI mode for coding agents\n  - connection to coding CLIs like Claude Code, Antigravity, Cursor, Codex, etc.\n  - when the user clicks 'execute' on a task, it spawns a CLI agent that performs the task in a windowed terminal in the AI side\n  - then on completion it writes back to the AI and user's side, and updates the task and subtasks to reflect what happened; the user can then also look back at the terminal to see more details\n  - terminal persistence",
+  "nextLine": "  - can it write out to the user's IDE?",
+  "parentTaskTitle": "CLI mode for coding agents",
+  "local": {
+   "text": "also be written to the AI side",
+   "ms": 612
+  },
+  "cloud": {
+   "text": "is lost unless it is persisted to disk.",
+   "kind": "rewrite",
+   "full": "terminated when the app is closed or reloaded, so any scrollback and command history from that session is lost unless it is persisted to disk.",
+   "ms": 2201,
+   "usage": {
+    "inputTokens": 837,
+    "outputTokens": 43,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 835,
+    "calls": 1,
+    "costUsd": 0.00018870000000000003
+   }
+  }
+ },
+ {
+  "id": 22,
+  "isSubtask": true,
+  "prefixText": "can it write out to ",
+  "truth": "the user's IDE?",
+  "taskText": "can it write out to ",
+  "contextBefore": "- CLI mode for coding agents\n  - connection to coding CLIs like Claude Code, Antigravity, Cursor, Codex, etc.\n  - when the user clicks 'execute' on a task, it spawns a CLI agent that performs the task in a windowed terminal in the AI side\n  - then on completion it writes back to the AI and user's side, and updates the task and subtasks to reflect what happened; the user can then also look back at the terminal to see more details\n  - terminal persistence\n  - Terminal session history is in-memory — when you close or reload the app, the PTY process is killed and the tab is gone. The config (which agent to use) persists. Reconnecting to a live PTY after a page reload would require a full server-side session registry",
+  "nextLine": "  - if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)",
+  "parentTaskTitle": "CLI mode for coding agents",
+  "local": {
+   "text": "the terminal",
+   "ms": 550
+  },
+  "cloud": {
+   "text": "the file system as well as the console",
+   "kind": "suffix",
+   "full": "can it write out to the file system as well as the console",
+   "ms": 2452,
+   "usage": {
+    "inputTokens": 815,
+    "outputTokens": 15,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 813,
+    "calls": 1,
+    "costUsd": 0.00017030000000000002
+   }
+  }
+ },
+ {
+  "id": 23,
+  "isSubtask": true,
+  "prefixText": "if so, it needs to have a way to ",
+  "truth": "jump to the files that were changed (and ideally a diff log)",
+  "taskText": "if so, it needs to have a way to ",
+  "contextBefore": "  - connection to coding CLIs like Claude Code, Antigravity, Cursor, Codex, etc.\n  - when the user clicks 'execute' on a task, it spawns a CLI agent that performs the task in a windowed terminal in the AI side\n  - then on completion it writes back to the AI and user's side, and updates the task and subtasks to reflect what happened; the user can then also look back at the terminal to see more details\n  - terminal persistence\n  - Terminal session history is in-memory — when you close or reload the app, the PTY process is killed and the tab is gone. The config (which agent to use) persists. Reconnecting to a live PTY after a page reload would require a full server-side session registry\n  - can it write out to the user's IDE?",
+  "nextLine": "- local AI should auto-compact by detault (configurable in AI profile panel advanced settings, under the Ollama section)",
+  "parentTaskTitle": "CLI mode for coding agents",
+  "local": {
+   "text": "write out to the user's IDE when the task is complete",
+   "ms": 849
+  },
+  "cloud": {
+   "text": "authenticate and run without interactive prompts",
+   "kind": "suffix",
+   "full": "if so, it needs to have a way to authenticate and run without interactive prompts",
+   "ms": 2366,
+   "usage": {
+    "inputTokens": 821,
+    "outputTokens": 26,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 819,
+    "calls": 1,
+    "costUsd": 0.000177
+   }
+  }
+ },
+ {
+  "id": 24,
+  "isSubtask": false,
+  "prefixText": "local AI should auto-compact by detault (configurable ",
+  "truth": "in AI profile panel advanced settings, under the Ollama section)",
+  "taskText": "local AI should auto-compact by detault (configurable ",
+  "contextBefore": "  - when the user clicks 'execute' on a task, it spawns a CLI agent that performs the task in a windowed terminal in the AI side\n  - then on completion it writes back to the AI and user's side, and updates the task and subtasks to reflect what happened; the user can then also look back at the terminal to see more details\n  - terminal persistence\n  - Terminal session history is in-memory — when you close or reload the app, the PTY process is killed and the tab is gone. The config (which agent to use) persists. Reconnecting to a live PTY after a page reload would require a full server-side session registry\n  - can it write out to the user's IDE?\n  - if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)",
+  "nextLine": "- look for an `AGENTS.md` or `CLAUDE.md` file at the project folder and use it as the AI's baseline agent context if found",
+  "parentTaskTitle": null,
+  "local": {
+   "text": ")",
+   "ms": 563
+  },
+  "cloud": {
+   "text": "",
+   "kind": "rewrite",
+   "full": "Local AI should auto-compact by default (configurable)",
+   "ms": 2158,
+   "usage": {
+    "inputTokens": 805,
+    "outputTokens": 19,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 803,
+    "calls": 1,
+    "costUsd": 0.0001703
+   }
+  }
+ },
+ {
+  "id": 25,
+  "isSubtask": false,
+  "prefixText": "look for an `AGENTS.md` or `CLAUDE.md` file at ",
+  "truth": "the project folder and use it as the AI's baseline agent context if found",
+  "taskText": "look for an `AGENTS.md` or `CLAUDE.md` file at ",
+  "contextBefore": "  - then on completion it writes back to the AI and user's side, and updates the task and subtasks to reflect what happened; the user can then also look back at the terminal to see more details\n  - terminal persistence\n  - Terminal session history is in-memory — when you close or reload the app, the PTY process is killed and the tab is gone. The config (which agent to use) persists. Reconnecting to a live PTY after a page reload would require a full server-side session registry\n  - can it write out to the user's IDE?\n  - if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)\n- local AI should auto-compact by detault (configurable in AI profile panel advanced settings, under the Ollama section)",
+  "nextLine": "- an undo button to revert back to the previous diff",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "the AI profile panel advanced settings, under the Ollama section",
+   "ms": 643
+  },
+  "cloud": {
+   "text": "the current working directory (/home/konur/.ergo) and summarize any instructions found",
+   "kind": "rewrite",
+   "full": "look for an `AGENTS.md` or `CLAUDE.md` file in the current working directory (/home/konur/.ergo) and summarize any instructions found",
+   "ms": 2240,
+   "usage": {
+    "inputTokens": 814,
+    "outputTokens": 53,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 812,
+    "calls": 1,
+    "costUsd": 0.00018910000000000002
+   }
+  }
+ },
+ {
+  "id": 26,
+  "isSubtask": false,
+  "prefixText": "an undo button to ",
+  "truth": "revert back to the previous diff",
+  "taskText": "an undo button to ",
+  "contextBefore": "  - terminal persistence\n  - Terminal session history is in-memory — when you close or reload the app, the PTY process is killed and the tab is gone. The config (which agent to use) persists. Reconnecting to a live PTY after a page reload would require a full server-side session registry\n  - can it write out to the user's IDE?\n  - if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)\n- local AI should auto-compact by detault (configurable in AI profile panel advanced settings, under the Ollama section)\n- look for an `AGENTS.md` or `CLAUDE.md` file at the project folder and use it as the AI's baseline agent context if found",
+  "nextLine": "  - how is this handled for non-code tasks?",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "be added to the UI",
+   "ms": 435
+  },
+  "cloud": {
+   "text": "to the editor toolbar that reverts the last change",
+   "kind": "rewrite",
+   "full": "Add an undo button to the editor toolbar that reverts the last change",
+   "ms": 2396,
+   "usage": {
+    "inputTokens": 794,
+    "outputTokens": 23,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 792,
+    "calls": 1,
+    "costUsd": 0.00017010000000000001
+   }
+  }
+ },
+ {
+  "id": 27,
+  "isSubtask": true,
+  "prefixText": "how is this handled ",
+  "truth": "for non-code tasks?",
+  "taskText": "how is this handled ",
+  "contextBefore": "  - Terminal session history is in-memory — when you close or reload the app, the PTY process is killed and the tab is gone. The config (which agent to use) persists. Reconnecting to a live PTY after a page reload would require a full server-side session registry\n  - can it write out to the user's IDE?\n  - if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)\n- local AI should auto-compact by detault (configurable in AI profile panel advanced settings, under the Ollama section)\n- look for an `AGENTS.md` or `CLAUDE.md` file at the project folder and use it as the AI's baseline agent context if found\n- an undo button to revert back to the previous diff",
+  "nextLine": "  - maybe this starts out in V1 just for code",
+  "parentTaskTitle": "an undo button to revert back to the previous diff",
+  "local": {
+   "text": "",
+   "ms": 407
+  },
+  "cloud": {
+   "text": "in the undo flow for reverting to the previous diff",
+   "kind": "suffix",
+   "full": "how is this handled in the undo flow for reverting to the previous diff",
+   "ms": 2047,
+   "usage": {
+    "inputTokens": 819,
+    "outputTokens": 23,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 817,
+    "calls": 1,
+    "costUsd": 0.00017510000000000003
+   }
+  }
+ },
+ {
+  "id": 28,
+  "isSubtask": true,
+  "prefixText": "maybe this starts out ",
+  "truth": "in V1 just for code",
+  "taskText": "maybe this starts out ",
+  "contextBefore": "  - can it write out to the user's IDE?\n  - if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)\n- local AI should auto-compact by detault (configurable in AI profile panel advanced settings, under the Ollama section)\n- look for an `AGENTS.md` or `CLAUDE.md` file at the project folder and use it as the AI's baseline agent context if found\n- an undo button to revert back to the previous diff\n  - how is this handled for non-code tasks?",
+  "nextLine": "  - also this means we need a proper diff list to be able to inspect when work is done",
+  "parentTaskTitle": "an undo button to revert back to the previous diff",
+  "local": {
+   "text": "to the user's IDE?",
+   "ms": 392
+  },
+  "cloud": {
+   "text": "as a simple prototype before refining the undo diff feature",
+   "kind": "suffix",
+   "full": "maybe this starts out as a simple prototype before refining the undo diff feature",
+   "ms": 2144,
+   "usage": {
+    "inputTokens": 821,
+    "outputTokens": 26,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 819,
+    "calls": 1,
+    "costUsd": 0.000177
+   }
+  }
+ },
+ {
+  "id": 29,
+  "isSubtask": true,
+  "prefixText": "also this means we need a proper diff list ",
+  "truth": "to be able to inspect when work is done",
+  "taskText": "also this means we need a proper diff list ",
+  "contextBefore": "  - if so, it needs to have a way to jump to the files that were changed (and ideally a diff log)\n- local AI should auto-compact by detault (configurable in AI profile panel advanced settings, under the Ollama section)\n- look for an `AGENTS.md` or `CLAUDE.md` file at the project folder and use it as the AI's baseline agent context if found\n- an undo button to revert back to the previous diff\n  - how is this handled for non-code tasks?\n  - maybe this starts out in V1 just for code",
+  "nextLine": "- some sort of master list of which files in a codebase are being accessed and by which agents",
+  "parentTaskTitle": "an undo button to revert back to the previous diff",
+  "local": {
+   "text": "",
+   "ms": 325
+  },
+  "cloud": {
+   "text": "to show the changes made before each undo step",
+   "kind": "suffix",
+   "full": "also this means we need a proper diff list to show the changes made before each undo step",
+   "ms": 2176,
+   "usage": {
+    "inputTokens": 825,
+    "outputTokens": 24,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 823,
+    "calls": 1,
+    "costUsd": 0.0001768
+   }
+  }
+ },
+ {
+  "id": 30,
+  "isSubtask": false,
+  "prefixText": "some sort of master list of which files in a ",
+  "truth": "codebase are being accessed and by which agents",
+  "taskText": "some sort of master list of which files in a ",
+  "contextBefore": "- local AI should auto-compact by detault (configurable in AI profile panel advanced settings, under the Ollama section)\n- look for an `AGENTS.md` or `CLAUDE.md` file at the project folder and use it as the AI's baseline agent context if found\n- an undo button to revert back to the previous diff\n  - how is this handled for non-code tasks?\n  - maybe this starts out in V1 just for code\n  - also this means we need a proper diff list to be able to inspect when work is done",
+  "nextLine": "  - this would give the user a view of what's actually being edited",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "project",
+   "ms": 474
+  },
+  "cloud": {
+   "text": "directory have been reviewed and which still need review",
+   "kind": "suffix",
+   "full": "some sort of master list of which files in a directory have been reviewed and which still need review",
+   "ms": 2303,
+   "usage": {
+    "inputTokens": 800,
+    "outputTokens": 26,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 798,
+    "calls": 1,
+    "costUsd": 0.0001728
+   }
+  }
+ },
+ {
+  "id": 31,
+  "isSubtask": true,
+  "prefixText": "this would give the user a ",
+  "truth": "view of what's actually being edited",
+  "taskText": "this would give the user a ",
+  "contextBefore": "- look for an `AGENTS.md` or `CLAUDE.md` file at the project folder and use it as the AI's baseline agent context if found\n- an undo button to revert back to the previous diff\n  - how is this handled for non-code tasks?\n  - maybe this starts out in V1 just for code\n  - also this means we need a proper diff list to be able to inspect when work is done\n- some sort of master list of which files in a codebase are being accessed and by which agents",
+  "nextLine": "  - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts",
+  "parentTaskTitle": "some sort of master list of which files in a codebase are being accessed and by which agents",
+  "local": {
+   "text": "better understanding of what is happening in the codebase",
+   "ms": 542
+  },
+  "cloud": {
+   "text": "clear view of which files in the codebase are being accessed by each agent",
+   "kind": "suffix",
+   "full": "this would give the user a clear view of which files in the codebase are being accessed by each agent",
+   "ms": 2249,
+   "usage": {
+    "inputTokens": 830,
+    "outputTokens": 28,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 828,
+    "calls": 1,
+    "costUsd": 0.0001798
+   }
+  }
+ },
+ {
+  "id": 32,
+  "isSubtask": true,
+  "prefixText": "more importantly, this can be used for the agents ",
+  "truth": "to coordinate amongst each other to prevent write/edit conflicts",
+  "taskText": "more importantly, this can be used for the agents ",
+  "contextBefore": "- an undo button to revert back to the previous diff\n  - how is this handled for non-code tasks?\n  - maybe this starts out in V1 just for code\n  - also this means we need a proper diff list to be able to inspect when work is done\n- some sort of master list of which files in a codebase are being accessed and by which agents\n  - this would give the user a view of what's actually being edited",
+  "nextLine": "- global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing",
+  "parentTaskTitle": "some sort of master list of which files in a codebase are being accessed and by which agents",
+  "local": {
+   "text": "to know what's being done",
+   "ms": 512
+  },
+  "cloud": {
+   "text": "to coordinate and avoid conflicting edits to the same files.",
+   "kind": "rewrite",
+   "full": "More importantly, this can be used by the agents to coordinate and avoid conflicting edits to the same files.",
+   "ms": 2313,
+   "usage": {
+    "inputTokens": 837,
+    "outputTokens": 35,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 835,
+    "calls": 1,
+    "costUsd": 0.00018470000000000002
+   }
+  }
+ },
+ {
+  "id": 33,
+  "isSubtask": false,
+  "prefixText": "global rules markdown file needs to be added at execution ",
+  "truth": "runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing",
+  "taskText": "global rules markdown file needs to be added at execution ",
+  "contextBefore": "  - how is this handled for non-code tasks?\n  - maybe this starts out in V1 just for code\n  - also this means we need a proper diff list to be able to inspect when work is done\n- some sort of master list of which files in a codebase are being accessed and by which agents\n  - this would give the user a view of what's actually being edited\n  - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts",
+  "nextLine": "  - these files also need to be exportable so the user can take them elsewhere if they want",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "",
+   "ms": 337
+  },
+  "cloud": {
+   "text": "execution start",
+   "kind": "rewrite",
+   "full": "Global rules markdown file must be loaded and applied at execution start",
+   "ms": 2472,
+   "usage": {
+    "inputTokens": 804,
+    "outputTokens": 22,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 802,
+    "calls": 1,
+    "costUsd": 0.0001716
+   }
+  }
+ },
+ {
+  "id": 34,
+  "isSubtask": true,
+  "prefixText": "these files also need to be ",
+  "truth": "exportable so the user can take them elsewhere if they want",
+  "taskText": "these files also need to be ",
+  "contextBefore": "  - maybe this starts out in V1 just for code\n  - also this means we need a proper diff list to be able to inspect when work is done\n- some sort of master list of which files in a codebase are being accessed and by which agents\n  - this would give the user a view of what's actually being edited\n  - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts\n- global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing",
+  "nextLine": "- user needs to easily be able to create skills, and call them in tasks with '/'",
+  "parentTaskTitle": "global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing",
+  "local": {
+   "text": "d be able to create tasks, and call them in tasks with '/'",
+   "ms": 642
+  },
+  "cloud": {
+   "text": "updated with the global rules markdown file at execution runtime, including the list of model routing",
+   "kind": "suffix",
+   "full": "these files also need to be updated with the global rules markdown file at execution runtime, including the list of model routing",
+   "ms": 2366,
+   "usage": {
+    "inputTokens": 879,
+    "outputTokens": 33,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 877,
+    "calls": 1,
+    "costUsd": 0.0001921
+   }
+  }
+ },
+ {
+  "id": 35,
+  "isSubtask": false,
+  "prefixText": "user needs to easily be able to ",
+  "truth": "create skills, and call them in tasks with '/'",
+  "taskText": "user needs to easily be able to ",
+  "contextBefore": "  - also this means we need a proper diff list to be able to inspect when work is done\n- some sort of master list of which files in a codebase are being accessed and by which agents\n  - this would give the user a view of what's actually being edited\n  - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts\n- global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing\n  - these files also need to be exportable so the user can take them elsewhere if they want",
+  "nextLine": "- user needs to be able to reference files with '@'",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "easily reference files with '@'",
+   "ms": 492
+  },
+  "cloud": {
+   "text": "find and filter tasks by status, priority, and due date",
+   "kind": "suffix",
+   "full": "user needs to easily be able to find and filter tasks by status, priority, and due date",
+   "ms": 2342,
+   "usage": {
+    "inputTokens": 798,
+    "outputTokens": 27,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 796,
+    "calls": 1,
+    "costUsd": 0.00017290000000000003
+   }
+  }
+ },
+ {
+  "id": 36,
+  "isSubtask": false,
+  "prefixText": "user needs to be able to ",
+  "truth": "reference files with '@'",
+  "taskText": "user needs to be able to ",
+  "contextBefore": "- some sort of master list of which files in a codebase are being accessed and by which agents\n  - this would give the user a view of what's actually being edited\n  - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts\n- global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing\n  - these files also need to be exportable so the user can take them elsewhere if they want\n- user needs to easily be able to create skills, and call them in tasks with '/'",
+  "nextLine": "  - does this open a modal to select the file, which is a deep link to the file on disk?",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "create a new task, and call it with '/'",
+   "ms": 692
+  },
+  "cloud": {
+   "text": "reset their password via email",
+   "kind": "suffix",
+   "full": "user needs to be able to reset their password via email",
+   "ms": 2196,
+   "usage": {
+    "inputTokens": 796,
+    "outputTokens": 15,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 794,
+    "calls": 1,
+    "costUsd": 0.0001665
+   }
+  }
+ },
+ {
+  "id": 37,
+  "isSubtask": true,
+  "prefixText": "does this open a modal to select the file, ",
+  "truth": "which is a deep link to the file on disk?",
+  "taskText": "does this open a modal to select the file, ",
+  "contextBefore": "  - this would give the user a view of what's actually being edited\n  - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts\n- global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing\n  - these files also need to be exportable so the user can take them elsewhere if they want\n- user needs to easily be able to create skills, and call them in tasks with '/'\n- user needs to be able to reference files with '@'",
+  "nextLine": "- needs a `/remember` skill that the user can call to force the AI to store that knowledge in its vector DB",
+  "parentTaskTitle": "user needs to be able to reference files with '@'",
+  "local": {
+   "text": "or a `/forget` skill that the user can call to remove that knowledge from its vector DB",
+   "ms": 884
+  },
+  "cloud": {
+   "text": "when the user types '@'?",
+   "kind": "rewrite",
+   "full": "does this open a modal to select the file when the user types '@'?",
+   "ms": 2091,
+   "usage": {
+    "inputTokens": 825,
+    "outputTokens": 20,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 823,
+    "calls": 1,
+    "costUsd": 0.0001748
+   }
+  }
+ },
+ {
+  "id": 38,
+  "isSubtask": false,
+  "prefixText": "needs a `/remember` skill that the user can call ",
+  "truth": "to force the AI to store that knowledge in its vector DB",
+  "taskText": "needs a `/remember` skill that the user can call ",
+  "contextBefore": "  - more importantly, this can be used for the agents to coordinate amongst each other to prevent write/edit conflicts\n- global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing\n  - these files also need to be exportable so the user can take them elsewhere if they want\n- user needs to easily be able to create skills, and call them in tasks with '/'\n- user needs to be able to reference files with '@'\n  - does this open a modal to select the file, which is a deep link to the file on disk?",
+  "nextLine": "- can we use a lightweight AI for scanning files (i.e. Sonnet), and then pass that to a more powerful AI that actually does the work (i.e. Opus)?",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "to scan files and then pass that to a more powerful AI that actually does the work (i.e. Opus)?",
+   "ms": 957
+  },
+  "cloud": {
+   "text": "to save important facts and preferences for future sessions",
+   "kind": "suffix",
+   "full": "needs a `/remember` skill that the user can call to save important facts and preferences for future sessions",
+   "ms": 2285,
+   "usage": {
+    "inputTokens": 804,
+    "outputTokens": 31,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 802,
+    "calls": 1,
+    "costUsd": 0.0001761
+   }
+  }
+ },
+ {
+  "id": 39,
+  "isSubtask": false,
+  "prefixText": "can we use a lightweight AI for scanning files (i.e. Sonnet), and then pass ",
+  "truth": "that to a more powerful AI that actually does the work (i.e. Opus)?",
+  "taskText": "can we use a lightweight AI for scanning files (i.e. Sonnet), and then pass ",
+  "contextBefore": "- global rules markdown file needs to be added at execution runtime to the [AGENTS.md](http://AGENTS.md) / [CLAUDE.md](http://CLAUDE.md) files, which should also store the list of model routing\n  - these files also need to be exportable so the user can take them elsewhere if they want\n- user needs to easily be able to create skills, and call them in tasks with '/'\n- user needs to be able to reference files with '@'\n  - does this open a modal to select the file, which is a deep link to the file on disk?\n- needs a `/remember` skill that the user can call to force the AI to store that knowledge in its vector DB",
+  "nextLine": "  - see if we can do this w/ Laya instead",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "it to the AI to scan files",
+   "ms": 587
+  },
+  "cloud": {
+   "text": "the relevant results to a more capable model (i.e. Opus) for deeper analysis?",
+   "kind": "suffix",
+   "full": "can we use a lightweight AI for scanning files (i.e. Sonnet), and then pass the relevant results to a more capable model (i.e. Opus) for deeper analysis?",
+   "ms": 2172,
+   "usage": {
+    "inputTokens": 819,
+    "outputTokens": 60,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 817,
+    "calls": 1,
+    "costUsd": 0.00019360000000000002
+   }
+  }
+ },
+ {
+  "id": 40,
+  "isSubtask": true,
+  "prefixText": "see if we can ",
+  "truth": "do this w/ Laya instead",
+  "taskText": "see if we can ",
+  "contextBefore": "  - these files also need to be exportable so the user can take them elsewhere if they want\n- user needs to easily be able to create skills, and call them in tasks with '/'\n- user needs to be able to reference files with '@'\n  - does this open a modal to select the file, which is a deep link to the file on disk?\n- needs a `/remember` skill that the user can call to force the AI to store that knowledge in its vector DB\n- can we use a lightweight AI for scanning files (i.e. Sonnet), and then pass that to a more powerful AI that actually does the work (i.e. Opus)?",
+  "nextLine": "- Run as...",
+  "parentTaskTitle": "can we use a lightweight AI for scanning files (i.e. Sonnet), and then pass that to a more powerful AI that actually does the work (i.e. Opus)?",
+  "local": {
+   "text": "",
+   "ms": 380
+  },
+  "cloud": {
+   "text": "use Sonnet to scan files and hand off the results to Opus for the heavier work",
+   "kind": "suffix",
+   "full": "see if we can use Sonnet to scan files and hand off the results to Opus for the heavier work",
+   "ms": 2358,
+   "usage": {
+    "inputTokens": 859,
+    "outputTokens": 32,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 857,
+    "calls": 1,
+    "costUsd": 0.0001876
+   }
+  }
+ },
+ {
+  "id": 41,
+  "isSubtask": false,
+  "prefixText": "when the autosave triggers, this needs to ",
+  "truth": "update the local vector DB automatically as well",
+  "taskText": "when the autosave triggers, this needs to ",
+  "contextBefore": "  - see if we can do this w/ Laya instead\n- Run as...\n  - Single task\n  - Tasks in sequence\n  - Tasks in parallel\n  - Schedule tasks...",
+  "nextLine": "- AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "be triggered",
+   "ms": 246
+  },
+  "cloud": {
+   "text": "save the current draft without interrupting the user's editing session",
+   "kind": "suffix",
+   "full": "when the autosave triggers, this needs to save the current draft without interrupting the user's editing session",
+   "ms": 2193,
+   "usage": {
+    "inputTokens": 802,
+    "outputTokens": 31,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 800,
+    "calls": 1,
+    "costUsd": 0.00017570000000000002
+   }
+  }
+ },
+ {
+  "id": 42,
+  "isSubtask": false,
+  "prefixText": "AI should run /grill-me type skill when first working on a task, to ",
+  "truth": "fill any uncertainty gaps before it actually starts work",
+  "taskText": "AI should run /grill-me type skill when first working on a task, to ",
+  "contextBefore": "- Run as...\n  - Single task\n  - Tasks in sequence\n  - Tasks in parallel\n  - Schedule tasks...\n- when the autosave triggers, this needs to update the local vector DB automatically as well",
+  "nextLine": "  - maybe implement an 'assistance' slider, which determines how much it asks for clarification and details vs. just autonomously assuming",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "help with tasks that require more time or resources",
+   "ms": 464
+  },
+  "cloud": {
+   "text": "clarify requirements and surface assumptions before writing any code",
+   "kind": "suffix",
+   "full": "AI should run /grill-me type skill when first working on a task, to clarify requirements and surface assumptions before writing any code",
+   "ms": 2259,
+   "usage": {
+    "inputTokens": 809,
+    "outputTokens": 40,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 807,
+    "calls": 1,
+    "costUsd": 0.00018160000000000002
+   }
+  }
+ },
+ {
+  "id": 43,
+  "isSubtask": true,
+  "prefixText": "maybe implement an 'assistance' slider, which determines how much it asks ",
+  "truth": "for clarification and details vs. just autonomously assuming",
+  "taskText": "maybe implement an 'assistance' slider, which determines how much it asks ",
+  "contextBefore": "  - Single task\n  - Tasks in sequence\n  - Tasks in parallel\n  - Schedule tasks...\n- when the autosave triggers, this needs to update the local vector DB automatically as well\n- AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "nextLine": "  - there should also be an 'effort' slider, which will automatically use less/more powerful models depending on what the user sets that task to",
+  "parentTaskTitle": "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "local": {
+   "text": "to fill any uncertainty gaps before it actually starts work",
+   "ms": 513
+  },
+  "cloud": {
+   "text": "clarifying questions before starting work, from minimal to thorough",
+   "kind": "rewrite",
+   "full": "maybe implement an \"assistance\" slider, which determines how much it asks clarifying questions before starting work, from minimal to thorough",
+   "ms": 2274,
+   "usage": {
+    "inputTokens": 861,
+    "outputTokens": 43,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 859,
+    "calls": 1,
+    "costUsd": 0.00019350000000000001
+   }
+  }
+ },
+ {
+  "id": 44,
+  "isSubtask": true,
+  "prefixText": "there should also be an 'effort' slider, which will automatically ",
+  "truth": "use less/more powerful models depending on what the user sets that task to",
+  "taskText": "there should also be an 'effort' slider, which will automatically ",
+  "contextBefore": "  - Tasks in sequence\n  - Tasks in parallel\n  - Schedule tasks...\n- when the autosave triggers, this needs to update the local vector DB automatically as well\n- AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work\n  - maybe implement an 'assistance' slider, which determines how much it asks for clarification and details vs. just autonomously assuming",
+  "nextLine": "  - the AI should select the best model for the job by default, unless the user explicitly sets it",
+  "parentTaskTitle": "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "local": {
+   "text": "be able to select the best model for the job by default, unless the user explicitly sets it",
+   "ms": 658
+  },
+  "cloud": {
+   "text": "adjust how much clarifying questions the AI asks based on the complexity of the task",
+   "kind": "suffix",
+   "full": "there should also be an 'effort' slider, which will automatically adjust how much clarifying questions the AI asks based on the complexity of the task",
+   "ms": 2479,
+   "usage": {
+    "inputTokens": 856,
+    "outputTokens": 45,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 854,
+    "calls": 1,
+    "costUsd": 0.00019350000000000004
+   }
+  }
+ },
+ {
+  "id": 45,
+  "isSubtask": true,
+  "prefixText": "the AI should select the best model for the ",
+  "truth": "job by default, unless the user explicitly sets it",
+  "taskText": "the AI should select the best model for the ",
+  "contextBefore": "  - Tasks in parallel\n  - Schedule tasks...\n- when the autosave triggers, this needs to update the local vector DB automatically as well\n- AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work\n  - maybe implement an 'assistance' slider, which determines how much it asks for clarification and details vs. just autonomously assuming\n  - there should also be an 'effort' slider, which will automatically use less/more powerful models depending on what the user sets that task to",
+  "nextLine": "  - these effort-levels should be automatically created when the user sets up a new AI profile, and configurable from the advanced settings in the AI profile panel",
+  "parentTaskTitle": "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "local": {
+   "text": "task",
+   "ms": 401
+  },
+  "cloud": {
+   "text": "task at hand before it starts work, based on complexity and uncertainty",
+   "kind": "suffix",
+   "full": "the AI should select the best model for the task at hand before it starts work, based on complexity and uncertainty",
+   "ms": 2125,
+   "usage": {
+    "inputTokens": 848,
+    "outputTokens": 33,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 846,
+    "calls": 1,
+    "costUsd": 0.0001859
+   }
+  }
+ },
+ {
+  "id": 46,
+  "isSubtask": true,
+  "prefixText": "these effort-levels should be automatically created when the user sets up a new ",
+  "truth": "AI profile, and configurable from the advanced settings in the AI profile panel",
+  "taskText": "these effort-levels should be automatically created when the user sets up a new ",
+  "contextBefore": "  - Schedule tasks...\n- when the autosave triggers, this needs to update the local vector DB automatically as well\n- AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work\n  - maybe implement an 'assistance' slider, which determines how much it asks for clarification and details vs. just autonomously assuming\n  - there should also be an 'effort' slider, which will automatically use less/more powerful models depending on what the user sets that task to\n  - the AI should select the best model for the job by default, unless the user explicitly sets it",
+  "nextLine": "  - we should use the same model throughout work tasks, so we can cache tokens",
+  "parentTaskTitle": "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "local": {
+   "text": "task",
+   "ms": 457
+  },
+  "cloud": {
+   "text": "new project",
+   "kind": "rewrite",
+   "full": "these effort levels should be automatically created when the user sets up a new project",
+   "ms": 2213,
+   "usage": {
+    "inputTokens": 858,
+    "outputTokens": 22,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 856,
+    "calls": 1,
+    "costUsd": 0.00018240000000000002
+   }
+  }
+ },
+ {
+  "id": 47,
+  "isSubtask": true,
+  "prefixText": "we should use the same model throughout work tasks, ",
+  "truth": "so we can cache tokens",
+  "taskText": "we should use the same model throughout work tasks, ",
+  "contextBefore": "- when the autosave triggers, this needs to update the local vector DB automatically as well\n- AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work\n  - maybe implement an 'assistance' slider, which determines how much it asks for clarification and details vs. just autonomously assuming\n  - there should also be an 'effort' slider, which will automatically use less/more powerful models depending on what the user sets that task to\n  - the AI should select the best model for the job by default, unless the user explicitly sets it\n  - these effort-levels should be automatically created when the user sets up a new AI profile, and configurable from the advanced settings in the AI profile panel",
+  "nextLine": "  - “Interview me to determine the goal of the task.”",
+  "parentTaskTitle": "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "local": {
+   "text": "“What is the goal of the task?” and “What is the goal of the task?” should be the same in",
+   "ms": 898
+  },
+  "cloud": {
+   "text": "so the grill-me skill and the main work share consistent reasoning and context",
+   "kind": "suffix",
+   "full": "we should use the same model throughout work tasks, so the grill-me skill and the main work share consistent reasoning and context",
+   "ms": 2283,
+   "usage": {
+    "inputTokens": 852,
+    "outputTokens": 38,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 850,
+    "calls": 1,
+    "costUsd": 0.00018920000000000002
+   }
+  }
+ },
+ {
+  "id": 48,
+  "isSubtask": true,
+  "prefixText": "“Interview me to determine the ",
+  "truth": "goal of the task.”",
+  "taskText": "“Interview me to determine the ",
+  "contextBefore": "- AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work\n  - maybe implement an 'assistance' slider, which determines how much it asks for clarification and details vs. just autonomously assuming\n  - there should also be an 'effort' slider, which will automatically use less/more powerful models depending on what the user sets that task to\n  - the AI should select the best model for the job by default, unless the user explicitly sets it\n  - these effort-levels should be automatically created when the user sets up a new AI profile, and configurable from the advanced settings in the AI profile panel\n  - we should use the same model throughout work tasks, so we can cache tokens",
+  "nextLine": "  - “Tell me what you think I want you to do, and place specific emphasis in your question(s) to me on the areas you’re least clear on.”",
+  "parentTaskTitle": "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "local": {
+   "text": "answer to the question, and I’ll provide feedback on my answer.”",
+   "ms": 873
+  },
+  "cloud": {
+   "text": "requirements and uncertainties before starting any work on a task”",
+   "kind": "suffix",
+   "full": "“Interview me to determine the requirements and uncertainties before starting any work on a task”",
+   "ms": 3674,
+   "usage": {
+    "inputTokens": 847,
+    "outputTokens": 29,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 845,
+    "calls": 1,
+    "costUsd": 0.00018370000000000002
+   }
+  }
+ },
+ {
+  "id": 49,
+  "isSubtask": true,
+  "prefixText": "“Tell me what you think I want you to do, and ",
+  "truth": "place specific emphasis in your question(s) to me on the areas you’re least clear on.”",
+  "taskText": "“Tell me what you think I want you to do, and ",
+  "contextBefore": "  - maybe implement an 'assistance' slider, which determines how much it asks for clarification and details vs. just autonomously assuming\n  - there should also be an 'effort' slider, which will automatically use less/more powerful models depending on what the user sets that task to\n  - the AI should select the best model for the job by default, unless the user explicitly sets it\n  - these effort-levels should be automatically created when the user sets up a new AI profile, and configurable from the advanced settings in the AI profile panel\n  - we should use the same model throughout work tasks, so we can cache tokens\n  - “Interview me to determine the goal of the task.”",
+  "nextLine": "  - “You should not make any assumptions. If you’re about to implement a feature / execute a task, and that thing is not &gt;50% grounded in fact from something the user either said or corroborating docs/files, you should ask for clarification or not do that thing at all.”",
+  "parentTaskTitle": "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "local": {
+   "text": "I’ll do it for you.”",
+   "ms": 776
+  },
+  "cloud": {
+   "text": "I'll correct any wrong assumptions before starting work",
+   "kind": "rewrite",
+   "full": "Tell me what you think I want you to do, and I'll correct any wrong assumptions before starting work",
+   "ms": 2115,
+   "usage": {
+    "inputTokens": 853,
+    "outputTokens": 33,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 851,
+    "calls": 1,
+    "costUsd": 0.00018690000000000002
+   }
+  }
+ },
+ {
+  "id": 50,
+  "isSubtask": true,
+  "prefixText": "“You should not make any assumptions. If you’re about to implement a feature / execute a task, and that thing is not &gt;50% grounded in fact from something the user ",
+  "truth": "either said or corroborating docs/files, you should ask for clarification or not do that thing at all.”",
+  "taskText": "“You should not make any assumptions. If you’re about to implement a feature / execute a task, and that thing is not &gt;50% grounded in fact from something the user ",
+  "contextBefore": "  - there should also be an 'effort' slider, which will automatically use less/more powerful models depending on what the user sets that task to\n  - the AI should select the best model for the job by default, unless the user explicitly sets it\n  - these effort-levels should be automatically created when the user sets up a new AI profile, and configurable from the advanced settings in the AI profile panel\n  - we should use the same model throughout work tasks, so we can cache tokens\n  - “Interview me to determine the goal of the task.”\n  - “Tell me what you think I want you to do, and place specific emphasis in your question(s) to me on the areas you’re least clear on.”",
+  "nextLine": "- can we index local files into the vector DB, so the AI can search through them to find relevant data?",
+  "parentTaskTitle": "AI should run /grill-me type skill when first working on a task, to fill any uncertainty gaps before it actually starts work",
+  "local": {
+   "text": "has?",
+   "ms": 540
+  },
+  "cloud": {
+   "text": "the user has said or provided, you must run the /grill-me skill first to close the uncertainty gaps before starting work.",
+   "kind": "rewrite",
+   "full": "You should not make any assumptions. If you're about to implement a feature or execute a task and that thing is not more than 50% grounded in facts from something the user has said or provided, you must run the /grill-me skill first to close the uncertainty gaps before starting work.",
+   "ms": 2480,
+   "usage": {
+    "inputTokens": 888,
+    "outputTokens": 82,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 886,
+    "calls": 1,
+    "costUsd": 0.0002184
+   }
+  }
+ },
+ {
+  "id": 51,
+  "isSubtask": false,
+  "prefixText": "can we index local files into the vector ",
+  "truth": "DB, so the AI can search through them to find relevant data?",
+  "taskText": "can we index local files into the vector ",
+  "contextBefore": "  - the AI should select the best model for the job by default, unless the user explicitly sets it\n  - these effort-levels should be automatically created when the user sets up a new AI profile, and configurable from the advanced settings in the AI profile panel\n  - we should use the same model throughout work tasks, so we can cache tokens\n  - “Interview me to determine the goal of the task.”\n  - “Tell me what you think I want you to do, and place specific emphasis in your question(s) to me on the areas you’re least clear on.”\n  - “You should not make any assumptions. If you’re about to implement a feature / execute a task, and that thing is not &gt;50% grounded in fact from something the user either said or corroborating docs/files, you should ask for clarification or not do that thing at all.”",
+  "nextLine": "- Major task-execution bugs",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "s",
+   "ms": 495
+  },
+  "cloud": {
+   "text": "database?",
+   "kind": "rewrite",
+   "full": "Can we index local files into the vector database?",
+   "ms": 2695,
+   "usage": {
+    "inputTokens": 798,
+    "outputTokens": 14,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 796,
+    "calls": 1,
+    "costUsd": 0.00016640000000000003
+   }
+  }
+ },
+ {
+  "id": 52,
+  "isSubtask": true,
+  "prefixText": "Token usage isn’t displaying ",
+  "truth": "in the AI execution pane",
+  "taskText": "Token usage isn’t displaying ",
+  "contextBefore": "  - we should use the same model throughout work tasks, so we can cache tokens\n  - “Interview me to determine the goal of the task.”\n  - “Tell me what you think I want you to do, and place specific emphasis in your question(s) to me on the areas you’re least clear on.”\n  - “You should not make any assumptions. If you’re about to implement a feature / execute a task, and that thing is not &gt;50% grounded in fact from something the user either said or corroborating docs/files, you should ask for clarification or not do that thing at all.”\n- can we index local files into the vector DB, so the AI can search through them to find relevant data?\n- Major task-execution bugs",
+  "nextLine": "  - The permissions prompt during task execution is buggy",
+  "parentTaskTitle": "Major task-execution bugs",
+  "local": {
+   "text": "",
+   "ms": 434
+  },
+  "cloud": {
+   "text": "correctly in the task execution summary",
+   "kind": "rewrite",
+   "full": "Token usage isn't displaying correctly in the task execution summary",
+   "ms": 2669,
+   "usage": {
+    "inputTokens": 820,
+    "outputTokens": 22,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 818,
+    "calls": 1,
+    "costUsd": 0.00017480000000000002
+   }
+  }
+ },
+ {
+  "id": 53,
+  "isSubtask": true,
+  "prefixText": "The permissions prompt during task ",
+  "truth": "execution is buggy",
+  "taskText": "The permissions prompt during task ",
+  "contextBefore": "  - “Interview me to determine the goal of the task.”\n  - “Tell me what you think I want you to do, and place specific emphasis in your question(s) to me on the areas you’re least clear on.”\n  - “You should not make any assumptions. If you’re about to implement a feature / execute a task, and that thing is not &gt;50% grounded in fact from something the user either said or corroborating docs/files, you should ask for clarification or not do that thing at all.”\n- can we index local files into the vector DB, so the AI can search through them to find relevant data?\n- Major task-execution bugs\n  - Token usage isn’t displaying in the AI execution pane",
+  "nextLine": "  - It prompts for WAY too much — this may have to do with Antigravity’s settings, but if so we need a way to be more permissive",
+  "parentTaskTitle": "Major task-execution bugs",
+  "local": {
+   "text": "execution",
+   "ms": 484
+  },
+  "cloud": {
+   "text": "execution is blocking progress",
+   "kind": "suffix",
+   "full": "The permissions prompt during task execution is blocking progress",
+   "ms": 2659,
+   "usage": {
+    "inputTokens": 818,
+    "outputTokens": 19,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 816,
+    "calls": 1,
+    "costUsd": 0.0001729
+   }
+  }
+ },
+ {
+  "id": 54,
+  "isSubtask": true,
+  "prefixText": "It prompts for WAY too much — this may have ",
+  "truth": "to do with Antigravity’s settings, but if so we need a way to be more permissive",
+  "taskText": "It prompts for WAY too much — this may have ",
+  "contextBefore": "  - “Tell me what you think I want you to do, and place specific emphasis in your question(s) to me on the areas you’re least clear on.”\n  - “You should not make any assumptions. If you’re about to implement a feature / execute a task, and that thing is not &gt;50% grounded in fact from something the user either said or corroborating docs/files, you should ask for clarification or not do that thing at all.”\n- can we index local files into the vector DB, so the AI can search through them to find relevant data?\n- Major task-execution bugs\n  - Token usage isn’t displaying in the AI execution pane\n  - The permissions prompt during task execution is buggy",
+  "nextLine": "  - It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice selections; obviously there’s still some weird bleed-over between the overview and the actions steps",
+  "parentTaskTitle": "Major task-execution bugs",
+  "local": {
+   "text": "to be fixed",
+   "ms": 589
+  },
+  "cloud": {
+   "text": "caused the task-execution bugs",
+   "kind": "suffix",
+   "full": "It prompts for WAY too much — this may have caused the task-execution bugs",
+   "ms": 2105,
+   "usage": {
+    "inputTokens": 823,
+    "outputTokens": 26,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 821,
+    "calls": 1,
+    "costUsd": 0.0001774
+   }
+  }
+ },
+ {
+  "id": 55,
+  "isSubtask": true,
+  "prefixText": "It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice ",
+  "truth": "selections; obviously there’s still some weird bleed-over between the overview and the actions steps",
+  "taskText": "It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice ",
+  "contextBefore": "  - “You should not make any assumptions. If you’re about to implement a feature / execute a task, and that thing is not &gt;50% grounded in fact from something the user either said or corroborating docs/files, you should ask for clarification or not do that thing at all.”\n- can we index local files into the vector DB, so the AI can search through them to find relevant data?\n- Major task-execution bugs\n  - Token usage isn’t displaying in the AI execution pane\n  - The permissions prompt during task execution is buggy\n  - It prompts for WAY too much — this may have to do with Antigravity’s settings, but if so we need a way to be more permissive",
+  "nextLine": "- Manager AI needs to never execute agents in its own instance, since agents will be spun off of it if need be",
+  "parentTaskTitle": "Major task-execution bugs",
+  "local": {
+   "text": "steps",
+   "ms": 516
+  },
+  "cloud": {
+   "text": "questions instead of plain text",
+   "kind": "rewrite",
+   "full": "It gives \"phantom prompts\" where it sometimes displays its overview steps as multiple-choice questions instead of plain text",
+   "ms": 2311,
+   "usage": {
+    "inputTokens": 840,
+    "outputTokens": 41,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 838,
+    "calls": 1,
+    "costUsd": 0.00018830000000000002
+   }
+  }
+ },
+ {
+  "id": 56,
+  "isSubtask": false,
+  "prefixText": "Manager AI needs to never execute agents in ",
+  "truth": "its own instance, since agents will be spun off of it if need be",
+  "taskText": "Manager AI needs to never execute agents in ",
+  "contextBefore": "- can we index local files into the vector DB, so the AI can search through them to find relevant data?\n- Major task-execution bugs\n  - Token usage isn’t displaying in the AI execution pane\n  - The permissions prompt during task execution is buggy\n  - It prompts for WAY too much — this may have to do with Antigravity’s settings, but if so we need a way to be more permissive\n  - It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice selections; obviously there’s still some weird bleed-over between the overview and the actions steps",
+  "nextLine": "  - Or do we let providers handle agentic tasks themselves, and simply never spin off agents at all?",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "the AI execution pane",
+   "ms": 443
+  },
+  "cloud": {
+   "text": "parallel without explicit user approval",
+   "kind": "suffix",
+   "full": "Manager AI needs to never execute agents in parallel without explicit user approval",
+   "ms": 2264,
+   "usage": {
+    "inputTokens": 803,
+    "outputTokens": 26,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 801,
+    "calls": 1,
+    "costUsd": 0.00017339999999999999
+   }
+  }
+ },
+ {
+  "id": 57,
+  "isSubtask": true,
+  "prefixText": "Or do we let providers handle agentic tasks themselves, ",
+  "truth": "and simply never spin off agents at all?",
+  "taskText": "Or do we let providers handle agentic tasks themselves, ",
+  "contextBefore": "- Major task-execution bugs\n  - Token usage isn’t displaying in the AI execution pane\n  - The permissions prompt during task execution is buggy\n  - It prompts for WAY too much — this may have to do with Antigravity’s settings, but if so we need a way to be more permissive\n  - It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice selections; obviously there’s still some weird bleed-over between the overview and the actions steps\n- Manager AI needs to never execute agents in its own instance, since agents will be spun off of it if need be",
+  "nextLine": "- write a function, then write the test for that function",
+  "parentTaskTitle": "Manager AI needs to never execute agents in its own instance, since agents will be spun off of it if need be",
+  "local": {
+   "text": "that can be used by the manager AI to execute tasks",
+   "ms": 588
+  },
+  "cloud": {
+   "text": "outside of the Manager AI's process?",
+   "kind": "suffix",
+   "full": "Or do we let providers handle agentic tasks themselves, outside of the Manager AI's process?",
+   "ms": 2336,
+   "usage": {
+    "inputTokens": 851,
+    "outputTokens": 33,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 849,
+    "calls": 1,
+    "costUsd": 0.0001865
+   }
+  }
+ },
+ {
+  "id": 58,
+  "isSubtask": false,
+  "prefixText": "write a function, then write the ",
+  "truth": "test for that function",
+  "taskText": "write a function, then write the ",
+  "contextBefore": "  - Token usage isn’t displaying in the AI execution pane\n  - The permissions prompt during task execution is buggy\n  - It prompts for WAY too much — this may have to do with Antigravity’s settings, but if so we need a way to be more permissive\n  - It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice selections; obviously there’s still some weird bleed-over between the overview and the actions steps\n- Manager AI needs to never execute agents in its own instance, since agents will be spun off of it if need be\n  - Or do we let providers handle agentic tasks themselves, and simply never spin off agents at all?",
+  "nextLine": "  - once it passes the test(s), the agent can move on",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "function, then write the function, then write the function, then write the function, then write",
+   "ms": 852
+  },
+  "cloud": {
+   "text": "unit tests for it",
+   "kind": "suffix",
+   "full": "write a function, then write the unit tests for it",
+   "ms": 2165,
+   "usage": {
+    "inputTokens": 796,
+    "outputTokens": 15,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 794,
+    "calls": 1,
+    "costUsd": 0.0001665
+   }
+  }
+ },
+ {
+  "id": 59,
+  "isSubtask": true,
+  "prefixText": "once it passes the test(s), ",
+  "truth": "the agent can move on",
+  "taskText": "once it passes the test(s), ",
+  "contextBefore": "  - The permissions prompt during task execution is buggy\n  - It prompts for WAY too much — this may have to do with Antigravity’s settings, but if so we need a way to be more permissive\n  - It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice selections; obviously there’s still some weird bleed-over between the overview and the actions steps\n- Manager AI needs to never execute agents in its own instance, since agents will be spun off of it if need be\n  - Or do we let providers handle agentic tasks themselves, and simply never spin off agents at all?\n- write a function, then write the test for that function",
+  "nextLine": "- Implementing Agile framework for agents",
+  "parentTaskTitle": "write a function, then write the test for that function",
+  "local": {
+   "text": "then write the test for that implementation",
+   "ms": 559
+  },
+  "cloud": {
+   "text": "mark the task as complete and move on to the next subtask",
+   "kind": "suffix",
+   "full": "once it passes the test(s), mark the task as complete and move on to the next subtask",
+   "ms": 2182,
+   "usage": {
+    "inputTokens": 820,
+    "outputTokens": 27,
+    "cachedInputTokens": 0,
+    "cacheWriteTokens": 818,
+    "calls": 1,
+    "costUsd": 0.00017730000000000003
+   }
+  }
+ },
+ {
+  "id": 60,
+  "isSubtask": true,
+  "prefixText": "make as many small changes/iterations as possible to try ",
+  "truth": "to best reach the goal",
+  "taskText": "make as many small changes/iterations as possible to try ",
+  "contextBefore": "  - It gives “phantom prompts” where it sometimes displays its overview steps as multiple-choice selections; obviously there’s still some weird bleed-over between the overview and the actions steps\n- Manager AI needs to never execute agents in its own instance, since agents will be spun off of it if need be\n  - Or do we let providers handle agentic tasks themselves, and simply never spin off agents at all?\n- write a function, then write the test for that function\n  - once it passes the test(s), the agent can move on\n- Implementing Agile framework for agents",
+  "nextLine": "  - maybe this looks like implementation plans by multiple agents, and then a judge AI decides which plan is the best",
+  "parentTaskTitle": "Implementing Agile framework for agents",
+  "local": {
+   "text": "out of the plan",
+   "ms": 554
+  },
+  "cloud": null
+ },
+ {
+  "id": 61,
+  "isSubtask": true,
+  "prefixText": "maybe this looks like implementation plans by multiple agents, ",
+  "truth": "and then a judge AI decides which plan is the best",
+  "taskText": "maybe this looks like implementation plans by multiple agents, ",
+  "contextBefore": "- Manager AI needs to never execute agents in its own instance, since agents will be spun off of it if need be\n  - Or do we let providers handle agentic tasks themselves, and simply never spin off agents at all?\n- write a function, then write the test for that function\n  - once it passes the test(s), the agent can move on\n- Implementing Agile framework for agents\n  - make as many small changes/iterations as possible to try to best reach the goal",
+  "nextLine": "  - each agent should approach its plan in a different way from the previous plans, so there are varied approaches and ideas",
+  "parentTaskTitle": "Implementing Agile framework for agents",
+  "local": {
+   "text": "or maybe it looks like a single agent, with multiple plans",
+   "ms": 524
+  },
+  "cloud": null
+ },
+ {
+  "id": 62,
+  "isSubtask": true,
+  "prefixText": "each agent should approach its plan in a different way from the ",
+  "truth": "previous plans, so there are varied approaches and ideas",
+  "taskText": "each agent should approach its plan in a different way from the ",
+  "contextBefore": "  - Or do we let providers handle agentic tasks themselves, and simply never spin off agents at all?\n- write a function, then write the test for that function\n  - once it passes the test(s), the agent can move on\n- Implementing Agile framework for agents\n  - make as many small changes/iterations as possible to try to best reach the goal\n  - maybe this looks like implementation plans by multiple agents, and then a judge AI decides which plan is the best",
+  "nextLine": "  - how do we do this without bloating a new agent's context with every other previous plan?",
+  "parentTaskTitle": "Implementing Agile framework for agents",
+  "local": {
+   "text": "other agents?",
+   "ms": 318
+  },
+  "cloud": null
+ },
+ {
+  "id": 63,
+  "isSubtask": true,
+  "prefixText": "how do we do this without bloating a ",
+  "truth": "new agent's context with every other previous plan?",
+  "taskText": "how do we do this without bloating a ",
+  "contextBefore": "- write a function, then write the test for that function\n  - once it passes the test(s), the agent can move on\n- Implementing Agile framework for agents\n  - make as many small changes/iterations as possible to try to best reach the goal\n  - maybe this looks like implementation plans by multiple agents, and then a judge AI decides which plan is the best\n  - each agent should approach its plan in a different way from the previous plans, so there are varied approaches and ideas",
+  "nextLine": "  - \"best\" is determined by which one adheres most strictly to the outcome/goal already determined by the initial context assembly AI",
+  "parentTaskTitle": "Implementing Agile framework for agents",
+  "local": {
+   "text": "plan",
+   "ms": 330
+  },
+  "cloud": null
+ },
+ {
+  "id": 64,
+  "isSubtask": true,
+  "prefixText": "\"best\" is determined by which one adheres most strictly to ",
+  "truth": "the outcome/goal already determined by the initial context assembly AI",
+  "taskText": "\"best\" is determined by which one adheres most strictly to ",
+  "contextBefore": "  - once it passes the test(s), the agent can move on\n- Implementing Agile framework for agents\n  - make as many small changes/iterations as possible to try to best reach the goal\n  - maybe this looks like implementation plans by multiple agents, and then a judge AI decides which plan is the best\n  - each agent should approach its plan in a different way from the previous plans, so there are varied approaches and ideas\n  - how do we do this without bloating a new agent's context with every other previous plan?",
+  "nextLine": "  - research this more and/or have AI put together a plan on what it thinks this should look like",
+  "parentTaskTitle": "Implementing Agile framework for agents",
+  "local": {
+   "text": "the goal",
+   "ms": 333
+  },
+  "cloud": null
+ },
+ {
+  "id": 65,
+  "isSubtask": true,
+  "prefixText": "research this more and/or have AI put together a ",
+  "truth": "plan on what it thinks this should look like",
+  "taskText": "research this more and/or have AI put together a ",
+  "contextBefore": "- Implementing Agile framework for agents\n  - make as many small changes/iterations as possible to try to best reach the goal\n  - maybe this looks like implementation plans by multiple agents, and then a judge AI decides which plan is the best\n  - each agent should approach its plan in a different way from the previous plans, so there are varied approaches and ideas\n  - how do we do this without bloating a new agent's context with every other previous plan?\n  - \"best\" is determined by which one adheres most strictly to the outcome/goal already determined by the initial context assembly AI",
+  "nextLine": "- Organization Redesign: Better task/subtask draggability/regrouping",
+  "parentTaskTitle": "Implementing Agile framework for agents",
+  "local": {
+   "text": "plan that is more intuitive and easier to understand",
+   "ms": 490
+  },
+  "cloud": null
+ },
+ {
+  "id": 66,
+  "isSubtask": false,
+  "prefixText": "Add reminders for tasks, which should ping the user at ",
+  "truth": "a specific time with their set prompt",
+  "taskText": "Add reminders for tasks, which should ping the user at ",
+  "contextBefore": "  - maybe this looks like implementation plans by multiple agents, and then a judge AI decides which plan is the best\n  - each agent should approach its plan in a different way from the previous plans, so there are varied approaches and ideas\n  - how do we do this without bloating a new agent's context with every other previous plan?\n  - \"best\" is determined by which one adheres most strictly to the outcome/goal already determined by the initial context assembly AI\n  - research this more and/or have AI put together a plan on what it thinks this should look like\n- Organization Redesign: Better task/subtask draggability/regrouping",
+  "nextLine": "- Customizable Dashboard: Allow users to customize their dashboard with different widgets and layouts.",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "the end of the day",
+   "ms": 406
+  },
+  "cloud": null
+ },
+ {
+  "id": 67,
+  "isSubtask": false,
+  "prefixText": "Customizable Dashboard: Allow users to customize their dashboard ",
+  "truth": "with different widgets and layouts.",
+  "taskText": "Customizable Dashboard: Allow users to customize their dashboard ",
+  "contextBefore": "  - each agent should approach its plan in a different way from the previous plans, so there are varied approaches and ideas\n  - how do we do this without bloating a new agent's context with every other previous plan?\n  - \"best\" is determined by which one adheres most strictly to the outcome/goal already determined by the initial context assembly AI\n  - research this more and/or have AI put together a plan on what it thinks this should look like\n- Organization Redesign: Better task/subtask draggability/regrouping\n- Add reminders for tasks, which should ping the user at a specific time with their set prompt",
+  "nextLine": "- custom themes",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "",
+   "ms": 383
+  },
+  "cloud": null
+ },
+ {
+  "id": 68,
+  "isSubtask": false,
+  "prefixText": "Card coloring, so user can mark certain ",
+  "truth": "cards as different (e.g. red = important)",
+  "taskText": "Card coloring, so user can mark certain ",
+  "contextBefore": "  - \"best\" is determined by which one adheres most strictly to the outcome/goal already determined by the initial context assembly AI\n  - research this more and/or have AI put together a plan on what it thinks this should look like\n- Organization Redesign: Better task/subtask draggability/regrouping\n- Add reminders for tasks, which should ping the user at a specific time with their set prompt\n- Customizable Dashboard: Allow users to customize their dashboard with different widgets and layouts.\n- custom themes",
+  "nextLine": "  - this should add something in markdown to delineate",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "color",
+   "ms": 275
+  },
+  "cloud": null
+ },
+ {
+  "id": 69,
+  "isSubtask": true,
+  "prefixText": "this should add something ",
+  "truth": "in markdown to delineate",
+  "taskText": "this should add something ",
+  "contextBefore": "  - research this more and/or have AI put together a plan on what it thinks this should look like\n- Organization Redesign: Better task/subtask draggability/regrouping\n- Add reminders for tasks, which should ping the user at a specific time with their set prompt\n- Customizable Dashboard: Allow users to customize their dashboard with different widgets and layouts.\n- custom themes\n- Card coloring, so user can mark certain cards as different (e.g. red = important)",
+  "nextLine": "- branding info text should emphasize 2 pain points: lack of control over architecture AI is going to implement to solve X task, and the black-box nature of not being able to directly supervise the AI while it's working",
+  "parentTaskTitle": "Card coloring, so user can mark certain cards as different (e.g. red = important)",
+  "local": {
+   "text": "to the dashboard",
+   "ms": 339
+  },
+  "cloud": null
+ },
+ {
+  "id": 70,
+  "isSubtask": false,
+  "prefixText": "branding info text should emphasize 2 pain points: lack of control over architecture AI ",
+  "truth": "is going to implement to solve X task, and the black-box nature of not being able to directly supervise the AI while it's working",
+  "taskText": "branding info text should emphasize 2 pain points: lack of control over architecture AI ",
+  "contextBefore": "- Organization Redesign: Better task/subtask draggability/regrouping\n- Add reminders for tasks, which should ping the user at a specific time with their set prompt\n- Customizable Dashboard: Allow users to customize their dashboard with different widgets and layouts.\n- custom themes\n- Card coloring, so user can mark certain cards as different (e.g. red = important)\n  - this should add something in markdown to delineate",
+  "nextLine": "- global rules - these would get added as part of the skill the AI runs when it executes",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "",
+   "ms": 273
+  },
+  "cloud": null
+ },
+ {
+  "id": 71,
+  "isSubtask": false,
+  "prefixText": "global rules - these would get added as part of ",
+  "truth": "the skill the AI runs when it executes",
+  "taskText": "global rules - these would get added as part of ",
+  "contextBefore": "- Add reminders for tasks, which should ping the user at a specific time with their set prompt\n- Customizable Dashboard: Allow users to customize their dashboard with different widgets and layouts.\n- custom themes\n- Card coloring, so user can mark certain cards as different (e.g. red = important)\n  - this should add something in markdown to delineate\n- branding info text should emphasize 2 pain points: lack of control over architecture AI is going to implement to solve X task, and the black-box nature of not being able to directly supervise the AI while it's working",
+  "nextLine": "- using AI to draft new tasks/edit existing should always attempt to mimic the user's writing style based on other tasks the user has written",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "the AI",
+   "ms": 424
+  },
+  "cloud": null
+ },
+ {
+  "id": 72,
+  "isSubtask": false,
+  "prefixText": "using AI to draft new tasks/edit existing should always attempt to mimic the ",
+  "truth": "user's writing style based on other tasks the user has written",
+  "taskText": "using AI to draft new tasks/edit existing should always attempt to mimic the ",
+  "contextBefore": "- Customizable Dashboard: Allow users to customize their dashboard with different widgets and layouts.\n- custom themes\n- Card coloring, so user can mark certain cards as different (e.g. red = important)\n  - this should add something in markdown to delineate\n- branding info text should emphasize 2 pain points: lack of control over architecture AI is going to implement to solve X task, and the black-box nature of not being able to directly supervise the AI while it's working\n- global rules - these would get added as part of the skill the AI runs when it executes",
+  "nextLine": "- tasks should be executable w/ keybinding as well as button press",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "AI's behavior",
+   "ms": 344
+  },
+  "cloud": null
+ },
+ {
+  "id": 73,
+  "isSubtask": false,
+  "prefixText": "tasks should be executable w/ keybinding as ",
+  "truth": "well as button press",
+  "taskText": "tasks should be executable w/ keybinding as ",
+  "contextBefore": "- custom themes\n- Card coloring, so user can mark certain cards as different (e.g. red = important)\n  - this should add something in markdown to delineate\n- branding info text should emphasize 2 pain points: lack of control over architecture AI is going to implement to solve X task, and the black-box nature of not being able to directly supervise the AI while it's working\n- global rules - these would get added as part of the skill the AI runs when it executes\n- using AI to draft new tasks/edit existing should always attempt to mimic the user's writing style based on other tasks the user has written",
+  "nextLine": "  - Ctrl+Enter by default for the 'execute' button, maybe Ctrl+Alt+E for the 'new task' button?",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "well as a 'run' button that can be used to execute the task",
+   "ms": 545
+  },
+  "cloud": null
+ },
+ {
+  "id": 74,
+  "isSubtask": true,
+  "prefixText": "Ctrl+Enter by default for the 'execute' button, maybe ",
+  "truth": "Ctrl+Alt+E for the 'new task' button?",
+  "taskText": "Ctrl+Enter by default for the 'execute' button, maybe ",
+  "contextBefore": "- Card coloring, so user can mark certain cards as different (e.g. red = important)\n  - this should add something in markdown to delineate\n- branding info text should emphasize 2 pain points: lack of control over architecture AI is going to implement to solve X task, and the black-box nature of not being able to directly supervise the AI while it's working\n- global rules - these would get added as part of the skill the AI runs when it executes\n- using AI to draft new tasks/edit existing should always attempt to mimic the user's writing style based on other tasks the user has written\n- tasks should be executable w/ keybinding as well as button press",
+  "nextLine": "  - this should be configurable",
+  "parentTaskTitle": "tasks should be executable w/ keybinding as well as button press",
+  "local": {
+   "text": "",
+   "ms": 334
+  },
+  "cloud": null
+ },
+ {
+  "id": 75,
+  "isSubtask": false,
+  "prefixText": "a way in the UI ",
+  "truth": "to specify fallback conditions for tasks/subtasks",
+  "taskText": "a way in the UI ",
+  "contextBefore": "- branding info text should emphasize 2 pain points: lack of control over architecture AI is going to implement to solve X task, and the black-box nature of not being able to directly supervise the AI while it's working\n- global rules - these would get added as part of the skill the AI runs when it executes\n- using AI to draft new tasks/edit existing should always attempt to mimic the user's writing style based on other tasks the user has written\n- tasks should be executable w/ keybinding as well as button press\n  - Ctrl+Enter by default for the 'execute' button, maybe Ctrl+Alt+E for the 'new task' button?\n  - this should be configurable",
+  "nextLine": "- a 'human review' card *inside* task cards, created by the AI after it finishes execution of a task",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "should be displayed when the AI finishes executing a task",
+   "ms": 493
+  },
+  "cloud": null
+ },
+ {
+  "id": 76,
+  "isSubtask": false,
+  "prefixText": "a 'human review' card *inside* task cards, created ",
+  "truth": "by the AI after it finishes execution of a task",
+  "taskText": "a 'human review' card *inside* task cards, created ",
+  "contextBefore": "- global rules - these would get added as part of the skill the AI runs when it executes\n- using AI to draft new tasks/edit existing should always attempt to mimic the user's writing style based on other tasks the user has written\n- tasks should be executable w/ keybinding as well as button press\n  - Ctrl+Enter by default for the 'execute' button, maybe Ctrl+Alt+E for the 'new task' button?\n  - this should be configurable\n- a way in the UI to specify fallback conditions for tasks/subtasks",
+  "nextLine": "  - make sure AI is instructed explicitly on *how* it should return human review and other text",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "when the AI returns human review",
+   "ms": 457
+  },
+  "cloud": null
+ },
+ {
+  "id": 77,
+  "isSubtask": true,
+  "prefixText": "make sure AI is instructed explicitly on *how* it ",
+  "truth": "should return human review and other text",
+  "taskText": "make sure AI is instructed explicitly on *how* it ",
+  "contextBefore": "- using AI to draft new tasks/edit existing should always attempt to mimic the user's writing style based on other tasks the user has written\n- tasks should be executable w/ keybinding as well as button press\n  - Ctrl+Enter by default for the 'execute' button, maybe Ctrl+Alt+E for the 'new task' button?\n  - this should be configurable\n- a way in the UI to specify fallback conditions for tasks/subtasks\n- a 'human review' card *inside* task cards, created by the AI after it finishes execution of a task",
+  "nextLine": "- give the user a 'how-to' of best practices",
+  "parentTaskTitle": "a 'human review' card *inside* task cards, created by the AI after it finishes execution of a task",
+  "local": {
+   "text": "to follow",
+   "ms": 327
+  },
+  "cloud": null
+ },
+ {
+  "id": 78,
+  "isSubtask": false,
+  "prefixText": "give the user ",
+  "truth": "a 'how-to' of best practices",
+  "taskText": "give the user ",
+  "contextBefore": "- tasks should be executable w/ keybinding as well as button press\n  - Ctrl+Enter by default for the 'execute' button, maybe Ctrl+Alt+E for the 'new task' button?\n  - this should be configurable\n- a way in the UI to specify fallback conditions for tasks/subtasks\n- a 'human review' card *inside* task cards, created by the AI after it finishes execution of a task\n  - make sure AI is instructed explicitly on *how* it should return human review and other text",
+  "nextLine": "  - how to structure tasks",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "a way to add subtasks",
+   "ms": 332
+  },
+  "cloud": null
+ },
+ {
+  "id": 79,
+  "isSubtask": true,
+  "prefixText": "putting down a number of tasks first before running, ",
+  "truth": "so the AI has enough context to work effectively",
+  "taskText": "putting down a number of tasks first before running, ",
+  "contextBefore": "  - this should be configurable\n- a way in the UI to specify fallback conditions for tasks/subtasks\n- a 'human review' card *inside* task cards, created by the AI after it finishes execution of a task\n  - make sure AI is instructed explicitly on *how* it should return human review and other text\n- give the user a 'how-to' of best practices\n  - how to structure tasks",
+  "nextLine": "  - for the optimal workflow, the user should verify tasks the AI kicked back for human review *while* a task is executing, so that the user is always doing the higher-level architecting/verification, while the AI is doing the lower-level task execution",
+  "parentTaskTitle": "give the user a 'how-to' of best practices",
+  "local": {
+   "text": "",
+   "ms": 340
+  },
+  "cloud": null
+ },
+ {
+  "id": 80,
+  "isSubtask": true,
+  "prefixText": "for the optimal workflow, the user should verify tasks the AI kicked back for human review ",
+  "truth": "*while* a task is executing, so that the user is always doing the higher-level architecting/verification, while the AI is doing the lower-level task execution",
+  "taskText": "for the optimal workflow, the user should verify tasks the AI kicked back for human review ",
+  "contextBefore": "- a way in the UI to specify fallback conditions for tasks/subtasks\n- a 'human review' card *inside* task cards, created by the AI after it finishes execution of a task\n  - make sure AI is instructed explicitly on *how* it should return human review and other text\n- give the user a 'how-to' of best practices\n  - how to structure tasks\n  - putting down a number of tasks first before running, so the AI has enough context to work effectively",
+  "nextLine": "- when a code CLI has paused prompting the user for clarification, this should show up as a status icon on both the humand and AI sides of the task, so the user knows they need to intervene",
+  "parentTaskTitle": "give the user a 'how-to' of best practices",
+  "local": {
+   "text": "",
+   "ms": 358
+  },
+  "cloud": null
+ },
+ {
+  "id": 81,
+  "isSubtask": false,
+  "prefixText": "when a code CLI has paused prompting the user for clarification, this should show ",
+  "truth": "up as a status icon on both the humand and AI sides of the task, so the user knows they need to intervene",
+  "taskText": "when a code CLI has paused prompting the user for clarification, this should show ",
+  "contextBefore": "- a 'human review' card *inside* task cards, created by the AI after it finishes execution of a task\n  - make sure AI is instructed explicitly on *how* it should return human review and other text\n- give the user a 'how-to' of best practices\n  - how to structure tasks\n  - putting down a number of tasks first before running, so the AI has enough context to work effectively\n  - for the optimal workflow, the user should verify tasks the AI kicked back for human review *while* a task is executing, so that the user is always doing the higher-level architecting/verification, while the AI is doing the lower-level task execution",
+  "nextLine": "- support for codeblocks (not just code lines) with ```",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "",
+   "ms": 364
+  },
+  "cloud": null
+ },
+ {
+  "id": 82,
+  "isSubtask": false,
+  "prefixText": "support for codeblocks ",
+  "truth": "(not just code lines) with ```",
+  "taskText": "support for codeblocks ",
+  "contextBefore": "  - make sure AI is instructed explicitly on *how* it should return human review and other text\n- give the user a 'how-to' of best practices\n  - how to structure tasks\n  - putting down a number of tasks first before running, so the AI has enough context to work effectively\n  - for the optimal workflow, the user should verify tasks the AI kicked back for human review *while* a task is executing, so that the user is always doing the higher-level architecting/verification, while the AI is doing the lower-level task execution\n- when a code CLI has paused prompting the user for clarification, this should show up as a status icon on both the humand and AI sides of the task, so the user knows they need to intervene",
+  "nextLine": "- copy/cut/delete for tasks needs to be better",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "",
+   "ms": 387
+  },
+  "cloud": null
+ },
+ {
+  "id": 83,
+  "isSubtask": false,
+  "prefixText": "copy/cut/delete for tasks needs ",
+  "truth": "to be better",
+  "taskText": "copy/cut/delete for tasks needs ",
+  "contextBefore": "- give the user a 'how-to' of best practices\n  - how to structure tasks\n  - putting down a number of tasks first before running, so the AI has enough context to work effectively\n  - for the optimal workflow, the user should verify tasks the AI kicked back for human review *while* a task is executing, so that the user is always doing the higher-level architecting/verification, while the AI is doing the lower-level task execution\n- when a code CLI has paused prompting the user for clarification, this should show up as a status icon on both the humand and AI sides of the task, so the user knows they need to intervene\n- support for codeblocks (not just code lines) with ```",
+  "nextLine": "- ability to create a code-formatting doc",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "",
+   "ms": 343
+  },
+  "cloud": null
+ },
+ {
+  "id": 84,
+  "isSubtask": true,
+  "prefixText": "is this just ",
+  "truth": "part of global rules?",
+  "taskText": "is this just ",
+  "contextBefore": "  - putting down a number of tasks first before running, so the AI has enough context to work effectively\n  - for the optimal workflow, the user should verify tasks the AI kicked back for human review *while* a task is executing, so that the user is always doing the higher-level architecting/verification, while the AI is doing the lower-level task execution\n- when a code CLI has paused prompting the user for clarification, this should show up as a status icon on both the humand and AI sides of the task, so the user knows they need to intervene\n- support for codeblocks (not just code lines) with ```\n- copy/cut/delete for tasks needs to be better\n- ability to create a code-formatting doc",
+  "nextLine": "- we need a screen for reading what the AI has saved in vector storage, and modifying as the user wants",
+  "parentTaskTitle": "ability to create a code-formatting doc",
+  "local": {
+   "text": "a new feature?",
+   "ms": 400
+  },
+  "cloud": null
+ },
+ {
+  "id": 85,
+  "isSubtask": false,
+  "prefixText": "given/when/then UI for tasks, which users can fill out themselves and can ",
+  "truth": "be accepted directly by the AI without it needing to build that piece of the gherkin",
+  "taskText": "given/when/then UI for tasks, which users can fill out themselves and can ",
+  "contextBefore": "- when a code CLI has paused prompting the user for clarification, this should show up as a status icon on both the humand and AI sides of the task, so the user knows they need to intervene\n- support for codeblocks (not just code lines) with ```\n- copy/cut/delete for tasks needs to be better\n- ability to create a code-formatting doc\n  - is this just part of global rules?\n- we need a screen for reading what the AI has saved in vector storage, and modifying as the user wants",
+  "nextLine": "- there could be a way to create flowcharts within the app, directly assigned to particular tasks",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "be saved as a flowchart",
+   "ms": 366
+  },
+  "cloud": null
+ },
+ {
+  "id": 86,
+  "isSubtask": false,
+  "prefixText": "there could be a way to create ",
+  "truth": "flowcharts within the app, directly assigned to particular tasks",
+  "taskText": "there could be a way to create ",
+  "contextBefore": "- support for codeblocks (not just code lines) with ```\n- copy/cut/delete for tasks needs to be better\n- ability to create a code-formatting doc\n  - is this just part of global rules?\n- we need a screen for reading what the AI has saved in vector storage, and modifying as the user wants\n- given/when/then UI for tasks, which users can fill out themselves and can be accepted directly by the AI without it needing to build that piece of the gherkin",
+  "nextLine": "  - this should probably be in `mermaid` format, so it can be visually represented by the user but then sent straight to the AI",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "a code-formatting doc",
+   "ms": 349
+  },
+  "cloud": null
+ },
+ {
+  "id": 87,
+  "isSubtask": true,
+  "prefixText": "this should probably be in `mermaid` format, so it can be visually represented by ",
+  "truth": "the user but then sent straight to the AI",
+  "taskText": "this should probably be in `mermaid` format, so it can be visually represented by ",
+  "contextBefore": "- copy/cut/delete for tasks needs to be better\n- ability to create a code-formatting doc\n  - is this just part of global rules?\n- we need a screen for reading what the AI has saved in vector storage, and modifying as the user wants\n- given/when/then UI for tasks, which users can fill out themselves and can be accepted directly by the AI without it needing to build that piece of the gherkin\n- there could be a way to create flowcharts within the app, directly assigned to particular tasks",
+  "nextLine": "- how do we handle MCP token expirations?",
+  "parentTaskTitle": "there could be a way to create flowcharts within the app, directly assigned to particular tasks",
+  "local": {
+   "text": "the AI",
+   "ms": 327
+  },
+  "cloud": null
+ },
+ {
+  "id": 88,
+  "isSubtask": false,
+  "prefixText": "how do we ",
+  "truth": "handle MCP token expirations?",
+  "taskText": "how do we ",
+  "contextBefore": "- ability to create a code-formatting doc\n  - is this just part of global rules?\n- we need a screen for reading what the AI has saved in vector storage, and modifying as the user wants\n- given/when/then UI for tasks, which users can fill out themselves and can be accepted directly by the AI without it needing to build that piece of the gherkin\n- there could be a way to create flowcharts within the app, directly assigned to particular tasks\n  - this should probably be in `mermaid` format, so it can be visually represented by the user but then sent straight to the AI",
+  "nextLine": "- create a default `TODO.md` file that new projects clone when created",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "handle the creation of new projects",
+   "ms": 413
+  },
+  "cloud": null
+ },
+ {
+  "id": 89,
+  "isSubtask": false,
+  "prefixText": "create a default `TODO.md` file ",
+  "truth": "that new projects clone when created",
+  "taskText": "create a default `TODO.md` file ",
+  "contextBefore": "  - is this just part of global rules?\n- we need a screen for reading what the AI has saved in vector storage, and modifying as the user wants\n- given/when/then UI for tasks, which users can fill out themselves and can be accepted directly by the AI without it needing to build that piece of the gherkin\n- there could be a way to create flowcharts within the app, directly assigned to particular tasks\n  - this should probably be in `mermaid` format, so it can be visually represented by the user but then sent straight to the AI\n- how do we handle MCP token expirations?",
+  "nextLine": "- the last-used project needs to be the one that restores when the user returns to the page again / reloads",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "",
+   "ms": 341
+  },
+  "cloud": null
+ },
+ {
+  "id": 90,
+  "isSubtask": false,
+  "prefixText": "the last-used project needs to be the one that restores ",
+  "truth": "when the user returns to the page again / reloads",
+  "taskText": "the last-used project needs to be the one that restores ",
+  "contextBefore": "- we need a screen for reading what the AI has saved in vector storage, and modifying as the user wants\n- given/when/then UI for tasks, which users can fill out themselves and can be accepted directly by the AI without it needing to build that piece of the gherkin\n- there could be a way to create flowcharts within the app, directly assigned to particular tasks\n  - this should probably be in `mermaid` format, so it can be visually represented by the user but then sent straight to the AI\n- how do we handle MCP token expirations?\n- create a default `TODO.md` file that new projects clone when created",
+  "nextLine": "- the AI profile and project need to be synced, so that if the user last used a different AI profile on a different project, switching projects automatically switches to the last AI profile as well",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "to the last used project",
+   "ms": 441
+  },
+  "cloud": null
+ },
+ {
+  "id": 91,
+  "isSubtask": false,
+  "prefixText": "the AI profile and project need to be synced, so that if the user last used a different AI profile on a ",
+  "truth": "different project, switching projects automatically switches to the last AI profile as well",
+  "taskText": "the AI profile and project need to be synced, so that if the user last used a different AI profile on a ",
+  "contextBefore": "- given/when/then UI for tasks, which users can fill out themselves and can be accepted directly by the AI without it needing to build that piece of the gherkin\n- there could be a way to create flowcharts within the app, directly assigned to particular tasks\n  - this should probably be in `mermaid` format, so it can be visually represented by the user but then sent straight to the AI\n- how do we handle MCP token expirations?\n- create a default `TODO.md` file that new projects clone when created\n- the last-used project needs to be the one that restores when the user returns to the page again / reloads",
+  "nextLine": "- the AI should only check off tasks as completed if it successfully gets to the end, not if the user stops a task partway through",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "project",
+   "ms": 395
+  },
+  "cloud": null
+ },
+ {
+  "id": 92,
+  "isSubtask": false,
+  "prefixText": "the AI should only check off tasks as completed if it successfully gets to the ",
+  "truth": "end, not if the user stops a task partway through",
+  "taskText": "the AI should only check off tasks as completed if it successfully gets to the ",
+  "contextBefore": "- there could be a way to create flowcharts within the app, directly assigned to particular tasks\n  - this should probably be in `mermaid` format, so it can be visually represented by the user but then sent straight to the AI\n- how do we handle MCP token expirations?\n- create a default `TODO.md` file that new projects clone when created\n- the last-used project needs to be the one that restores when the user returns to the page again / reloads\n- the AI profile and project need to be synced, so that if the user last used a different AI profile on a different project, switching projects automatically switches to the last AI profile as well",
+  "nextLine": "- make the Ergo app icon `❯` but with a purple gradient across it",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "completion status",
+   "ms": 376
+  },
+  "cloud": null
+ },
+ {
+  "id": 93,
+  "isSubtask": false,
+  "prefixText": "tasks with a code line in them don't ",
+  "truth": "correctly check/uncheck from the boxes",
+  "taskText": "tasks with a code line in them don't ",
+  "contextBefore": "- how do we handle MCP token expirations?\n- create a default `TODO.md` file that new projects clone when created\n- the last-used project needs to be the one that restores when the user returns to the page again / reloads\n- the AI profile and project need to be synced, so that if the user last used a different AI profile on a different project, switching projects automatically switches to the last AI profile as well\n- the AI should only check off tasks as completed if it successfully gets to the end, not if the user stops a task partway through\n- make the Ergo app icon `❯` but with a purple gradient across it",
+  "nextLine": "- nest the download button into the settings panel",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "need to be a separate button",
+   "ms": 463
+  },
+  "cloud": null
+ },
+ {
+  "id": 94,
+  "isSubtask": false,
+  "prefixText": "nest the download ",
+  "truth": "button into the settings panel",
+  "taskText": "nest the download ",
+  "contextBefore": "- create a default `TODO.md` file that new projects clone when created\n- the last-used project needs to be the one that restores when the user returns to the page again / reloads\n- the AI profile and project need to be synced, so that if the user last used a different AI profile on a different project, switching projects automatically switches to the last AI profile as well\n- the AI should only check off tasks as completed if it successfully gets to the end, not if the user stops a task partway through\n- make the Ergo app icon `❯` but with a purple gradient across it\n- tasks with a code line in them don't correctly check/uncheck from the boxes",
+  "nextLine": "- remove the AI workstation from being a panel and instead have it be a section directly against the background",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "section",
+   "ms": 460
+  },
+  "cloud": null
+ },
+ {
+  "id": 95,
+  "isSubtask": true,
+  "prefixText": "headers should automatically be assigned a random color ",
+  "truth": "from a palette when the user makes a header",
+  "taskText": "headers should automatically be assigned a random color ",
+  "contextBefore": "- the AI should only check off tasks as completed if it successfully gets to the end, not if the user stops a task partway through\n- make the Ergo app icon `❯` but with a purple gradient across it\n- tasks with a code line in them don't correctly check/uncheck from the boxes\n- nest the download button into the settings panel\n- remove the AI workstation from being a panel and instead have it be a section directly against the background\n- task headers / grouping",
+  "nextLine": "  - this header should be able to be assigned a different color from right-click context menu",
+  "parentTaskTitle": "task headers / grouping",
+  "local": {
+   "text": "",
+   "ms": 265
+  },
+  "cloud": null
+ },
+ {
+  "id": 96,
+  "isSubtask": true,
+  "prefixText": "this header should be able to be ",
+  "truth": "assigned a different color from right-click context menu",
+  "taskText": "this header should be able to be ",
+  "contextBefore": "- make the Ergo app icon `❯` but with a purple gradient across it\n- tasks with a code line in them don't correctly check/uncheck from the boxes\n- nest the download button into the settings panel\n- remove the AI workstation from being a panel and instead have it be a section directly against the background\n- task headers / grouping\n  - headers should automatically be assigned a random color from a palette when the user makes a header",
+  "nextLine": "  - figure out how to represent this in the markdown file so it translates back into the UI",
+  "parentTaskTitle": "task headers / grouping",
+  "local": {
+   "text": "nly appear when the user makes a header",
+   "ms": 350
+  },
+  "cloud": null
+ },
+ {
+  "id": 97,
+  "isSubtask": true,
+  "prefixText": "figure out how to represent this in the markdown file ",
+  "truth": "so it translates back into the UI",
+  "taskText": "figure out how to represent this in the markdown file ",
+  "contextBefore": "- tasks with a code line in them don't correctly check/uncheck from the boxes\n- nest the download button into the settings panel\n- remove the AI workstation from being a panel and instead have it be a section directly against the background\n- task headers / grouping\n  - headers should automatically be assigned a random color from a palette when the user makes a header\n  - this header should be able to be assigned a different color from right-click context menu",
+  "nextLine": "  - instead of the task group name taking up as much space in the task card, it should just be the task number of the same color as the corresponding header",
+  "parentTaskTitle": "task headers / grouping",
+  "local": {
+   "text": "",
+   "ms": 288
+  },
+  "cloud": null
+ },
+ {
+  "id": 98,
+  "isSubtask": true,
+  "prefixText": "instead of the task group name taking up as much space in the task card, it should just be ",
+  "truth": "the task number of the same color as the corresponding header",
+  "taskText": "instead of the task group name taking up as much space in the task card, it should just be ",
+  "contextBefore": "- nest the download button into the settings panel\n- remove the AI workstation from being a panel and instead have it be a section directly against the background\n- task headers / grouping\n  - headers should automatically be assigned a random color from a palette when the user makes a header\n  - this header should be able to be assigned a different color from right-click context menu\n  - figure out how to represent this in the markdown file so it translates back into the UI",
+  "nextLine": "  - this needs to dynamically change if the user changes the task header color from the human side",
+  "parentTaskTitle": "task headers / grouping",
+  "local": {
+   "text": "a single line",
+   "ms": 334
+  },
+  "cloud": null
+ },
+ {
+  "id": 99,
+  "isSubtask": true,
+  "prefixText": "this needs to dynamically change if the ",
+  "truth": "user changes the task header color from the human side",
+  "taskText": "this needs to dynamically change if the ",
+  "contextBefore": "- remove the AI workstation from being a panel and instead have it be a section directly against the background\n- task headers / grouping\n  - headers should automatically be assigned a random color from a palette when the user makes a header\n  - this header should be able to be assigned a different color from right-click context menu\n  - figure out how to represent this in the markdown file so it translates back into the UI\n  - instead of the task group name taking up as much space in the task card, it should just be the task number of the same color as the corresponding header",
+  "nextLine": "  - hovering over it should show the full group name in the tooltip",
+  "parentTaskTitle": "task headers / grouping",
+  "local": {
+   "text": "user makes a header",
+   "ms": 373
+  },
+  "cloud": null
+ },
+ {
+  "id": 100,
+  "isSubtask": true,
+  "prefixText": "hovering over it should show ",
+  "truth": "the full group name in the tooltip",
+  "taskText": "hovering over it should show ",
+  "contextBefore": "- task headers / grouping\n  - headers should automatically be assigned a random color from a palette when the user makes a header\n  - this header should be able to be assigned a different color from right-click context menu\n  - figure out how to represent this in the markdown file so it translates back into the UI\n  - instead of the task group name taking up as much space in the task card, it should just be the task number of the same color as the corresponding header\n  - this needs to dynamically change if the user changes the task header color from the human side",
+  "nextLine": "- ‘related tasks’ should move above ‘overview’, since it chronologically comes first",
+  "parentTaskTitle": "task headers / grouping",
+  "local": {
+   "text": "the task card",
+   "ms": 390
+  },
+  "cloud": null
+ },
+ {
+  "id": 101,
+  "isSubtask": false,
+  "prefixText": "‘related tasks’ should move above ",
+  "truth": "‘overview’, since it chronologically comes first",
+  "taskText": "‘related tasks’ should move above ",
+  "contextBefore": "  - headers should automatically be assigned a random color from a palette when the user makes a header\n  - this header should be able to be assigned a different color from right-click context menu\n  - figure out how to represent this in the markdown file so it translates back into the UI\n  - instead of the task group name taking up as much space in the task card, it should just be the task number of the same color as the corresponding header\n  - this needs to dynamically change if the user changes the task header color from the human side\n  - hovering over it should show the full group name in the tooltip",
+  "nextLine": "- the AI should not ask if I want to use the associated API key during execution - it should always assume that if it's set, we want to use it",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "the task card",
+   "ms": 384
+  },
+  "cloud": null
+ },
+ {
+  "id": 102,
+  "isSubtask": false,
+  "prefixText": "see if AI providers have built-in commands for ",
+  "truth": "upgrading/migrating to newer models (like what claude has w/ `/claude-api migrate`)",
+  "taskText": "see if AI providers have built-in commands for ",
+  "contextBefore": "  - figure out how to represent this in the markdown file so it translates back into the UI\n  - instead of the task group name taking up as much space in the task card, it should just be the task number of the same color as the corresponding header\n  - this needs to dynamically change if the user changes the task header color from the human side\n  - hovering over it should show the full group name in the tooltip\n- ‘related tasks’ should move above ‘overview’, since it chronologically comes first\n- the AI should not ask if I want to use the associated API key during execution - it should always assume that if it's set, we want to use it",
+  "nextLine": "- allowed folders should be grouped into either global or per-project",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "specific folders",
+   "ms": 424
+  },
+  "cloud": null
+ },
+ {
+  "id": 103,
+  "isSubtask": false,
+  "prefixText": "allowed folders should be grouped ",
+  "truth": "into either global or per-project",
+  "taskText": "allowed folders should be grouped ",
+  "contextBefore": "  - instead of the task group name taking up as much space in the task card, it should just be the task number of the same color as the corresponding header\n  - this needs to dynamically change if the user changes the task header color from the human side\n  - hovering over it should show the full group name in the tooltip\n- ‘related tasks’ should move above ‘overview’, since it chronologically comes first\n- the AI should not ask if I want to use the associated API key during execution - it should always assume that if it's set, we want to use it\n- see if AI providers have built-in commands for upgrading/migrating to newer models (like what claude has w/ `/claude-api migrate`)",
+  "nextLine": "  - this way, if a user has specific allowed folders for a project, the AI won't be able to read other folders that don't apply to its current project",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "",
+   "ms": 531
+  },
+  "cloud": null
+ },
+ {
+  "id": 104,
+  "isSubtask": true,
+  "prefixText": "this way, if a user has specific allowed folders for a project, the AI won't ",
+  "truth": "be able to read other folders that don't apply to its current project",
+  "taskText": "this way, if a user has specific allowed folders for a project, the AI won't ",
+  "contextBefore": "  - this needs to dynamically change if the user changes the task header color from the human side\n  - hovering over it should show the full group name in the tooltip\n- ‘related tasks’ should move above ‘overview’, since it chronologically comes first\n- the AI should not ask if I want to use the associated API key during execution - it should always assume that if it's set, we want to use it\n- see if AI providers have built-in commands for upgrading/migrating to newer models (like what claude has w/ `/claude-api migrate`)\n- allowed folders should be grouped into either global or per-project",
+  "nextLine": "- a right-click context menu should show up in the human side task list, with options for (along w/ keybinds)",
+  "parentTaskTitle": "allowed folders should be grouped into either global or per-project",
+  "local": {
+   "text": "need to manually select the folder",
+   "ms": 522
+  },
+  "cloud": null
+ },
+ {
+  "id": 105,
+  "isSubtask": false,
+  "prefixText": "a right-click context menu should show up in ",
+  "truth": "the human side task list, with options for (along w/ keybinds)",
+  "taskText": "a right-click context menu should show up in ",
+  "contextBefore": "  - hovering over it should show the full group name in the tooltip\n- ‘related tasks’ should move above ‘overview’, since it chronologically comes first\n- the AI should not ask if I want to use the associated API key during execution - it should always assume that if it's set, we want to use it\n- see if AI providers have built-in commands for upgrading/migrating to newer models (like what claude has w/ `/claude-api migrate`)\n- allowed folders should be grouped into either global or per-project\n  - this way, if a user has specific allowed folders for a project, the AI won't be able to read other folders that don't apply to its current project",
+  "nextLine": "  - Undo (Ctrl+Z)",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "when the user right-clicks on a file or folder",
+   "ms": 529
+  },
+  "cloud": null
+ },
+ {
+  "id": 106,
+  "isSubtask": true,
+  "prefixText": "pastes directly into the ",
+  "truth": "markdown file so formatting can apply directly",
+  "taskText": "pastes directly into the ",
+  "contextBefore": "  - Redo (Ctrl+Y)\n  - Cut (Ctrl+X)\n  - Copy (Ctrl+C)\n  - Duplicate (Ctrl+D)\n  - Paste (Ctrl+V)\n  - Paste from Markdown (Ctrl+Shift+V)",
+  "nextLine": "  - Delete (Ctrl+Delete)",
+  "parentTaskTitle": "a right-click context menu should show up in the human side task list, with options for (along w/ keybinds)",
+  "local": {
+   "text": "editor",
+   "ms": 178
+  },
+  "cloud": null
+ },
+ {
+  "id": 107,
+  "isSubtask": false,
+  "prefixText": "instead of each stage being a dropdown card, it should be a series of tabs ",
+  "truth": "horizontally below the token usage card that open one by one as execution progresses through each stage",
+  "taskText": "instead of each stage being a dropdown card, it should be a series of tabs ",
+  "contextBefore": "  - Duplicate (Ctrl+D)\n  - Paste (Ctrl+V)\n  - Paste from Markdown (Ctrl+Shift+V)\n  - pastes directly into the markdown file so formatting can apply directly\n  - Delete (Ctrl+Delete)\n  - Select All (Ctrl+A)",
+  "nextLine": "- User should be able to link to local documents on their device and open them directly within the workspace.",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "",
+   "ms": 208
+  },
+  "cloud": null
+ },
+ {
+  "id": 108,
+  "isSubtask": false,
+  "prefixText": "User should be able to link to local documents ",
+  "truth": "on their device and open them directly within the workspace.",
+  "taskText": "User should be able to link to local documents ",
+  "contextBefore": "  - Paste (Ctrl+V)\n  - Paste from Markdown (Ctrl+Shift+V)\n  - pastes directly into the markdown file so formatting can apply directly\n  - Delete (Ctrl+Delete)\n  - Select All (Ctrl+A)\n- instead of each stage being a dropdown card, it should be a series of tabs horizontally below the token usage card that open one by one as execution progresses through each stage",
+  "nextLine": "- Help bot that’s basically just a normal chatbot, but has access to the internal MCP and can read/write across the entire app",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "",
+   "ms": 318
+  },
+  "cloud": null
+ },
+ {
+  "id": 109,
+  "isSubtask": false,
+  "prefixText": "Help bot that’s basically just a normal chatbot, but has access ",
+  "truth": "to the internal MCP and can read/write across the entire app",
+  "taskText": "Help bot that’s basically just a normal chatbot, but has access ",
+  "contextBefore": "  - Paste from Markdown (Ctrl+Shift+V)\n  - pastes directly into the markdown file so formatting can apply directly\n  - Delete (Ctrl+Delete)\n  - Select All (Ctrl+A)\n- instead of each stage being a dropdown card, it should be a series of tabs horizontally below the token usage card that open one by one as execution progresses through each stage\n- User should be able to link to local documents on their device and open them directly within the workspace.",
+  "nextLine": "  - This needs to replace the AI Assistant, so it’s just a freeform text prompt to perform actions in the human side",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "to interact with the user’s device and perform actions in the human side",
+   "ms": 449
+  },
+  "cloud": null
+ },
+ {
+  "id": 110,
+  "isSubtask": true,
+  "prefixText": "This needs to replace the AI Assistant, so it’s just a freeform text ",
+  "truth": "prompt to perform actions in the human side",
+  "taskText": "This needs to replace the AI Assistant, so it’s just a freeform text ",
+  "contextBefore": "  - pastes directly into the markdown file so formatting can apply directly\n  - Delete (Ctrl+Delete)\n  - Select All (Ctrl+A)\n- instead of each stage being a dropdown card, it should be a series of tabs horizontally below the token usage card that open one by one as execution progresses through each stage\n- User should be able to link to local documents on their device and open them directly within the workspace.\n- Help bot that’s basically just a normal chatbot, but has access to the internal MCP and can read/write across the entire app",
+  "nextLine": "  - Needs to have access to the internal Ergo MCP, so it can directly perform actions for the user",
+  "parentTaskTitle": "Help bot that’s basically just a normal chatbot, but has access to the internal MCP and can read/write across the entire app",
+  "local": {
+   "text": "chatbot",
+   "ms": 344
+  },
+  "cloud": null
+ },
+ {
+  "id": 111,
+  "isSubtask": true,
+  "prefixText": "Needs to have access to the internal Ergo MCP, so ",
+  "truth": "it can directly perform actions for the user",
+  "taskText": "Needs to have access to the internal Ergo MCP, so ",
+  "contextBefore": "  - Delete (Ctrl+Delete)\n  - Select All (Ctrl+A)\n- instead of each stage being a dropdown card, it should be a series of tabs horizontally below the token usage card that open one by one as execution progresses through each stage\n- User should be able to link to local documents on their device and open them directly within the workspace.\n- Help bot that’s basically just a normal chatbot, but has access to the internal MCP and can read/write across the entire app\n  - This needs to replace the AI Assistant, so it’s just a freeform text prompt to perform actions in the human side",
+  "nextLine": "  - Needs to have an undo — if the user hates its changes, it can immediately revert them",
+  "parentTaskTitle": "Help bot that’s basically just a normal chatbot, but has access to the internal MCP and can read/write across the entire app",
+  "local": {
+   "text": "needs to have a redo — if the user hates its changes, it can immediately revert them",
+   "ms": 587
+  },
+  "cloud": null
+ },
+ {
+  "id": 112,
+  "isSubtask": true,
+  "prefixText": "Needs to have an undo — if the user ",
+  "truth": "hates its changes, it can immediately revert them",
+  "taskText": "Needs to have an undo — if the user ",
+  "contextBefore": "  - Select All (Ctrl+A)\n- instead of each stage being a dropdown card, it should be a series of tabs horizontally below the token usage card that open one by one as execution progresses through each stage\n- User should be able to link to local documents on their device and open them directly within the workspace.\n- Help bot that’s basically just a normal chatbot, but has access to the internal MCP and can read/write across the entire app\n  - This needs to replace the AI Assistant, so it’s just a freeform text prompt to perform actions in the human side\n  - Needs to have access to the internal Ergo MCP, so it can directly perform actions for the user",
+  "nextLine": "  - Needs to use the vector DB & Laya to be able to search through all the current knowledge in the project for free, handing the actual AI that’s doing the work exactly the data it needs",
+  "parentTaskTitle": "Help bot that’s basically just a normal chatbot, but has access to the internal MCP and can read/write across the entire app",
+  "local": {
+   "text": "can’t find the action they’re trying to perform, it should be able to say “I don’t know what to",
+   "ms": 644
+  },
+  "cloud": null
+ },
+ {
+  "id": 113,
+  "isSubtask": true,
+  "prefixText": "Needs to use the vector DB & Laya to be able to search through all the current knowledge in ",
+  "truth": "the project for free, handing the actual AI that’s doing the work exactly the data it needs",
+  "taskText": "Needs to use the vector DB & Laya to be able to search through all the current knowledge in ",
+  "contextBefore": "- instead of each stage being a dropdown card, it should be a series of tabs horizontally below the token usage card that open one by one as execution progresses through each stage\n- User should be able to link to local documents on their device and open them directly within the workspace.\n- Help bot that’s basically just a normal chatbot, but has access to the internal MCP and can read/write across the entire app\n  - This needs to replace the AI Assistant, so it’s just a freeform text prompt to perform actions in the human side\n  - Needs to have access to the internal Ergo MCP, so it can directly perform actions for the user\n  - Needs to have an undo — if the user hates its changes, it can immediately revert them",
+  "nextLine": "  - Determine which level of AI model this then requires. Can it be done with a smaller model?",
+  "parentTaskTitle": "Help bot that’s basically just a normal chatbot, but has access to the internal MCP and can read/write across the entire app",
+  "local": {
+   "text": "the knowledge base?",
+   "ms": 451
+  },
+  "cloud": null
+ },
+ {
+  "id": 114,
+  "isSubtask": true,
+  "prefixText": "Determine which level of AI model this then requires. ",
+  "truth": "Can it be done with a smaller model?",
+  "taskText": "Determine which level of AI model this then requires. ",
+  "contextBefore": "- User should be able to link to local documents on their device and open them directly within the workspace.\n- Help bot that’s basically just a normal chatbot, but has access to the internal MCP and can read/write across the entire app\n  - This needs to replace the AI Assistant, so it’s just a freeform text prompt to perform actions in the human side\n  - Needs to have access to the internal Ergo MCP, so it can directly perform actions for the user\n  - Needs to have an undo — if the user hates its changes, it can immediately revert them\n  - Needs to use the vector DB & Laya to be able to search through all the current knowledge in the project for free, handing the actual AI that’s doing the work exactly the data it needs",
+  "nextLine": "  - microphone access to help bot",
+  "parentTaskTitle": "Help bot that’s basically just a normal chatbot, but has access to the internal MCP and can read/write across the entire app",
+  "local": {
+   "text": "",
+   "ms": 367
+  },
+  "cloud": null
+ },
+ {
+  "id": 115,
+  "isSubtask": false,
+  "prefixText": "Execution cards in the AI workspace need to ",
+  "truth": "be archived if the user deletes the corresponding card from the human side",
+  "taskText": "Execution cards in the AI workspace need to ",
+  "contextBefore": "  - This needs to replace the AI Assistant, so it’s just a freeform text prompt to perform actions in the human side\n  - Needs to have access to the internal Ergo MCP, so it can directly perform actions for the user\n  - Needs to have an undo — if the user hates its changes, it can immediately revert them\n  - Needs to use the vector DB & Laya to be able to search through all the current knowledge in the project for free, handing the actual AI that’s doing the work exactly the data it needs\n  - Determine which level of AI model this then requires. Can it be done with a smaller model?\n  - microphone access to help bot",
+  "nextLine": "  - There also seems to be a related bug where deleting the ‘initial task’ card from the AI workspace deletes all tasks in the human side — this is a serious bug that needs to be worked out",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "be fixed",
+   "ms": 456
+  },
+  "cloud": null
+ },
+ {
+  "id": 116,
+  "isSubtask": true,
+  "prefixText": "There also seems to be a related bug where deleting the ‘initial task’ card from the AI workspace deletes all tasks in the ",
+  "truth": "human side — this is a serious bug that needs to be worked out",
+  "taskText": "There also seems to be a related bug where deleting the ‘initial task’ card from the AI workspace deletes all tasks in the ",
+  "contextBefore": "  - Needs to have access to the internal Ergo MCP, so it can directly perform actions for the user\n  - Needs to have an undo — if the user hates its changes, it can immediately revert them\n  - Needs to use the vector DB & Laya to be able to search through all the current knowledge in the project for free, handing the actual AI that’s doing the work exactly the data it needs\n  - Determine which level of AI model this then requires. Can it be done with a smaller model?\n  - microphone access to help bot\n- Execution cards in the AI workspace need to be archived if the user deletes the corresponding card from the human side",
+  "nextLine": "- Clicking Tab inside a task should indent it as part of the previous task, and subindent any children it may have by another level",
+  "parentTaskTitle": "Execution cards in the AI workspace need to be archived if the user deletes the corresponding card from the human side",
+  "local": {
+   "text": "task",
+   "ms": 458
+  },
+  "cloud": null
+ },
+ {
+  "id": 117,
+  "isSubtask": false,
+  "prefixText": "Clicking Tab inside a task should indent it as part of the previous task, ",
+  "truth": "and subindent any children it may have by another level",
+  "taskText": "Clicking Tab inside a task should indent it as part of the previous task, ",
+  "contextBefore": "  - Needs to have an undo — if the user hates its changes, it can immediately revert them\n  - Needs to use the vector DB & Laya to be able to search through all the current knowledge in the project for free, handing the actual AI that’s doing the work exactly the data it needs\n  - Determine which level of AI model this then requires. Can it be done with a smaller model?\n  - microphone access to help bot\n- Execution cards in the AI workspace need to be archived if the user deletes the corresponding card from the human side\n  - There also seems to be a related bug where deleting the ‘initial task’ card from the AI workspace deletes all tasks in the human side — this is a serious bug that needs to be worked out",
+  "nextLine": "  - currently, it creates a new task that’s indented",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "but it should be indented as part of the previous task, not as part of the current task",
+   "ms": 638
+  },
+  "cloud": null
+ },
+ {
+  "id": 118,
+  "isSubtask": true,
+  "prefixText": "currently, it creates a new ",
+  "truth": "task that’s indented",
+  "taskText": "currently, it creates a new ",
+  "contextBefore": "  - Needs to use the vector DB & Laya to be able to search through all the current knowledge in the project for free, handing the actual AI that’s doing the work exactly the data it needs\n  - Determine which level of AI model this then requires. Can it be done with a smaller model?\n  - microphone access to help bot\n- Execution cards in the AI workspace need to be archived if the user deletes the corresponding card from the human side\n  - There also seems to be a related bug where deleting the ‘initial task’ card from the AI workspace deletes all tasks in the human side — this is a serious bug that needs to be worked out\n- Clicking Tab inside a task should indent it as part of the previous task, and subindent any children it may have by another level",
+  "nextLine": "- Autocomplete should also attempt to mimic the user’s writing/formatting/layout style for its suggestions",
+  "parentTaskTitle": "Clicking Tab inside a task should indent it as part of the previous task, and subindent any children it may have by another level",
+  "local": {
+   "text": "task when the user types a word",
+   "ms": 563
+  },
+  "cloud": null
+ },
+ {
+  "id": 119,
+  "isSubtask": false,
+  "prefixText": "Autocomplete should also attempt to mimic the user’s ",
+  "truth": "writing/formatting/layout style for its suggestions",
+  "taskText": "Autocomplete should also attempt to mimic the user’s ",
+  "contextBefore": "  - Determine which level of AI model this then requires. Can it be done with a smaller model?\n  - microphone access to help bot\n- Execution cards in the AI workspace need to be archived if the user deletes the corresponding card from the human side\n  - There also seems to be a related bug where deleting the ‘initial task’ card from the AI workspace deletes all tasks in the human side — this is a serious bug that needs to be worked out\n- Clicking Tab inside a task should indent it as part of the previous task, and subindent any children it may have by another level\n  - currently, it creates a new task that’s indented",
+  "nextLine": "- a helper card that says “done when…”",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "behavior",
+   "ms": 336
+  },
+  "cloud": null
+ },
+ {
+  "id": 120,
+  "isSubtask": false,
+  "prefixText": "a helper card ",
+  "truth": "that says “done when…”",
+  "taskText": "a helper card ",
+  "contextBefore": "  - microphone access to help bot\n- Execution cards in the AI workspace need to be archived if the user deletes the corresponding card from the human side\n  - There also seems to be a related bug where deleting the ‘initial task’ card from the AI workspace deletes all tasks in the human side — this is a serious bug that needs to be worked out\n- Clicking Tab inside a task should indent it as part of the previous task, and subindent any children it may have by another level\n  - currently, it creates a new task that’s indented\n- Autocomplete should also attempt to mimic the user’s writing/formatting/layout style for its suggestions",
+  "nextLine": "- Built-in search (so users don’t have to use Ctrl+F)",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "should be available in the AI workspace",
+   "ms": 432
+  },
+  "cloud": null
+ },
+ {
+  "id": 121,
+  "isSubtask": false,
+  "prefixText": "Built-in search (so users ",
+  "truth": "don’t have to use Ctrl+F)",
+  "taskText": "Built-in search (so users ",
+  "contextBefore": "- Execution cards in the AI workspace need to be archived if the user deletes the corresponding card from the human side\n  - There also seems to be a related bug where deleting the ‘initial task’ card from the AI workspace deletes all tasks in the human side — this is a serious bug that needs to be worked out\n- Clicking Tab inside a task should indent it as part of the previous task, and subindent any children it may have by another level\n  - currently, it creates a new task that’s indented\n- Autocomplete should also attempt to mimic the user’s writing/formatting/layout style for its suggestions\n- a helper card that says “done when…”",
+  "nextLine": "- We need an `AGENTS.md` / `CLAUDE.md` / etc. that are all duplicates of each other, set from a “global rules” document the user can create",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "can easily add their own agents to the workspace",
+   "ms": 470
+  },
+  "cloud": null
+ },
+ {
+  "id": 122,
+  "isSubtask": false,
+  "prefixText": "We need an `AGENTS.md` / `CLAUDE.md` / etc. that are ",
+  "truth": "all duplicates of each other, set from a “global rules” document the user can create",
+  "taskText": "We need an `AGENTS.md` / `CLAUDE.md` / etc. that are ",
+  "contextBefore": "  - There also seems to be a related bug where deleting the ‘initial task’ card from the AI workspace deletes all tasks in the human side — this is a serious bug that needs to be worked out\n- Clicking Tab inside a task should indent it as part of the previous task, and subindent any children it may have by another level\n  - currently, it creates a new task that’s indented\n- Autocomplete should also attempt to mimic the user’s writing/formatting/layout style for its suggestions\n- a helper card that says “done when…”\n- Built-in search (so users don’t have to use Ctrl+F)",
+  "nextLine": "  - User should also be able to create other rules/skills that can be referenced dynamically in tasks (either by the human for the AI, or automatically by the AI as needed)",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "to be included in the AI workspace",
+   "ms": 488
+  },
+  "cloud": null
+ },
+ {
+  "id": 123,
+  "isSubtask": true,
+  "prefixText": "User should also be able to create other rules/skills that can be referenced dynamically in tasks ",
+  "truth": "(either by the human for the AI, or automatically by the AI as needed)",
+  "taskText": "User should also be able to create other rules/skills that can be referenced dynamically in tasks ",
+  "contextBefore": "- Clicking Tab inside a task should indent it as part of the previous task, and subindent any children it may have by another level\n  - currently, it creates a new task that’s indented\n- Autocomplete should also attempt to mimic the user’s writing/formatting/layout style for its suggestions\n- a helper card that says “done when…”\n- Built-in search (so users don’t have to use Ctrl+F)\n- We need an `AGENTS.md` / `CLAUDE.md` / etc. that are all duplicates of each other, set from a “global rules” document the user can create",
+  "nextLine": "- Draggable task cards",
+  "parentTaskTitle": "We need an `AGENTS.md` / `CLAUDE.md` / etc. that are all duplicates of each other, set from a “global rules” document the user can create",
+  "local": {
+   "text": "",
+   "ms": 319
+  },
+  "cloud": null
+ },
+ {
+  "id": 124,
+  "isSubtask": true,
+  "prefixText": "maybe by grabbing ",
+  "truth": "one of the edges?",
+  "taskText": "maybe by grabbing ",
+  "contextBefore": "- Autocomplete should also attempt to mimic the user’s writing/formatting/layout style for its suggestions\n- a helper card that says “done when…”\n- Built-in search (so users don’t have to use Ctrl+F)\n- We need an `AGENTS.md` / `CLAUDE.md` / etc. that are all duplicates of each other, set from a “global rules” document the user can create\n  - User should also be able to create other rules/skills that can be referenced dynamically in tasks (either by the human for the AI, or automatically by the AI as needed)\n- Draggable task cards",
+  "nextLine": "- Tasks that are completely checked should collapse the task section by default",
+  "parentTaskTitle": "Draggable task cards",
+  "local": {
+   "text": "ing the task card",
+   "ms": 373
+  },
+  "cloud": null
+ },
+ {
+  "id": 125,
+  "isSubtask": false,
+  "prefixText": "Tasks that are completely ",
+  "truth": "checked should collapse the task section by default",
+  "taskText": "Tasks that are completely ",
+  "contextBefore": "- a helper card that says “done when…”\n- Built-in search (so users don’t have to use Ctrl+F)\n- We need an `AGENTS.md` / `CLAUDE.md` / etc. that are all duplicates of each other, set from a “global rules” document the user can create\n  - User should also be able to create other rules/skills that can be referenced dynamically in tasks (either by the human for the AI, or automatically by the AI as needed)\n- Draggable task cards\n  - maybe by grabbing one of the edges?",
+  "nextLine": "- Collapsed tasks that have 1 or more subtasks completed should show a little muted `(n/n)` hint after the task name",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "completed should show a little muted `(n/n)` hint after the task name",
+   "ms": 512
+  },
+  "cloud": null
+ },
+ {
+  "id": 126,
+  "isSubtask": false,
+  "prefixText": "Collapsed tasks that have 1 or more subtasks ",
+  "truth": "completed should show a little muted `(n/n)` hint after the task name",
+  "taskText": "Collapsed tasks that have 1 or more subtasks ",
+  "contextBefore": "- Built-in search (so users don’t have to use Ctrl+F)\n- We need an `AGENTS.md` / `CLAUDE.md` / etc. that are all duplicates of each other, set from a “global rules” document the user can create\n  - User should also be able to create other rules/skills that can be referenced dynamically in tasks (either by the human for the AI, or automatically by the AI as needed)\n- Draggable task cards\n  - maybe by grabbing one of the edges?\n- Tasks that are completely checked should collapse the task section by default",
+  "nextLine": "- Hovering over text that has markdown formatting over it should pop up the markdown characters around it",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "should be collapsed by default",
+   "ms": 381
+  },
+  "cloud": null
+ },
+ {
+  "id": 127,
+  "isSubtask": false,
+  "prefixText": "Hovering over text that has markdown formatting ",
+  "truth": "over it should pop up the markdown characters around it",
+  "taskText": "Hovering over text that has markdown formatting ",
+  "contextBefore": "- We need an `AGENTS.md` / `CLAUDE.md` / etc. that are all duplicates of each other, set from a “global rules” document the user can create\n  - User should also be able to create other rules/skills that can be referenced dynamically in tasks (either by the human for the AI, or automatically by the AI as needed)\n- Draggable task cards\n  - maybe by grabbing one of the edges?\n- Tasks that are completely checked should collapse the task section by default\n- Collapsed tasks that have 1 or more subtasks completed should show a little muted `(n/n)` hint after the task name",
+  "nextLine": "  - For example, hovering over codeblock text should make the ` graves appear, so the user can delete them if they want — but the rest of the time, only the formatting is visible, without showing the markdown characters",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "should show a little hint after the text",
+   "ms": 478
+  },
+  "cloud": null
+ },
+ {
+  "id": 128,
+  "isSubtask": true,
+  "prefixText": "For example, hovering over codeblock text should make the ` graves appear, so the user can delete ",
+  "truth": "them if they want — but the rest of the time, only the formatting is visible, without showing the markdown characters",
+  "taskText": "For example, hovering over codeblock text should make the ` graves appear, so the user can delete ",
+  "contextBefore": "  - User should also be able to create other rules/skills that can be referenced dynamically in tasks (either by the human for the AI, or automatically by the AI as needed)\n- Draggable task cards\n  - maybe by grabbing one of the edges?\n- Tasks that are completely checked should collapse the task section by default\n- Collapsed tasks that have 1 or more subtasks completed should show a little muted `(n/n)` hint after the task name\n- Hovering over text that has markdown formatting over it should pop up the markdown characters around it",
+  "nextLine": "- An agent tree, to see each worker agent of a task and what it’s doing",
+  "parentTaskTitle": "Hovering over text that has markdown formatting over it should pop up the markdown characters around it",
+  "local": {
+   "text": "the code",
+   "ms": 384
+  },
+  "cloud": null
+ },
+ {
+  "id": 129,
+  "isSubtask": false,
+  "prefixText": "An agent tree, to see ",
+  "truth": "each worker agent of a task and what it’s doing",
+  "taskText": "An agent tree, to see ",
+  "contextBefore": "- Draggable task cards\n  - maybe by grabbing one of the edges?\n- Tasks that are completely checked should collapse the task section by default\n- Collapsed tasks that have 1 or more subtasks completed should show a little muted `(n/n)` hint after the task name\n- Hovering over text that has markdown formatting over it should pop up the markdown characters around it\n  - For example, hovering over codeblock text should make the ` graves appear, so the user can delete them if they want — but the rest of the time, only the formatting is visible, without showing the markdown characters",
+  "nextLine": "",
+  "parentTaskTitle": null,
+  "local": {
+   "text": "how the agent tree is structured",
+   "ms": 380
+  },
+  "cloud": null
+ }
+]

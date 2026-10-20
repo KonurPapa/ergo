@@ -1,0 +1,97 @@
+##### aikid123-qwen3-coder-0.6b — A: same per-question prompts as the Qwen2.5 eval (thinking off)
+TASK KIND (model only)        55% {'other': 7, 'coding': 8, 'ops': 11, 'writing': 4, 'research': 6, 'data': 4}
+TASK KIND (code rule + model) 55%
+STRAIGHTFORWARD               38%  (always-yes baseline 70%)
+QA NEEDED (all 12 coding tasks) 50%  (always-yes baseline 50%)
+MCP exact set 45%  precision 0.26  recall 0.32  (tp 6 fp 17 fn 13)  [no-tools baseline exact 55%]
+RELATED TASKS precision 0.37 recall 0.64 F1 0.46 (tp 23 fp 40 fn 13)  [stage-1 strict cut-off F1 .56]
+LATENCY per call: median 147 ms, p90 190 ms (620 calls)
+##### aikid123-qwen3-coder-0.6b — autocomplete
+"in the human side task list, with options for"
+   FIM  ( 199 ms): ''
+   chat ( 233 ms): 'a few words'
+"Tasks that are completely checked should"
+   FIM  (  39 ms): ''
+   chat ( 212 ms): 'Tasks that are completely checked should pop up the markdown characters around them.'
+"roject needs to be the one that restores when"
+   FIM  (  55 ms): ''
+   chat ( 198 ms): 'the last-used project needs to be the one that restores when'
+"Built-in search (so users don"
+   FIM  (  34 ms): ''
+   chat ( 160 ms): "so users don't have to use Ctrl+F."
+" AI workspace need to be archived if the user"
+   FIM  (  57 ms): ''
+   chat ( 308 ms): 'Execution cards in the AI workspace need to be archived if the user has exceeded the number of tasks.'
+"support for codeblocks (not just"
+   FIM  (  48 ms): ''
+   chat ( 136 ms): 'support for codeblocks (not just)'
+" should ping the user at a specific time with"
+   FIM  (  51 ms): ''
+   chat ( 304 ms): 'Add reminders for tasks, which should ping the user at a specific time with a few words.'
+"allowed folders should be grouped into either"
+   FIM  (  48 ms): ''
+   chat ( 209 ms): 'allowed folders should be grouped into either a single folder or multiple folders.'
+median latency  FIM 51 ms   chat 212 ms
+##### aikid123-qwen3-coder-0.6b — B: one combined prompt (the one Haiku passed), thinking off
+TASK KIND        62%
+STRAIGHTFORWARD  30%
+QA NEEDED (12 coding) 75%
+MCP exact set 50%  precision 0.00  recall 0.00  (tp 0 fp 5 fn 19)  [no-tools baseline exact 55%]
+RELATED TASKS precision 0.27 recall 0.70 F1 0.39 (tp 30 fp 80 fn 13)  [stage-1 strict cut-off F1 .56]
+LATENCY per call: median 1320 ms, p90 4553 ms; median output tokens 33; unparseable answers 0 of 54
+##### aikid123-qwen3-coder-0.6b — B: one combined prompt (the one Haiku passed), thinking ON
+TASK KIND        62%
+STRAIGHTFORWARD  60%
+QA NEEDED (12 coding) 75%
+MCP exact set 65%  precision 0.50  recall 0.32  (tp 6 fp 6 fn 13)  [no-tools baseline exact 55%]
+RELATED TASKS precision 0.37 recall 0.42 F1 0.39 (tp 18 fp 31 fn 25)  [stage-1 strict cut-off F1 .56]
+LATENCY per call: median 8422 ms, p90 17227 ms; median output tokens 271; unparseable answers 0 of 54
+##### Havenlon-EB-Qwen3.5-0.8B — A: same per-question prompts as the Qwen2.5 eval (thinking off)
+TASK KIND (model only)        60% {'other': 2, 'coding': 15, 'data': 6, 'writing': 8, 'research': 4, 'ops': 5}
+TASK KIND (code rule + model) 58%
+STRAIGHTFORWARD               42%  (always-yes baseline 70%)
+QA NEEDED (all 12 coding tasks) 92%  (always-yes baseline 50%)
+MCP exact set 32%  precision 0.06  recall 0.42  (tp 8 fp 119 fn 11)  [no-tools baseline exact 55%]
+RELATED TASKS precision 0.38 recall 0.08 F1 0.14 (tp 3 fp 5 fn 33)  [stage-1 strict cut-off F1 .56]
+LATENCY per call: median 222 ms, p90 400 ms (620 calls)
+##### Havenlon-EB-Qwen3.5-0.8B — autocomplete
+"in the human side task list, with options for"
+   FIM  ( 299 ms): ''
+   chat ( 495 ms): 'edit, assign to someone else, and archive.'
+"Tasks that are completely checked should"
+   FIM  ( 191 ms): ''
+   chat ( 270 ms): 'be marked as done.'
+"roject needs to be the one that restores when"
+   FIM  ( 205 ms): ''
+   chat ( 421 ms): 'the last-used project needs to be the one that restores when'
+"Built-in search (so users don"
+   FIM  ( 214 ms): ''
+   chat ( 371 ms): 'have to use Ctrl+F) to find it.'
+" AI workspace need to be archived if the user"
+   FIM  ( 209 ms): ''
+   chat ( 256 ms): 'archived'
+"support for codeblocks (not just"
+   FIM  ( 182 ms): ''
+   chat ( 218 ms): 'codeblocks'
+" should ping the user at a specific time with"
+   FIM  ( 205 ms): ''
+   chat ( 272 ms): 'the same formatting.'
+"allowed folders should be grouped into either"
+   FIM  ( 201 ms): ''
+   chat ( 226 ms): 'one category'
+median latency  FIM 205 ms   chat 272 ms
+##### Havenlon-EB-Qwen3.5-0.8B — B: one combined prompt (the one Haiku passed), thinking off
+TASK KIND        65%
+STRAIGHTFORWARD  52%
+QA NEEDED (12 coding) 50%
+MCP exact set 38%  precision 0.15  recall 0.11  (tp 2 fp 11 fn 17)  [no-tools baseline exact 55%]
+RELATED TASKS precision 0.18 recall 0.30 F1 0.22 (tp 13 fp 61 fn 30)  [stage-1 strict cut-off F1 .56]
+LATENCY per call: median 2046 ms, p90 5691 ms; median output tokens 34; unparseable answers 2 of 54
+##### Havenlon-EB-Qwen3.5-0.8B — B: one combined prompt (the one Haiku passed), thinking ON
+TASK KIND        0%
+STRAIGHTFORWARD  0%
+QA NEEDED (12 coding) 0%
+MCP exact set 55%  precision 0.00  recall 0.00  (tp 0 fp 0 fn 19)  [no-tools baseline exact 55%]
+RELATED TASKS precision 0.00 recall 0.00 F1 0.00 (tp 0 fp 1 fn 43)  [stage-1 strict cut-off F1 .56]
+LATENCY per call: median 2300 ms, p90 9948 ms; median output tokens 34; unparseable answers 53 of 54
+ALLDONE

@@ -1,4 +1,5 @@
 import { type TaskItem, type AgentContextItem, type TaskStatus, type SwimLaneDoc, type TokenUsage } from '../types';
+import { splitHeaderColor } from './headerColors';
 
 export const ARCHIVE_DELIMITER = '<!-- ARCHIVE -->';
 
@@ -32,6 +33,7 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
   let currentHeading: string | null = null;
   let currentHeadingPrefix = '##';
   let currentHeadingHasColon = false;
+  let currentHeadingColor: string | undefined;
   let isHeadingActive = false;
   let currentCategory = isArchived ? 'Archive' : 'Untitled';
   let categoryCounter = 0;
@@ -48,11 +50,13 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
     }
 
     // Category / Section headers (e.g. # General TODOs: or ## other todos)
-    const categoryMatch = line.match(/^(#{1,6})\s+(.+?)(:?)$/);
+    const headingSplit = splitHeaderColor(line.trimEnd());
+    const categoryMatch = headingSplit.name.match(/^(#{1,6})\s+(.+?)(:?)$/);
     if (categoryMatch && !line.trim().startsWith('<!--')) {
       const headingPrefix = categoryMatch[1];
-      const catText = categoryMatch[2].trim();
       const hasColon = categoryMatch[3] === ':';
+      const catText = categoryMatch[2].trim();
+      currentHeadingColor = headingSplit.colorId;
       currentHeading = catText || 'Untitled';
       currentHeadingPrefix = headingPrefix;
       currentHeadingHasColon = hasColon;
@@ -125,6 +129,7 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
         category: currentCategory,
         categoryHeadingPrefix: currentHeadingPrefix,
         categoryHasColon: currentHeadingHasColon,
+        categoryColor: currentHeadingColor,
         listIndex: categoryCounter,
         listType: 'ordered',
         isUnordered: false,
@@ -166,6 +171,7 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
         category: currentCategory,
         categoryHeadingPrefix: currentHeadingPrefix,
         categoryHasColon: currentHeadingHasColon,
+        categoryColor: currentHeadingColor,
         listIndex: categoryCounter,
         listType: 'bullet',
         isUnordered: true,
@@ -288,7 +294,9 @@ function serializeTaskListMarkdown(items: TaskItem[]): string {
       const firstItem = catItems[0];
       const prefix = firstItem?.categoryHeadingPrefix || '##';
       const colon = firstItem?.categoryHasColon ? ':' : '';
-      md += `${prefix} ${catName}${colon}\n\n`;
+      const colorId = catItems.find((i) => i.categoryColor)?.categoryColor;
+      const token = colorId ? ` {color=${colorId}}` : '';
+      md += `${prefix} ${catName}${colon}${token}\n\n`;
     }
     let catIndex = 1;
     for (const item of catItems) {
@@ -433,8 +441,13 @@ function parseAgentContextBlock(markdown: string, isArchived: boolean = false): 
     let metaSourceHeading: string | undefined;
     let metaId: string | undefined;
     let metaTotalUsage: TokenUsage | undefined;
+    let metaOverviewSource: 'generated' | 'user' | undefined;
+    let metaOverviewTaskHash: string | undefined;
+    let metaOverviewDoc: any;
+    let metaQaVerification: boolean | undefined;
 
-    const jsonMetaMatch = section.match(/<!--\s*ergo-meta:\s*(\{.*?\})\s*-->/i);
+    // Greedy to the last `}` of the one-line comment: nested objects (totalUsage, overview metadata) contain `}`.
+    const jsonMetaMatch = section.match(/<!--\s*ergo-meta:\s*(\{.*\})\s*-->/i);
     if (jsonMetaMatch) {
       try {
         const parsedMeta = JSON.parse(jsonMetaMatch[1]);
@@ -445,6 +458,10 @@ function parseAgentContextBlock(markdown: string, isArchived: boolean = false): 
         if (parsedMeta.sourceHeading) metaSourceHeading = parsedMeta.sourceHeading;
         if (parsedMeta.id) metaId = parsedMeta.id;
         if (parsedMeta.totalUsage) metaTotalUsage = parsedMeta.totalUsage;
+        if (parsedMeta.overviewSource === 'generated' || parsedMeta.overviewSource === 'user') metaOverviewSource = parsedMeta.overviewSource;
+        if (typeof parsedMeta.overviewTaskHash === 'string') metaOverviewTaskHash = parsedMeta.overviewTaskHash;
+        if (parsedMeta.overviewDoc && typeof parsedMeta.overviewDoc === 'object') metaOverviewDoc = parsedMeta.overviewDoc;
+        if (parsedMeta.qaVerification === true) metaQaVerification = true;
       } catch {}
     } else {
       const altMetaMatch = section.match(/<!--\s*sourceTaskId:\s*([^|\s]+)(?:\s*\|\s*sourceLaneId:\s*([^>\s]+))?\s*-->/i);
@@ -507,7 +524,27 @@ function parseAgentContextBlock(markdown: string, isArchived: boolean = false): 
       sourceLaneTitle: metaSourceLaneTitle,
       sourceContent: metaSourceContent,
       sourceHeading: metaSourceHeading,
-      totalUsage: metaTotalUsage
+      totalUsage: metaTotalUsage,
+      ...(metaOverviewSource ? { overviewSource: metaOverviewSource } : {}),
+      ...(metaOverviewTaskHash ? { overviewTaskHash: metaOverviewTaskHash } : {}),
+      ...(metaQaVerification ? { qaVerification: true } : {}),
+      // The markdown keeps only the overview's metadata; its text is the Overview section itself.
+      ...(metaOverviewDoc
+        ? {
+            overviewDocument: {
+              brief: overview.match(/```gherkin([\s\S]*?)```/)?.[1]?.trim() || '',
+              goals: overview,
+              raw: overview,
+              output_as: typeof metaOverviewDoc.output_as === 'string' ? metaOverviewDoc.output_as : '',
+              ...(metaOverviewDoc.taskKind ? { taskKind: metaOverviewDoc.taskKind } : {}),
+              ...(typeof metaOverviewDoc.requiresHardener === 'boolean' ? { requiresHardener: metaOverviewDoc.requiresHardener } : {}),
+              ...(metaOverviewDoc.hardenerReason ? { hardenerReason: metaOverviewDoc.hardenerReason } : {}),
+              ...(Array.isArray(metaOverviewDoc.requiredMcps) ? { requiredMcps: metaOverviewDoc.requiredMcps } : {}),
+              ...(Array.isArray(metaOverviewDoc.relatedTaskIds) ? { relatedTaskIds: metaOverviewDoc.relatedTaskIds.map(String) } : {}),
+              ...(Array.isArray(metaOverviewDoc.relatedTaskTitles) ? { relatedTaskTitles: metaOverviewDoc.relatedTaskTitles.map(String) } : {}),
+            },
+          }
+        : {}),
     });
   }
 
@@ -562,7 +599,7 @@ function serializeAgentContextItemsList(items: AgentContextItem[]): string {
     }
 
     // Embed metadata comments if linkage exists
-    if (item.sourceTaskId || item.sourceLaneId || item.id || item.sourceContent || item.sourceHeading || item.totalUsage) {
+    if (item.sourceTaskId || item.sourceLaneId || item.id || item.sourceContent || item.sourceHeading || item.totalUsage || item.overviewSource) {
       const metaObj: Record<string, any> = {};
       if (item.id) metaObj.id = item.id;
       if (item.sourceTaskId) metaObj.sourceTaskId = item.sourceTaskId;
@@ -571,7 +608,23 @@ function serializeAgentContextItemsList(items: AgentContextItem[]): string {
       if (item.sourceContent) metaObj.sourceContent = item.sourceContent;
       if (item.sourceHeading) metaObj.sourceHeading = item.sourceHeading;
       if (item.totalUsage) metaObj.totalUsage = item.totalUsage;
-      md += `<!-- ergo-meta: ${JSON.stringify(metaObj)} -->\n\n`;
+      if (item.overviewSource) metaObj.overviewSource = item.overviewSource;
+      if (item.overviewTaskHash) metaObj.overviewTaskHash = item.overviewTaskHash;
+      if (item.qaVerification) metaObj.qaVerification = true;
+      if (item.overviewDocument) {
+        const d = item.overviewDocument;
+        metaObj.overviewDoc = {
+          output_as: d.output_as || '',
+          ...(d.taskKind ? { taskKind: d.taskKind } : {}),
+          ...(typeof d.requiresHardener === 'boolean' ? { requiresHardener: d.requiresHardener } : {}),
+          ...(d.hardenerReason ? { hardenerReason: d.hardenerReason } : {}),
+          ...(d.requiredMcps ? { requiredMcps: d.requiredMcps } : {}),
+          ...(d.relatedTaskIds ? { relatedTaskIds: d.relatedTaskIds } : {}),
+          ...(d.relatedTaskTitles ? { relatedTaskTitles: d.relatedTaskTitles } : {}),
+        };
+      }
+      // `-->` inside a value would end the comment early; \u003e is the same character to JSON.parse.
+      md += `<!-- ergo-meta: ${JSON.stringify(metaObj).replace(/-->/g, '--\\u003e')} -->\n\n`;
     }
 
     md += `**Status:** ${item.status}\n\n`;

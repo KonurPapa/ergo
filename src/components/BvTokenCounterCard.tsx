@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { bridgeClient } from '../lib/bridgeClient';
 import {
   type TaskItem,
   type AgentContextItem,
@@ -108,7 +109,9 @@ export function extractTaskTokenSummary(
             cachedInputTokens: parsed.cachedInputTokens || 0,
             cacheWriteTokens: parsed.cacheWriteTokens || 0,
             calls: parsed.calls || 0,
-            ...(parsed.estimated ? { estimated: true } : {})
+            ...(parsed.estimated ? { estimated: true } : {}),
+            ...(typeof parsed.costUsd === 'number' ? { costUsd: parsed.costUsd } : {}),
+            ...(parsed.costPartial ? { costPartial: true } : {})
           };
           found = true;
         }
@@ -142,6 +145,63 @@ interface BvTokenCounterCardProps {
   isExecuting?: boolean;
   isTaskStarted?: boolean;
   defaultBreakdownOpen?: boolean;
+  /** How the active AI profile pays: an API key (real cost), a subscription CLI (API-equivalent value), or local. */
+  billing?: TaskBilling;
+}
+
+export interface TaskBilling {
+  kind: 'api' | 'subscription' | 'local';
+  /** Subscription CLI binary (claude, codex, agy) — Claude Code exposes its plan usage. */
+  cli?: string;
+  /** "Claude Code", "Codex"… for the plan line. */
+  label?: string;
+}
+
+/** "$0.048", "$1.23", "<$0.001". */
+export function formatUsd(usd: number): string {
+  if (usd <= 0) return '$0.00';
+  if (usd < 0.001) return '<$0.001';
+  if (usd < 1) return `$${usd.toFixed(3)}`;
+  return `$${usd.toFixed(2)}`;
+}
+
+interface PlanUsage {
+  available: boolean;
+  fetchedAt?: string | null;
+  session?: { percent: number; resetsAt: string | null } | null;
+  weekly?: { percent: number; resetsAt: string | null } | null;
+}
+
+/** The subscription plan's usage limits as the CLI last saw them (refreshed every minute while shown). */
+function usePlanUsage(cli: string | undefined, enabled: boolean): PlanUsage | null {
+  const [usage, setUsage] = useState<PlanUsage | null>(null);
+  useEffect(() => {
+    if (!enabled || !cli) return;
+    let alive = true;
+    const load = () =>
+      fetch(bridgeClient.getApiUrl(`/api/cli/plan-usage?cli=${encodeURIComponent(cli)}`))
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => alive && setUsage(d && d.available ? d : null))
+        .catch(() => {});
+    load();
+    const timer = setInterval(load, 60_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [cli, enabled]);
+  return usage;
+}
+
+function planLine(plan: PlanUsage, label: string): string | null {
+  const weekly = plan.weekly;
+  if (!weekly) return null;
+  const resets = weekly.resetsAt ? new Date(weekly.resetsAt) : null;
+  if (resets && resets.getTime() < Date.now()) {
+    return `${label} plan: weekly limit reset ${resets.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} — updates on the CLI's next check`;
+  }
+  const when = resets ? ` · resets ${resets.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : '';
+  return `${label} plan: ${Math.round(weekly.percent)}% of weekly limit used${when}`;
 }
 
 /**
@@ -155,10 +215,13 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
   executionSteps,
   isExecuting = false,
   isTaskStarted = false,
-  defaultBreakdownOpen = false
+  defaultBreakdownOpen = false,
+  billing
 }) => {
   const summary = extractTaskTokenSummary(task, brief, executionSteps);
   const [showBreakdown, setShowBreakdown] = useState(defaultBreakdownOpen);
+  const isSubscription = billing?.kind === 'subscription';
+  const plan = usePlanUsage(billing?.cli, isSubscription && billing?.cli === 'claude');
 
   const { totalTokens, totalUsage, byRole, hasUsage } = summary;
   const { inputTokens, outputTokens, cachedInputTokens, cacheWriteTokens, calls } = totalUsage;
@@ -297,7 +360,7 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
               color: 'var(--text-muted)'
             }}
           >
-            Task Token Usage
+            {typeof totalUsage.costUsd === 'number' ? 'Task Cost' : 'Task Token Usage'}
           </span>
 
           {/* Running vs Done vs Standby status pill */}
@@ -323,28 +386,67 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
           )}
         </div>
 
-        {/* Complete Token Number */}
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}>
-          <span
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '1.15rem',
-              fontWeight: 700,
-              color: 'var(--text-bright)',
-              letterSpacing: '-0.02em',
-              textShadow: isExecuting ? '0 0 12px rgba(6, 182, 212, 0.3)' : 'none'
-            }}
-          >
-            {totalUsage.estimated ? '≈ ' : ''}{totalTokens.toLocaleString()}
-          </span>
-          <span
-            style={{ fontSize: '0.72rem', fontWeight: 500, color: 'var(--text-muted)' }}
-            title={totalUsage.estimated ? "Estimated from text length — this CLI doesn't report exact token counts" : undefined}
-          >
-            {totalUsage.estimated ? 'tokens (est.)' : 'tokens'}
-          </span>
-        </div>
+        {/* Cost first (what it means for the user), tokens underneath */}
+        {typeof totalUsage.costUsd === 'number' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.15 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}>
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '1.15rem',
+                  fontWeight: 700,
+                  color: 'var(--text-bright)',
+                  letterSpacing: '-0.02em',
+                  textShadow: isExecuting ? '0 0 12px rgba(6, 182, 212, 0.3)' : 'none'
+                }}
+                title={
+                  isSubscription
+                    ? 'What these calls would cost at API prices. Your subscription covers them; they count toward its usage limits.'
+                    : 'Cost at your provider\'s API prices, prompt-cache discounts included.'
+                }
+              >
+                {totalUsage.costPartial || totalUsage.estimated ? '≈ ' : ''}{formatUsd(totalUsage.costUsd)}
+              </span>
+              {isSubscription && (
+                <span style={{ fontSize: '0.68rem', fontWeight: 500, color: 'var(--text-muted)' }}>API value</span>
+              )}
+            </div>
+            <span
+              style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}
+              title={totalUsage.estimated ? "Estimated from text length — this CLI doesn't report exact token counts" : undefined}
+            >
+              {totalUsage.estimated ? '≈ ' : ''}{totalTokens.toLocaleString()} tokens
+            </span>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}>
+            <span
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '1.15rem',
+                fontWeight: 700,
+                color: 'var(--text-bright)',
+                letterSpacing: '-0.02em',
+                textShadow: isExecuting ? '0 0 12px rgba(6, 182, 212, 0.3)' : 'none'
+              }}
+            >
+              {totalUsage.estimated ? '≈ ' : ''}{totalTokens.toLocaleString()}
+            </span>
+            <span
+              style={{ fontSize: '0.72rem', fontWeight: 500, color: 'var(--text-muted)' }}
+              title={totalUsage.estimated ? "Estimated from text length — this CLI doesn't report exact token counts" : undefined}
+            >
+              {totalUsage.estimated ? 'tokens (est.)' : 'tokens'}
+            </span>
+          </div>
+        )}
       </div>
+
+      {isSubscription && plan && planLine(plan, billing?.label || 'Claude') && (
+        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }} title={plan.fetchedAt ? `As of ${new Date(plan.fetchedAt).toLocaleString()}` : undefined}>
+          {planLine(plan, billing?.label || 'Claude')}
+        </div>
+      )}
 
       {/* Middle Metrics Strip: In / Out / Calls breakdown */}
       <div
@@ -529,8 +631,17 @@ export const BvHeaderTokenBadge: React.FC<BvTokenCounterCardProps> = ({
       title={`Total tokens used: ${summary.totalUsage.estimated ? '≈ ' : ''}${summary.totalTokens.toLocaleString()} (${summary.totalUsage.calls} calls)${summary.totalUsage.estimated ? ' — estimated' : ''}`}
     >
       <Zap size={11} color={isExecuting ? '#06b6d4' : 'var(--accent-violet)'} />
-      <span>{summary.totalUsage.estimated ? '≈ ' : ''}{summary.totalTokens.toLocaleString()}</span>
-      <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', fontWeight: 400 }}>tokens</span>
+      {typeof summary.totalUsage.costUsd === 'number' ? (
+        <>
+          <span>{summary.totalUsage.costPartial || summary.totalUsage.estimated ? '≈ ' : ''}{formatUsd(summary.totalUsage.costUsd)}</span>
+          <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', fontWeight: 400 }}>{summary.totalTokens.toLocaleString()} tokens</span>
+        </>
+      ) : (
+        <>
+          <span>{summary.totalUsage.estimated ? '≈ ' : ''}{summary.totalTokens.toLocaleString()}</span>
+          <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', fontWeight: 400 }}>tokens</span>
+        </>
+      )}
     </span>
   );
 };

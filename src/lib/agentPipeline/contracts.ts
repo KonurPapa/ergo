@@ -12,6 +12,7 @@
  *  - Route at task boundaries: models are chosen per role once, never mid-loop.
  *  - Clean hand-offs: workers receive only the shared prefix + their piece contract.
  */
+import type { SteeringQueue } from './steeringQueue';
 import {
   type AIProviderConfig,
   type AIProviderId,
@@ -37,13 +38,33 @@ import {
 export const DEFAULT_AGENT_PIPELINE_OPTIONS: AgentPipelineOptions = {
   permissionLevel: 'acceptEdits',
   effortLevel: 'medium',
-  autoModelRouting: true,
+  modelSelection: 'auto',
   maxConcurrentAgents: 3,
   maxQaRetries: 2,
   maxToolRoundsPerAgent: 10,
-  enableCleaner: true,
-  enableHardener: true
+  enableCleaner: true
 };
+
+/**
+ * Merge persisted (possibly partial / stale) pipeline settings over `base`, ignoring undefined or invalid values.
+ * Migrates the old `autoModelRouting` flag: false → Manual model selection, anything else → Auto.
+ */
+export function mergeAgentPipelineOptions(
+  base: AgentPipelineOptions,
+  patch?: (Partial<AgentPipelineOptions> & { autoModelRouting?: unknown }) | null
+): AgentPipelineOptions {
+  if (!patch) return base;
+  const next: AgentPipelineOptions = { ...base };
+  if (typeof patch.maxConcurrentAgents === 'number' && Number.isFinite(patch.maxConcurrentAgents)) next.maxConcurrentAgents = patch.maxConcurrentAgents;
+  if (typeof patch.maxQaRetries === 'number' && Number.isFinite(patch.maxQaRetries)) next.maxQaRetries = patch.maxQaRetries;
+  if (typeof patch.maxToolRoundsPerAgent === 'number' && Number.isFinite(patch.maxToolRoundsPerAgent)) next.maxToolRoundsPerAgent = patch.maxToolRoundsPerAgent;
+  if (typeof patch.enableCleaner === 'boolean') next.enableCleaner = patch.enableCleaner;
+  if (patch.permissionLevel && ['plan', 'ask', 'acceptEdits', 'bypass'].includes(patch.permissionLevel)) next.permissionLevel = patch.permissionLevel;
+  if (patch.effortLevel && ['low', 'medium', 'high', 'xhigh', 'max'].includes(patch.effortLevel)) next.effortLevel = patch.effortLevel;
+  if (patch.modelSelection === 'auto' || patch.modelSelection === 'manual') next.modelSelection = patch.modelSelection;
+  else if ('autoModelRouting' in patch) next.modelSelection = patch.autoModelRouting === false ? 'manual' : 'auto';
+  return next;
+}
 
 /** Max characters of any single tool result fed back into a model (per-turn payload trimming). */
 export const TOOL_RESULT_CHAR_CAP = 5_000;
@@ -63,6 +84,9 @@ export function addUsage(target: TokenUsage, delta: Partial<TokenUsage>): TokenU
   target.cacheWriteTokens += delta.cacheWriteTokens || 0;
   target.calls += delta.calls || 0;
   if (delta.estimated) target.estimated = true;
+  if (typeof delta.costUsd === 'number') target.costUsd = (target.costUsd || 0) + delta.costUsd;
+  else if ((delta.inputTokens || 0) + (delta.outputTokens || 0) > 0) target.costPartial = true;
+  if (delta.costPartial) target.costPartial = true;
   return target;
 }
 
@@ -143,6 +167,11 @@ export interface ToolLoopRequest {
   /** Permission level, forwarded to headless CLI agents so their built-in tools follow the same policy. */
   permissionLevel?: PermissionLevel;
   /**
+   * Live permission level (the user may change it mid-run). Headless CLI providers read it before every
+   * round so each new CLI process runs under the current level; falls back to `permissionLevel`.
+   */
+  getPermissionLevel?: () => PermissionLevel;
+  /**
    * Cached block 2 — role skill + execution rules. Byte-identical for every agent sharing a role
    * within a run. Rendered AFTER sharedContext so all roles share the longest possible prefix.
    */
@@ -178,6 +207,11 @@ export interface ToolLoopRequest {
   onRequestOllamaFallback?: (prompt: OllamaFallbackPrompt) => Promise<OllamaFallbackChoice>;
   /** Callback fired when the user switches to a cloud profile, returning the new credentials. */
   onSwitchToCloud?: () => Promise<ResolvedRoleTarget | null>;
+  /**
+   * Mid-run steering: messages the user sent from the prompt box for this agent, taken at each round boundary and
+   * appended to the END of the conversation as a user turn (tools and earlier turns stay byte-identical).
+   */
+  drainSteering?: () => string[];
 }
 
 export type ToolLoopStopReason = 'end' | 'max_rounds' | 'aborted' | 'no_tool_support' | 'error';
@@ -209,6 +243,11 @@ export interface PipelineContext extends PipelineCallbacks {
   connectedMcps: MCPServer[];
   allowedRoots: McpRootBoundary[];
   options: AgentPipelineOptions;
+  /**
+   * Current permission level. The user can change it while the run is in flight, so tool gating reads this
+   * on every call instead of the `options.permissionLevel` snapshot taken at run start.
+   */
+  getPermissionLevel: () => PermissionLevel;
   /** Short unique id for this execution run (used in run dir + bible metadata). */
   runId: string;
   /** Run directory relative to the storage root, e.g. "runs/default-workspace/task-3-k9x2". */
@@ -222,6 +261,8 @@ export interface PipelineContext extends PipelineCallbacks {
   sessionAllowedTools: Set<string>;
   /** Convenience emitter that stamps `time` and `taskId`. */
   emit: (step: Omit<ExecutionStep, 'time' | 'taskId'> & Partial<Pick<ExecutionStep, 'time' | 'taskId'>>) => void;
+  /** The prompt box's mid-run messages for this run's agent loops (see steeringQueue.ts). */
+  steering?: SteeringQueue;
 }
 
 /** Resolved provider and credentials for an individual execution agent role. */
@@ -377,7 +418,8 @@ export function buildToolLoopRequest(
     cliCustomCommand: params.cliCustomCommand ?? target.cliCustomCommand,
     effort: params.effort ?? target.effort,
     fallbackModel: params.fallbackModel ?? target.fallbackModel,
-    permissionLevel: params.permissionLevel ?? ctx.options.permissionLevel,
+    permissionLevel: params.permissionLevel ?? ctx.getPermissionLevel(),
+    getPermissionLevel: params.getPermissionLevel ?? (params.permissionLevel ? undefined : ctx.getPermissionLevel),
     signal: ctx.signal,
     ollamaFailureState: ctx.ollamaFailureState,
     taskId: ctx.task.id,

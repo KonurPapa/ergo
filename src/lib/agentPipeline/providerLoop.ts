@@ -28,6 +28,17 @@ import {
 } from './contracts';
 import { bridgeClient } from '../bridgeClient';
 import { toAnthropicTools, toGeminiTools, toOpenAiTools } from './toolSchemas';
+import { peekModelCatalog } from '../modelCatalog/catalog';
+import { PRICE_SNAPSHOT } from '../modelCatalog/priceSnapshot';
+import { priceUsage, resolveAliasModelId } from '../modelCatalog/pricing';
+
+/** Adds the call's API-price cost to a usage delta (live catalog when loaded, else the bundled snapshot). */
+function priceDelta(delta: TokenUsage, model: string | undefined): void {
+  if (!model) return;
+  const models = (peekModelCatalog() ?? PRICE_SNAPSHOT).models;
+  const cost = priceUsage(models, resolveAliasModelId(models, model), delta);
+  if (typeof cost === 'number') delta.costUsd = cost;
+}
 import { type EffortLevel, type TokenUsage } from '../../types';
 
 const RETRYABLE_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529]);
@@ -225,6 +236,33 @@ export function extractToolCallsFromContent(content: string, tools: ToolDefiniti
   return calls;
 }
 
+/** The user's mid-run messages for this agent since its last round (ToolLoopRequest.drainSteering). Never throws. */
+function takeSteering(req: ToolLoopRequest): string[] {
+  try {
+    return (req.drainSteering?.() ?? []).filter((t) => typeof t === 'string' && t.trim());
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Appends steering notes to the END of an Anthropic conversation: as text blocks after the newest user turn's content
+ * (after its tool_result blocks, as the API requires), or as a new user turn after an assistant turn. Earlier turns
+ * are never rewritten, so the cached prefix stays valid.
+ */
+function appendAnthropicSteering(messages: any[], notes: string[]): void {
+  if (notes.length === 0) return;
+  const blocks = notes.map((text) => ({ type: 'text', text }));
+  const last = messages[messages.length - 1];
+  if (last?.role === 'user') {
+    // Only the very first turn is still a plain string (nothing has been sent or cached after it yet).
+    if (typeof last.content === 'string') last.content = [{ type: 'text', text: last.content }, ...blocks];
+    else last.content.push(...blocks);
+  } else {
+    messages.push({ role: 'user', content: blocks });
+  }
+}
+
 async function dispatchToolCalls(req: ToolLoopRequest, calls: ToolCallRequest[]): Promise<ToolCallResult[]> {
   if (!req.onToolCalls) {
     return calls.map((c) => ({ id: c.id, name: c.name, content: 'ERROR: no tools are available in this phase.', isError: true }));
@@ -378,6 +416,8 @@ async function runAnthropic(req: ToolLoopRequest, tools: ToolDefinition[], usage
 
   for (let round = 1; round <= req.maxRounds; round++) {
     throwIfAborted(req.signal);
+    // Round boundary: the user's mid-run messages join the end of the conversation.
+    appendAnthropicSteering(messages, takeSteering(req));
     const body: any = {
       model: activeModel,
       max_tokens: req.maxTokens ?? 16000,
@@ -426,6 +466,7 @@ async function runAnthropic(req: ToolLoopRequest, tools: ToolDefinition[], usage
       cacheWriteTokens: cacheWrite,
       calls: 1
     };
+    priceDelta(delta, activeModel);
     addUsage(usage, delta);
     req.onUsage?.(delta);
     if (!firstResponseFired) {
@@ -444,6 +485,13 @@ async function runAnthropic(req: ToolLoopRequest, tools: ToolDefinition[], usage
 
     const toolUses = content.filter((b) => b.type === 'tool_use');
     if (data.stop_reason !== 'tool_use' || toolUses.length === 0) {
+      // The user wrote while this turn was running: let the agent answer it instead of ending here.
+      const late = round < req.maxRounds && data.stop_reason !== 'max_tokens' ? takeSteering(req) : [];
+      if (late.length > 0) {
+        messages.push({ role: 'assistant', content: content.length > 0 ? content : [{ type: 'text', text: '(no reply)' }] });
+        appendAnthropicSteering(messages, late);
+        continue;
+      }
       return makeResult(lastText, round, toolCallCount, usage, 'end');
     }
 
@@ -503,6 +551,9 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
 
   for (let round = 1; round <= req.maxRounds; round++) {
     throwIfAborted(req.signal);
+    // Round boundary: the user's mid-run messages join the end of the conversation.
+    const steering = takeSteering(req);
+    if (steering.length > 0) messages.push({ role: 'user', content: steering.join('\n\n') });
     const body: any = { model: activeModel, messages };
     const effort = isOllama || effortDisabled ? undefined : openAiEffortFor(activeModel, req.effort);
     if (isOllama) {
@@ -562,6 +613,7 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
           cacheWriteTokens: 0,
           calls: 1
         };
+    priceDelta(delta, isOllama ? undefined : activeModel);
     addUsage(usage, delta);
     req.onUsage?.(delta);
     if (!firstResponseFired) {
@@ -605,6 +657,12 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
         });
         continue;
       }
+      const late = round < req.maxRounds ? takeSteering(req) : [];
+      if (late.length > 0) {
+        messages.push({ role: 'assistant', content: message.content || '' });
+        messages.push({ role: 'user', content: late.join('\n\n') });
+        continue;
+      }
       return makeResult(lastText, round, toolCallCount, usage, 'end');
     }
 
@@ -635,7 +693,7 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
 
 async function runGemini(req: ToolLoopRequest, tools: ToolDefinition[], usage: TokenUsage): Promise<ToolLoopResult> {
   if (!req.apiKey) return makeResult('', 0, 0, usage, 'error', 'Google Gemini API key missing.');
-  let activeModel = req.model || 'gemini-3.7-pro';
+  let activeModel = req.model || 'gemini-4-argon';
   const urlFor = (model: string) =>
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(req.apiKey!)}`;
   const contents: any[] = [{ role: 'user', parts: [{ text: req.initialUserMessage }] }];
@@ -647,6 +705,13 @@ async function runGemini(req: ToolLoopRequest, tools: ToolDefinition[], usage: T
 
   for (let round = 1; round <= req.maxRounds; round++) {
     throwIfAborted(req.signal);
+    // Round boundary: the user's mid-run messages join the end of the conversation.
+    const steering = takeSteering(req);
+    if (steering.length > 0) {
+      const last = contents[contents.length - 1];
+      if (last?.role === 'user') last.parts.push(...steering.map((text) => ({ text })));
+      else contents.push({ role: 'user', parts: steering.map((text) => ({ text })) });
+    }
     const body: any = {
       systemInstruction: { parts: [{ text: joinSystem(req) }] },
       contents
@@ -683,6 +748,7 @@ async function runGemini(req: ToolLoopRequest, tools: ToolDefinition[], usage: T
       cacheWriteTokens: 0,
       calls: 1
     };
+    priceDelta(delta, activeModel);
     addUsage(usage, delta);
     req.onUsage?.(delta);
     if (!firstResponseFired) {
@@ -700,7 +766,15 @@ async function runGemini(req: ToolLoopRequest, tools: ToolDefinition[], usage: T
     if (textParts.length > 0) lastText = textParts.map((p) => p.text).join('\n');
 
     const fnParts = parts.filter((p) => p.functionCall);
-    if (fnParts.length === 0) return makeResult(lastText, round, toolCallCount, usage, 'end');
+    if (fnParts.length === 0) {
+      const late = round < req.maxRounds ? takeSteering(req) : [];
+      if (late.length > 0) {
+        contents.push({ role: 'model', parts });
+        contents.push({ role: 'user', parts: late.map((text) => ({ text })) });
+        continue;
+      }
+      return makeResult(lastText, round, toolCallCount, usage, 'end');
+    }
 
     contents.push({ role: 'model', parts });
     const calls: ToolCallRequest[] = fnParts.map((p, i) => ({
@@ -742,6 +816,9 @@ async function runCliSubscription(req: ToolLoopRequest, tools: ToolDefinition[],
 
   for (let round = 1; round <= req.maxRounds; round++) {
     throwIfAborted(req.signal);
+    // Round boundary: the user's mid-run messages join the end of the conversation.
+    const steering = takeSteering(req);
+    if (steering.length > 0) conversationHistory += `\n\n${steering.join('\n\n')}`;
 
     let toolsInstruction = '';
     if (tools.length > 0) {
@@ -769,7 +846,8 @@ async function runCliSubscription(req: ToolLoopRequest, tools: ToolDefinition[],
         responseFormat: req.responseFormat,
         model: cliModel,
         effort: req.effort,
-        permissionLevel: req.permissionLevel,
+        // Read the live level every round: each round is a fresh CLI process, so a mid-run change applies here.
+        permissionLevel: req.getPermissionLevel?.() ?? req.permissionLevel,
         timeoutMs: 60_000,
         env: cliEnv
       }),
@@ -815,12 +893,19 @@ async function runCliSubscription(req: ToolLoopRequest, tools: ToolDefinition[],
           calls: 1,
           estimated: true
         };
+    if (typeof reported?.costUsd === 'number') delta.costUsd = reported.costUsd;
+    else priceDelta(delta, cliModel);
     addUsage(usage, delta);
     req.onUsage?.(delta);
 
     // Check for tool calls in response
     const calls = extractToolCallsFromContent(lastText, tools);
     if (calls.length === 0) {
+      const late = round < req.maxRounds ? takeSteering(req) : [];
+      if (late.length > 0) {
+        conversationHistory += `\n\n${lastText}\n\n${late.join('\n\n')}`;
+        continue;
+      }
       return makeResult(lastText, round, toolCallCount, usage, 'end');
     }
 

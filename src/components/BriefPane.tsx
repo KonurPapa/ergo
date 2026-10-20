@@ -1,3 +1,4 @@
+import { resolveHeaderColor } from '../lib/headerColors';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   type TaskItem,
@@ -11,13 +12,28 @@ import {
   type OllamaFallbackChoice,
   type MCPServer,
   type AgentPipelineOptions,
-  type PermissionDecision
+  type PermissionDecision,
+  type PermissionLevel
 } from '../types';
 import { AgentTerminal } from './AgentTerminal';
 import { ResizableTerminalContainer } from './ResizableTerminalContainer';
 import { CliAgentNotesBridge } from './CliAgentNotesBridge';
-import { StepStatusIcon, StepUsageBadge, PieceChip, BiblePreview, BaselineContextPreview } from './ExecutionStepExtras';
-import { BvTokenCounterCard } from './BvTokenCounterCard';
+import { TaskPromptBox } from './TaskPromptBox';
+import { RunSurveyCard } from './RunSurveyCard';
+import type { TaskMessageOptions, TaskMessageResult } from '../lib/taskMessages';
+import {
+  AgentSessionTabs,
+  AgentRoleBadge,
+  AgentStatusDot,
+  sortAgentSessions,
+  pickLiveAgent,
+  isAgentWorking,
+  agentStatusLabel,
+} from './AgentSessionTabs';
+import { hasUsableOverview, isOverviewStale, overviewTaskFingerprint } from '../lib/overviewUtils';
+import { promptSummary } from '../lib/cliPromptParser';
+import { StepStatusIcon, StepUsageBadge, PieceChip, BiblePreview, RelatedTasksPanel } from './ExecutionStepExtras';
+import { BvTokenCounterCard, type TaskBilling } from './BvTokenCounterCard';
 import { ExecutionSettingsBar } from './ExecutionSettingsBar';
 import {
   FileCode,
@@ -53,7 +69,10 @@ import {
   AlertTriangle,
   Calendar,
   Clock,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Copy,
+  Check,
+  CornerUpLeft
 } from 'lucide-react';
 
 import { RichTextToolbar } from './RichTextToolbar';
@@ -181,6 +200,8 @@ const HumanInputCard: React.FC<HumanInputCardProps> = ({ prompt, onSubmit }) => 
 };
 
 interface BriefPaneProps {
+  /** How the active AI profile pays, so the token card can show cost (see BvTokenCounterCard). */
+  taskBilling?: TaskBilling;
   tasks: TaskItem[];
   briefs: AgentContextItem[];
   projectId?: string;
@@ -211,9 +232,16 @@ interface BriefPaneProps {
   onPermissionChoice?: (taskId: string | number, approved: PermissionDecision) => void;
   onHumanInputChoice?: (taskId: string | number, answer: string) => void;
   onOllamaFallbackChoice?: (taskId: string | number, choice: OllamaFallbackChoice) => void;
+  /** @deprecated Agent exits reach App through the bridge's event stream; views no longer report them. */
   onSessionExit?: (taskId: string | number, code: number) => void;
+  /** Relaunch the task's whole CLI run. */
   onRestartSession?: (task: TaskItem) => void;
+  /** Stop every agent of the task's run. */
   onKillSession?: (taskId: string | number) => void;
+  /** Stop one agent (SpawnedSession.ptySessionId). */
+  onKillAgentSession?: (ptySessionId: string) => void;
+  /** Task prompt box: steer the running agents, or continue the finished run with a follow-up. */
+  onSendTaskMessage?: (task: TaskItem, text: string, opts?: TaskMessageOptions) => Promise<TaskMessageResult>;
   onTerminateAgent?: (taskId: string | number) => void;
   onArchiveTask?: (taskTitle: string) => void;
   onRemoveAiTask?: (targetId: string | number) => void;
@@ -234,12 +262,16 @@ interface BriefPaneProps {
 }
 
 interface AiTaskCardProps {
+  taskBilling?: TaskBilling;
   task: TaskItem;
   brief: AgentContextItem | undefined;
   isSelected: boolean;
   isWorking: boolean;
   isQueued?: boolean;
-  terminalSession: SpawnedSession | null;
+  /** This task's CLI agent sessions, ordered manager → workers → QA. */
+  agentSessions: SpawnedSession[];
+  /** Current permission level (for sessions that don't report their own). */
+  permissionLevel?: PermissionLevel;
   isExecuting: boolean;
   executionSteps: ExecutionStep[];
   pendingPermission: McpToolPermissionPrompt | null;
@@ -256,18 +288,29 @@ interface AiTaskCardProps {
   onPermissionChoice?: (approved: PermissionDecision) => void;
   onHumanInputChoice?: (answer: string) => void;
   onOllamaFallbackChoice?: (choice: OllamaFallbackChoice) => void;
+  /** @deprecated Unused: agent exits reach App through the bridge's event stream. */
   onSessionExit?: (code: number) => void;
   onRestartSession?: (task: TaskItem) => void;
   onKillSession?: (taskId: string | number) => void;
+  onKillAgentSession?: (ptySessionId: string) => void;
+  onSendTaskMessage?: (task: TaskItem, text: string, opts?: TaskMessageOptions) => Promise<TaskMessageResult>;
   onTerminateAgent?: (taskId: string | number) => void;
   onArchiveTask?: (taskTitle: string) => void;
   onRemoveAiTask?: (targetId: string | number) => void;
   onPurgeTaskFromAi?: (targetId: string | number) => void;
   mcpServers?: MCPServer[];
   onUpdateTaskMcpTools?: (taskId: string | number, toolNames: string[]) => void;
+  /** Related Tasks card: whether a related task has a card to open, and opening (selecting) it. */
+  canOpenRelatedTask?: (taskId: string) => boolean;
+  onOpenRelatedTask?: (taskId: string) => void;
 }
 
 type CardStatus = 'not_started' | 'queued' | 'working' | 'done';
+
+const NO_AGENT_SESSIONS: SpawnedSession[] = [];
+
+/** React key for an agent's views: a relaunch reuses the ptySessionId, so the launch id forces a fresh attach. */
+const agentViewKey = (s: SpawnedSession) => `${s.ptySessionId}|${s.spawnId || s.runId || s.session.spawnedAt}`;
 
 const CardStatusChip: React.FC<{ status: CardStatus }> = ({ status }) => {
   if (status === 'working') {
@@ -316,13 +359,93 @@ const CardStatusChip: React.FC<{ status: CardStatus }> = ({ status }) => {
   );
 };
 
+/** What a pipeline tool call wants to do: the exact command, the file + diff, or the tool's arguments. */
+const PermissionRequestDetails: React.FC<{ prompt: McpToolPermissionPrompt }> = ({ prompt }) => {
+  const [copied, setCopied] = useState(false);
+  const args: Record<string, any> = prompt.args && typeof prompt.args === 'object' ? prompt.args : {};
+  const command = typeof args.command === 'string' ? args.command : '';
+  const cwd = typeof args.cwd === 'string' ? args.cwd : '';
+  const path =
+    typeof args.path === 'string' ? args.path : typeof args.file_path === 'string' ? args.file_path : '';
+  const isCommand = prompt.toolName === 'run_command' || (Boolean(command) && !path);
+  const isFileChange =
+    !isCommand &&
+    Boolean(path) &&
+    (/(?:write|edit|create|append|patch|replace|move|delete)/i.test(prompt.toolName) ||
+      args.content !== undefined ||
+      args.old_string !== undefined);
+
+  const copy = (text: string) => {
+    navigator.clipboard?.writeText(text).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  if (isCommand && command) {
+    return (
+      <div className="permission-request-details">
+        <div className="permission-detail-header">
+          <span className="permission-detail-label">Command</span>
+          <button type="button" className="command-copy-btn" onClick={() => copy(command)} title="Copy command to clipboard">
+            {copied ? <Check size={11} color="var(--accent-emerald)" /> : <Copy size={11} />}
+            <span>{copied ? 'Copied' : 'Copy'}</span>
+          </button>
+        </div>
+        <pre className="permission-command-pre">$ {command}</pre>
+        {cwd && <div className="permission-detail-meta">cwd: <code>{cwd}</code></div>}
+      </div>
+    );
+  }
+
+  if (isFileChange) {
+    const diffLines = (prompt.diffPreview || '').split('\n');
+    return (
+      <div className="permission-request-details">
+        <div className="permission-detail-header">
+          <span className="permission-detail-label">{prompt.toolName.replace(/_/g, ' ')}</span>
+          <button type="button" className="command-copy-btn" onClick={() => copy(path)} title="Copy path to clipboard">
+            {copied ? <Check size={11} color="var(--accent-emerald)" /> : <Copy size={11} />}
+            <span>{copied ? 'Copied' : 'Copy path'}</span>
+          </button>
+        </div>
+        <div className="permission-detail-path">{path}</div>
+        {prompt.diffPreview ? (
+          <div className="diff-view permission-diff-preview">
+            {diffLines.map((line, idx) => (
+              <div key={idx} className={line.startsWith('+') ? 'diff-line-add' : line.startsWith('-') ? 'diff-line-del' : ''}>
+                {line || ' '}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="permission-detail-meta">{prompt.summary}</div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="permission-request-details">
+      <div className="permission-detail-summary">{prompt.summary}</div>
+      {Object.keys(args).length > 0 && (
+        <details className="permission-args-details">
+          <summary>Arguments</summary>
+          <pre>{JSON.stringify(args, null, 2)}</pre>
+        </details>
+      )}
+    </div>
+  );
+};
+
 const AiTaskCard: React.FC<AiTaskCardProps> = ({
+  taskBilling,
   task,
   brief,
   isSelected,
   isWorking,
   isQueued = false,
-  terminalSession,
+  agentSessions,
+  permissionLevel,
   isExecuting,
   executionSteps,
   pendingPermission,
@@ -339,15 +462,19 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   onPermissionChoice,
   onHumanInputChoice,
   onOllamaFallbackChoice,
-  onSessionExit,
+  onSessionExit: _onSessionExit,
   onRestartSession,
   onKillSession,
+  onKillAgentSession,
+  onSendTaskMessage,
   onTerminateAgent,
   onArchiveTask,
   onRemoveAiTask,
   onPurgeTaskFromAi,
   mcpServers: _mcpServers = [],
   onUpdateTaskMcpTools: _onUpdateTaskMcpTools,
+  canOpenRelatedTask,
+  onOpenRelatedTask,
 }) => {
   const [isTaskCollapsed, setIsTaskCollapsed] = useState(!isSelected);
   const [isEditing, setIsEditing] = useState(false);
@@ -367,7 +494,14 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     return [];
   }, [task.mcpRequired, brief?.selectedMcpTools, brief?.requiredMcps]);
   const menuRef = useRef<HTMLDivElement>(null);
-  const hasPendingAlert = !!(pendingPermission || pendingOllamaFallback);
+
+  // ── CLI agents of this task's run (manager, workers, QA) ──
+  const managerSession = agentSessions.find((s) => s.role === 'manager') ?? null;
+  // The manager stands for the run in the task-level status logic (falls back to whichever agent exists).
+  const terminalSession = managerSession ?? agentSessions[0] ?? null;
+  const agentsWorking = agentSessions.some((s) => isAgentWorking(s.status));
+  const agentsWithPrompt = agentSessions.filter((s) => s.pendingPrompt && s.session.isActive);
+  const hasPendingAlert = !!(pendingPermission || pendingOllamaFallback || agentsWithPrompt.length > 0);
 
   const overviewRef = useRef<HTMLTextAreaElement>(null);
   const buildVerificationRef = useRef<HTMLTextAreaElement>(null);
@@ -396,10 +530,14 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   }, [isMenuOpen]);
 
   // Determine if this task has already been started (e.g. Overview section written up / structured / in-progress)
+  // The most recent successful overview wins: a resumed run appends its own overview step after earlier ones
+  // (e.g. an in-app Summary after a CLI run's `step-overview-<task>-<runId>`), and that one is current.
   const summaryStep = React.useMemo(() => {
-    return executionSteps.find(
-      (s) => s.stage === 'overview' && s.status === 'success' && s.overviewDocument
-    );
+    for (let i = executionSteps.length - 1; i >= 0; i--) {
+      const s = executionSteps[i];
+      if (s.stage === 'overview' && s.status === 'success' && s.overviewDocument) return s;
+    }
+    return undefined;
   }, [executionSteps]);
 
   const summaryDoc = summaryStep?.overviewDocument || null;
@@ -417,29 +555,32 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     return overviewText.replace(/## Acceptance Brief \(Gherkin\)\s*```gherkin[\s\S]*?```\s*/g, '').trim();
   }, [overviewText]);
 
-  // Determine if there is actually a valid overview from the Summary agent (not generic human task list)
+  // What the Summary document shows: its goals, or (CLI runs, whose document has no output_as) the full overview.
+  const summaryDocContent = React.useMemo(() => {
+    if (!summaryDoc) return '';
+    const content = summaryDoc.output_as ? summaryDoc.goals : summaryDoc.goals || summaryDoc.raw || '';
+    return (content || '').replace(/## Acceptance Brief \(Gherkin\)\s*```gherkin[\s\S]*?```\s*/g, '').trim();
+  }, [summaryDoc]);
+
+  // An overview exists only once a run's Summary step generated it (or the user wrote one) — shared rule with the
+  // run launcher (lib/overviewUtils). A newly added task stays empty: text copied from the task never shows here.
   const isRealOverview = React.useMemo(() => {
     if (summaryDoc) return true;
-    if (!overviewText || !overviewText.trim()) return false;
+    return hasUsableOverview(brief ? { ...brief, overview: overviewText } : null);
+  }, [summaryDoc, overviewText, brief]);
+  // The task was edited after its overview was generated: still shown, but the next run regenerates it.
+  const isOverviewOutdated = React.useMemo(() => Boolean(brief) && isOverviewStale(brief, task), [brief, task]);
+  // The user's own wording wins over the Summary document of the run it replaced.
+  const showOverviewText = brief?.overviewSource === 'user';
+
+  // Structured (Summary-agent style) overview text: what counts as evidence that the task was already started.
+  // Kept stricter than isRealOverview so a hand-written overview alone doesn't mark a task as started.
+  const hasStructuredOverview = React.useMemo(() => {
+    if (summaryDoc) return true;
     const trimmed = overviewText.trim();
-    if (trimmed === task.title.trim()) return false;
-    if (trimmed === `Task #${task.id}: ${task.title}`.trim()) return false;
-    if (trimmed.startsWith(`Overview for ${task.title}`)) return false;
-    if (trimmed === `Overview for ${task.title}`.trim()) return false;
-    if (
-      trimmed.includes('Scenario:') ||
-      trimmed.includes('Given ') ||
-      trimmed.includes('## Acceptance Brief') ||
-      trimmed.includes('## Brief') ||
-      trimmed.includes('## Goals') ||
-      trimmed.includes('## Output') ||
-      trimmed.includes('Feature:')
-    ) {
-      return true;
-    }
-    if (trimmed.length <= task.title.length + 15) return false;
-    return false;
-  }, [summaryDoc, overviewText, task.title, task.id]);
+    if (!trimmed || !isRealOverview) return false;
+    return /Scenario:|Given |Feature:|## (?:Acceptance Brief|Brief|Goals|Output)/.test(trimmed);
+  }, [summaryDoc, overviewText, isRealOverview]);
 
   // Determine if this task has already been started
   const isTaskStarted = React.useMemo(() => {
@@ -452,7 +593,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     if (buildVerificationText && buildVerificationText.trim().length > 0) return true;
     if (brief?.built && brief.built.trim().length > 0) return true;
     if (brief?.validation && brief.validation.trim().length > 0) return true;
-    if (isRealOverview) return true;
+    if (hasStructuredOverview) return true;
     return false;
   }, [
     isWorking,
@@ -466,7 +607,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     terminalSession,
     buildVerificationText,
     completionText,
-    isRealOverview,
+    hasStructuredOverview,
   ]);
 
 
@@ -512,10 +653,32 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     }
   }, [pendingHumanInput]);
 
+  // Expand Actions once for every new request that needs the user: a pipeline permission prompt, an Ollama
+  // fallback, or a prompt on any CLI agent's screen (keyed by prompt signature, so repaints don't re-expand it).
+  const alertKeys = [
+    pendingPermission ? `perm:${pendingPermission.id}` : '',
+    pendingOllamaFallback ? `ollama:${pendingOllamaFallback.prompt.id}` : '',
+    ...agentsWithPrompt.map((s) => `cli:${s.ptySessionId}:${s.pendingPrompt!.signature}`),
+  ].filter(Boolean);
+  const alertKeysSig = alertKeys.join('\u0000');
+  const seenAlertKeysRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    let isNew = false;
+    for (const key of alertKeys) {
+      if (!seenAlertKeysRef.current.has(key)) {
+        seenAlertKeysRef.current.add(key);
+        isNew = true;
+      }
+    }
+    if (isNew) setCollapsedCards((prev) => (prev.steps ? { ...prev, steps: false } : prev));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alertKeysSig]);
+
   // Sync state with brief
   useEffect(() => {
     if (brief) {
-      const newOverview = brief.overview || brief.brief || '';
+      // Text that was only copied in from the task (or drafted elsewhere) isn't an overview: start empty.
+      const newOverview = hasUsableOverview(brief) ? brief.overview || brief.brief || '' : '';
       const newBuild = brief.buildAndVerification || brief.built || '';
       const newCompletion = brief.completion || brief.validation || brief.humanReview || brief.followUps || '';
 
@@ -530,6 +693,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   }, [task.id, brief]);
 
   // Reset edit and card states when switching tasks
+  const hasAgentSessions = agentSessions.length > 0;
   const prevTaskIdRef = useRef(task.id);
   useEffect(() => {
     const isNewTask = prevTaskIdRef.current !== task.id;
@@ -538,7 +702,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     setIsEditing(false);
 
     if (isNewTask) {
-      if (terminalSession?.session) {
+      if (hasAgentSessions) {
         setCollapsedCards({
           overview: false,
           vectorMemory: true,
@@ -554,12 +718,14 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
         });
       }
     } else {
-      // If task status changed on the same task, ensure Actions card stays visible if active
-      if (terminalSession?.session?.isActive) {
-        setCollapsedCards((prev) => ({ ...prev, steps: false }));
+      // If task status changed on the same task, ensure Actions card stays visible while agents work
+      if (agentsWorking) {
+        setCollapsedCards((prev) => (prev.steps ? { ...prev, steps: false } : prev));
       }
     }
-  }, [task.id, task.status, task.isDone, terminalSession]);
+    // Booleans only: session objects change on every agent status update and must not re-expand the card.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.id, task.status, task.isDone, hasAgentSessions, agentsWorking]);
 
   const prevWorkingRef = useRef(isWorking);
   useEffect(() => {
@@ -585,27 +751,28 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     (isContextRunning ||
       executionSteps.length === 0 ||
       !executionSteps.some((s) => s.stage === 'overview' || s.stage === 'execution' || s.stage === 'built_record' || s.stage === 'done'));
-  const contextStep = executionSteps.find((s) => s.stage === 'context');
+  // The context step that carries the assembled context (the pipeline's model-routing step is a context step too).
+  const contextStep = React.useMemo(
+    () =>
+      [...executionSteps].reverse().find((s) => s.stage === 'context' && s.baselineContext) ||
+      executionSteps.find((s) => s.stage === 'context'),
+    [executionSteps]
+  );
 
   // ── Card Status Computations (Not started | Working... | Done) ──
-  const isOverviewWorking =
-    isExecuting &&
-    (isGatheringContext || executionSteps.some((s) => s.stage === 'overview' && s.status === 'running'));
+  // The Summary agent (pipeline) or the overview synthesis (CLI runs) is writing the overview right now.
+  const isOverviewSynthesizing = isExecuting && executionSteps.some((s) => s.stage === 'overview' && s.status === 'running');
+  const isOverviewWorking = isExecuting && (isGatheringContext || isOverviewSynthesizing);
 
   const overviewStatus = React.useMemo<'not_started' | 'working' | 'done'>(() => {
     if (isOverviewWorking) {
       return 'working';
     }
-    if (
-      isRealOverview ||
-      Boolean(summaryDoc) ||
-      executionSteps.some((s) => s.stage === 'overview' && s.status === 'success') ||
-      (overviewText.trim().length > 0 && !isExecuting)
-    ) {
+    if (isRealOverview) {
       return 'done';
     }
     return 'not_started';
-  }, [isOverviewWorking, isRealOverview, summaryDoc, executionSteps, overviewText, isExecuting]);
+  }, [isOverviewWorking, isRealOverview]);
 
   const isRelatedWorking =
     isExecuting && executionSteps.some((s) => s.stage === 'context' && s.status === 'running');
@@ -624,8 +791,36 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     return 'not_started';
   }, [isRelatedWorking, contextStep, executionSteps, task.isDone]);
 
+  // Header tag: "2 related · 9 candidates" once matched (legacy context steps: memory hits / guidelines).
+  const { relatedSummaryTag, relatedSelectedCount } = React.useMemo(() => {
+    const bc = contextStep?.baselineContext;
+    if (!bc) return { relatedSummaryTag: null, relatedSelectedCount: 0 };
+    if (!bc.relatedCandidates) {
+      return { relatedSummaryTag: `${bc.memoryHits?.length || 0} hits · ${bc.guidelines?.length || 0} guidelines`, relatedSelectedCount: 0 };
+    }
+    const total = bc.relatedCandidates.length;
+    if (total === 0) return { relatedSummaryTag: 'none found', relatedSelectedCount: 0 };
+    const known = new Set(bc.relatedCandidates.map((c) => String(c.taskId)));
+    const selectedCount = bc.selectedRelatedTaskIds ? bc.selectedRelatedTaskIds.filter((id) => known.has(String(id))).length : null;
+    const candidatesLabel = `${total} candidate${total === 1 ? '' : 's'}`;
+    return {
+      relatedSummaryTag: selectedCount === null ? candidatesLabel : `${selectedCount} related · ${candidatesLabel}`,
+      relatedSelectedCount: selectedCount || 0,
+    };
+  }, [contextStep]);
+
+  // Expand Related Tasks once per run when the Summary step selected related tasks (a later collapse sticks).
+  const autoOpenedRelatedForRef = useRef<string | null>(null);
+  // (The in-app pipeline reuses one step id across runs; the search timestamp tells runs apart.)
+  const contextStepId = contextStep ? `${contextStep.id}|${contextStep.baselineContext?.timestamp || ''}` : undefined;
+  useEffect(() => {
+    if (!contextStepId || relatedSelectedCount === 0 || autoOpenedRelatedForRef.current === contextStepId) return;
+    autoOpenedRelatedForRef.current = contextStepId;
+    setCollapsedCards((prev) => (prev.vectorMemory ? { ...prev, vectorMemory: false } : prev));
+  }, [contextStepId, relatedSelectedCount]);
+
   const isStepsWorking =
-    Boolean(terminalSession?.session.isActive) ||
+    agentsWorking ||
     (isExecuting &&
       !isGatheringContext &&
       !isOverviewWorking &&
@@ -644,7 +839,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
       return 'working';
     }
     if (
-      (terminalSession?.session && !terminalSession.session.isActive) ||
+      (terminalSession && !agentsWorking) ||
       task.isDone ||
       task.status === 'done' ||
       (executionSteps.some(
@@ -661,10 +856,15 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
       return 'done';
     }
     return 'not_started';
-  }, [isStepsWorking, terminalSession, task.isDone, task.status, executionSteps, isExecuting, buildVerificationText]);
+  }, [isStepsWorking, terminalSession, agentsWorking, task.isDone, task.status, executionSteps, isExecuting, buildVerificationText]);
 
+  // The completion log is being written (pipeline Logger, or App finalizing a CLI run via a running built_record step).
+  // A stale running step persisted from an interrupted session only counts while the card has no completion text.
+  const isCompletionStepRunning = executionSteps.some(
+    (s) => (s.stage === 'built_record' || s.stage === 'done') && s.status === 'running'
+  );
   const isCompletionWorking =
-    isExecuting && executionSteps.some((s) => (s.stage === 'built_record' || s.stage === 'done') && s.status === 'running');
+    isCompletionStepRunning && (isExecuting || agentsWorking || completionText.trim().length === 0);
 
   const completionStatus = React.useMemo<'not_started' | 'working' | 'done'>(() => {
     if (isCompletionWorking) {
@@ -683,6 +883,14 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 
   // Determine what to display in Section 2 (Build & Verification / Steps & Actions)
   const showExecutionSteps = viewModeSection2 === 'steps' && !isEditing;
+
+  // Editing the overview makes it the user's (kept and reused by runs); clearing it lets the next run generate one.
+  const overviewProvenance = (text: string): Partial<AgentContextItem> => {
+    const original = (brief?.overview || brief?.brief || '').trim();
+    if (text.trim() === original) return {};
+    if (!text.trim()) return { overviewSource: undefined, overviewTaskHash: undefined };
+    return { overviewSource: 'user', overviewTaskHash: overviewTaskFingerprint(task) };
+  };
 
   const handleFieldChange = (
     field: 'overview' | 'buildAndVerification' | 'completion',
@@ -712,6 +920,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
         itemNumber: brief?.itemNumber,
         title: task.title,
         status: task.status,
+        ...overviewProvenance(newOverview),
         overview: newOverview,
         buildAndVerification: newBuild,
         completion: newCompletion,
@@ -724,6 +933,24 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     }
   };
 
+  // Task menu → "QA verification" (off by default). A task that has never run gets its brief record here.
+  const qaVerificationOn = brief?.qaVerification === true;
+  const toggleQaVerification = () => {
+    onSaveBrief({
+      ...(brief || {
+        title: task.title,
+        status: task.status,
+        overview: '',
+        buildAndVerification: '',
+        completion: '',
+      }),
+      id: brief?.id || `brief_${task.id}`,
+      sourceTaskId: task.id,
+      sourceLaneId: task.swimLaneId || brief?.sourceLaneId,
+      qaVerification: !qaVerificationOn,
+    });
+  };
+
   const handleSave = () => {
     onSaveBrief({
       ...brief,
@@ -733,6 +960,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
       itemNumber: brief?.itemNumber,
       title: task.title,
       status: task.status,
+      ...overviewProvenance(overviewText),
       overview: overviewText,
       buildAndVerification: buildVerificationText,
       completion: completionText,
@@ -841,8 +1069,10 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     if (isTaskDone) return false;
     // Explicitly cancelled step or terminated
     if (executionSteps.some((s) => s.status === 'cancelled' || s.id === 'step-terminated')) return true;
+    // The run's manager was stopped or failed
+    if (terminalSession && (terminalSession.status === 'cancelled' || terminalSession.status === 'failed')) return true;
     // Terminal session killed with non-zero exit code
-    if (terminalSession?.session && !terminalSession.session.isActive && terminalSession.session.exitCode !== 0 && terminalSession.session.exitCode !== undefined) return true;
+    if (terminalSession?.session && !terminalSession.session.isActive && terminalSession.session.exitCode !== 0 && terminalSession.session.exitCode !== undefined && terminalSession.status !== 'done') return true;
     // Task or brief status marked partly_done and not yet fully completed
     const hasCompletedSuccessfully = executionSteps.some((s) => (s.stage === 'built_record' || s.stage === 'done') && s.status === 'success');
     if ((task.status === 'partly_done' || brief?.status === 'partly_done') && !hasCompletedSuccessfully) return true;
@@ -856,10 +1086,223 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     if (isWorking || isStoppedPartway) return false;
     if (isTaskDone) return true;
     if (executionSteps.some((s) => (s.stage === 'built_record' || s.stage === 'done') && s.status === 'success')) return true;
+    if (terminalSession?.status === 'done') return true;
     if (terminalSession?.session && !terminalSession.session.isActive && terminalSession.session.exitCode === 0) return true;
     if ((brief?.completion && brief.completion.trim().length > 0) || (brief?.validation && brief.validation.trim().length > 0)) return true;
     return false;
   }, [isWorking, isStoppedPartway, isTaskDone, executionSteps, terminalSession, brief?.completion, brief?.validation]);
+
+  // ── Which agent the Notes view shows ──
+  // "Follow live" (default) tracks the agent that matters right now (pickLiveAgent), switching after a short
+  // debounce and always announcing the switch; picking a tab pins that agent and turns following off.
+  const [followLive, setFollowLive] = useState(true);
+  const [pinnedAgentId, setPinnedAgentId] = useState<string | null>(null);
+  const [followedAgentId, setFollowedAgentId] = useState<string | null>(null);
+  const [switchBanner, setSwitchBanner] = useState<{
+    toId: string;
+    toLabel: string;
+    reason: string;
+    fromId: string;
+    fromLabel: string;
+  } | null>(null);
+  const agentSessionsRef = useRef(agentSessions);
+  agentSessionsRef.current = agentSessions;
+  const agentIdsKey = agentSessions.map((s) => s.ptySessionId).join('|');
+
+  // A new run starts with following switched back on.
+  const runId = managerSession?.runId || '';
+  const prevRunIdRef = useRef(runId);
+  useEffect(() => {
+    if (runId && prevRunIdRef.current && runId !== prevRunIdRef.current) {
+      setFollowLive(true);
+      setPinnedAgentId(null);
+      setSwitchBanner(null);
+    }
+    prevRunIdRef.current = runId;
+  }, [runId]);
+
+  const livePick = React.useMemo(() => pickLiveAgent(agentSessions), [agentSessions]);
+  const livePickId = livePick?.session.ptySessionId ?? null;
+  const livePickReason = livePick?.reason ?? '';
+
+  useEffect(() => {
+    if (!followLive) return;
+    if (!livePickId) {
+      setFollowedAgentId(null);
+      return;
+    }
+    if (livePickId === followedAgentId) return;
+    const current = followedAgentId ? agentSessionsRef.current.find((s) => s.ptySessionId === followedAgentId) : undefined;
+    if (!current) {
+      // First agent of the run (or the one shown is gone): nothing to announce.
+      setFollowedAgentId(livePickId);
+      return;
+    }
+    const timer = setTimeout(() => {
+      const from = agentSessionsRef.current.find((s) => s.ptySessionId === followedAgentId);
+      const to = agentSessionsRef.current.find((s) => s.ptySessionId === livePickId);
+      setFollowedAgentId(livePickId);
+      if (from && to) {
+        setSwitchBanner({ toId: to.ptySessionId, toLabel: to.label, reason: livePickReason, fromId: from.ptySessionId, fromLabel: from.label });
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [followLive, livePickId, livePickReason, followedAgentId, agentIdsKey]);
+
+  const shownAgent: SpawnedSession | null = (() => {
+    if (!followLive && pinnedAgentId) {
+      const pinned = agentSessions.find((s) => s.ptySessionId === pinnedAgentId);
+      if (pinned) return pinned;
+    }
+    return agentSessions.find((s) => s.ptySessionId === followedAgentId) ?? livePick?.session ?? null;
+  })();
+
+  const pinAgent = (ptySessionId: string) => {
+    setPinnedAgentId(ptySessionId);
+    setFollowLive(false);
+    setSwitchBanner(null);
+  };
+
+  const toggleFollowLive = (next: boolean) => {
+    setSwitchBanner(null);
+    if (next) {
+      setPinnedAgentId(null);
+      setFollowedAgentId(livePickId);
+      setFollowLive(true);
+    } else {
+      setPinnedAgentId(shownAgent?.ptySessionId ?? null);
+      setFollowLive(false);
+    }
+  };
+
+  // "Manager is waiting on …" while it handed work to workers / QA.
+  const managerWaitingOn = React.useMemo(() => {
+    if (managerSession?.status !== 'waiting') return null;
+    const workers = agentSessions.filter((s) => s.role === 'worker' && isAgentWorking(s.status));
+    if (workers.length > 0) {
+      return { text: `Manager is waiting on ${workers.length} worker${workers.length === 1 ? '' : 's'}`, agents: workers };
+    }
+    const qa = agentSessions.filter((s) => s.role === 'qa' && isAgentWorking(s.status));
+    if (qa.length > 0) return { text: 'Manager is waiting on QA', agents: qa };
+    return { text: 'Manager is waiting for its agents to report back', agents: [] as SpawnedSession[] };
+  }, [managerSession?.status, agentSessions]);
+
+  // Header chip: which agent is working right now (the shown one when it is working). In-app pipeline runs have no
+  // terminals, so their running step's agent role is used instead.
+  const nowRunningAgent =
+    shownAgent && isAgentWorking(shownAgent.status) ? shownAgent : livePick && isAgentWorking(livePick.session.status) ? livePick.session : null;
+  const runningPipelineStep =
+    !nowRunningAgent && isExecuting
+      ? [...executionSteps].reverse().find((st) => st.status === 'running' && st.agentRole)
+      : undefined;
+
+  // ── Task prompt box ── mid-run it steers the agents; after the run it continues it (never a restart).
+  const runActive = isWorking || isExecuting || agentsWorking;
+  const hasEverRun = runActive || executionSteps.length > 0 || agentSessions.length > 0 || Boolean(brief?.completion?.trim());
+  // In-app pipeline: workers running right now can be addressed directly.
+  const pipelineWorkerTargets = React.useMemo(() => {
+    const seen = new Set<string>();
+    const out: Array<{ pieceId: string; label: string }> = [];
+    for (const st of executionSteps) {
+      if (st.agentRole !== 'worker' || !st.pieceId || st.ptySessionId || st.status !== 'running' || seen.has(st.pieceId)) continue;
+      seen.add(st.pieceId);
+      out.push({ pieceId: st.pieceId, label: `Worker ${st.pieceId}` });
+    }
+    return out;
+  }, [executionSteps]);
+  const sendTaskMessage = onSendTaskMessage
+    ? (text: string, opts: TaskMessageOptions) => onSendTaskMessage(task, text, opts)
+    : undefined;
+
+  // Prompts on agents the user isn't looking at in the Notes view (or any prompt while in Steps view).
+  const offscreenPromptAgents = agentsWithPrompt.filter(
+    (s) => showExecutionSteps || s.ptySessionId !== shownAgent?.ptySessionId
+  );
+
+  // Steps view: each agent's terminal lives under its own step (step.ptySessionId). Legacy manager steps without
+  // an id take the manager's terminal; sessions no step claims are listed under "Agent terminals".
+  const { stepTerminals, unclaimedAgents } = React.useMemo(() => {
+    const byId = new Map(agentSessions.map((s) => [s.ptySessionId, s] as const));
+    const map = new Map<string, SpawnedSession>();
+    const claimed = new Set<string>();
+    // Latest step wins (a QA retry reuses the QA session id).
+    for (let i = executionSteps.length - 1; i >= 0; i--) {
+      const st = executionSteps[i];
+      const agent = st.ptySessionId ? byId.get(st.ptySessionId) : undefined;
+      if (agent && !claimed.has(agent.ptySessionId)) {
+        map.set(st.id, agent);
+        claimed.add(agent.ptySessionId);
+      }
+    }
+    if (managerSession && !claimed.has(managerSession.ptySessionId)) {
+      // Only CLI manager steps (`step-manager-*`, written before steps carried a ptySessionId) qualify: in-app
+      // pipeline steps also use agentRole 'manager' / stage 'execution' but never belong to a CLI terminal.
+      const legacy = [...executionSteps]
+        .reverse()
+        .find((st) => !st.ptySessionId && st.id.startsWith('step-manager-'));
+      if (legacy) {
+        map.set(legacy.id, managerSession);
+        claimed.add(managerSession.ptySessionId);
+      }
+    }
+    return { stepTerminals: map, unclaimedAgents: agentSessions.filter((s) => !claimed.has(s.ptySessionId)) };
+  }, [executionSteps, agentSessions, managerSession]);
+
+  /** Terminal for one agent (attach-only: App launched it), headed by who it is. */
+  const renderAgentTerminal = (agent: SpawnedSession) => {
+    const canStop = agent.session.isActive && (onKillAgentSession || (agent.role === 'manager' && onKillSession));
+    return (
+      <ResizableTerminalContainer
+        key={agentViewKey(agent)}
+        defaultHeight={380}
+        minHeight={200}
+        maxHeight={800}
+        maximizedHeight={680}
+        storageKey={`ergo_terminal_height_${agent.role}`}
+        headerLeft={
+          <div className="agent-terminal-header">
+            <AgentRoleBadge role={agent.role} pieceId={agent.pieceId} label={agent.label} size="md" />
+            <span className="agent-terminal-sep">·</span>
+            <span className="agent-terminal-cmd">{agent.cmd}</span>
+            <span className="agent-terminal-sep">·</span>
+            <span className={`agent-terminal-status status-${agent.status}`}>
+              <AgentStatusDot status={agent.status} />
+              <span>{agentStatusLabel(agent.status)}</span>
+            </span>
+            <span className="agent-terminal-cwd" title={agent.cwd}>cwd: {agent.cwd}</span>
+          </div>
+        }
+        headerRight={
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            {agent.role === 'manager' && onRestartSession && (
+              <button
+                type="button"
+                className="terminal-ctrl-btn"
+                onClick={() => onRestartSession(task)}
+                title="Restart the task run (relaunches the Manager)"
+              >
+                <RotateCcw size={10} />
+                <span>Restart</span>
+              </button>
+            )}
+            {canStop && (
+              <button
+                type="button"
+                className="terminal-ctrl-btn is-danger"
+                onClick={() => (onKillAgentSession ? onKillAgentSession(agent.ptySessionId) : onKillSession?.(task.id))}
+                title={`Stop ${agent.label}`}
+              >
+                <Square size={10} />
+                <span>Stop</span>
+              </button>
+            )}
+          </div>
+        }
+      >
+        <AgentTerminal attachOnly sessionId={agent.ptySessionId} cmd={agent.cmd} args={agent.args} cwd={agent.cwd} />
+      </ResizableTerminalContainer>
+    );
+  };
 
   return (
     <div
@@ -887,18 +1330,29 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
           >
             <ChevronDown size={14} className="collapse-chevron" />
           </button>
-          {brief?.isUnordered || task.isUnordered ? (
-            <span className="ai-task-num-badge ai-task-num-badge-unordered" title={task.category && task.category.trim() ? task.category.trim() : 'Task'}>
-              {task.category && task.category.trim() ? task.category.trim() : 'Task'}
-            </span>
-          ) : (
-            <span
-              className="ai-task-num-badge"
-              title={task.category && task.category.trim() && task.category !== 'AI Workspace' ? `${task.category.trim()} #${task.listIndex ?? task.id}` : `#${brief?.itemNumber ?? task.id}`}
-            >
-              {task.category && task.category.trim() && task.category !== 'AI Workspace' ? `${task.category.trim()} #${task.listIndex ?? task.id}` : `#${brief?.itemNumber ?? task.id}`}
-            </span>
-          )}
+          {(() => {
+            const groupName = task.category && task.category.trim();
+            const isGroup = !!groupName && groupName !== 'AI Workspace' && groupName !== 'Untitled';
+            if (isGroup) {
+              const color = resolveHeaderColor(groupName!, task.categoryColor);
+              return (
+                <span
+                  className="ai-task-num-badge ai-task-num-badge-group"
+                  title={groupName!}
+                  style={{ color: color.hex, borderColor: color.hex, background: `${color.hex}1f` }}
+                >
+                  #{task.listIndex ?? task.id}
+                </span>
+              );
+            }
+            return brief?.isUnordered || task.isUnordered ? (
+              <span className="ai-task-num-badge ai-task-num-badge-unordered" title="Task">Task</span>
+            ) : (
+              <span className="ai-task-num-badge" title={`#${brief?.itemNumber ?? task.id}`}>
+                #{brief?.itemNumber ?? task.id}
+              </span>
+            );
+          })()}
           <span className="ai-task-title-text" title={brief?.title || task.title}>
             {brief?.title || task.title}
           </span>
@@ -1152,6 +1606,26 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   <span>Configure MCP Tools{activeTaskTools.length > 0 ? ` (${activeTaskTools.length})` : ''}...</span>
                 </button>
 
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={qaVerificationOn}
+                  className="swimlane-dropdown-item"
+                  onClick={toggleQaVerification}
+                  disabled={runActive}
+                  title={
+                    runActive
+                      ? "Can't change this while the task is running"
+                      : 'A separate QA agent checks the finished work and sends it back to the manager if it fails. Costs an extra agent run (plus any retries).'
+                  }
+                >
+                  <ShieldCheck size={13} style={{ color: qaVerificationOn ? 'var(--accent-emerald)' : undefined }} />
+                  <span style={{ flex: 1 }}>QA verification</span>
+                  <span className={`toggle-switch-btn menu-switch ${qaVerificationOn ? 'is-active' : ''}`} aria-hidden="true">
+                    <span className="toggle-switch-thumb" />
+                  </span>
+                </button>
+
                 <div className="swimlane-dropdown-divider" />
 
                 {isTaskStarted ? (
@@ -1331,10 +1805,62 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
               isExecuting={isExecuting}
               isTaskStarted={isTaskStarted}
               defaultBreakdownOpen={false}
+              billing={taskBilling}
             />
 
+            {/* "How did this task do?" after an Auto run Ergo can't judge well on its own */}
+            <RunSurveyCard record={brief?.lastRunOutcome} hidden={runActive} />
+
             {/* ═══════════════════════════════════════════════════════════
-                CARD 2: OVERVIEW (populated from Summary agent)
+                CARD 2: RELATED TASKS (above the Overview: the Summary step uses them to write it)
+               ═══════════════════════════════════════════════════════════ */}
+            <div className={`ai-sub-card card-related-tasks ${collapsedCards.vectorMemory ? 'is-collapsed' : ''}`}>
+              <div
+                className="ai-sub-card-header"
+                onClick={() => toggleCard('vectorMemory')}
+              >
+                <div className="header-left">
+                  <button
+                    type="button"
+                    className={`card-collapse-btn ${collapsedCards.vectorMemory ? 'is-collapsed' : ''}`}
+                    title={collapsedCards.vectorMemory ? 'Expand Related Tasks' : 'Collapse Related Tasks'}
+                    aria-label={collapsedCards.vectorMemory ? 'Expand Related Tasks' : 'Collapse Related Tasks'}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleCard('vectorMemory');
+                    }}
+                  >
+                    <ChevronDown size={12} className="collapse-chevron" />
+                  </button>
+                  <span className="section-title-text">
+                    <Database size={14} color="#eab308" />
+                    <span>Related Tasks</span>
+                  </span>
+                  {relatedSummaryTag && !isRelatedWorking && (
+                    <span className="section-subtitle-tag">{relatedSummaryTag}</span>
+                  )}
+                </div>
+
+                <div className="header-right" onClick={(e) => e.stopPropagation()}>
+                  <CardStatusChip status={relatedTasksStatus} />
+                </div>
+              </div>
+
+              {!collapsedCards.vectorMemory && (
+                <div className="ai-sub-card-body">
+                  <RelatedTasksPanel
+                    baselineContext={contextStep?.baselineContext}
+                    isSearching={isRelatedWorking}
+                    isSelecting={isOverviewSynthesizing}
+                    canOpenTask={canOpenRelatedTask}
+                    onOpenTask={onOpenRelatedTask}
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* ═══════════════════════════════════════════════════════════
+                CARD 3: OVERVIEW (populated from Summary agent)
                ═══════════════════════════════════════════════════════════ */}
             <div className={`ai-sub-card card-overview ${collapsedCards.overview ? 'is-collapsed' : ''}`}>
               <div
@@ -1363,9 +1889,23 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                       Goals & Execution Plan
                     </span>
                   )} */}
-                  {isGatheringContext && (
+                  {isGatheringContext && !isOverviewSynthesizing && (
                     <span className="section-subtitle-tag">
                       Analyzing...
+                    </span>
+                  )}
+                  {isOverviewOutdated && !isOverviewSynthesizing && (
+                    <span
+                      className="section-subtitle-tag"
+                      title="The task changed after this overview was generated. The next run generates a new one."
+                    >
+                      Task changed — regenerates on next run
+                    </span>
+                  )}
+                  {isOverviewSynthesizing && isRealOverview && (
+                    <span className="section-subtitle-tag overview-refreshing-tag">
+                      <Loader2 size={10} className="spin-animate" />
+                      <span>Refreshing…</span>
                     </span>
                   )}
                 </div>
@@ -1391,18 +1931,23 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                       onFocus={() => setActiveFocusedRef(overviewRef)}
                       rows={5}
                     />
-                  ) : isGatheringContext ? (
+                  ) : isOverviewSynthesizing && !isRealOverview ? (
                     <div className="ai-card-hint" style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--accent-cyan)' }}>
                       <Loader2 size={12} className="spin-animate" />
-                      <span>Summary agent is synthesizing the execution brief and tool plan…</span>
+                      <span>Summary agent is synthesizing the overview…</span>
+                    </div>
+                  ) : isGatheringContext && !isRealOverview ? (
+                    <div className="ai-card-hint" style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--accent-cyan)' }}>
+                      <Loader2 size={12} className="spin-animate" />
+                      <span>Gathering context — the Summary agent will synthesize the overview next…</span>
                     </div>
                   ) : isRealOverview ? (
                     <div className="brief-markdown-render">
-                      {summaryDoc ? (
+                      {summaryDoc && !showOverviewText ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
                           {/* <div className="goals-brief-title">Goals & Success Criteria</div> */}
                           <div style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: '1.45' }}>
-                            <MarkdownRenderer content={summaryDoc.goals} />
+                            <MarkdownRenderer content={summaryDocContent || overviewDisplayContent || overviewText} />
                           </div>
                           {/* {summaryDoc.goals && (
                             <div className="goals-brief-box">
@@ -1427,57 +1972,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                     </div>
                   ) : (
                     <div className="ai-card-hint">
-                      Overview will populate with goals, success criteria, and tool plan once the Summary agent has finished. Click <strong>'Run Task'</strong> to begin.
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* ═══════════════════════════════════════════════════════════
-                CARD 3: VECTOR MEMORY / RELATED TASKS (collapsed by default)
-               ═══════════════════════════════════════════════════════════ */}
-            <div className={`ai-sub-card card-related-tasks ${collapsedCards.vectorMemory ? 'is-collapsed' : ''}`}>
-              <div
-                className="ai-sub-card-header"
-                onClick={() => toggleCard('vectorMemory')}
-              >
-                <div className="header-left">
-                  <button
-                    type="button"
-                    className={`card-collapse-btn ${collapsedCards.vectorMemory ? 'is-collapsed' : ''}`}
-                    title={collapsedCards.vectorMemory ? 'Expand Related Tasks' : 'Collapse Related Tasks'}
-                    aria-label={collapsedCards.vectorMemory ? 'Expand Related Tasks' : 'Collapse Related Tasks'}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleCard('vectorMemory');
-                    }}
-                  >
-                    <ChevronDown size={12} className="collapse-chevron" />
-                  </button>
-                  <span className="section-title-text">
-                    <Database size={14} color="#eab308" />
-                    <span>Related Tasks</span>
-                  </span>
-                  {contextStep?.baselineContext && (
-                    <span className="section-subtitle-tag">
-                      {contextStep.baselineContext.memoryHits?.length || 0} hits · {contextStep.baselineContext.guidelines?.length || 0} guidelines
-                    </span>
-                  )}
-                </div>
-
-                <div className="header-right" onClick={(e) => e.stopPropagation()}>
-                  <CardStatusChip status={relatedTasksStatus} />
-                </div>
-              </div>
-
-              {!collapsedCards.vectorMemory && (
-                <div className="ai-sub-card-body">
-                  {contextStep?.baselineContext ? (
-                    <BaselineContextPreview baselineContext={contextStep.baselineContext} defaultOpen={true} plain={true} />
-                  ) : (
-                    <div className="ai-card-hint">
-                      Vector Memory will retrieve project knowledge and guidelines for baseline context when started.
+                      No overview yet. The first run generates one — goals, success criteria, and tool plan — so you can check the agent understood the task. It's kept for reruns. Click <strong>'Run Task'</strong> to begin.
                     </div>
                   )}
                 </div>
@@ -1522,7 +2017,29 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                       style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {/* Terminal Session Controls */}
+                      {/* Which agent is working right now */}
+                      {nowRunningAgent ? (
+                        <span
+                          className={`agent-now-running-chip status-${nowRunningAgent.status}`}
+                          title={`${nowRunningAgent.label} · ${nowRunningAgent.cmd} · ${agentStatusLabel(nowRunningAgent.status)}`}
+                        >
+                          <span className="agent-now-running-prefix">
+                            {nowRunningAgent.status === 'awaiting_approval'
+                              ? 'Needs approval:'
+                              : nowRunningAgent.status === 'waiting'
+                              ? 'Waiting:'
+                              : 'Now running:'}
+                          </span>
+                          <AgentRoleBadge role={nowRunningAgent.role} pieceId={nowRunningAgent.pieceId} label={nowRunningAgent.label} />
+                        </span>
+                      ) : runningPipelineStep?.agentRole ? (
+                        <span className="agent-now-running-chip status-running" title={runningPipelineStep.title}>
+                          <span className="agent-now-running-prefix">Now running:</span>
+                          <AgentRoleBadge role={runningPipelineStep.agentRole} pieceId={runningPipelineStep.pieceId} />
+                        </span>
+                      ) : null}
+
+                      {/* Run controls (every agent of the task's run) */}
                       {terminalSession && (
                         <>
                           {onRestartSession && (
@@ -1534,19 +2051,19 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                                 setCollapsedCards((prev) => ({ ...prev, steps: false }));
                                 onRestartSession(task);
                               }}
-                              title="Restart CLI agent in terminal"
+                              title="Restart the task run (relaunches the Manager)"
                             >
                               <RotateCcw size={10} />
                             </button>
                           )}
 
-                          {terminalSession.session.isActive && onKillSession && (
+                          {(agentsWorking || agentSessions.some((s) => s.session.isActive)) && onKillSession && (
                             <button
                               type="button"
                               className="btn btn-secondary"
                               style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem', color: 'var(--accent-rose)' }}
                               onClick={() => onKillSession(task.id)}
-                              title="Stop CLI agent process"
+                              title="Stop every agent of this run"
                             >
                               <Square size={10} />
                             </button>
@@ -1562,35 +2079,22 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   {!collapsedCards.steps && (
                     <div className="ai-sub-card-body" style={{ padding: 0 }}>
                       {/* High-priority pending action prompts (Permission or Ollama Offline) */}
-                      {hasPendingAlert && (
+                      {(pendingPermission || pendingOllamaFallback || offscreenPromptAgents.length > 0) && (
                         <div style={{ padding: '0.65rem 0.65rem 0.25rem 0.65rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                           {pendingPermission && onPermissionChoice && (
-                            <div
-                              style={{
-                                background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.14) 0%, rgba(20, 22, 28, 0.95) 100%)',
-                                border: '1.5px solid rgba(239, 68, 68, 0.55)',
-                                borderRadius: 'var(--radius-md)',
-                                padding: '0.85rem 1rem',
-                                boxShadow: '0 4px 20px rgba(239, 68, 68, 0.18), 0 0 0 1px rgba(239, 68, 68, 0.1)',
-                                animation: 'fadeIn 0.2s ease',
-                              }}
-                            >
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.45rem' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#f43f5e', fontWeight: 700, fontSize: '0.84rem' }}>
+                            <div className="pipeline-permission-card">
+                              <div className="pipeline-permission-header">
+                                <div className="pipeline-permission-title">
                                   <ShieldAlert size={16} />
-                                  <span>Permission Authorization Required</span>
+                                  <span>Approve {pendingPermission.toolName}?</span>
                                 </div>
-                                <span style={{ fontSize: '0.68rem', fontWeight: 600, color: 'var(--text-muted)', background: 'rgba(255,255,255,0.06)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
-                                  Awaiting Approval
-                                </span>
+                                <span className="pipeline-permission-pill">Awaiting Approval</span>
                               </div>
-                              <p style={{ fontSize: '0.8rem', color: 'var(--text-main)', marginBottom: '0.5rem', lineHeight: 1.4 }}>
-                                The agent is requesting permission to execute tool: <strong style={{ color: 'var(--accent-cyan)' }}>{pendingPermission.serverName} / {pendingPermission.toolName}()</strong>
+                              <p className="pipeline-permission-subtitle">
+                                The agent wants to use <strong>{pendingPermission.serverName} / {pendingPermission.toolName}</strong>:
                               </p>
-                              <div style={{ background: 'rgba(0, 0, 0, 0.4)', padding: '0.55rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(255, 255, 255, 0.08)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.65rem' }}>
-                                {pendingPermission.summary}
-                              </div>
-                              <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                              <PermissionRequestDetails prompt={pendingPermission} />
+                              <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap', marginTop: '0.65rem' }}>
                                 <button
                                   className="btn btn-secondary"
                                   style={{ padding: '0.3rem 0.75rem', fontSize: '0.76rem', fontWeight: 600 }}
@@ -1619,6 +2123,33 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                               </div>
                             </div>
                           )}
+
+                          {/* CLI agents blocked on a prompt the user can't see in the current view */}
+                          {offscreenPromptAgents.map((agent) => (
+                            <div key={`prompt-${agent.ptySessionId}`} className="agent-prompt-alert-row">
+                              <ShieldAlert size={14} className="agent-prompt-alert-icon" />
+                              <AgentRoleBadge role={agent.role} pieceId={agent.pieceId} label={agent.label} />
+                              <span className="agent-prompt-alert-text" title={agent.pendingPrompt!.rawSnippet}>
+                                {agent.pendingPrompt!.kind === 'approval'
+                                  ? 'needs approval'
+                                  : agent.pendingPrompt!.kind === 'question'
+                                  ? 'is asking'
+                                  : 'reports'}
+                                : <code>{promptSummary(agent.pendingPrompt!)}</code>
+                              </span>
+                              <button
+                                type="button"
+                                className="agent-prompt-alert-btn"
+                                onClick={() => {
+                                  setViewModeSection2('notes');
+                                  pinAgent(agent.ptySessionId);
+                                }}
+                                title={`Show ${agent.label} in the Notes view to answer`}
+                              >
+                                Review
+                              </button>
+                            </div>
+                          ))}
 
                           {pendingOllamaFallback && onOllamaFallbackChoice && (
                             <div
@@ -1676,6 +2207,8 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                             ? executionSteps.length > 0
                               ? `${executionSteps.length} action${executionSteps.length === 1 ? '' : 's'}`
                               : 'Execution Steps'
+                            : shownAgent
+                            ? `Notes · ${shownAgent.label}`
                             : 'Notes'}
                         </span>
                         <div className="steps-notes-chip">
@@ -1711,71 +2244,16 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                             />
                           )}
 
-                          {/* Fallback Agent Terminal in Steps view if session exists but no manager step is in list */}
-                          {terminalSession &&
-                            !executionSteps.some(
-                              (s) =>
-                                s.agentRole === 'manager' ||
-                                s.id.includes('step-manager-') ||
-                                s.stage === 'execution'
-                            ) && (
-                              <div style={{ marginTop: '0.2rem' }}>
-                                <ResizableTerminalContainer
-                                  defaultHeight={380}
-                                  minHeight={200}
-                                  maxHeight={800}
-                                  maximizedHeight={680}
-                                  storageKey="ergo_terminal_height_step"
-                                  headerLeft={
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap', fontSize: '0.72rem' }}>
-                                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: 'var(--accent-cyan)', fontWeight: 600 }}>
-                                        <Terminal size={12} />
-                                        <span>Agent Terminal ({terminalSession.cmd})</span>
-                                      </span>
-                                      <span style={{ color: 'var(--text-muted)' }}>cwd: {terminalSession.cwd}</span>
-                                    </div>
-                                  }
-                                  headerRight={
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                                      {onRestartSession && (
-                                        <button
-                                          type="button"
-                                          className="terminal-ctrl-btn"
-                                          onClick={() => onRestartSession(task)}
-                                          title="Restart CLI agent in terminal"
-                                        >
-                                          <RotateCcw size={10} />
-                                          <span>Restart</span>
-                                        </button>
-                                      )}
-                                      {terminalSession.session.isActive && onKillSession && (
-                                        <button
-                                          type="button"
-                                          className="terminal-ctrl-btn is-danger"
-                                          onClick={() => onKillSession(task.id)}
-                                          title="Stop CLI agent process"
-                                        >
-                                          <Square size={10} />
-                                          <span>Stop</span>
-                                        </button>
-                                      )}
-                                    </div>
-                                  }
-                                >
-                                  <AgentTerminal
-                                    cmd={terminalSession.cmd}
-                                    args={terminalSession.args}
-                                    cwd={terminalSession.cwd}
-                                    env={terminalSession.env}
-                                    forceRestart={terminalSession.forceRestart}
-                                spawnId={terminalSession.spawnId}
-                                    taskId={task.id}
-                                    sessionId={String(terminalSession.session.taskId)}
-                                    onExit={(code) => onSessionExit?.(code)}
-                                  />
-                                </ResizableTerminalContainer>
+                          {/* Agent terminals no step claims (e.g. restored sessions, or steps not recorded yet) */}
+                          {unclaimedAgents.length > 0 && (
+                            <div className="agent-terminals-list">
+                              <div className="agent-terminals-list-title">
+                                <Terminal size={12} />
+                                <span>Agent terminals</span>
                               </div>
-                            )}
+                              {unclaimedAgents.map((agent) => renderAgentTerminal(agent))}
+                            </div>
+                          )}
 
                           {/* Acceptance Brief (Gherkin Scenarios) - Collapsed by default */}
                           {gherkinBrief && (
@@ -1831,7 +2309,11 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                                   <div className="step-header">
                                     <div className="step-title">
                                       <StepStatusIcon step={step} size={13} />
-                                      <PieceChip pieceId={step.stage === 'mcp_call' ? step.pieceId : undefined} />
+                                      {step.agentRole ? (
+                                        <AgentRoleBadge role={step.agentRole} pieceId={step.pieceId} />
+                                      ) : (
+                                        <PieceChip pieceId={step.stage === 'mcp_call' ? step.pieceId : undefined} />
+                                      )}
                                       <span style={{ fontSize: '0.8rem', color: step.status === 'cancelled' ? 'var(--text-muted)' : undefined }}>{step.title}</span>
                                     </div>
                                     <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
@@ -1845,71 +2327,10 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                                   <div className="step-detail"><MarkdownRenderer content={step.detail} /></div>
                                   <BiblePreview markdown={step.bibleMarkdown} filePath={step.bibleMarkdown ? step.bibleFilePath : undefined} />
 
-                                  {/* Embedded Live Agent Terminal inside the agent step */}
-                                  {terminalSession &&
-                                    (step.agentRole === 'manager' ||
-                                      step.id.includes('step-manager-') ||
-                                      (step.stage === 'execution' &&
-                                        !executionSteps.some(
-                                          (s) => s.id !== step.id && (s.id.includes('step-manager-') || s.agentRole === 'manager')
-                                        ))) && (
-                                      <div style={{ marginTop: '0.65rem' }}>
-                                        <ResizableTerminalContainer
-                                          defaultHeight={380}
-                                          minHeight={200}
-                                          maxHeight={800}
-                                          maximizedHeight={680}
-                                          storageKey="ergo_terminal_height_step"
-                                          headerLeft={
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap', fontSize: '0.72rem' }}>
-                                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: 'var(--accent-cyan)', fontWeight: 600 }}>
-                                                <Terminal size={12} />
-                                                <span>Agent Terminal ({terminalSession.cmd})</span>
-                                              </span>
-                                              <span style={{ color: 'var(--text-muted)' }}>cwd: {terminalSession.cwd}</span>
-                                            </div>
-                                          }
-                                          headerRight={
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                                              {onRestartSession && (
-                                                <button
-                                                  type="button"
-                                                  className="terminal-ctrl-btn"
-                                                  onClick={() => onRestartSession(task)}
-                                                  title="Restart CLI agent in terminal"
-                                                >
-                                                  <RotateCcw size={10} />
-                                                  <span>Restart</span>
-                                                </button>
-                                              )}
-                                              {terminalSession.session.isActive && onKillSession && (
-                                                <button
-                                                  type="button"
-                                                  className="terminal-ctrl-btn is-danger"
-                                                  onClick={() => onKillSession(task.id)}
-                                                  title="Stop CLI agent process"
-                                                >
-                                                  <Square size={10} />
-                                                  <span>Stop</span>
-                                                </button>
-                                              )}
-                                            </div>
-                                          }
-                                        >
-                                          <AgentTerminal
-                                            cmd={terminalSession.cmd}
-                                            args={terminalSession.args}
-                                            cwd={terminalSession.cwd}
-                                            env={terminalSession.env}
-                                            forceRestart={terminalSession.forceRestart}
-                                spawnId={terminalSession.spawnId}
-                                            taskId={task.id}
-                                            sessionId={String(terminalSession.session.taskId)}
-                                            onExit={(code) => onSessionExit?.(code)}
-                                          />
-                                        </ResizableTerminalContainer>
-                                      </div>
-                                    )}
+                                  {/* This agent's live terminal, embedded in its own step */}
+                                  {stepTerminals.has(step.id) && (
+                                    <div style={{ marginTop: '0.65rem' }}>{renderAgentTerminal(stepTerminals.get(step.id)!)}</div>
+                                  )}
 
                                   {step.humanInputPrompt && step.status === 'running' && onHumanInputChoice && !pendingHumanInput && (
                                     <div style={{ marginTop: '0.4rem' }}>
@@ -1925,28 +2346,114 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                               ))
                             )}
                           </div>
+
+                          {sendTaskMessage && hasEverRun && (
+                            <div style={{ padding: '0.4rem 0.1rem 0.2rem' }}>
+                              <TaskPromptBox
+                                running={runActive}
+                                onSend={sendTaskMessage}
+                                workerTargets={agentSessions.length === 0 ? pipelineWorkerTargets : []}
+                                hint={agentSessions.length > 0 && runActive ? 'Goes to the manager (pick an agent in the Notes view to message it directly).' : undefined}
+                              />
+                            </div>
+                          )}
                         </div>
                       ) : (
-                        /* Sub-view 2: Notes View (Always shows Manager AI Terminal if active/available + Notes editor) */
+                        /* Sub-view 2: Notes View (the run's agents, one at a time, clearly labelled + Notes editor) */
                         <div className="notes-view-container" style={{ display: 'flex', flexDirection: 'column' }}>
-                          {/* Manager AI Activity & Steering Bridge in Notes view for non-power users */}
-                          {terminalSession && (
-                            <div style={{ padding: '0.5rem 0.65rem 0.35rem 0.65rem' }}>
-                              <CliAgentNotesBridge
-                                cmd={terminalSession.cmd}
-                                args={terminalSession.args}
-                                cwd={terminalSession.cwd}
-                                env={terminalSession.env}
-                                forceRestart={terminalSession.forceRestart}
-                                spawnId={terminalSession.spawnId}
-                                taskId={task.id}
-                                sessionId={String(terminalSession.session.taskId)}
-                                isActive={terminalSession.session.isActive}
-                                onExit={(code) => onSessionExit?.(code)}
-                                onRestartSession={onRestartSession ? () => onRestartSession(task) : undefined}
-                                onKillSession={onKillSession ? () => onKillSession(task.id) : undefined}
-                                onSwitchToSteps={() => setViewModeSection2('steps')}
+                          {agentSessions.length > 0 && (
+                            <div className="agent-notes-panel">
+                              <AgentSessionTabs
+                                sessions={agentSessions}
+                                selectedId={shownAgent?.ptySessionId ?? null}
+                                onSelect={pinAgent}
+                                followLive={followLive}
+                                onToggleFollow={toggleFollowLive}
                               />
+
+                              {managerWaitingOn && (
+                                <div className="agent-waiting-row">
+                                  <Clock size={11} />
+                                  <span>{managerWaitingOn.text}</span>
+                                  {managerWaitingOn.agents.map((agent) => (
+                                    <button
+                                      key={agent.ptySessionId}
+                                      type="button"
+                                      className="agent-waiting-chip"
+                                      onClick={() => pinAgent(agent.ptySessionId)}
+                                      title={`Show ${agent.label}`}
+                                    >
+                                      <AgentRoleBadge role={agent.role} pieceId={agent.pieceId} label={agent.label} />
+                                      <AgentStatusDot status={agent.status} />
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+
+                              {switchBanner && shownAgent && switchBanner.toId === shownAgent.ptySessionId && (
+                                <div className="agent-switch-banner" role="status">
+                                  <span className="agent-switch-banner-text">
+                                    Now showing <AgentRoleBadge role={shownAgent.role} pieceId={shownAgent.pieceId} label={switchBanner.toLabel} /> — {switchBanner.reason}
+                                  </span>
+                                  {agentSessions.some((s) => s.ptySessionId === switchBanner.fromId) && (
+                                    <button
+                                      type="button"
+                                      className="agent-switch-back-btn"
+                                      onClick={() => pinAgent(switchBanner.fromId)}
+                                      title={`Go back to ${switchBanner.fromLabel} and stop following automatically`}
+                                    >
+                                      <CornerUpLeft size={11} />
+                                      <span>Back to {switchBanner.fromLabel}</span>
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="agent-switch-dismiss-btn"
+                                    onClick={() => setSwitchBanner(null)}
+                                    aria-label="Dismiss"
+                                    title="Dismiss"
+                                  >
+                                    <X size={11} />
+                                  </button>
+                                </div>
+                              )}
+
+                              {shownAgent && (
+                                <CliAgentNotesBridge
+                                  key={agentViewKey(shownAgent)}
+                                  sessionId={shownAgent.ptySessionId}
+                                  role={shownAgent.role}
+                                  label={shownAgent.label}
+                                  pieceId={shownAgent.pieceId}
+                                  cmd={shownAgent.cmd}
+                                  launchPrompt={shownAgent.args[shownAgent.args.length - 1]}
+                                  isActive={shownAgent.session.isActive}
+                                  status={shownAgent.status}
+                                  permissionLevel={shownAgent.permissionLevel ?? permissionLevel}
+                                  initialPrompt={shownAgent.pendingPrompt ?? null}
+                                  onSwitchToSteps={() => setViewModeSection2('steps')}
+                                  onKill={
+                                    onKillAgentSession
+                                      ? () => onKillAgentSession(shownAgent.ptySessionId)
+                                      : shownAgent.role === 'manager' && onKillSession
+                                      ? () => onKillSession(task.id)
+                                      : undefined
+                                  }
+                                  onRestart={shownAgent.role === 'manager' && onRestartSession ? () => onRestartSession(task) : undefined}
+                                  onSendMessage={
+                                    sendTaskMessage
+                                      ? (text, opts) => sendTaskMessage(text, { ...opts, ptySessionId: shownAgent.ptySessionId })
+                                      : undefined
+                                  }
+                                  runActive={runActive}
+                                />
+                              )}
+                            </div>
+                          )}
+
+                          {!shownAgent && sendTaskMessage && hasEverRun && (
+                            <div style={{ padding: '0.55rem 0.75rem 0' }}>
+                              <TaskPromptBox running={runActive} onSend={sendTaskMessage} workerTargets={pipelineWorkerTargets} />
                             </div>
                           )}
 
@@ -2009,6 +2516,12 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                     <Flag size={14} color="#14b8a6" />
                     <span>Completion</span>
                   </span>
+                  {isCompletionWorking && completionText.trim().length > 0 && (
+                    <span className="section-subtitle-tag overview-refreshing-tag">
+                      <Loader2 size={10} className="spin-animate" />
+                      <span>Updating…</span>
+                    </span>
+                  )}
                   {/* <span className="section-subtitle-tag">What Got Done</span> */}
                 </div>
 
@@ -2036,9 +2549,14 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                         <MarkdownRenderer content={completionText} />
                       </div>
                     </div>
+                  ) : isCompletionWorking ? (
+                    <div className="ai-card-hint" style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--accent-cyan)' }}>
+                      <Loader2 size={12} className="spin-animate" />
+                      <span>Writing the completion log from the agent's results…</span>
+                    </div>
                   ) : (
                     <div className="ai-card-hint">
-                      The completion log will be written when the Logger agent finishes execution.
+                      The completion log is written when the agent finishes (or when you stop it).
                     </div>
                   )}
                 </div>
@@ -2067,6 +2585,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 };
 
 export const BriefPane: React.FC<BriefPaneProps> = ({
+  taskBilling,
   tasks,
   briefs,
   projectId,
@@ -2096,9 +2615,11 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   onPermissionChoice,
   onHumanInputChoice,
   onOllamaFallbackChoice,
-  onSessionExit,
+  onSessionExit: _onSessionExit,
   onRestartSession,
   onKillSession,
+  onKillAgentSession,
+  onSendTaskMessage,
   onTerminateAgent,
   onArchiveTask,
   onRemoveAiTask,
@@ -2118,7 +2639,28 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   const [schedulingTask, setSchedulingTask] = useState<TaskItem | null>(null);
 
   const activeTaskRunningCount = runningTaskIds.length;
+
+  // Each task's agent sessions (String task ids), ordered manager → workers → QA.
+  const sessionsByTask = React.useMemo(() => {
+    const map = new Map<string, SpawnedSession[]>();
+    for (const s of terminalSessions) {
+      const key = String(s.session.taskId);
+      const list = map.get(key);
+      if (list) list.push(s);
+      else map.set(key, [s]);
+    }
+    for (const [key, list] of map) map.set(key, sortAgentSessions(list));
+    return map;
+  }, [terminalSessions]);
   const doneCount = briefs.filter((b) => b.status === 'done').length;
+
+  // Related Tasks card: candidates carry String task ids; selection needs the task's own id (number or string).
+  const taskIdByString = React.useMemo(() => new Map(tasks.map((t) => [String(t.id), t.id] as const)), [tasks]);
+  const canOpenRelatedTask = React.useCallback((id: string) => taskIdByString.has(String(id)), [taskIdByString]);
+  const openRelatedTask = (id: string) => {
+    const original = taskIdByString.get(String(id));
+    if (original !== undefined) onSelectTask?.(original);
+  };
 
   // ── Collapsed Vertical Menu Rail View ──
   if (isPanelOpen === false) {
@@ -2315,10 +2857,10 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                   swimLaneId: brief.sourceLaneId,
                 };
 
-                const terminalSession = terminalSessions.find((s) => s.session.taskId === effectiveTask.id) ?? null;
-                const isTerminalRunning = !!terminalSession?.session.isActive;
+                const agentSessions = sessionsByTask.get(String(effectiveTask.id)) ?? NO_AGENT_SESSIONS;
+                const areAgentsWorking = agentSessions.some((s) => isAgentWorking(s.status));
                 const isExecuting = executingTaskId !== null && String(executingTaskId) === String(effectiveTask.id);
-                const isWorking = isTerminalRunning || isExecuting;
+                const isWorking = areAgentsWorking || isExecuting;
                 const isSelected =
                   selectedTaskId != null &&
                   (selectedTaskId === effectiveTask.id ||
@@ -2331,13 +2873,15 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
 
                 return (
                   <AiTaskCard
+                    taskBilling={taskBilling}
                     key={brief.id || brief.sourceTaskId || brief.itemNumber || `brief-${index}`}
                     task={effectiveTask}
                     brief={brief}
                     isSelected={isSelected}
                     isWorking={isWorking}
                     isQueued={isQueued}
-                    terminalSession={terminalSession}
+                    agentSessions={agentSessions}
+                    permissionLevel={agentPipelineOptions?.permissionLevel}
                     isExecuting={isExecuting}
                     executionSteps={taskExecutionSteps[effectiveTask.id] || taskExecutionSteps[String(effectiveTask.id)] || []}
                     pendingPermission={pendingPermissions[effectiveTask.id]?.prompt ?? Object.entries(pendingPermissions || {}).find(([k]) => String(k) === String(effectiveTask.id))?.[1]?.prompt ?? null}
@@ -2354,15 +2898,18 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                     onPermissionChoice={(approved) => onPermissionChoice?.(effectiveTask.id, approved)}
                     onHumanInputChoice={(answer) => onHumanInputChoice?.(effectiveTask.id, answer)}
                     onOllamaFallbackChoice={(choice) => onOllamaFallbackChoice?.(effectiveTask.id, choice)}
-                    onSessionExit={(code) => onSessionExit?.(effectiveTask.id, code)}
                     onRestartSession={onRestartSession}
                     onKillSession={onKillSession}
+                    onKillAgentSession={onKillAgentSession}
+                    onSendTaskMessage={onSendTaskMessage}
                     onTerminateAgent={onTerminateAgent}
                     onArchiveTask={onArchiveTask}
                     onRemoveAiTask={(targetId) => onRemoveAiTask?.(targetId)}
                     onPurgeTaskFromAi={(targetId) => onPurgeTaskFromAi?.(targetId)}
                     mcpServers={mcpServers}
                     onUpdateTaskMcpTools={onUpdateTaskMcpTools}
+                    canOpenRelatedTask={canOpenRelatedTask}
+                    onOpenRelatedTask={onSelectTask ? (id) => openRelatedTask(id) : undefined}
                   />
                 );
               })}

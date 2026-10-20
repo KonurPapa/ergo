@@ -7,10 +7,13 @@
  * project guidelines (AGENTS.md / CLAUDE.md), and formats the baseline Markdown
  * handed directly to the Summary AI.
  */
+import { hasUsableOverview } from '../overviewUtils';
 import { searchMemory, type SearchResult } from '../memory';
+import { findRelatedTasks, formatRelatedCandidatesForPrompt } from '../memory/relatedTasks';
+import type { RelatedNoteCandidate, RelatedTaskCandidate, RelatedTasksRequest, RelatedTasksResponse } from '../memory/types';
 import { callMcpTool } from '../mcpClient';
 import { formatSkillsForAiContext, syncSkillsToWorkspace } from '../skillsManager';
-import { type AssembledBaselineContext } from '../../types';
+import { type AgentContextItem, type AssembledBaselineContext, type ExecutionStep, type TaskItem } from '../../types';
 import { bridgeClient } from '../bridgeClient';
 import {
   GUIDELINE_EXCERPT_CHAR_CAP,
@@ -28,6 +31,78 @@ export interface BaselineContext {
   baselineMarkdown: string;
   guidelines: GuidelineDoc[];
   memoryHits: SearchResult[];
+  /** Stage 1 of related-task matching (local, zero tokens); the Summary step selects from these. */
+  relatedCandidates: RelatedTaskCandidate[];
+  relatedNotes: RelatedNoteCandidate[];
+  /** The related-task search ran (false: the memory bridge was unreachable, so no selection is possible). */
+  relatedSearchOk: boolean;
+  /** The context step as emitted, so the Summary step can re-emit it with its related-task selection. */
+  contextStep: Pick<ExecutionStep, 'title' | 'detail' | 'time'> & { baselineContext: AssembledBaselineContext };
+}
+
+const RELATED_TOP_K = 10;
+const MAX_RELATED_QUERY_SUBTASKS = 12;
+const MAX_RELATED_QUERY_TEXT = 600;
+
+/** The related-tasks query for a task: title, subtasks, and its summary note or freeform source text. */
+export function buildRelatedTasksRequest(
+  projectId: string,
+  task: Pick<TaskItem, 'id' | 'title' | 'subtasks' | 'summaryNote'>,
+  brief?: Pick<AgentContextItem, 'sourceContent'> | null
+): RelatedTasksRequest {
+  const extra = (task.summaryNote || '').trim() || (brief?.sourceContent || '').trim();
+  return {
+    projectId,
+    taskId: String(task.id),
+    title: task.title,
+    subtasks: (task.subtasks || [])
+      .map((s) => s.text.trim())
+      .filter(Boolean)
+      .slice(0, MAX_RELATED_QUERY_SUBTASKS),
+    ...(extra && extra !== task.title.trim() ? { text: extra.slice(0, MAX_RELATED_QUERY_TEXT) } : {}),
+    topK: RELATED_TOP_K,
+  };
+}
+
+const RELATED_SEARCH_TIMEOUT_MS = 20_000;
+
+/**
+ * findRelatedTasks that never blocks a run for long: resolves as a failed search (no candidates) after a timeout
+ * (the bridge may still be loading its embedding model) or when `signal` aborts. Never throws.
+ */
+export async function findRelatedTasksSoft(
+  req: RelatedTasksRequest,
+  opts: { timeoutMs?: number; signal?: AbortSignal } = {}
+): Promise<RelatedTasksResponse> {
+  const failed: RelatedTasksResponse = { success: false, candidates: [], notes: [], searched: 0 };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const cutoff = new Promise<RelatedTasksResponse>((resolve) => {
+    timer = setTimeout(() => resolve(failed), opts.timeoutMs ?? RELATED_SEARCH_TIMEOUT_MS);
+    if (opts.signal) {
+      if (opts.signal.aborted) resolve(failed);
+      onAbort = () => resolve(failed);
+      opts.signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
+  try {
+    return await Promise.race([findRelatedTasks(req).catch(() => failed), cutoff]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (onAbort) opts.signal?.removeEventListener('abort', onAbort);
+  }
+}
+
+/** Context-step detail line for the related-task search. */
+export function describeRelatedSearch(res: { success: boolean; candidates: unknown[]; notes: unknown[]; searched: number }): string {
+  if (!res.success) return 'Related-task search unavailable (memory bridge offline).';
+  if (res.candidates.length === 0) {
+    return `No related tasks among ${res.searched} workspace item(s).`;
+  }
+  return (
+    `${res.candidates.length} candidate related task(s) among ${res.searched} workspace item(s)` +
+    `${res.notes.length > 0 ? ` + ${res.notes.length} note(s)` : ''} (local search, 0 tokens).`
+  );
 }
 
 const GUIDELINE_FILENAMES = ['AGENTS.md', 'CLAUDE.md'];
@@ -104,7 +179,9 @@ function connectedServerLines(ctx: PipelineContext): string[] {
 function buildBaselineMarkdown(
   ctx: PipelineContext,
   guidelines: GuidelineDoc[],
-  memoryHits: SearchResult[]
+  memoryHits: SearchResult[],
+  relatedCandidates: RelatedTaskCandidate[],
+  relatedNotes: RelatedNoteCandidate[]
 ): string {
   const { task, brief, project } = ctx;
   const out: string[] = [];
@@ -132,9 +209,15 @@ function buildBaselineMarkdown(
   }
   out.push('');
 
+  const sourceContent = cap(brief?.sourceContent, 2000);
+  if (sourceContent && sourceContent.trim() !== task.title.trim()) {
+    out.push('## Task Description', sourceContent, '');
+  }
+
+  // Unstamped drafts are still useful input for the Summary agent; only their label differs.
   const existingBrief = cap(brief?.overview || brief?.brief, 1500);
   if (existingBrief) {
-    out.push('## Existing Brief', existingBrief, '');
+    out.push(hasUsableOverview(brief) ? '## Existing Brief' : '## Draft Notes', existingBrief, '');
   }
 
   const existingBuild = cap(brief?.buildAndVerification || brief?.built, 2000);
@@ -170,10 +253,22 @@ function buildBaselineMarkdown(
       const sim = `${(hit.similarity * 100).toFixed(0)}%`;
       const tags = hit.chunk.metadata.tags?.length ? ` [${hit.chunk.metadata.tags.join(', ')}]` : '';
       const source = hit.chunk.metadata.source ? ` (${hit.chunk.metadata.source})` : '';
-      const taskTitle = hit.chunk.metadata.taskTitle ? ` [Task: ${hit.chunk.metadata.taskTitle}]` : '';
+      const meta = hit.chunk.metadata;
+      const taskTitle = meta.taskTitle
+        ? ` [Task: ${meta.taskTitle}]`
+        : meta.title
+          ? ` [${meta.kind ? `${meta.kind}: ` : ''}${meta.title}]`
+          : '';
       out.push(`- **[${sim} match${tags}${source}${taskTitle}]**: ${hit.chunk.text}`);
     }
     out.push('');
+  }
+
+  // Stage 1 related-task candidates; the Summary agent picks the useful ones (stage 2, "relatedTaskIds").
+  if (relatedCandidates.length > 0 || relatedNotes.length > 0) {
+    out.push('## Candidate Related Tasks (choose the useful ones)');
+    out.push('_Found by local similarity search of this project; many are only superficially similar. Ids in brackets._');
+    out.push(formatRelatedCandidatesForPrompt(relatedCandidates, relatedNotes).trim(), '');
   }
 
   if (guidelines.length > 0) {
@@ -212,7 +307,7 @@ export async function assembleTaskContext(ctx: PipelineContext): Promise<Baselin
     id: 'step-context',
     stage: 'context',
     title: 'Vector Memory: Assembling Baseline Context',
-    detail: 'Querying local vector store, syncing workspace skills, and reading guidelines…',
+    detail: 'Finding related tasks, querying local vector store, syncing workspace skills, and reading guidelines…',
     status: 'running'
   });
 
@@ -223,19 +318,29 @@ export async function assembleTaskContext(ctx: PipelineContext): Promise<Baselin
     console.warn('[Ergo Context] Non-fatal: skills codebase sync failed:', err);
   }
 
-  // 1. Local Vector Memory semantic search (0 tokens)
+  // 1. Local Vector Memory semantic search + related-task candidates (both 0 tokens, run together)
   let memoryHits: SearchResult[] = [];
   const query = `${task.title} ${task.category || ''} ${task.subtasks.map((s) => s.text).join(' ')}`.trim();
-  try {
-    memoryHits = await searchMemory(query, {
+  const [, related] = await Promise.all([
+    searchMemory(query, {
       topK: MEMORY_SEARCH_LIMIT,
       minSimilarity: MEMORY_SEARCH_THRESHOLD,
       projectId: ctx.project.id,
       excludeTaskId: task.id,
-    });
-  } catch (err) {
-    console.warn('[Ergo Context] Vector memory search failed (non-fatal):', err);
-  }
+      // Agents see their own working memory (run notes, saved findings) too; the archive UI doesn't.
+      includeHidden: true,
+    }).then(
+      (hits) => {
+        memoryHits = hits;
+      },
+      (err) => {
+        console.warn('[Ergo Context] Vector memory search failed (non-fatal):', err);
+      }
+    ),
+    findRelatedTasksSoft(buildRelatedTasksRequest(ctx.project.id, task, ctx.brief), { signal: ctx.signal }),
+  ]);
+  const relatedCandidates = related.candidates || [];
+  const relatedNotes = related.notes || [];
 
   throwIfAborted(ctx.signal);
 
@@ -244,7 +349,7 @@ export async function assembleTaskContext(ctx: PipelineContext): Promise<Baselin
   throwIfAborted(ctx.signal);
 
   // 3. Assemble baseline markdown
-  const baselineMarkdown = buildBaselineMarkdown(ctx, guidelines, memoryHits);
+  const baselineMarkdown = buildBaselineMarkdown(ctx, guidelines, memoryHits, relatedCandidates, relatedNotes);
 
   console.log('%c[Ergo Agent Pipeline] ── Step 1: Zero-Token Context Assembly (Vector DB + Guidelines) ──', 'color: #38bdf8; font-weight: bold; font-size: 13px;');
   console.log(baselineMarkdown);
@@ -265,22 +370,29 @@ export async function assembleTaskContext(ctx: PipelineContext): Promise<Baselin
       tags: h.chunk.metadata.tags
     })),
     guidelines: guidelines.map((g) => ({ path: g.path, excerpt: g.excerpt })),
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    relatedCandidates,
+    relatedNotes
   };
 
-  ctx.emit({
-    id: 'step-context',
-    stage: 'context',
+  const contextStep = {
     title: 'Vector Memory: Baseline Context Assembled',
     detail:
+      `${describeRelatedSearch(related)} ` +
       (memoryHits.length > 0
         ? `Retrieved ${memoryHits.length} relevant memory hit(s) from local vector DB (cutoff ≥ ${(MEMORY_SEARCH_THRESHOLD * 100).toFixed(0)}%, 0 tokens). `
         : `No prior memory hits above ${(MEMORY_SEARCH_THRESHOLD * 100).toFixed(0)}% threshold. `) +
       (guidelines.length > 0 ? `Guidelines: ${guidelines.map((g) => g.path).join(', ')}.` : 'No guideline files found.'),
-    status: 'success',
-    usage: emptyUsage(),
+    time: new Date().toLocaleTimeString(),
     baselineContext: assembledBaselineContext
+  };
+  ctx.emit({
+    id: 'step-context',
+    stage: 'context',
+    ...contextStep,
+    status: 'success',
+    usage: emptyUsage()
   });
 
-  return { baselineMarkdown, guidelines, memoryHits };
+  return { baselineMarkdown, guidelines, memoryHits, relatedCandidates, relatedNotes, relatedSearchOk: Boolean(related.success), contextStep };
 }

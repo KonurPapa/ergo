@@ -1,0 +1,69 @@
+##### Qwen3-0.6B-Q4 — round 2 prompts (same as Qwen2.5 eval), thinking off
+TASK KIND (model only)        55% {'ops': 20, 'coding': 3, 'writing': 4, 'research': 5, 'data': 5, 'other': 3}
+TASK KIND (code rule + model) 55%
+STRAIGHTFORWARD               52%  (always-yes baseline 70%)
+QA NEEDED (all 12 coding tasks) 50%  (always-yes baseline 50%)
+MCP exact set 38%  precision 0.12  recall 0.58  (tp 11 fp 80 fn 8)  [no-tools baseline exact 55%]
+RELATED TASKS precision 0.26 recall 0.75 F1 0.38 (tp 27 fp 78 fn 9)  [stage-1 strict cut-off F1 .56]
+LATENCY per call: median 142 ms, p90 190 ms (620 calls)
+##### Qwen3-0.6B-Q4 — autocomplete
+"in the human side task list, with options for"
+   FIM  ( 187 ms): ''
+   chat ( 221 ms): 'a few options'
+"Tasks that are completely checked should"
+   FIM  (  45 ms): ''
+   chat ( 182 ms): 'completely checked should pop up the markdown characters around them.'
+"roject needs to be the one that restores when"
+   FIM  (  61 ms): ''
+   chat ( 197 ms): 'the last-used project needs to be the one that restores when'
+"Built-in search (so users don"
+   FIM  (  33 ms): ''
+   chat ( 129 ms): "don't have to use Ctrl+F."
+" AI workspace need to be archived if the user"
+   FIM  (  56 ms): ''
+   chat (  74 ms): 'archived'
+"support for codeblocks (not just"
+   FIM  (  47 ms): ''
+   chat (  60 ms): 'codeblocks'
+" should ping the user at a specific time with"
+   FIM  (  59 ms): ''
+   chat ( 283 ms): 'Add reminders for tasks, which should ping the user at a specific time with a countdown.'
+"allowed folders should be grouped into either"
+   FIM  (  53 ms): ''
+   chat ( 239 ms): 'allowed folders should be grouped into either a task card or a drag-and-drop area.'
+median latency  FIM 56 ms   chat 197 ms
+##### Qwen3-0.6B-Q8 — round 2 prompts (same as Qwen2.5 eval), thinking off
+TASK KIND (model only)        55% {'other': 3, 'coding': 11, 'ops': 9, 'writing': 6, 'research': 5, 'data': 6}
+TASK KIND (code rule + model) 52%
+STRAIGHTFORWARD               42%  (always-yes baseline 70%)
+QA NEEDED (all 12 coding tasks) 50%  (always-yes baseline 50%)
+MCP exact set 32%  precision 0.12  recall 0.74  (tp 14 fp 99 fn 5)  [no-tools baseline exact 55%]
+RELATED TASKS precision 0.29 recall 0.69 F1 0.41 (tp 25 fp 60 fn 11)  [stage-1 strict cut-off F1 .56]
+LATENCY per call: median 180 ms, p90 236 ms (620 calls)
+##### Qwen3-0.6B-Q8 — autocomplete
+"in the human side task list, with options for"
+   FIM  ( 215 ms): ''
+   chat ( 620 ms): 'a right-click context menu should show up in the human side task list, with options for drag-and-drop and search.'
+"Tasks that are completely checked should"
+   FIM  (  46 ms): ''
+   chat ( 232 ms): 'Tasks that are completely checked should be marked as completed.'
+"roject needs to be the one that restores when"
+   FIM  (  58 ms): ''
+   chat ( 257 ms): 'the last-used project needs to be the one that restores when'
+"Built-in search (so users don"
+   FIM  (  58 ms): ''
+   chat ( 198 ms): "don't have to use Ctrl+F."
+" AI workspace need to be archived if the user"
+   FIM  (  61 ms): ''
+   chat ( 236 ms): 'if the user has not completed the task cards.'
+"support for codeblocks (not just"
+   FIM  (  50 ms): ''
+   chat ( 182 ms): 'support for codeblocks (not just)'
+" should ping the user at a specific time with"
+   FIM  (  62 ms): ''
+   chat ( 380 ms): 'Add reminders for tasks, which should ping the user at a specific time with a notification.'
+"allowed folders should be grouped into either"
+   FIM  (  52 ms): ''
+   chat ( 290 ms): 'allowed folders should be grouped into either a single folder or multiple folders.'
+median latency  FIM 58 ms   chat 257 ms
+ALLDONE

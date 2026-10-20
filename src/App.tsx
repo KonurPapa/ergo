@@ -9,9 +9,7 @@ import {
   type FolderMetadata,
   type CliAgentConfig,
   type CliAgentSetup,
-  type TerminalSession,
   type HumanAiAssistantResult,
-  type SpawnedSession,
   type ExecutionStep,
   type McpToolPermissionPrompt,
   type HumanInputPrompt,
@@ -20,11 +18,15 @@ import {
   type SwimLaneDoc,
   type AgentPipelineOptions,
   type PermissionDecision,
-  type TokenUsage,
   type TaskStatus,
   type McpSecretEntry,
   type RunningJobInfo,
-  type RunningJobsDoc
+  type RunningJobsDoc,
+  type OverviewDocument,
+  type PermissionLevel,
+  type AssembledBaselineContext,
+  type TaskRating,
+  type ModelDataSettings
 } from './types';
 
 import {
@@ -33,7 +35,7 @@ import {
   serializeRunningJobsDoc
 } from './lib/runningJobsStorage';
 
-import { INITIAL_PROJECTS, createNewProjectData, INITIAL_MCP_SERVERS } from './lib/demoData';
+import { INITIAL_PROJECTS, createNewProjectData, INITIAL_MCP_SERVERS, removeRetiredMcpServers, RETIRED_MCP_SERVER_IDS } from './lib/demoData';
 import { GITHUB_MCP_TOOLS } from './lib/githubMcpTools';
 import {
   parseTodoMarkdown,
@@ -50,14 +52,17 @@ import {
   preWarmEmbeddings,
   migrateAgentContextToMemory,
   archiveTaskToVectorMemory,
-  runSessionRetrospective,
   removeChunksByTaskId,
   clearProjectMemory,
   clearAllMemory
 } from './lib/memory';
 import { useAutosave } from './hooks/useAutosave';
 import { SUPPORTED_AI_PROVIDERS } from './lib/aiProviders';
-import { getEffectiveCliAgent, buildTaskCliPrompt, buildCliArgsForTask } from './lib/cliAgents';
+import { getEffectiveCliAgent } from './lib/cliAgents';
+import { isOverviewReusable, overviewDocumentFor, stampOverview } from './lib/overviewUtils';
+import { FILE_MUTATING_TOOL_NAMES } from './lib/agentPipeline/toolSchemas';
+import { reevaluatePendingPermission } from './lib/agentPipeline/toolExecutor';
+import { useCliAgentRuns, makeCliRunId, isWorkingAgentSession, type CliLaunchConfig, type CliAgentRunsApi } from './hooks/useCliAgentRuns';
 import { Navbar } from './components/Navbar';
 import { TaskPane } from './components/TaskPane';
 import { BriefPane } from './components/BriefPane';
@@ -70,10 +75,27 @@ import { FolderPickerModal } from './components/FolderPickerModal';
 import { OnboardingModal } from './components/OnboardingModal';
 import { ToastContainer, type ToastMessage } from './components/Toast';
 import { executeTaskWithAi, syncTaskOverviewWithAi } from './lib/ai';
+import { continueTaskWithAi } from './lib/agentPipeline/continuation';
+import { SteeringQueue } from './lib/agentPipeline/steeringQueue';
+import { recordSteeringMessage } from './lib/agentPipeline/steeringLog';
+import { pipelineRunKey, recallPipelineRun } from './lib/agentPipeline/runRegistry';
+import type { TaskMessageOptions, TaskMessageResult } from './lib/taskMessages';
 import { startMcpRoutineUpdateChecker } from './lib/mcpClient';
-import { DEFAULT_AGENT_PIPELINE_OPTIONS } from './lib/agentPipeline/contracts';
-import { formatOverviewDocToMarkdown } from './lib/agentPipeline/summary';
-import { routeModelsForRun } from './lib/agentPipeline/modelRouter';
+import { DEFAULT_AGENT_PIPELINE_OPTIONS, mergeAgentPipelineOptions } from './lib/agentPipeline/contracts';
+import { formatOverviewDocToMarkdown, validateRelatedTaskIds } from './lib/agentPipeline/summary';
+import { buildRelatedTasksRequest, describeRelatedSearch, findRelatedTasksSoft } from './lib/agentPipeline/context';
+import { formatRelatedCandidatesForPrompt, formatSelectedRelatedContext, resolveSavedRelatedIds, savedRelatedSelection, strictRelatedFallback } from './lib/memory/relatedTasks';
+import type { RelatedTasksResponse } from './lib/memory/types';
+import { useWorkspaceMemorySync } from './hooks/useWorkspaceMemorySync';
+import { routeModelsForRun, tinyCloudModelLabelFor, tinyCloudCallConfig, describeRouting, cliModelForPin, EFFORT_LABELS, type RoutingResult } from './lib/agentPipeline/modelRouter';
+import { rateTask } from './lib/agentPipeline/taskRating';
+import { recordRunCalibration, startSteeringCalibration } from './lib/agentPipeline/calibrationStore';
+import { rerunEscalation, workEscalation, describeRerunEscalation } from './lib/agentPipeline/escalation';
+import { isSubscriptionTarget, resolveCliBinary } from './lib/agentPipeline/contracts';
+import type { TaskBilling } from './components/BvTokenCounterCard';
+import { getModelCatalog, setArtificialAnalysisKey } from './lib/modelCatalog/catalog';
+import { decideRunShape, describeRunShape, type RunShapeDecision } from './lib/localModel/decisions';
+import { setLocalModelMode, type LocalModelMode } from './lib/localModel/preference';
 import {
   type ScheduledJob,
   getScheduledJobs,
@@ -86,49 +108,25 @@ import { syncSkillsToWorkspace } from './lib/skillsManager';
 import { bridgeClient, type BridgeStatus } from './lib/bridgeClient';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 
-/**
- * Token usage of an embedded CLI agent session. The bridge reads the CLI's own session log (Claude Code,
- * Codex, Gemini CLI) and falls back to a transcript-length estimate (flagged `estimated`) for other CLIs.
- */
-async function fetchCliSessionUsage(sessionId: string): Promise<TokenUsage | null> {
-  try {
-    const res = await fetch(bridgeClient.getApiUrl(`/api/pty/usage?sessionId=${encodeURIComponent(sessionId)}`));
-    if (!res.ok) return null;
-    const u = (await res.json())?.usage;
-    if (!u || typeof u.inputTokens !== 'number') return null;
-    return {
-      inputTokens: u.inputTokens || 0,
-      outputTokens: u.outputTokens || 0,
-      cachedInputTokens: u.cachedInputTokens || 0,
-      cacheWriteTokens: u.cacheWriteTokens || 0,
-      calls: u.calls || 0,
-      ...(u.estimated ? { estimated: true } : {}),
-    };
-  } catch {
-    return null;
+/** One-line description of what a pipeline permission prompt is asking for: the command, the path, or the summary. */
+function describePermissionRequest(prompt: McpToolPermissionPrompt): string {
+  const args = prompt.args || {};
+  let text = '';
+  if (typeof args.command === 'string' && args.command.trim()) {
+    text = `$ ${args.command.trim()}${typeof args.cwd === 'string' && args.cwd ? `  (in ${args.cwd})` : ''}`;
+  } else if (typeof args.path === 'string' && args.path.trim()) {
+    text = prompt.summary && prompt.summary.includes(args.path) ? prompt.summary : `${prompt.toolName}: ${args.path}`;
+  } else {
+    text = prompt.summary || `${prompt.serverName} / ${prompt.toolName}()`;
   }
+  text = text.replace(/\s*\n\s*/g, ' ⏎ ').trim();
+  return text.length > 280 ? `${text.slice(0, 279)}…` : text;
 }
 
-/** Merge persisted (possibly partial / stale) pipeline settings over the defaults, ignoring undefined values. */
-function mergeAgentPipelineOptions(
-  base: AgentPipelineOptions,
-  patch?: Partial<AgentPipelineOptions> | null
-): AgentPipelineOptions {
-  if (!patch) return base;
-  const next: AgentPipelineOptions = { ...base };
-  if (typeof patch.maxConcurrentAgents === 'number' && Number.isFinite(patch.maxConcurrentAgents)) next.maxConcurrentAgents = patch.maxConcurrentAgents;
-  if (typeof patch.maxQaRetries === 'number' && Number.isFinite(patch.maxQaRetries)) next.maxQaRetries = patch.maxQaRetries;
-  if (typeof patch.maxToolRoundsPerAgent === 'number' && Number.isFinite(patch.maxToolRoundsPerAgent)) next.maxToolRoundsPerAgent = patch.maxToolRoundsPerAgent;
-  if (typeof patch.enableCleaner === 'boolean') next.enableCleaner = patch.enableCleaner;
-  if (typeof patch.enableHardener === 'boolean') next.enableHardener = patch.enableHardener;
-  if (patch.permissionLevel && ['plan', 'ask', 'acceptEdits', 'bypass'].includes(patch.permissionLevel)) next.permissionLevel = patch.permissionLevel;
-  if (patch.effortLevel && ['low', 'medium', 'high', 'xhigh', 'max'].includes(patch.effortLevel)) next.effortLevel = patch.effortLevel;
-  if (typeof patch.autoModelRouting === 'boolean') next.autoModelRouting = patch.autoModelRouting;
-  return next;
-}
+export /** Stable empty lane list (a fresh [] each render would look like a workspace change). */
+const EMPTY_SWIM_LANES: SwimLaneDoc[] = [];
 
-
-export function App() {
+function App() {
   // Folder & Local Storage State
   const [folderMetadata, setFolderMetadata] = useState<FolderMetadata>(() => storageManager.getMetadata());
   const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false);
@@ -157,6 +155,8 @@ export function App() {
   const [activeProjectId, setActiveProjectId] = useState<string>(() => {
     return projects[0]?.id || 'default-workspace';
   });
+  // Settings must not be saved before the stored ones are loaded, or the initial first-project default overwrites the last-used project.
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
 
   const activeProject = useMemo(
     () => projects.find((p) => p.id === activeProjectId) || projects[0],
@@ -179,10 +179,14 @@ export function App() {
 
   // MCP & AI Settings State (persisted to localStorage so tool permissions are global)
   const [mcpServers, setMcpServers] = useState<MCPServer[]>(() => {
+    // Retired bundled servers (the removed Laya engine) are dropped from the saved list, with their toggle flags.
+    try {
+      RETIRED_MCP_SERVER_IDS.forEach((id) => localStorage.removeItem('ergo_mcp_user_toggled_' + id));
+    } catch { }
     const saved = localStorage.getItem('ergo_mcp_servers');
     if (saved) {
       try {
-        const parsed = JSON.parse(saved);
+        const parsed = removeRetiredMcpServers(JSON.parse(saved));
         if (Array.isArray(parsed) && parsed.length > 0) {
           return INITIAL_MCP_SERVERS.map((initServer) => {
             const match = parsed.find((s: MCPServer) => s.id === initServer.id);
@@ -201,7 +205,7 @@ export function App() {
                 return toolMatch ? { ...initTool, autoApprove: Boolean(toolMatch.autoApprove) } : initTool;
               });
 
-            // Ensure bundled default connections (like Laya, Filesystem, Fetch, Git) default to connected if they were previously saved before being enabled by default
+            // Ensure bundled default connections (like Filesystem, Fetch, Git) default to connected if they were previously saved before being enabled by default
             const resolvedStatus = (initServer.serverType === 'bundled_harness' && initServer.status === 'connected' && match.status === 'disconnected' && !localStorage.getItem('ergo_mcp_user_toggled_' + initServer.id))
               ? 'connected'
               : (match.status || initServer.status);
@@ -284,20 +288,28 @@ export function App() {
   const [cliAgentConfig, setCliAgentConfig] = useState<CliAgentConfig | null>(null);
   const [cliAgents, setCliAgents] = useState<CliAgentSetup[]>([]);
   const [activeCliAgentId, setActiveCliAgentId] = useState<string | null>(null);
-  // Live spawned terminal sessions, one per task
-  const [terminalSessions, setTerminalSessions] = useState<SpawnedSession[]>([]);
-  const [_activeTerminalTaskId, setActiveTerminalTaskId] = useState<string | number | null>(null);
+  // Agent terminal sessions (one per agent of a CLI run) live in useCliAgentRuns, wired in below.
 
 
-  // Theme State (Default: 'dark' to match Kiro Crew)
+  // Theme State (Default: 'light')
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('ergo_theme');
     if (saved === 'dark' || saved === 'light') return saved;
-    return 'dark';
+    return 'light';
   });
 
   // Agent Execution Pipeline tuning (concurrency, QA retries, tool rounds, cleaner/hardener gates)
   const [agentPipelineOptions, setAgentPipelineOptions] = useState<AgentPipelineOptions>(DEFAULT_AGENT_PIPELINE_OPTIONS);
+  // Synchronous mirror: runs read the live settings (e.g. the permission level) from here, never from a closure.
+  const agentPipelineOptionsRef = useRef<AgentPipelineOptions>(DEFAULT_AGENT_PIPELINE_OPTIONS);
+  // Set below once the permission-change handler exists (it needs the CLI run controller and pipeline prompts).
+  const onPermissionLevelChangeRef = useRef<(level: PermissionLevel) => void>(() => { });
+  const updateAgentPipelineOptions = useCallback((next: AgentPipelineOptions) => {
+    const prev = agentPipelineOptionsRef.current;
+    agentPipelineOptionsRef.current = next;
+    setAgentPipelineOptions(next);
+    if (prev.permissionLevel !== next.permissionLevel) onPermissionLevelChangeRef.current(next.permissionLevel);
+  }, []);
 
   // Apply theme attribute to root HTML document element
   useEffect(() => {
@@ -319,6 +331,39 @@ export function App() {
     return { enabled: true, keybinding: 'Tab' };
   });
 
+  // Local AI model mode (config/settings.json → localModel): which engine makes the small background decisions
+  // (CLI run shape, autocomplete). 'unset' until the user picks one in onboarding or Settings (= tiny cloud model).
+  // Library code (decisions, autocomplete) reads it from the module-level store, which is set alongside the state.
+  const [localModelMode, setLocalModelModeState] = useState<LocalModelMode>(() => {
+    let mode: LocalModelMode = 'unset';
+    try {
+      const saved = JSON.parse(localStorage.getItem('ergo_app_settings') || 'null');
+      if (saved?.localModel?.mode === 'local' || saved?.localModel?.mode === 'cloud') mode = saved.localModel.mode;
+    } catch { }
+    setLocalModelMode(mode);
+    return mode;
+  });
+  const handleSetLocalModelMode = useCallback((mode: LocalModelMode) => {
+    setLocalModelMode(mode);
+    setLocalModelModeState(mode);
+  }, []);
+
+  // Model data for Auto model selection (config/secrets.json → modelData): the optional Artificial Analysis key.
+  // Library code (routing) reads the key from the catalog module, which is set alongside the state. Until the stored
+  // value is loaded (or the user sets one), secrets saves leave the stored value alone.
+  const [modelData, setModelDataState] = useState<ModelDataSettings>({});
+  const modelDataReadyRef = useRef(false);
+  const handleSetModelData = useCallback((next: ModelDataSettings) => {
+    const key = next.artificialAnalysisKey?.trim() || '';
+    modelDataReadyRef.current = true;
+    setArtificialAnalysisKey(key);
+    setModelDataState(key ? { artificialAnalysisKey: key } : {});
+  }, []);
+  // Warm the model catalog (prices) so Settings and the tiny-model choice have it before the first run.
+  useEffect(() => {
+    void getModelCatalog();
+  }, []);
+
   // Initialize Storage Layer on mount (IndexedDB handle & config loading)
   useEffect(() => {
     async function initStorage() {
@@ -339,18 +384,26 @@ export function App() {
         if (res.secrets?.activeCliAgentId !== undefined) {
           setActiveCliAgentId(res.secrets.activeCliAgentId);
         }
+        // The key used to live in settings.json; it moves to secrets.json on the next save.
+        const storedModelData = res.secrets?.modelData || res.settings?.modelData;
+        handleSetModelData(storedModelData && typeof storedModelData === 'object' ? storedModelData : {});
 
         if (res.projects && res.projects.length > 0) {
           setProjects(res.projects);
+        }
+
+        // Restore the last-worked-on project; fall back to the first one if it no longer exists.
+        const storedProjectId = res.settings?.activeProjectId;
+        if (res.projects && res.projects.length > 0) {
+          setActiveProjectId(
+            storedProjectId && res.projects.some((p: any) => p.id === storedProjectId) ? storedProjectId : res.projects[0].id
+          );
         }
 
         let effectiveActiveKeyId: string | null = null;
         let onboarded = false;
 
         if (res.settings) {
-          if (res.settings.activeProjectId) {
-            setActiveProjectId(res.settings.activeProjectId);
-          }
           if (res.settings.activeKeyId) {
             setActiveKeyId(res.settings.activeKeyId);
             effectiveActiveKeyId = res.settings.activeKeyId;
@@ -369,11 +422,16 @@ export function App() {
             setTheme(res.settings.theme);
           }
           if (res.settings.agentPipeline) {
-            const persisted = res.settings.agentPipeline;
-            setAgentPipelineOptions((prev) => mergeAgentPipelineOptions(prev, persisted));
+            const merged = mergeAgentPipelineOptions(agentPipelineOptionsRef.current, res.settings.agentPipeline);
+            agentPipelineOptionsRef.current = merged;
+            setAgentPipelineOptions(merged);
           }
           if (res.settings.autocomplete) {
             setAutocompleteSettings(res.settings.autocomplete);
+          }
+          const savedLocalModelMode = res.settings.localModel?.mode;
+          if (savedLocalModelMode === 'local' || savedLocalModelMode === 'cloud') {
+            handleSetLocalModelMode(savedLocalModelMode);
           }
         }
 
@@ -386,12 +444,14 @@ export function App() {
         }
       } catch (err) {
         console.warn('[App] Error initializing storage layer:', err);
+      } finally {
+        setSettingsLoaded(true);
       }
     }
     initStorage();
 
-    // Pre-warm the embedding model in the background (non-blocking, 0 API tokens).
-    // The WASM model (~25MB) downloads and caches on first use; subsequent loads are instant.
+    // Ask the local bridge to load its embedding model in the background (non-blocking, 0 API tokens), and
+    // move any vector memory the old in-browser engine left in IndexedDB to the bridge (once).
     preWarmEmbeddings();
   }, []);
 
@@ -401,7 +461,7 @@ export function App() {
       localStorage.setItem('ergo_autocomplete_settings', JSON.stringify(autocompleteSettings));
     } catch { }
 
-    if (activeProjectId) {
+    if (activeProjectId && settingsLoaded) {
       storageManager.saveSettings({
         version: 1,
         activeProjectId,
@@ -412,10 +472,11 @@ export function App() {
         hasCompletedOnboarding,
         agentPipeline: agentPipelineOptions,
         autocomplete: autocompleteSettings,
+        ...(localModelMode !== 'unset' ? { localModel: { mode: localModelMode } } : {}),
         lastOpenedAt: new Date().toISOString()
       });
     }
-  }, [activeProjectId, activeKeyId, autosave.delaySec, autosave.isEnabled, theme, hasCompletedOnboarding, agentPipelineOptions, autocompleteSettings]);
+  }, [activeProjectId, activeKeyId, autosave.delaySec, autosave.isEnabled, theme, hasCompletedOnboarding, agentPipelineOptions, autocompleteSettings, localModelMode, settingsLoaded]);
 
   // MCP Secrets State (config/secrets.json)
   const [mcpSecrets, setMcpSecrets] = useState<Record<string, McpSecretEntry>>({});
@@ -460,8 +521,9 @@ export function App() {
       cliAgent: cliAgentConfig ?? undefined,
       cliAgents,
       activeCliAgentId,
+      modelData: modelDataReadyRef.current ? modelData : undefined,
     });
-  }, [userApiKeys, mcpSecrets, cliAgentConfig, cliAgents, activeCliAgentId]);
+  }, [userApiKeys, mcpSecrets, cliAgentConfig, cliAgents, activeCliAgentId, modelData]);
 
 
   // Active AI Provider Config
@@ -491,6 +553,12 @@ export function App() {
       isConnected: false
     };
   });
+
+  // Latest aiConfig for handlers that may run from a stale closure (e.g. sequence runs).
+  const aiConfigRef = useRef<AIProviderConfig>(aiConfig);
+  aiConfigRef.current = aiConfig;
+  // What the tiny cloud model is called in UI copy ("Skip — use Claude Haiku instead").
+  const tinyCloudModelLabel = useMemo(() => tinyCloudModelLabelFor(aiConfig), [aiConfig]);
 
   // Sync activeKeyId & userApiKeys to aiConfig and cliAgentConfig
   useEffect(() => {
@@ -601,6 +669,14 @@ export function App() {
   // AbortController map — one controller per active execution (keyed by taskId)
   const abortControllersRef = useRef<Map<string | number, AbortController>>(new Map());
 
+  // Task prompt box. In-app pipeline runs: one steering queue per running task (agent loops take its messages at their
+  // next round boundary), and each queued message's delivery callbacks. CLI runs still being prepared (overview, model
+  // routing): their messages wait here and go to the manager once it has started.
+  const pipelineSteeringRef = useRef<Map<string, SteeringQueue>>(new Map());
+  const steeringCallbacksRef = useRef<Map<string, TaskMessageOptions>>(new Map());
+  const cliLaunchingRef = useRef<Set<string>>(new Set());
+  const preLaunchMessagesRef = useRef<Map<string, Array<{ text: string; opts: TaskMessageOptions }>>>(new Map());
+
   // Running Jobs & Queued Tasks State (Persisted in RUNNING_JOBS.json)
   const [queuedTaskIds, setQueuedTaskIds] = useState<(string | number)[]>([]);
   const [runningJobs, setRunningJobs] = useState<RunningJobInfo[]>([]);
@@ -613,6 +689,15 @@ export function App() {
 
   const briefsRef = useRef<AgentContextItem[]>([]);
   briefsRef.current = briefs;
+
+  // Latest tasks for async continuations (also updated synchronously by syncAndSaveProject).
+  const tasksRef = useRef<TaskItem[]>(tasks);
+  tasksRef.current = tasks;
+
+  // CLI run controller (stable API from useCliAgentRuns, assigned where the hook is wired in below).
+  const cliRunsRef = useRef<CliAgentRunsApi>(null as unknown as CliAgentRunsApi);
+  /** Project whose tasks/briefs the refs hold right now (null while a newly opened project loads). */
+  const loadedProjectIdRef = useRef<string | null>(null);
 
   const taskExecutionStepsRef = useRef<Record<string | number, ExecutionStep[]>>({});
   taskExecutionStepsRef.current = taskExecutionSteps;
@@ -672,6 +757,7 @@ export function App() {
         autosaveEnabled: autosave.isEnabled,
         theme,
         hasCompletedOnboarding: true,
+        ...(localModelMode !== 'unset' ? { localModel: { mode: localModelMode } } : {}),
         lastOpenedAt: new Date().toISOString()
       });
     } catch (err) {
@@ -879,6 +965,8 @@ export function App() {
   // Load active project markdown from disk or local state into structured state
   useEffect(() => {
     let isMounted = true;
+    // Until this project's data is in tasksRef/briefsRef, CLI runs must not finalize into them.
+    if (loadedProjectIdRef.current !== activeProjectId) loadedProjectIdRef.current = null;
 
     async function loadActiveProjectContent() {
       if (!activeProject) return;
@@ -1004,42 +1092,27 @@ export function App() {
         setTaskExecutionSteps(runningJobsDoc.taskExecutionSteps);
       }
 
-      // Query active backend PTY sessions to reconnect any running terminal sessions for the active project
-      try {
-        const ptyRes = await fetch(bridgeClient.getApiUrl('/api/pty/sessions'));
-        if (ptyRes.ok) {
-          const { sessions } = await ptyRes.json();
-          if (Array.isArray(sessions) && sessions.length > 0) {
-            // Only reconnect sessions whose taskId matches an active task or brief in this project
-            const projectTaskIds = new Set([
-              ...allActiveTasks.map((t) => String(t.id)),
-              ...activeBriefs.map((b) => String(b.sourceTaskId || b.id || b.itemNumber)),
-            ]);
-
-            const activeSessions: SpawnedSession[] = sessions
-              .filter((s: any) => projectTaskIds.has(String(s.taskId || s.id)))
-              .map((s: any) => ({
-                session: {
-                  taskId: s.taskId || s.id,
-                  taskTitle: s.taskTitle || `Task ${s.taskId || s.id}`,
-                  isActive: true,
-                  spawnedAt: new Date(s.createdAt || Date.now()).toISOString(),
-                },
-                cwd: s.cwd || activeProject.folderPath,
-                cmd: s.cmd || '',
-                args: s.args || [],
-              }));
-
-            setTerminalSessions((prev) => {
-              const existingTaskIds = new Set(activeSessions.map((as) => String(as.session.taskId)));
-              const retained = prev.filter((p) => !existingTaskIds.has(String(p.session.taskId)));
-              return [...retained, ...activeSessions];
-            });
-          }
-        }
-      } catch (ptyErr) {
-        console.warn('[Ergo] Failed to query active PTY sessions on load:', ptyErr);
+      // Re-attach to agent sessions still running on the bridge for this project's tasks. Refs are set first so
+      // the restore (and any run it finalizes) reads this project's data, not the previous render's.
+      tasksRef.current = allActiveTasks;
+      briefsRef.current = activeBriefs;
+      loadedProjectIdRef.current = activeProjectId;
+      if (runningJobsDoc.taskExecutionSteps && Object.keys(runningJobsDoc.taskExecutionSteps).length > 0) {
+        taskExecutionStepsRef.current = runningJobsDoc.taskExecutionSteps;
       }
+      runningJobsRef.current = (runningJobsDoc.runningJobs || []).map((j) =>
+        j.status === 'in_progress' ? { ...j, status: 'cancelled' as const } : j
+      );
+      try {
+        const projectTaskIds = new Set<string>([
+          ...allActiveTasks.map((t) => String(t.id)),
+          ...activeBriefs.map((b) => String(b.sourceTaskId ?? b.id ?? b.itemNumber)),
+        ]);
+        await cliRunsRef.current.restoreAgentSessions(projectTaskIds);
+      } catch (ptyErr) {
+        console.warn('[Ergo] Failed to restore agent sessions on load:', ptyErr);
+      }
+      if (!isMounted) return;
 
       if (activeBriefs.length > 0) {
         void migrateAgentContextToMemory(
@@ -1095,9 +1168,7 @@ export function App() {
 
   // Real-time disk file watcher subscription (SSE): updates UI instantly when markdown files change externally
   const activeProjectRef = useRef(activeProject);
-  const tasksRef = useRef(tasks);
   useEffect(() => { activeProjectRef.current = activeProject; }, [activeProject]);
-  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
 
   useEffect(() => {
     let eventSource: EventSource | null = null;
@@ -1237,6 +1308,9 @@ export function App() {
     currentArchivedBriefs = archivedBriefs,
     currentSwimLanes = activeProject?.swimLanes
   ) => {
+    // Keep the refs in step so async flows that run before the next render see these values.
+    tasksRef.current = newTasks;
+    briefsRef.current = newBriefs;
     setTasks(newTasks);
     setBriefs(newBriefs);
     setArchivedTasks(currentArchivedTasks);
@@ -1343,6 +1417,240 @@ export function App() {
       prev.map((p) => (p.id === activeProjectId ? { ...p, runningJobsDoc: doc } : p))
     );
   }, [activeProject?.folderPath, activeProjectId]);
+
+  /** Working directory CLI agents run in: the project folder under the storage root. */
+  const resolveProjectCwd = (): string =>
+    activeProject?.folderPath
+      ? (storageManager as any).resolvedStoragePath
+        ? `${(storageManager as any).resolvedStoragePath}/${activeProject.folderPath}`
+        : activeProject.folderPath
+      : '~';
+
+  /**
+   * Resolve how CLI agents of a run are launched: command + extra args of the active profile, API keys to forward,
+   * and the model / effort for each agent role. Auto model selection picks the models for the task's rating (given,
+   * else the one saved with the brief's overview); Manual uses the AI profile's per-stage models. Returns null when
+   * the active profile has no CLI agent. `onRouting` receives the routing (for the run's "Model routing" step).
+   */
+  const prepareCliLaunch = async (
+    _task: TaskItem,
+    brief: AgentContextItem | undefined,
+    opts: {
+      rating?: TaskRating;
+      onRouting?: (routing: RoutingResult) => void;
+      signal?: AbortSignal;
+      /** A follow-up / restored run reuses the models it launched with: no routing (no catalog or model calls). */
+      skipRouting?: boolean;
+    } = {}
+  ): Promise<CliLaunchConfig | null> => {
+    const activeKey = userApiKeys.find((k) => k.id === activeKeyId);
+    const effectiveCli = getEffectiveCliAgent(activeKey, cliAgentConfig);
+    if (!effectiveCli?.command) return null;
+
+    // Collect API keys to pass to the spawned CLI agent process environment
+    const env: Record<string, string> = {};
+    if (activeKey?.apiKey && activeKey.apiKey !== 'cli_subscription_active') {
+      if (activeKey.provider === 'anthropic' || effectiveCli.command.includes('claude')) {
+        env.ANTHROPIC_API_KEY = activeKey.apiKey.trim();
+      } else if (activeKey.provider === 'openai' || effectiveCli.command.includes('codex')) {
+        env.OPENAI_API_KEY = activeKey.apiKey.trim();
+      } else if (activeKey.provider === 'gemini' || effectiveCli.command.includes('agy')) {
+        env.GEMINI_API_KEY = activeKey.apiKey.trim();
+      } else if (activeKey.provider === 'grok' || effectiveCli.command.includes('grok')) {
+        env.XAI_API_KEY = activeKey.apiKey.trim();
+      }
+    }
+    if (activeKey?.providerKeys) {
+      if (activeKey.providerKeys.anthropic?.apiKey) env.ANTHROPIC_API_KEY = activeKey.providerKeys.anthropic.apiKey.trim();
+      if (activeKey.providerKeys.openai?.apiKey) env.OPENAI_API_KEY = activeKey.providerKeys.openai.apiKey.trim();
+      if (activeKey.providerKeys.gemini?.apiKey) env.GEMINI_API_KEY = activeKey.providerKeys.gemini.apiKey.trim();
+      if (activeKey.providerKeys.grok?.apiKey) env.XAI_API_KEY = activeKey.providerKeys.grok.apiKey.trim();
+    }
+
+    // Check all configured userApiKeys for any provider keys not yet filled
+    for (const k of userApiKeys) {
+      if (k.apiKey && k.apiKey !== 'cli_subscription_active') {
+        if (k.provider === 'anthropic' && !env.ANTHROPIC_API_KEY) {
+          env.ANTHROPIC_API_KEY = k.apiKey.trim();
+        } else if (k.provider === 'openai' && !env.OPENAI_API_KEY) {
+          env.OPENAI_API_KEY = k.apiKey.trim();
+        } else if (k.provider === 'gemini' && !env.GEMINI_API_KEY) {
+          env.GEMINI_API_KEY = k.apiKey.trim();
+        } else if (k.provider === 'grok' && !env.XAI_API_KEY) {
+          env.XAI_API_KEY = k.apiKey.trim();
+        }
+      }
+      if (k.providerKeys) {
+        if (k.providerKeys.anthropic?.apiKey && !env.ANTHROPIC_API_KEY) env.ANTHROPIC_API_KEY = k.providerKeys.anthropic.apiKey.trim();
+        if (k.providerKeys.openai?.apiKey && !env.OPENAI_API_KEY) env.OPENAI_API_KEY = k.providerKeys.openai.apiKey.trim();
+        if (k.providerKeys.gemini?.apiKey && !env.GEMINI_API_KEY) env.GEMINI_API_KEY = k.providerKeys.gemini.apiKey.trim();
+        if (k.providerKeys.grok?.apiKey && !env.XAI_API_KEY) env.XAI_API_KEY = k.providerKeys.grok.apiKey.trim();
+      }
+    }
+
+    const hasApiKeyForCli = Boolean(
+      (effectiveCli.command.includes('claude') && env.ANTHROPIC_API_KEY) ||
+      (effectiveCli.command.includes('codex') && env.OPENAI_API_KEY) ||
+      (effectiveCli.command.includes('agy') && env.GEMINI_API_KEY) ||
+      (effectiveCli.command.includes('grok') && env.XAI_API_KEY)
+    );
+
+    // Pick each agent's model + effort (manager, workers, QA verifier = hardener role).
+    const options = agentPipelineOptionsRef.current;
+    const mode = options.modelSelection;
+    const roles: CliLaunchConfig['roles'] = {
+      manager: { effort: options.effortLevel },
+      worker: { effort: options.effortLevel },
+      qa: { effort: options.effortLevel },
+    };
+    // A rerun after a failed / stopped run starts the manager and workers a rung up; each QA retry climbs one more.
+    const startEscalation = rerunEscalation(brief);
+    const retryRoles: NonNullable<CliLaunchConfig['retryRoles']> = [];
+    const routingConfig: AIProviderConfig = { ...aiConfig, authMode: 'cli_subscription', cliCustomCommand: effectiveCli.command };
+    const rating = opts.rating ?? brief?.overviewDocument?.taskRating;
+    if (opts.skipRouting) {
+      return {
+        cmd: effectiveCli.command,
+        cliName: effectiveCli.name || effectiveCli.command,
+        extraArgs: effectiveCli.extraArgs || '',
+        env,
+        hasApiKey: hasApiKeyForCli,
+        cwd: resolveProjectCwd(),
+        roles,
+        startEscalation,
+      };
+    }
+    const cliRolesFrom = (decisions: RoutingResult['decisions']) => {
+      const out: Partial<CliLaunchConfig['roles']> = {};
+      for (const decision of decisions) {
+        const role = decision.role === 'hardener' ? 'qa' : decision.role === 'worker' ? 'worker' : decision.role === 'manager' ? 'manager' : null;
+        if (!role) continue;
+        out[role] = {
+          // Auto picks are in the CLI's own vocabulary; a profile model is passed only when this CLI accepts it.
+          model: decision.via === 'auto' ? decision.model : decision.via === 'pinned' ? cliModelForPin(effectiveCli.command, decision.model) : undefined,
+          effort: decision.effort || options.effortLevel,
+          // Kept for the learning table (set even when absent, so a QA-retry step-up replaces the earlier pick's).
+          tier: decision.tier,
+          calibrated: decision.calibrated,
+        };
+      }
+      return out;
+    };
+    try {
+      const routing = await routeModelsForRun({
+        config: routingConfig,
+        effort: options.effortLevel,
+        mode,
+        roles: ['manager', 'worker', 'hardener'],
+        rating,
+        escalation: workEscalation(startEscalation),
+        signal: opts.signal,
+      });
+      Object.assign(roles, cliRolesFrom(routing.decisions));
+      const maxRetries = Math.max(0, Math.floor(options.maxQaRetries || 0));
+      for (let retry = 1; retry <= maxRetries; retry++) {
+        const stepped = await routeModelsForRun({
+          config: routingConfig,
+          effort: options.effortLevel,
+          mode,
+          roles: ['manager', 'worker'],
+          rating,
+          escalation: workEscalation(startEscalation + retry),
+          signal: opts.signal,
+        });
+        retryRoles.push(cliRolesFrom(stepped.decisions));
+      }
+      opts.onRouting?.(routing);
+    } catch (err) {
+      console.warn('[Ergo CLI Task] Model routing failed; launching with CLI defaults:', err);
+    }
+
+    return {
+      cmd: effectiveCli.command,
+      cliName: effectiveCli.name || effectiveCli.command,
+      extraArgs: effectiveCli.extraArgs || '',
+      env,
+      hasApiKey: hasApiKeyForCli,
+      cwd: resolveProjectCwd(),
+      roles,
+      ...(retryRoles.length ? { retryRoles } : {}),
+      startEscalation,
+    };
+  };
+
+  // ─── CLI agent runs (manager / workers / QA PTYs, completion log) ───
+  const { terminalSessions, api: cliRuns } = useCliAgentRuns({
+    tasksRef,
+    briefsRef,
+    taskExecutionStepsRef,
+    setTaskExecutionSteps,
+    runningJobsRef,
+    setRunningJobs,
+    setExecutingTaskId,
+    agentPipelineOptionsRef,
+    syncAndSaveProject: (newTasks, newBriefs, immediate) => syncAndSaveProject(newTasks, newBriefs, immediate ?? true),
+    persistRunningJobsDoc: () => persistRunningJobsDoc(),
+    showToast,
+    dismissToast: handleDismissToast,
+    openTask: (taskId) => {
+      setSelectedTaskId(taskId);
+      setIsAiPanelOpen(true);
+    },
+    prepareLaunch: prepareCliLaunch,
+    projectId: activeProjectId,
+    dataProjectIdRef: loadedProjectIdRef,
+  });
+  cliRunsRef.current = cliRuns;
+
+  // Related-task search index: the bridge keeps a vector index of the open project's workspace (tasks, subtasks,
+  // freeform text), synced after edits. No project id while a newly opened project's data is still loading, so
+  // the previous project's tasks are never indexed under the new id.
+  const workspaceSwimLanes = activeProject?.swimLanes;
+  // How the active profile pays, for the task cost card: API key → real cost; subscription CLI → API-equivalent value
+  // plus the plan's usage limits; Ollama → tokens only.
+  const taskBilling = useMemo<TaskBilling>(() => {
+    if (aiConfig.provider === 'ollama') return { kind: 'local' };
+    if (isSubscriptionTarget(aiConfig)) {
+      const cli = resolveCliBinary(aiConfig).toLowerCase().replace(/^.*[\\/]/, '');
+      const label = cli === 'claude' ? 'Claude' : cli === 'codex' ? 'ChatGPT' : cli === 'agy' ? 'Gemini' : cli;
+      return { kind: 'subscription', cli, label };
+    }
+    return { kind: 'api' };
+  }, [aiConfig]);
+
+  // Auto mode learning (config/model-calibration.json): each run's outcome record, written onto its brief when the
+  // run ends (or a follow-up ends), feeds the table once; prompt-box messages that judge the model are classified.
+  const appStartedAtRef = useRef(new Date().toISOString());
+  const calibratedRunsRef = useRef(new Set<string>());
+  useEffect(() => startSteeringCalibration(() => aiConfigRef.current), []);
+  useEffect(() => {
+    for (const b of briefs) {
+      const rec = b.lastRunOutcome;
+      // Records from before this session were already counted (or predate calibration).
+      if (!rec || rec.at < appStartedAtRef.current) continue;
+      const key = `${rec.runId}|${rec.at}`;
+      if (calibratedRunsRef.current.has(key)) continue;
+      calibratedRunsRef.current.add(key);
+      recordRunCalibration({
+        runId: rec.runId,
+        taskId: String(b.sourceTaskId ?? b.id),
+        projectId: activeProjectId,
+        family: rec.family,
+        rating: rec.rating,
+        outcome: rec.outcome,
+        start: rec.startModels ?? rec.models,
+        end: rec.models,
+        usage: b.totalUsage,
+      });
+    }
+  }, [briefs, activeProjectId]);
+
+  useWorkspaceMemorySync({
+    projectId: loadedProjectIdRef.current === activeProjectId ? activeProjectId : null,
+    tasks,
+    briefs,
+    swimLanes: workspaceSwimLanes || EMPTY_SWIM_LANES,
+  });
 
   // AI Assistant Undo Snapshot State (Supports Ctrl+Z for Human AI Assistant modifications)
   const [aiUndoSnapshot, setAiUndoSnapshot] = useState<{
@@ -1471,10 +1779,11 @@ export function App() {
       itemNumber: nextItemNumber,
       title: taskTitle,
       status: sourceTask?.status || 'not_started',
-      overview: cleanText,
+      // Empty until a run's Summary step generates it. A freeform selection's text is kept in sourceContent.
+      overview: '',
       buildAndVerification: '',
       completion: '',
-      brief: cleanText,
+      brief: '',
       built: '',
       validation: '',
       requiredMcps: sourceTask?.mcpRequired,
@@ -1535,9 +1844,11 @@ export function App() {
     });
   }, [tasks, briefs, syncAndSaveProject, showToast]);
 
-  // Terminate a running agent execution for a given task ID (in-place agent execution, tool loop, and embedded CLI session)
+  // Terminate a running agent execution for a given task ID (in-place agent execution, tool loop, and embedded CLI agents)
+  const syncAndSaveProjectRef = useRef(syncAndSaveProject);
+  syncAndSaveProjectRef.current = syncAndSaveProject;
   const handleTerminateAgent = useCallback(async (taskId: string | number) => {
-    // 1. Abort controller (exact match or stringified match)
+    // 1. Abort controller (exact match or stringified match) — also cancels a CLI launch still preparing its overview
     let foundController: AbortController | undefined;
     for (const [key, ctrl] of abortControllersRef.current.entries()) {
       if (String(key) === String(taskId)) {
@@ -1561,13 +1872,6 @@ export function App() {
         delete pendingPermissionsRef.current[key];
       }
     }
-    for (const [key, pending] of Object.entries(pendingPermissions)) {
-      if (String(key) === String(taskId)) {
-        try {
-          pending.resolve(false);
-        } catch { }
-      }
-    }
 
     // 3. If there is any pending Ollama fallback waiting, resolve it to terminate immediately
     for (const [key, pending] of Object.entries(pendingOllamaFallbacksRef.current)) {
@@ -1589,97 +1893,85 @@ export function App() {
       }
     }
 
-    // 5. Terminate server-side PTY process (CLI agent, node, gemini, etc.)
-    try {
-      fetch(bridgeClient.getApiUrl('/api/pty/kill'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskId: String(taskId), sessionId: String(taskId) }),
-      }).catch((err) => console.warn('[Ergo] PTY kill fetch failed:', err));
-    } catch { }
+    // 5. Kill every CLI agent of the task. A CLI run that hasn't finished is finalized as "stopped" by the run
+    //    controller (completion log, task status, steps, running job) — nothing more to do for it here.
+    const cliOutcome = cliRunsRef.current.stopCliRun(taskId);
 
-    // Mark active terminal session for this task as inactive
-    setTerminalSessions((prev) =>
-      prev.map((s) =>
-        String(s.session.taskId) === String(taskId)
-          ? { ...s, session: { ...s.session, isActive: false, exitCode: -1 } }
-          : s
-      )
-    );
-
-    // 6. Clear executing task id and remove from queue
-    setExecutingTaskId((cur) => (cur !== null && String(cur) === String(taskId) ? null : cur));
+    // 6. Remove from queue
     setQueuedTaskIds((prev) => prev.filter((id) => String(id) !== String(taskId)));
     queuedTaskIdsRef.current = queuedTaskIdsRef.current.filter((id) => String(id) !== String(taskId));
 
-    // Update running job status to cancelled
-    setRunningJobs((prev) => {
-      const updated = prev.map((j) =>
-        String(j.taskId) === String(taskId)
-          ? { ...j, status: 'cancelled' as const, completedAt: new Date().toISOString() }
+    // 7. Clean up pending UI prompts and toasts
+    handleDismissToast(`perm-toast-${taskId}`);
+    handleDismissToast(`ollama-toast-${taskId}`);
+    const dropKey = <T,>(prev: Record<string | number, T>) => {
+      const next = { ...prev };
+      for (const k of Object.keys(next)) {
+        if (String(k) === String(taskId)) delete next[k];
+      }
+      return next;
+    };
+    setPendingOllamaFallbacks(dropKey);
+    setPendingPermissions(dropKey);
+    setPendingHumanInputs(dropKey);
+
+    // 'finalized' refers to a previous, finished run. If Stop just aborted a launch that was still preparing
+    // (overview synthesis / model routing), fall through so executingTaskId and its running steps are cleaned up.
+    if (cliOutcome === 'stopping' || (cliOutcome === 'finalized' && !foundController)) {
+      persistRunningJobsDoc(runningJobsRef.current, queuedTaskIdsRef.current, briefsRef.current, taskExecutionStepsRef.current);
+      return;
+    }
+
+    // In-app pipeline (or a CLI launch stopped before its agents started)
+    setExecutingTaskId((cur) => (cur !== null && String(cur) === String(taskId) ? null : cur));
+
+    const completedAt = new Date().toISOString();
+    const cancelJob = (jobs: RunningJobInfo[]) =>
+      jobs.map((j) =>
+        String(j.taskId) === String(taskId) && (j.status === 'in_progress' || j.status === 'queued')
+          ? { ...j, status: 'cancelled' as const, completedAt }
           : j
       );
+    runningJobsRef.current = cancelJob(runningJobsRef.current);
+    setRunningJobs((prev) => {
+      const updated = cancelJob(prev);
       runningJobsRef.current = updated;
-      persistRunningJobsDoc(updated, queuedTaskIdsRef.current, briefsRef.current, taskExecutionStepsRef.current);
       return updated;
     });
 
-    // Cancel running step in execution steps
+    // Cancel running steps
+    const cancelSteps = (rec: Record<string | number, ExecutionStep[]>) => {
+      const steps = rec[taskId] || rec[String(taskId)] || [];
+      return {
+        ...rec,
+        [taskId]: steps.map((s) =>
+          s.status === 'running'
+            ? { ...s, status: 'cancelled' as const, detail: 'Task execution terminated by user.' }
+            : s
+        ),
+      };
+    };
+    taskExecutionStepsRef.current = cancelSteps(taskExecutionStepsRef.current);
     setTaskExecutionSteps((prev) => {
-      const steps = prev[taskId] || prev[String(taskId)] || [];
-      const nextSteps = steps.map((s) =>
-        s.status === 'running'
-          ? { ...s, status: 'cancelled' as const, detail: 'Task execution terminated by user.' }
-          : s
-      );
-      const nextRecord = { ...prev, [taskId]: nextSteps };
+      const nextRecord = cancelSteps(prev);
       taskExecutionStepsRef.current = nextRecord;
       return nextRecord;
     });
 
-    // 7. Update task status from in_progress back to partly_done
-    setTasks((prevTasks) => {
-      const updated = prevTasks.map((t) =>
-        String(t.id) === String(taskId)
-          ? { ...t, status: 'partly_done' as TaskStatus, isDone: false }
-          : t
-      );
-      const updatedBriefs = briefs.map((b) =>
-        (b.sourceTaskId != null && String(b.sourceTaskId) === String(taskId)) ||
-          (b.id != null && String(b.id) === String(taskId))
-          ? { ...b, status: 'partly_done' as TaskStatus }
-          : b
-      );
-      syncAndSaveProject(updated, updatedBriefs, true);
-      setBriefs(updatedBriefs);
-      return updated;
-    });
-
-    // 8. Clean up pending UI prompts and toasts
-    handleDismissToast(`perm-toast-${taskId}`);
-    handleDismissToast(`ollama-toast-${taskId}`);
-    setPendingOllamaFallbacks((prev) => {
-      const next = { ...prev };
-      for (const k of Object.keys(next)) {
-        if (String(k) === String(taskId)) delete next[k];
-      }
-      return next;
-    });
-    setPendingPermissions((prev) => {
-      const next = { ...prev };
-      for (const k of Object.keys(next)) {
-        if (String(k) === String(taskId)) delete next[k];
-      }
-      return next;
-    });
-    setPendingHumanInputs((prev) => {
-      const next = { ...prev };
-      for (const k of Object.keys(next)) {
-        if (String(k) === String(taskId)) delete next[k];
-      }
-      return next;
-    });
-  }, [briefs, handleDismissToast, pendingPermissions, syncAndSaveProject]);
+    // 8. Update task status from in_progress back to partly_done (latest state, not a render closure)
+    const updatedTasks = tasksRef.current.map((t) =>
+      String(t.id) === String(taskId)
+        ? { ...t, status: 'partly_done' as TaskStatus, isDone: false }
+        : t
+    );
+    const updatedBriefs = briefsRef.current.map((b) =>
+      (b.sourceTaskId != null && String(b.sourceTaskId) === String(taskId)) ||
+        (b.id != null && String(b.id) === String(taskId))
+        ? { ...b, status: 'partly_done' as TaskStatus }
+        : b
+    );
+    syncAndSaveProjectRef.current(updatedTasks, updatedBriefs, true);
+  }, [handleDismissToast, persistRunningJobsDoc]);
 
   const handlePermissionChoice = (taskId: string | number, approved: PermissionDecision) => {
     handleDismissToast(`perm-toast-${taskId}`);
@@ -1795,8 +2087,10 @@ export function App() {
   // Trigger In-Place Task Execution
   // If a CLI agent is configured, spawn a terminal session inside the Build & Verification card.
   // Otherwise, run executeTaskWithAi in place and stream logs directly into Build & Verification and Completion.
-  const handleExecuteTask = async (task: TaskItem) => {
+  const handleExecuteTask = async (task: TaskItem, execOpts?: { followUp?: string }) => {
     setSelectedTaskId(task.id);
+    // A follow-up from the prompt box continues the task's last in-app run instead of starting it over.
+    const followUp = typeof execOpts?.followUp === 'string' && execOpts.followUp.trim() ? execOpts.followUp.trim() : '';
 
     const activeKey = userApiKeys.find((k) => k.id === activeKeyId);
     const effectiveCli = getEffectiveCliAgent(activeKey, cliAgentConfig);
@@ -1827,291 +2121,330 @@ export function App() {
       }
     }
 
+    // Brief lookup against the LATEST briefs (this handler may be a stale closure, e.g. from a sequence run).
+    const findBriefFor = (t: TaskItem): AgentContextItem | undefined => {
+      const list = briefsRef.current;
+      return (
+        list.find((b) => b.sourceTaskId != null && String(b.sourceTaskId) === String(t.id)) ||
+        list.find((b) => b.title.trim().toLowerCase() === t.title.trim().toLowerCase()) ||
+        list.find((b) => b.sourceTaskId == null && String(b.itemNumber) === String(t.id))
+      );
+    };
+    const latestTaskFor = (t: TaskItem): TaskItem => tasksRef.current.find((x) => String(x.id) === String(t.id)) || t;
+
     if (effectiveCli?.command) {
-      setExecutingTaskId(task.id);
-
-      // Remove from queued tasks
-      setQueuedTaskIds((prev) => prev.filter((id) => String(id) !== String(task.id)));
-      queuedTaskIdsRef.current = queuedTaskIdsRef.current.filter((id) => String(id) !== String(task.id));
-
-      // Resolve working directory: use the project folder path or home
-      const cwd = activeProject?.folderPath
-        ? (storageManager as any).resolvedStoragePath
-          ? `${(storageManager as any).resolvedStoragePath}/${activeProject.folderPath}`
-          : activeProject.folderPath
-        : '~';
-
-      let currentBrief = briefs.find(
-        (b) =>
-          (b.sourceTaskId != null && String(b.sourceTaskId) === String(task.id)) ||
-          b.title.trim().toLowerCase() === task.title.trim().toLowerCase() ||
-          String(b.itemNumber) === String(task.id)
-      );
-
-      const existingOverviewText = (currentBrief?.overview || currentBrief?.brief || '').trim();
-      const hasValidOverview = Boolean(
-        existingOverviewText.length > 30 &&
-        !existingOverviewText.startsWith(`Overview for ${task.title}`) &&
-        existingOverviewText !== task.title.trim()
-      );
-
-      // If task does not yet have an Overview, synthesize it with AI first so Card 2 is populated
-      if (!hasValidOverview) {
-        const overviewSteps: ExecutionStep[] = [
-          {
-            id: `step-ctx-${task.id}-${Date.now()}`,
-            taskId: task.id,
-            time: new Date().toLocaleTimeString(),
-            stage: 'context',
-            title: 'Context Assembly & Task Spec',
-            detail: `Assembled task brief, acceptance criteria, and workspace context for "${task.title}".`,
-            status: 'success',
-          },
-          {
-            id: `step-overview-${task.id}-${Date.now()}`,
-            taskId: task.id,
-            time: new Date().toLocaleTimeString(),
-            stage: 'overview',
-            agentRole: 'summary',
-            title: 'Summary AI: Building Task Overview & Acceptance Criteria',
-            detail: `Synthesizing task overview, acceptance criteria, and workspace context for "${task.title}"...`,
-            status: 'running',
-          },
-        ];
-        setTaskExecutionSteps((prev) => ({
-          ...prev,
-          [task.id]: overviewSteps,
-        }));
-
-        try {
-          const syncedOverview = await syncTaskOverviewWithAi(
-            task,
-            existingOverviewText,
-            activeProject,
-            aiConfig,
-            mcpServers,
-            serializeTodoMarkdown(tasks, headerComments, archivedTasks),
-            serializeAgentContextMarkdown(briefs, archivedBriefs)
-          );
-
-          const updatedBrief: AgentContextItem = {
-            ...currentBrief,
-            id: currentBrief?.id || `brief_${task.id}`,
-            sourceTaskId: task.id,
-            sourceLaneId: task.swimLaneId || currentBrief?.sourceLaneId,
-            itemNumber: currentBrief?.itemNumber,
-            title: task.title,
-            status: 'in_progress',
-            overview: syncedOverview,
-            buildAndVerification: currentBrief?.buildAndVerification || currentBrief?.built || '',
-            completion: currentBrief?.completion || currentBrief?.validation || currentBrief?.humanReview || currentBrief?.followUps || '',
-            brief: syncedOverview,
-            built: currentBrief?.built || '',
-            validation: currentBrief?.validation || '',
-            humanReview: currentBrief?.humanReview || '',
-            followUps: currentBrief?.followUps || '',
-          };
-
-          const existingIdx = briefs.findIndex(
-            (b) =>
-              (b.id && b.id === updatedBrief.id) ||
-              (b.sourceTaskId && updatedBrief.sourceTaskId && b.sourceTaskId === updatedBrief.sourceTaskId) ||
-              b.title.trim().toLowerCase() === updatedBrief.title.trim().toLowerCase()
-          );
-          const nextBriefs = existingIdx !== -1
-            ? briefs.map((b, idx) => (idx === existingIdx ? updatedBrief : b))
-            : [...briefs, updatedBrief];
-
-          syncAndSaveProject(tasks, nextBriefs, false);
-          currentBrief = updatedBrief;
-        } catch (err) {
-          console.warn('[Ergo CLI Task] Overview generation error, continuing with fallback:', err);
-        }
-      }
-
-      // Collect API keys to pass to the spawned CLI agent process environment
-      const env: Record<string, string> = {};
-      if (activeKey?.apiKey && activeKey.apiKey !== 'cli_subscription_active') {
-        if (activeKey.provider === 'anthropic' || effectiveCli.command.includes('claude')) {
-          env.ANTHROPIC_API_KEY = activeKey.apiKey.trim();
-        } else if (activeKey.provider === 'openai' || effectiveCli.command.includes('codex')) {
-          env.OPENAI_API_KEY = activeKey.apiKey.trim();
-        } else if (activeKey.provider === 'gemini' || effectiveCli.command.includes('agy')) {
-          env.GEMINI_API_KEY = activeKey.apiKey.trim();
-        } else if (activeKey.provider === 'grok' || effectiveCli.command.includes('grok')) {
-          env.XAI_API_KEY = activeKey.apiKey.trim();
-        }
-      }
-      if (activeKey?.providerKeys) {
-        if (activeKey.providerKeys.anthropic?.apiKey) env.ANTHROPIC_API_KEY = activeKey.providerKeys.anthropic.apiKey.trim();
-        if (activeKey.providerKeys.openai?.apiKey) env.OPENAI_API_KEY = activeKey.providerKeys.openai.apiKey.trim();
-        if (activeKey.providerKeys.gemini?.apiKey) env.GEMINI_API_KEY = activeKey.providerKeys.gemini.apiKey.trim();
-        if (activeKey.providerKeys.grok?.apiKey) env.XAI_API_KEY = activeKey.providerKeys.grok.apiKey.trim();
-      }
-
-      // Check all configured userApiKeys for any provider keys not yet filled
-      for (const k of userApiKeys) {
-        if (k.apiKey && k.apiKey !== 'cli_subscription_active') {
-          if (k.provider === 'anthropic' && !env.ANTHROPIC_API_KEY) {
-            env.ANTHROPIC_API_KEY = k.apiKey.trim();
-          } else if (k.provider === 'openai' && !env.OPENAI_API_KEY) {
-            env.OPENAI_API_KEY = k.apiKey.trim();
-          } else if (k.provider === 'gemini' && !env.GEMINI_API_KEY) {
-            env.GEMINI_API_KEY = k.apiKey.trim();
-          } else if (k.provider === 'grok' && !env.XAI_API_KEY) {
-            env.XAI_API_KEY = k.apiKey.trim();
-          }
-        }
-        if (k.providerKeys) {
-          if (k.providerKeys.anthropic?.apiKey && !env.ANTHROPIC_API_KEY) env.ANTHROPIC_API_KEY = k.providerKeys.anthropic.apiKey.trim();
-          if (k.providerKeys.openai?.apiKey && !env.OPENAI_API_KEY) env.OPENAI_API_KEY = k.providerKeys.openai.apiKey.trim();
-          if (k.providerKeys.gemini?.apiKey && !env.GEMINI_API_KEY) env.GEMINI_API_KEY = k.providerKeys.gemini.apiKey.trim();
-          if (k.providerKeys.grok?.apiKey && !env.XAI_API_KEY) env.XAI_API_KEY = k.providerKeys.grok.apiKey.trim();
-        }
-      }
-
-      const hasApiKeyForCli = Boolean(
-        (effectiveCli.command.includes('claude') && env.ANTHROPIC_API_KEY) ||
-        (effectiveCli.command.includes('codex') && env.OPENAI_API_KEY) ||
-        (effectiveCli.command.includes('agy') && env.GEMINI_API_KEY) ||
-        (effectiveCli.command.includes('grok') && env.XAI_API_KEY)
-      );
-
-      const prompt = buildTaskCliPrompt(task, currentBrief);
-      // The CLI agent runs the whole task as the manager: pick its model + effort from the effort level.
-      let routedModel: string | undefined;
-      let routedEffort = agentPipelineOptions.effortLevel;
+      // Prompt-box messages sent while this launch is prepared are delivered to the manager once it has started.
+      cliLaunchingRef.current.add(String(task.id));
+      let cliLaunched = false;
       try {
-        const routing = await routeModelsForRun({
-          config: {
-            ...aiConfig,
-            authMode: 'cli_subscription',
-            cliCustomCommand: effectiveCli.command,
-          },
-          effort: agentPipelineOptions.effortLevel,
-          autoModelRouting: agentPipelineOptions.autoModelRouting,
-          roles: ['manager'],
-          taskText: `${task.title}\n${task.subtasks.map((st) => `- ${st.text}`).join('\n')}\n${currentBrief?.overview || ''}`,
-          connectedMcps: mcpServers,
-        });
-        const decision = routing.decisions[0];
-        routedModel = decision?.via === 'pinned' ? undefined : decision?.model;
-        routedEffort = decision?.effort || routedEffort;
-      } catch (err) {
-        console.warn('[Ergo CLI Task] Model routing failed; launching with CLI defaults:', err);
-      }
-      const isClaudeCli = effectiveCli.command.trim().replace(/^.*[\\/]/, '').toLowerCase() === 'claude';
-      const args = buildCliArgsForTask(effectiveCli.command, effectiveCli.extraArgs, prompt, hasApiKeyForCli, {
-        permissionLevel: agentPipelineOptions.permissionLevel,
-        effort: routedEffort,
-        model: routedModel,
-        sessionId: isClaudeCli ? crypto.randomUUID() : undefined,
-      });
+        // A Stop of the previous run may still be finalizing; this launch owns the task from here on.
+        cliRunsRef.current.supersedeFinishedRun(task.id);
+        setExecutingTaskId(task.id);
 
-      // Ensure any lingering background PTY process for this task is cleanly killed
-      try {
-        fetch(bridgeClient.getApiUrl('/api/pty/kill'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskId: String(task.id), sessionId: String(task.id) }),
-        }).catch(() => { });
-      } catch { }
+        // Remove from queued tasks
+        setQueuedTaskIds((prev) => prev.filter((id) => String(id) !== String(task.id)));
+        queuedTaskIdsRef.current = queuedTaskIdsRef.current.filter((id) => String(id) !== String(task.id));
 
-      // Create or reuse a session for this task
-      const session: TerminalSession = {
-        taskId: task.id,
-        taskTitle: task.title,
-        isActive: true,
-        spawnedAt: new Date().toISOString(),
-      };
+        // Stop pressed while the overview is still being generated cancels the launch.
+        const launchController = new AbortController();
+        abortControllersRef.current.set(task.id, launchController);
+        const releaseLaunchController = () => {
+          if (abortControllersRef.current.get(task.id) === launchController) abortControllersRef.current.delete(task.id);
+        };
 
-      const spawned: SpawnedSession = {
-        session,
-        cwd,
-        cmd: effectiveCli.command,
-        args,
-        env,
-        forceRestart: true,
-        spawnId: `${task.id}-${Date.now().toString(36)}`,
-      };
+        const runId = makeCliRunId(task.id);
+        const overviewStepId = `step-overview-${task.id}-${runId}`;
+        const setTaskSteps = (steps: ExecutionStep[]) => {
+          const apply = (rec: Record<string | number, ExecutionStep[]>) => ({ ...rec, [task.id]: steps });
+          taskExecutionStepsRef.current = apply(taskExecutionStepsRef.current);
+          setTaskExecutionSteps((prev) => {
+            const next = apply(prev);
+            taskExecutionStepsRef.current = next;
+            return next;
+          });
+        };
 
-      setTerminalSessions((prev) => {
-        // Replace any existing session for this task
-        const filtered = prev.filter((s) => s.session.taskId !== task.id);
-        return [...filtered, spawned];
-      });
+        let currentBrief = findBriefFor(task);
+        // The overview merge below marks the brief in progress; a launch that fails restores this status.
+        const priorBriefStatus = currentBrief ? currentBrief.status : null;
+        const existingOverviewText = (currentBrief?.overview || currentBrief?.brief || '').trim();
+        // A saved overview (generated by an earlier run, or written by the user) is reused as-is — no new Summary
+        // call — unless the task's text changed since it was generated.
+        const hasValidOverview = isOverviewReusable(currentBrief, latestTaskFor(task));
+        let overviewText = hasValidOverview ? existingOverviewText : '';
+        let overviewFailed = false;
+        const autoModels = agentPipelineOptionsRef.current.modelSelection !== 'manual';
 
-      setActiveTerminalTaskId(task.id);
-
-      // Register or update CLI job in running jobs
-      const newCliJob: RunningJobInfo = {
-        id: `job_cli_${task.id}_${Date.now()}`,
-        taskId: task.id,
-        taskTitle: task.title,
-        type: 'cli',
-        status: 'in_progress',
-        startedAt: new Date().toISOString(),
-        sessionId: String(task.id),
-        cmd: effectiveCli.command,
-        args,
-        cwd,
-      };
-
-      // Initialize workflow steps for the CLI agent
-      const initialCliSteps: ExecutionStep[] = [
-        {
-          id: `step-ctx-${task.id}-${Date.now()}`,
+        // ── Context step: related tasks, stage 1 (local, zero tokens) ──
+        const ctxStepBase: ExecutionStep = {
+          id: `step-ctx-${task.id}-${runId}`,
           taskId: task.id,
           time: new Date().toLocaleTimeString(),
           stage: 'context',
+          title: 'Context Assembly: Related Tasks',
+          detail: `Finding related tasks in this project for "${task.title}"…`,
+          status: 'running',
+        };
+        setTaskSteps([ctxStepBase]);
+        const relatedRequest = buildRelatedTasksRequest(activeProjectId, latestTaskFor(task), currentBrief);
+        const related: RelatedTasksResponse = await findRelatedTasksSoft(relatedRequest, { signal: launchController.signal });
+        if (launchController.signal.aborted) return;
+        // Run shape (one deliverable? QA verifier?): local model → tiny cloud model → heuristics. Never rejects; runs
+        // alongside the overview call and the launch preparation, and is awaited just before launch.
+        const runShapePromise: Promise<RunShapeDecision> = decideRunShape(latestTaskFor(task), aiConfigRef.current, {
+          signal: launchController.signal,
+        });
+        const relatedCandidates = related.candidates || [];
+        const relatedBaseline: AssembledBaselineContext = {
+          query: [relatedRequest.title, ...(relatedRequest.subtasks || [])].join(' · '),
+          threshold: 0,
+          projectId: activeProjectId,
+          memoryHits: [],
+          guidelines: [],
+          timestamp: new Date().toISOString(),
+          relatedCandidates,
+          relatedNotes: related.notes || [],
+        };
+        let ctxStep: ExecutionStep = {
+          ...ctxStepBase,
           title: 'Context Assembly & Task Spec',
-          detail: `Assembled task brief, acceptance criteria, and workspace context for "${task.title}".`,
+          detail: describeRelatedSearch(related),
           status: 'success',
-        },
-        {
-          id: `step-overview-${task.id}-${Date.now()}`,
+          baselineContext: relatedBaseline,
+        };
+        // Stage 2 (selection): made by the overview call below, or the selection saved with a reused overview.
+        let selectedRelatedTaskIds: string[] | undefined;
+        if (hasValidOverview) {
+          selectedRelatedTaskIds = resolveSavedRelatedIds(currentBrief?.overviewDocument, relatedCandidates);
+        }
+
+        // First run (or the task changed): generate the Overview before launching so the card fills in on start.
+        if (!hasValidOverview) {
+          setTaskSteps([
+            ctxStep,
+            {
+              id: overviewStepId,
+              taskId: task.id,
+              time: new Date().toLocaleTimeString(),
+              stage: 'overview',
+              agentRole: 'summary',
+              title: 'Summary AI: Building Task Overview & Acceptance Criteria',
+              detail: `Synthesizing task overview, acceptance criteria, and workspace context for "${task.title}"...`,
+              status: 'running',
+            },
+          ]);
+
+          try {
+            const relatedCandidatesPrompt =
+              relatedCandidates.length > 0 || (related.notes || []).length > 0
+                ? formatRelatedCandidatesForPrompt(relatedCandidates, related.notes || [])
+                : '';
+            const synced = await syncTaskOverviewWithAi(
+              latestTaskFor(task),
+              // Unstamped text (a draft, or a freeform brief's source text) is still useful input for the Summary.
+              existingOverviewText || currentBrief?.sourceContent || '',
+              activeProject,
+              // Auto model selection writes the overview with the tiny model (it also rates the task for the picks).
+              autoModels ? tinyCloudCallConfig(aiConfig) ?? aiConfig : aiConfig,
+              mcpServers,
+              serializeTodoMarkdown(tasksRef.current, headerComments, archivedTasks),
+              serializeAgentContextMarkdown(briefsRef.current, archivedBriefs),
+              { relatedCandidatesPrompt }
+            );
+            if (launchController.signal.aborted) return;
+            const syncedOverview = synced.overview;
+            // Bridge offline: no selection was possible (undefined, not "none needed"). The model skipped the question:
+            // fall back to the candidates that clearly stand out locally.
+            selectedRelatedTaskIds = !related.success
+              ? undefined
+              : synced.relatedSelectionMade
+                ? validateRelatedTaskIds(synced.relatedTaskIds, relatedCandidates)
+                : strictRelatedFallback(relatedCandidates);
+
+            // Merge into the LATEST briefs (by String ids) and persist right away so the card fills in now.
+            const latestBriefs = briefsRef.current;
+            const latestBrief = findBriefFor(task);
+            const updatedBrief: AgentContextItem = {
+              ...latestBrief,
+              id: latestBrief?.id || `brief_${task.id}`,
+              sourceTaskId: task.id,
+              sourceLaneId: task.swimLaneId || latestBrief?.sourceLaneId,
+              itemNumber: latestBrief?.itemNumber,
+              title: task.title,
+              status: 'in_progress',
+              ...stampOverview(latestTaskFor(task), 'generated', syncedOverview, {
+                brief: syncedOverview.match(/```gherkin\s*([\s\S]*?)```/i)?.[1]?.trim() || '',
+                goals: syncedOverview,
+                output_as: '',
+                raw: syncedOverview,
+                ...(selectedRelatedTaskIds ? savedRelatedSelection(relatedCandidates, selectedRelatedTaskIds) : {}),
+                ...(synced.taskRating ? { taskRating: synced.taskRating } : {}),
+              }),
+              buildAndVerification: latestBrief?.buildAndVerification || latestBrief?.built || '',
+              completion: latestBrief?.completion || '',
+              built: latestBrief?.built || '',
+              validation: latestBrief?.validation || '',
+              humanReview: latestBrief?.humanReview || '',
+              followUps: latestBrief?.followUps || '',
+            };
+            const nextBriefs = latestBrief
+              ? latestBriefs.map((b) => (b === latestBrief ? updatedBrief : b))
+              : [...latestBriefs, updatedBrief];
+            syncAndSaveProjectRef.current(tasksRef.current, nextBriefs, true);
+            currentBrief = updatedBrief;
+            overviewText = syncedOverview.trim();
+          } catch (err) {
+            if (launchController.signal.aborted) return;
+            overviewFailed = true;
+            if (related.success) selectedRelatedTaskIds = strictRelatedFallback(relatedCandidates);
+            console.warn('[Ergo CLI Task] Overview generation error, continuing with fallback:', err);
+          }
+        }
+        if (launchController.signal.aborted) return;
+
+        // Auto model selection: the task rating comes with the overview (this run's, or the one saved with it). An
+        // overview without one (saved before ratings existed, written by the user, or the line was missing) is rated
+        // once by the tiny model (else heuristics) and the rating saved with it, so reruns don't ask again.
+        let taskRating: TaskRating | undefined = overviewFailed
+          ? undefined
+          : findBriefFor(task)?.overviewDocument?.taskRating ?? currentBrief?.overviewDocument?.taskRating;
+        if (autoModels && !taskRating) {
+          taskRating = await rateTask(latestTaskFor(task), aiConfigRef.current, { signal: launchController.signal, overview: overviewText });
+          if (launchController.signal.aborted) return;
+          const ratedBrief = findBriefFor(task);
+          if (ratedBrief && overviewText) {
+            const withRating: AgentContextItem = {
+              ...ratedBrief,
+              overviewDocument: { ...(ratedBrief.overviewDocument ?? overviewDocumentFor(ratedBrief)), taskRating },
+            };
+            syncAndSaveProjectRef.current(tasksRef.current, briefsRef.current.map((b) => (b === ratedBrief ? withRating : b)), true);
+            currentBrief = withRating;
+          }
+        }
+
+        const gherkinMatch = overviewText.match(/```gherkin\s*([\s\S]*?)```/i);
+        const overviewDocument: OverviewDocument | undefined = !overviewText
+          ? undefined
+          : hasValidOverview && currentBrief
+            ? {
+                ...overviewDocumentFor(currentBrief),
+                // The selection resolved for this run (by title, so it survives task reordering).
+                ...(selectedRelatedTaskIds ? savedRelatedSelection(relatedCandidates, selectedRelatedTaskIds) : {}),
+              }
+            : currentBrief?.overviewDocument || { brief: gherkinMatch ? gherkinMatch[1].trim() : '', goals: overviewText, output_as: '', raw: overviewText };
+        const overviewStep: ExecutionStep = {
+          id: overviewStepId,
           taskId: task.id,
           time: new Date().toLocaleTimeString(),
           stage: 'overview',
           agentRole: 'summary',
-          title: 'Task Overview & Acceptance Spec',
-          detail: `Synthesized task overview, objectives, and acceptance criteria.`,
-          status: 'success',
-        },
-        {
-          id: `step-manager-${task.id}-${Date.now()}`,
-          taskId: task.id,
-          time: new Date().toLocaleTimeString(),
-          stage: 'execution',
-          agentRole: 'manager',
-          title: `Manager Agent Execution (${effectiveCli.name || effectiveCli.command})`,
-          detail: `Running command: \`${effectiveCli.command} ${args.slice(0, 2).join(' ')}...\` in \`${cwd}\`.\nTask prompt dispatched. Watching live manager agent execution...`,
-          status: 'running',
-        },
-      ];
+          title: 'Summary AI: Task Overview & Acceptance Spec',
+          detail: hasValidOverview
+            ? 'Reusing the saved overview from an earlier run (no new Summary call). Edit the task to regenerate it.'
+            : overviewFailed || !overviewText
+              ? 'Overview generation failed; the agent works from the task title and checklist.'
+              : 'Synthesized task overview, objectives, and acceptance criteria.',
+          status: overviewText ? 'success' : 'warning',
+          ...(overviewDocument ? { overviewDocument } : {}),
+        };
+        // Undefined (no selection made: failed overview call, bridge offline, or an overview saved before selections
+        // existed) shows the candidates only.
+        if (selectedRelatedTaskIds) {
+          const n = selectedRelatedTaskIds.length;
+          ctxStep = {
+            ...ctxStep,
+            detail: `${ctxStep.detail} ${hasValidOverview ? 'Reused the saved selection' : 'Summary selected'}: ${n} related task${n === 1 ? '' : 's'}.`,
+            baselineContext: { ...relatedBaseline, selectedRelatedTaskIds },
+          };
+        }
+        const relatedContext =
+          selectedRelatedTaskIds && selectedRelatedTaskIds.length > 0 && relatedCandidates.length > 0
+            ? formatSelectedRelatedContext(relatedCandidates, selectedRelatedTaskIds).trim()
+            : '';
+        setTaskSteps([ctxStep, overviewStep]);
 
-      setTaskExecutionSteps((prev) => {
-        const next = { ...prev, [task.id]: initialCliSteps };
-        taskExecutionStepsRef.current = next;
-        return next;
-      });
+        let routingStep: ExecutionStep | null = null;
+        const [launch, runShape] = await Promise.all([
+          prepareCliLaunch(latestTaskFor(task), findBriefFor(task) || currentBrief, {
+            rating: taskRating,
+            signal: launchController.signal,
+            onRouting: (routing) => {
+              routingStep = {
+                id: `step-routing-${task.id}-${runId}`,
+                taskId: task.id,
+                time: new Date().toLocaleTimeString(),
+                stage: 'context',
+                title: `Models ${routing.mode === 'auto' ? 'Auto' : 'Manual'} · Effort ${EFFORT_LABELS[agentPipelineOptionsRef.current.effortLevel]}`,
+                detail: [describeRouting(routing), describeRerunEscalation(findBriefFor(task) || currentBrief)].filter(Boolean).join('\n'),
+                status: 'success',
+              };
+              console.log(`[Ergo CLI Task] Model routing:\n${routingStep.detail}`);
+            },
+          }),
+          runShapePromise,
+        ]);
+        if (launchController.signal.aborted) return;
+        releaseLaunchController();
+        if (!launch) {
+          setExecutingTaskId((cur) => (cur !== null && String(cur) === String(task.id) ? null : cur));
+          showToast({
+            type: 'warning',
+            title: 'No CLI Agent',
+            message: 'The active AI profile has no CLI agent configured.',
+            duration: 5000,
+          });
+          return;
+        }
 
-      setRunningJobs((prev) => {
-        const filtered = prev.filter((j) => String(j.taskId) !== String(task.id));
-        const updated = [...filtered, newCliJob];
-        runningJobsRef.current = updated;
-        persistRunningJobsDoc(updated, queuedTaskIdsRef.current, briefsRef.current, taskExecutionStepsRef.current);
-        return updated;
-      });
+        // QA runs only when the task's menu switch is on. Settings stay the upper bound for worker delegation: the
+        // decision can only reduce it.
+        const pipelineOptions = agentPipelineOptionsRef.current;
+        const qaEnabled = (findBriefFor(task) || currentBrief)?.qaVerification === true;
+        const maxWorkers = runShape.single ? 1 : Math.max(1, Math.min(8, Math.floor(pipelineOptions.maxConcurrentAgents || 1)));
+        const runPlanNote = describeRunShape(runShape, { qaEnabled, maxWorkers });
+        console.log(`[Ergo CLI Task] ${runPlanNote}`);
 
-      // Update task status to in_progress if not already done
-      if (!task.isDone && task.status !== 'done') {
-        const nextTasks = tasks.map((t) => (t.id === task.id ? { ...t, status: 'in_progress' as const } : t));
-        syncAndSaveProject(nextTasks, briefs, true);
+        cliLaunched = await cliRuns.launchCliRun({
+          task: latestTaskFor(task),
+          brief: findBriefFor(task) || currentBrief,
+          launch,
+          runId,
+          preSteps: routingStep ? [ctxStep, overviewStep, routingStep] : [ctxStep, overviewStep],
+          priorBriefStatus,
+          ...(relatedContext ? { relatedContext } : {}),
+          qaEnabled,
+          maxWorkers,
+          runPlanNote,
+        });
+      } finally {
+        finishCliLaunch(task.id, cliLaunched);
       }
     } else {
       // In-Place AI Task Execution
       setExecutingTaskId(task.id);
+
+      // Prompt box: messages sent while this run works reach its agent loops at their next round boundary.
+      const steeringKey = String(task.id);
+      const steering = new SteeringQueue((delivery) => {
+        recordSteeringMessage({
+          taskId: String(task.id),
+          runId: delivery.runId,
+          role: delivery.role,
+          text: delivery.item.text,
+          phase: 'mid-run',
+        });
+        const who = delivery.role === 'worker' ? `worker ${delivery.pieceId || ''}`.trim() : delivery.role === 'hardener' ? 'QA hardener' : 'manager';
+        upsertTaskStep(task.id, {
+          id: `step-steer-${delivery.item.id}`,
+          status: 'success',
+          detail: `You: "${delivery.item.text}"\n\n↳ Delivered to the ${who} at its next step.`,
+        });
+        const callbacks = steeringCallbacksRef.current.get(delivery.item.id);
+        steeringCallbacksRef.current.delete(delivery.item.id);
+        callbacks?.onDelivered?.();
+      });
+      pipelineSteeringRef.current.set(steeringKey, steering);
+      let pipelineEndedCleanly = false;
 
       // Remove from queued tasks
       setQueuedTaskIds((prev) => prev.filter((id) => String(id) !== String(task.id)));
@@ -2135,19 +2468,36 @@ export function App() {
         return updated;
       });
 
-      const currentTask = tasks.find((t) => String(t.id) === String(task.id)) || task;
-      const currentBrief = briefs.find(
-        (b) =>
-          (b.sourceTaskId != null && String(b.sourceTaskId) === String(task.id)) ||
-          b.title.trim().toLowerCase() === task.title.trim().toLowerCase() ||
-          String(b.itemNumber) === String(task.id)
-      );
+      const currentTask = latestTaskFor(task);
+      const currentBrief = findBriefFor(task);
 
       const isResuming = currentTask.status === 'partly_done' ||
         (currentBrief && (currentBrief.status === 'partly_done' || Boolean(currentBrief.buildAndVerification && currentBrief.buildAndVerification.trim().length > 0)));
 
       setTaskExecutionSteps((prev) => {
         const existing = prev[task.id] || prev[String(task.id)] || [];
+        if (followUp) {
+          // A follow-up continues the run: its steps are appended after the earlier run's.
+          const settled = existing.map((s) => (s.status === 'running' ? { ...s, status: 'cancelled' as const } : s));
+          const next = {
+            ...prev,
+            [task.id]: [
+              ...settled,
+              {
+                id: `step-followup-${Date.now()}`,
+                stage: 'human_input' as const,
+                agentRole: 'manager' as const,
+                title: 'Follow-up: continuing the task',
+                detail: `You: "${followUp}"\n\nContinuing the last run from where it left off (no new overview or model routing).`,
+                status: 'success' as const,
+                time: new Date().toLocaleTimeString(),
+                taskId: task.id,
+              } as ExecutionStep,
+            ],
+          };
+          taskExecutionStepsRef.current = next;
+          return next;
+        }
         if (isResuming && existing.length > 0) {
           const priorCleaned = existing.map((s) => (s.status === 'running' ? { ...s, status: 'cancelled' as const } : s));
           return {
@@ -2170,7 +2520,8 @@ export function App() {
       });
 
       // Set task status to in_progress
-      const inProgressTasks = tasks.map((t) => (String(t.id) === String(task.id) ? { ...t, status: 'in_progress' as const } : t));
+      const inProgressTasks = tasksRef.current.map((t) => (String(t.id) === String(task.id) ? { ...t, status: 'in_progress' as const } : t));
+      tasksRef.current = inProgressTasks;
       setTasks(inProgressTasks);
 
       let controller: AbortController | null = null;
@@ -2179,7 +2530,11 @@ export function App() {
         controller = new AbortController();
         abortControllersRef.current.set(task.id, controller);
 
-        const res = await executeTaskWithAi(
+        const runPipeline = followUp
+          ? (...args: Parameters<typeof executeTaskWithAi>) =>
+              continueTaskWithAi(args[0], args[1], args[2], args[3], args[4], followUp, args[5], args[6], args[7], args[8], args[9], args[10])
+          : executeTaskWithAi;
+        const res = await runPipeline(
           currentTask,
           currentBrief,
           activeProject,
@@ -2225,20 +2580,39 @@ export function App() {
               return nextRecord;
             });
 
-            // If Summary AI finished with an overview document, populate the live brief immediately
+            // If Summary AI finished with an overview document, populate the live brief immediately (and persist it)
             if (stepUpdate.stage === 'overview' && stepUpdate.status === 'success' && stepUpdate.overviewDocument) {
               const generatedMarkdown = formatOverviewDocToMarkdown(stepUpdate.overviewDocument);
               const gherkinText = stepUpdate.overviewDocument.brief || '';
-              if (generatedMarkdown || gherkinText) {
-                setBriefs((prevBriefs) =>
-                  prevBriefs.map((b) =>
-                    (b.sourceTaskId != null && b.sourceTaskId === task.id) ||
-                      b.title.trim().toLowerCase() === task.title.trim().toLowerCase() ||
-                      b.itemNumber === task.id
-                      ? { ...b, overview: generatedMarkdown || b.overview, brief: gherkinText || b.brief }
-                      : b
-                  )
-                );
+              const target = findBriefFor(task);
+              // The Summary step reused the saved overview: nothing new to store (and a user-written one stays as is).
+              const reused = isOverviewReusable(target, latestTaskFor(task));
+              if (!reused && (generatedMarkdown || gherkinText)) {
+                const latestBriefs = briefsRef.current;
+                const stamped = {
+                  ...stampOverview(latestTaskFor(task), 'generated', generatedMarkdown || gherkinText, stepUpdate.overviewDocument),
+                  brief: gherkinText || generatedMarkdown,
+                };
+                const merged: AgentContextItem = target
+                  ? { ...target, ...stamped }
+                  : {
+                    id: `brief_${task.id}`,
+                    sourceTaskId: task.id,
+                    sourceLaneId: task.swimLaneId,
+                    title: task.title,
+                    status: 'in_progress',
+                    ...stamped,
+                    buildAndVerification: '',
+                    completion: '',
+                    built: '',
+                    validation: '',
+                  };
+                const nextBriefs = target
+                  ? latestBriefs.map((b) => (b === target ? merged : b))
+                  : [...latestBriefs, merged];
+                briefsRef.current = nextBriefs;
+                setBriefs(nextBriefs);
+                persistRunningJobsDoc(undefined, undefined, nextBriefs, undefined);
               }
             }
           },
@@ -2260,10 +2634,18 @@ export function App() {
               showToast({
                 id: toastId,
                 type: 'warning',
-                title: 'Permission Required',
-                message: `Task "${task.title}": Agent requests permission to execute ${permissionPrompt.serverName} / ${permissionPrompt.toolName}()`,
+                title: `Approve ${permissionPrompt.toolName}? — ${task.title}`,
+                message: describePermissionRequest(permissionPrompt),
                 duration: 0,
                 actions: [
+                  {
+                    label: 'Open task',
+                    variant: 'secondary',
+                    onClick: () => {
+                      setSelectedTaskId(task.id);
+                      setIsAiPanelOpen(true);
+                    },
+                  },
                   {
                     label: 'Skip / Reject',
                     variant: 'secondary',
@@ -2299,7 +2681,12 @@ export function App() {
             });
           },
           controller.signal,
-          agentPipelineOptions,
+          {
+            ...agentPipelineOptionsRef.current,
+            // Read on every tool call, so switching the approval mode mid-run takes effect immediately.
+            getPermissionLevel: () => agentPipelineOptionsRef.current.permissionLevel,
+            steering,
+          },
           (ollamaFallbackPrompt) => {
             const toastId = `ollama-toast-${task.id}`;
             return new Promise<OllamaFallbackChoice>((resolve) => {
@@ -2338,75 +2725,118 @@ export function App() {
           }
         );
 
-        // Completed execution: apply results & persist to TODO.md and vector memory
-        const nextTasks = tasks.map((t) => (String(t.id) === String(res.updatedTask.id) ? res.updatedTask : t));
-        const existingBriefIdx = briefs.findIndex(
+        // Completed execution: apply results to the LATEST tasks/briefs & persist to TODO.md and vector memory
+        const latestTasks = tasksRef.current;
+        const nextTasks = latestTasks.some((t) => String(t.id) === String(res.updatedTask.id))
+          ? latestTasks.map((t) => (String(t.id) === String(res.updatedTask.id) ? res.updatedTask : t))
+          : latestTasks;
+        const latestBriefs = briefsRef.current;
+        const existingBriefIdx = latestBriefs.findIndex(
           (b) =>
+            (b.sourceTaskId != null && res.updatedBrief.sourceTaskId != null && String(b.sourceTaskId) === String(res.updatedBrief.sourceTaskId)) ||
             (b.id && b.id === res.updatedBrief.id) ||
-            (b.sourceTaskId && res.updatedBrief.sourceTaskId && String(b.sourceTaskId) === String(res.updatedBrief.sourceTaskId)) ||
             b.title.trim().toLowerCase() === res.updatedBrief.title.trim().toLowerCase()
         );
         let nextBriefs: AgentContextItem[];
         if (existingBriefIdx !== -1) {
-          nextBriefs = briefs.map((b, idx) => (idx === existingBriefIdx ? res.updatedBrief : b));
+          nextBriefs = latestBriefs.map((b, idx) => (idx === existingBriefIdx ? res.updatedBrief : b));
         } else {
-          nextBriefs = [...briefs, res.updatedBrief];
+          nextBriefs = [...latestBriefs, res.updatedBrief];
         }
 
         // Update running job to completed
-        setRunningJobs((prev) => {
-          const updated = prev.map((j) =>
-            String(j.taskId) === String(task.id)
-              ? { ...j, status: 'completed' as const, completedAt: new Date().toISOString() }
+        const completedAt = new Date().toISOString();
+        const completeJob = (jobs: RunningJobInfo[]) =>
+          jobs.map((j) =>
+            String(j.taskId) === String(task.id) && j.status === 'in_progress'
+              ? { ...j, status: 'completed' as const, completedAt }
               : j
           );
+        runningJobsRef.current = completeJob(runningJobsRef.current);
+        setRunningJobs((prev) => {
+          const updated = completeJob(prev);
           runningJobsRef.current = updated;
           return updated;
         });
 
-        syncAndSaveProject(nextTasks, nextBriefs, true);
+        syncAndSaveProjectRef.current(nextTasks, nextBriefs, true);
+        pipelineEndedCleanly = !controller?.signal?.aborted;
       } catch (err) {
         console.error('Task execution error:', err);
         const isAborted = (err as any)?.name === 'AbortError' || !!controller?.signal?.aborted;
 
         // Update running job to cancelled or failed
-        setRunningJobs((prev) => {
-          const updated = prev.map((j) =>
-            String(j.taskId) === String(task.id)
-              ? { ...j, status: isAborted ? ('cancelled' as const) : ('failed' as const), completedAt: new Date().toISOString() }
+        const endedAt = new Date().toISOString();
+        const endJob = (jobs: RunningJobInfo[]) =>
+          jobs.map((j) =>
+            String(j.taskId) === String(task.id) && (j.status === 'in_progress' || j.status === 'cancelled')
+              ? { ...j, status: isAborted ? ('cancelled' as const) : ('failed' as const), completedAt: j.completedAt || endedAt }
               : j
           );
+        runningJobsRef.current = endJob(runningJobsRef.current);
+        setRunningJobs((prev) => {
+          const updated = endJob(prev);
           runningJobsRef.current = updated;
           return updated;
         });
         if (isAborted) {
-          setTasks((prevTasks) => {
-            const nextTasks = prevTasks.map((t) =>
-              String(t.id) === String(task.id)
-                ? { ...t, status: 'partly_done' as TaskStatus, isDone: false }
-                : t
-            );
-            const nextBriefs = briefs.map((b) =>
-              (b.sourceTaskId != null && String(b.sourceTaskId) === String(task.id)) ||
-                (b.id != null && String(b.id) === String(task.id))
-                ? { ...b, status: 'partly_done' as TaskStatus }
-                : b
-            );
-            syncAndSaveProject(nextTasks, nextBriefs, true);
-            setBriefs(nextBriefs);
-            return nextTasks;
-          });
-          setTaskExecutionSteps((prev) => {
-            const steps = prev[task.id] || [];
-            const nextSteps = steps.map((s) =>
+          // Latest state (refs), so edits made during the run — e.g. the overview — are kept.
+          const nextTasks = tasksRef.current.map((t) =>
+            String(t.id) === String(task.id)
+              ? { ...t, status: 'partly_done' as TaskStatus, isDone: false }
+              : t
+          );
+          const nextBriefs = briefsRef.current.map((b) =>
+            (b.sourceTaskId != null && String(b.sourceTaskId) === String(task.id)) ||
+              (b.id != null && String(b.id) === String(task.id))
+              ? { ...b, status: 'partly_done' as TaskStatus }
+              : b
+          );
+          const cancelSteps = (rec: Record<string | number, ExecutionStep[]>) => ({
+            ...rec,
+            [task.id]: (rec[task.id] || []).map((s) =>
               s.status === 'running'
                 ? { ...s, status: 'cancelled' as const, detail: 'Task execution terminated by user.' }
                 : s
-            );
-            return { ...prev, [task.id]: nextSteps };
+            ),
           });
+          taskExecutionStepsRef.current = cancelSteps(taskExecutionStepsRef.current);
+          setTaskExecutionSteps((prev) => {
+            const next = cancelSteps(prev);
+            taskExecutionStepsRef.current = next;
+            return next;
+          });
+          syncAndSaveProjectRef.current(nextTasks, nextBriefs, true);
+        } else {
+          persistRunningJobsDoc();
         }
       } finally {
+        // Messages no agent loop took before the run ended continue it as a follow-up (dropped when it was stopped).
+        if (pipelineSteeringRef.current.get(steeringKey) === steering) pipelineSteeringRef.current.delete(steeringKey);
+        const leftover = steering.close();
+        for (const item of leftover) {
+          const callbacks = steeringCallbacksRef.current.get(item.id);
+          steeringCallbacksRef.current.delete(item.id);
+          upsertTaskStep(task.id, {
+            id: `step-steer-${item.id}`,
+            status: pipelineEndedCleanly ? 'success' : 'cancelled',
+            detail: `You: "${item.text}"\n\n${pipelineEndedCleanly ? '↳ The run finished first: this continues the task as a follow-up.' : '↳ Not delivered: the run ended first.'}`,
+          });
+          if (pipelineEndedCleanly) callbacks?.onDelivered?.();
+          else callbacks?.onDropped?.();
+        }
+        if (pipelineEndedCleanly && leftover.length > 0) {
+          const text = leftover.map((i) => i.text).join('\n\n');
+          const latest = tasksRef.current.find((t) => String(t.id) === String(task.id)) || task;
+          recordSteeringMessage({
+            taskId: String(task.id),
+            runId: recallPipelineRun(pipelineRunKey(activeProject, task.id))?.runId || '',
+            role: 'manager',
+            text,
+            phase: 'post-run',
+          });
+          setTimeout(() => void handleExecuteTask(latest, { followUp: text }), 0);
+        }
         handleDismissToast(`perm-toast-${task.id}`);
         handleDismissToast(`ollama-toast-${task.id}`);
         abortControllersRef.current.delete(task.id);
@@ -2433,200 +2863,137 @@ export function App() {
     }
   };
 
-  // ── Live token usage for embedded CLI agent sessions ──
-  const cliUsageRef = useRef<Record<string, TokenUsage>>({});
-
-  const applyCliUsage = useCallback((taskId: string | number, usage: TokenUsage) => {
-    cliUsageRef.current[String(taskId)] = usage;
+  /** Add a step to a task's run, or merge into the one with the same id (latest state, persisted with the jobs doc). */
+  const upsertTaskStep = (taskId: string | number, step: Partial<ExecutionStep> & { id: string }) => {
+    const apply = (rec: Record<string | number, ExecutionStep[]>) => {
+      const list = rec[taskId] || rec[String(taskId)] || [];
+      const idx = list.findIndex((s) => s.id === step.id);
+      const next =
+        idx === -1
+          ? [...list, { time: new Date().toLocaleTimeString(), taskId, stage: 'human_input', title: '', detail: '', status: 'success', ...step } as ExecutionStep]
+          : list.map((s, i) => (i === idx ? { ...s, ...step } : s));
+      return { ...rec, [taskId]: next };
+    };
+    taskExecutionStepsRef.current = apply(taskExecutionStepsRef.current);
     setTaskExecutionSteps((prev) => {
-      const existing = prev[taskId] || prev[String(taskId)];
-      if (!existing || existing.length === 0) return prev;
-      let changed = false;
-      const next = existing.map((st) => {
-        if (st.agentRole !== 'manager' || !st.id.startsWith('step-manager-')) return st;
-        changed = true;
-        return { ...st, usage, totalUsage: usage };
-      });
-      if (!changed) return prev;
-      const record = { ...prev, [taskId]: next };
-      taskExecutionStepsRef.current = record;
-      return record;
+      const next = apply(prev);
+      taskExecutionStepsRef.current = next;
+      return next;
     });
-  }, []);
+  };
 
-  useEffect(() => {
-    const active = terminalSessions.filter((s) => s.session.isActive);
-    if (active.length === 0) return;
-    let cancelled = false;
-    const poll = async () => {
-      for (const s of active) {
-        const usage = await fetchCliSessionUsage(String(s.session.taskId));
-        if (!cancelled && usage) applyCliUsage(s.session.taskId, usage);
-      }
-    };
-    void poll();
-    const timer = setInterval(poll, 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [terminalSessions, applyCliUsage]);
-
-  const handleSessionExit = (taskId: string | number, code: number) => {
-    // CLIs flush their session logs on exit — take one last reading for the steps view.
+  /** A CLI launch finished preparing: messages sent meanwhile go to its manager (or are dropped when it didn't start). */
+  const finishCliLaunch = (taskId: string | number, launched: boolean) => {
+    const key = String(taskId);
+    cliLaunchingRef.current.delete(key);
+    const waiting = preLaunchMessagesRef.current.get(key) || [];
+    preLaunchMessagesRef.current.delete(key);
+    if (waiting.length === 0) return;
+    if (!launched) {
+      waiting.forEach((m) => m.opts.onDropped?.());
+      return;
+    }
+    // Give the CLI a moment to draw its UI before typing (the initial prompt went in as an argument).
     setTimeout(() => {
-      void fetchCliSessionUsage(String(taskId)).then((usage) => {
-        if (usage) applyCliUsage(taskId, usage);
-      });
-    }, 1500);
-    const lastCliUsage = cliUsageRef.current[String(taskId)];
-
-    setTerminalSessions((prev) =>
-      prev.map((s) =>
-        s.session.taskId === taskId
-          ? { ...s, session: { ...s.session, isActive: false, exitCode: code } }
-          : s
-      )
-    );
-
-    // If CLI process completed successfully (exit code 0), mark task as done and update brief
-    if (code === 0) {
-      setSelectedTaskId(taskId);
-      const task = tasks.find((t) => t.id === taskId);
-      if (task) {
-        const updatedTask: TaskItem = {
-          ...task,
-          status: 'done',
-          isDone: true,
-          subtasks: task.subtasks.map((s) => ({ ...s, isDone: true })),
-        };
-        const nextTasks = tasks.map((t) => (t.id === taskId ? updatedTask : t));
-
-        const buildDate = new Date().toISOString().split('T')[0];
-        const existingBrief = briefs.find(
-          (b) =>
-            (b.sourceTaskId != null && b.sourceTaskId === taskId) ||
-            b.title.trim().toLowerCase() === task.title.trim().toLowerCase()
-        );
-        const fallbackCompletion = `**Completion Summary (${buildDate}):**\n- CLI Agent completed task execution successfully (exit code 0).\n- Status: Done / Verified.`;
-        const completionText: string = (existingBrief?.completion || existingBrief?.validation) || fallbackCompletion;
-
-        // Persist the CLI session's token usage the same way the pipeline logger does (survives reloads).
-        const withUsageComment = (text: string) =>
-          lastCliUsage
-            ? `${text.replace(/\n*<!--\s*task_token_usage:[\s\S]*?-->/g, '')}\n\n<!-- task_token_usage: ${JSON.stringify(lastCliUsage)} -->`.trim()
-            : text;
-        const updatedBrief: AgentContextItem = existingBrief
-          ? {
-            ...existingBrief,
-            overview: existingBrief.overview || '',
-            buildAndVerification: withUsageComment(existingBrief.buildAndVerification || ''),
-            status: 'done',
-            completion: completionText,
-            validation: completionText,
-            ...(lastCliUsage ? { totalUsage: lastCliUsage } : {}),
-          }
-          : {
-            id: `brief_${taskId}`,
-            sourceTaskId: taskId,
-            title: task.title,
-            status: 'done',
-            overview: `Task (${task.title})`,
-            buildAndVerification: withUsageComment(`Executed in CLI agent terminal.`),
-            completion: completionText,
-            ...(lastCliUsage ? { totalUsage: lastCliUsage } : {}),
-          };
-
-        const existingIdx = briefs.findIndex(
-          (b) =>
-            (b.id && b.id === updatedBrief.id) ||
-            (b.sourceTaskId != null && b.sourceTaskId === taskId) ||
-            b.title.trim().toLowerCase() === task.title.trim().toLowerCase()
-        );
-        let nextBriefs: AgentContextItem[];
-        if (existingIdx !== -1) {
-          nextBriefs = briefs.map((b, idx) => (idx === existingIdx ? updatedBrief : b));
-        } else {
-          nextBriefs = [...briefs, updatedBrief];
-        }
-
-        syncAndSaveProject(nextTasks, nextBriefs, true);
-
-        // Persist concise completion output & learnings directly to local vector memory
-        void runSessionRetrospective({
-          taskId,
-          taskTitle: task.title,
-          projectId: activeProjectId,
-          overview: updatedBrief.overview || '',
-          buildLog: updatedBrief.buildAndVerification || '',
-          completion: completionText,
-          createdFiles: updatedBrief.createdFiles || [],
-          allScenariosPass: true,
+      for (const m of waiting) {
+        void cliRunsRef.current.sendUserMessage(taskId, m.text, m.opts).then((r) => {
+          if (!r.ok) m.opts.onDropped?.();
+          else if (r.delivery !== 'queued') m.opts.onDelivered?.();
         });
+      }
+    }, 4000);
+  };
+
+  /**
+   * The task prompt box. While a run works, the message steers it (CLI: typed into the agent the user is looking at,
+   * held while a permission prompt is open; in-app pipeline: taken by the agent loop at its next round). After the
+   * run finished, it continues that run from where it left off — never a restart of the task.
+   */
+  const handleSendTaskMessage = async (task: TaskItem, text: string, opts: TaskMessageOptions = {}): Promise<TaskMessageResult> => {
+    const message = String(text || '').trim();
+    if (!message) return { ok: false, error: 'Type a message first.' };
+    const key = String(task.id);
+    const latestTask = tasksRef.current.find((t) => String(t.id) === key) || task;
+
+    // 1. A CLI run is working (or a follow-up reopened it): its agents.
+    if (cliRunsRef.current.hasActiveCliRun(task.id)) return cliRunsRef.current.sendUserMessage(task.id, message, opts);
+
+    // 2. A CLI run is still being prepared (overview, model routing): the manager gets it once it has started.
+    if (cliLaunchingRef.current.has(key)) {
+      preLaunchMessagesRef.current.set(key, [...(preLaunchMessagesRef.current.get(key) || []), { text: message, opts }]);
+      return { ok: true, delivery: 'queued', target: 'Manager' };
+    }
+
+    // 3. An in-app pipeline run is working: its agent loops take the message at their next round boundary.
+    const queue = pipelineSteeringRef.current.get(key);
+    if (queue?.isOpen()) {
+      const item = queue.push(message, opts.pieceId);
+      if (item) {
+        steeringCallbacksRef.current.set(item.id, opts);
+        upsertTaskStep(task.id, {
+          id: `step-steer-${item.id}`,
+          stage: 'human_input',
+          agentRole: opts.pieceId ? 'worker' : 'manager',
+          ...(opts.pieceId ? { pieceId: opts.pieceId } : {}),
+          title: opts.pieceId ? `You → Worker ${opts.pieceId}` : 'You → Manager',
+          detail: `You: "${message}"\n\n↳ Queued: the agent reads it at its next step.`,
+          status: 'running',
+        });
+        return { ok: true, delivery: 'queued', target: opts.pieceId ? `Worker ${opts.pieceId}` : 'Manager' };
       }
     }
 
-    // Update execution steps
-    setTaskExecutionSteps((prev) => {
-      const existing = prev[taskId] || prev[String(taskId)] || [];
-      if (existing.length === 0) return prev;
-      const updated = existing.map((s) => {
-        if (s.agentRole === 'manager' || s.id.includes('step-manager-') || s.stage === 'execution') {
-          return {
-            ...s,
-            status: code === 0 ? ('success' as const) : ('error' as const),
-            detail:
-              code === 0
-                ? `${s.detail}\n\n✓ Manager agent completed task execution successfully (exit code 0).`
-                : `${s.detail}\n\n✗ CLI agent process terminated with exit code ${code}.`,
-          };
-        }
-        return s;
-      });
-
-      if (code === 0 && !updated.some((s) => s.stage === 'verify')) {
-        updated.push({
-          id: `step-verify-${taskId}-${Date.now()}`,
-          taskId,
-          time: new Date().toLocaleTimeString(),
-          stage: 'verify',
-          title: 'Verification & Task Completion',
-          detail: 'Task execution completed successfully with exit code 0. Status updated to Done.',
-          status: 'success',
-        });
-      }
-
-      taskExecutionStepsRef.current = {
-        ...taskExecutionStepsRef.current,
-        [taskId]: updated,
-      };
-      return {
-        ...prev,
-        [taskId]: updated,
-      };
+    // 4. Nothing is running: a follow-up continues the task's last run.
+    const activeKey = userApiKeys.find((k) => k.id === activeKeyId);
+    if (getEffectiveCliAgent(activeKey, cliAgentConfig)?.command) {
+      const res = await cliRunsRef.current.sendUserMessage(task.id, message, opts);
+      return res.error === 'no-run' ? { ok: false, error: 'This task has not run yet — press Run to start it.' } : res;
+    }
+    const brief = briefsRef.current.find(
+      (b) => (b.sourceTaskId != null && String(b.sourceTaskId) === key) || b.title.trim().toLowerCase() === latestTask.title.trim().toLowerCase()
+    );
+    const hasRun = Boolean(brief?.completion?.trim()) || (taskExecutionStepsRef.current[task.id] || []).length > 0;
+    if (!hasRun) return { ok: false, error: 'This task has not run yet — press Run to start it.' };
+    if (abortControllersRef.current.has(task.id)) return { ok: false, error: 'The task is still starting — try again in a moment.' };
+    recordSteeringMessage({
+      taskId: key,
+      runId: recallPipelineRun(pipelineRunKey(activeProject, task.id))?.runId || brief?.lastRunOutcome?.runId || '',
+      role: 'manager',
+      text: message,
+      phase: 'post-run',
     });
-
-    setExecutingTaskId((prev) => (String(prev) === String(taskId) ? null : prev));
-
-    // Update running job status
-    setRunningJobs((prev) => {
-      const updated = prev.map((j) =>
-        String(j.taskId) === String(taskId)
-          ? {
-            ...j,
-            status: code === 0 ? ('completed' as const) : ('failed' as const),
-            completedAt: new Date().toISOString(),
-          }
-          : j
-      );
-      runningJobsRef.current = updated;
-      persistRunningJobsDoc(updated, undefined, undefined, taskExecutionStepsRef.current);
-      return updated;
-    });
+    void handleExecuteTask(latestTask, { followUp: message });
+    return { ok: true, delivery: 'continued', target: 'Manager' };
   };
 
   const handleKillSession = async (taskId: string | number) => {
     await handleTerminateAgent(taskId);
+  };
+
+  // Stop one agent: the manager stops the whole run; a worker / QA verifier stops just that agent.
+  const handleKillAgentSession = (ptySessionId: string) => {
+    const session = terminalSessions.find((s) => s.ptySessionId === ptySessionId);
+    if (session?.role === 'manager') {
+      void handleTerminateAgent(session.session.taskId);
+      return;
+    }
+    cliRuns.killAgentSession(ptySessionId);
+  };
+
+  // Approval mode changed: apply it to everything already running, right now.
+  onPermissionLevelChangeRef.current = (level: PermissionLevel) => {
+    // In-app pipeline: tool calls read the live level; prompts already waiting are re-evaluated under the new
+    // mode with the executor's own permission rules (allow → approve, block → reject with the plan-mode reason).
+    for (const [taskKey, pending] of Object.entries(pendingPermissionsRef.current)) {
+      const toolName = pending.prompt.toolName;
+      const verdict = reevaluatePendingPermission(pending.prompt)
+        // Prompts from outside the tool executor: settle by level alone.
+        ?? (level === 'bypass' || (level === 'acceptEdits' && FILE_MUTATING_TOOL_NAMES.has(toolName)) ? 'allow' : level === 'plan' ? 'block' : 'prompt');
+      if (verdict === 'allow') handlePermissionChoice(taskKey, true);
+      else if (verdict === 'block') handlePermissionChoice(taskKey, false);
+    }
+    // CLI agents: live mode switch / auto-approve on the bridge (warns for CLIs that need a restart).
+    void cliRuns.applyPermissionLevel(level);
   };
 
   // Immediate Save Brief Edits
@@ -2662,11 +3029,6 @@ export function App() {
           b.title.trim().toLowerCase() === item.title.trim().toLowerCase()
       );
 
-      let contextText = item.title;
-      if (item.subtasks && item.subtasks.length > 0) {
-        contextText += '\n' + item.subtasks.map((st) => `- ${st.text}`).join('\n');
-      }
-
       if (existingIdx === -1) {
         maxNumber += 1;
         const newBrief: AgentContextItem = {
@@ -2677,10 +3039,11 @@ export function App() {
           itemNumber: maxNumber,
           title: item.title,
           status: item.status || 'not_started',
-          overview: contextText,
+          // Empty until a run's Summary step generates it (the task's own text lives on the task).
+          overview: '',
           buildAndVerification: '',
           completion: '',
-          brief: contextText,
+          brief: '',
           built: '',
           validation: '',
         };
@@ -2757,9 +3120,10 @@ export function App() {
         return updated;
       });
 
-      // Check if user terminated everything
+      // CLI runs return once the agents are launched: wait for the run's completion log before the next task.
       try {
         await handleExecuteTask(task);
+        await cliRuns.waitForCliRun(task.id);
       } catch (err) {
         console.error(`[Sequence] Error running task ${task.title}:`, err);
       }
@@ -2813,7 +3177,10 @@ export function App() {
     });
 
     await Promise.allSettled(
-      taskList.map((task) => handleExecuteTask(task))
+      taskList.map(async (task) => {
+        await handleExecuteTask(task);
+        await cliRuns.waitForCliRun(task.id);
+      })
     );
 
     persistRunningJobsDoc(undefined, [], undefined, undefined);
@@ -3128,9 +3495,8 @@ export function App() {
       return next;
     });
 
-    setTerminalSessions((prev) =>
-      prev.filter((s) => !idKeys.some((k) => String(k) === String(s.session.taskId)))
-    );
+    // Stop and forget the task's CLI agents (no completion log for a purged task)
+    for (const k of new Set(idKeys.map((k) => String(k)))) cliRuns.forgetTask(k);
 
     // 3. Delete completely from local vector DB
     try {
@@ -3356,6 +3722,7 @@ export function App() {
       category: referenceTask?.category || 'Untitled',
       categoryHeadingPrefix: referenceTask?.categoryHeadingPrefix || '##',
       categoryHasColon: referenceTask?.categoryHasColon || false,
+      categoryColor: referenceTask?.categoryColor,
       isArchived: false,
       archivedAtIndex: undefined,
     };
@@ -3452,15 +3819,29 @@ export function App() {
       briefs.find((b) => b.itemNumber === task.id);
     const existingOverview = existingBrief?.overview || existingBrief?.brief || '';
 
-    const syncedOverview = await syncTaskOverviewWithAi(
+    // Related tasks: the same two-stage selection a run makes, saved with the overview so runs reuse it.
+    const related = await findRelatedTasksSoft(buildRelatedTasksRequest(activeProjectId, task, existingBrief));
+    const relatedCandidates = related.candidates || [];
+    const relatedNotes = related.notes || [];
+    const synced = await syncTaskOverviewWithAi(
       task,
       existingOverview,
       activeProject,
       aiConfig,
       mcpServers,
       serializeTodoMarkdown(tasks, headerComments, archivedTasks),
-      serializeAgentContextMarkdown(briefs, archivedBriefs)
+      serializeAgentContextMarkdown(briefs, archivedBriefs),
+      {
+        relatedCandidatesPrompt:
+          relatedCandidates.length > 0 || relatedNotes.length > 0 ? formatRelatedCandidatesForPrompt(relatedCandidates, relatedNotes) : '',
+      }
     );
+    const syncedOverview = synced.overview;
+    const relatedTaskIds = !related.success
+      ? undefined
+      : synced.relatedSelectionMade
+        ? validateRelatedTaskIds(synced.relatedTaskIds, relatedCandidates)
+        : strictRelatedFallback(relatedCandidates);
 
     const updatedBrief: AgentContextItem = {
       ...existingBrief,
@@ -3470,10 +3851,17 @@ export function App() {
       itemNumber: existingBrief?.itemNumber,
       title: task.title,
       status: task.status,
-      overview: syncedOverview,
+      // Generated on request: kept and reused by runs like a run-generated overview.
+      ...stampOverview(task, 'generated', syncedOverview, {
+        brief: syncedOverview.match(/```gherkin([\s\S]*?)```/)?.[1]?.trim() || '',
+        goals: syncedOverview,
+        output_as: '',
+        raw: syncedOverview,
+        ...(relatedTaskIds ? savedRelatedSelection(relatedCandidates, relatedTaskIds) : {}),
+        ...(synced.taskRating ? { taskRating: synced.taskRating } : {}),
+      }),
       buildAndVerification: existingBrief?.buildAndVerification || existingBrief?.built || '',
       completion: existingBrief?.completion || existingBrief?.validation || existingBrief?.humanReview || existingBrief?.followUps || '',
-      brief: syncedOverview,
       built: existingBrief?.built || '',
       validation: existingBrief?.validation || '',
       humanReview: existingBrief?.humanReview || '',
@@ -3970,7 +4358,12 @@ export function App() {
 
     const ids: (string | number)[] = [];
     terminalSessions.forEach((s) => {
-      if (s.session.isActive && validTaskIds.has(String(s.session.taskId)) && !ids.includes(s.session.taskId)) {
+      if (
+        s.session.isActive &&
+        isWorkingAgentSession(s) &&
+        validTaskIds.has(String(s.session.taskId)) &&
+        !ids.some((id) => String(id) === String(s.session.taskId))
+      ) {
         ids.push(s.session.taskId);
       }
     });
@@ -4175,6 +4568,7 @@ export function App() {
           }}
         >
           <BriefPane
+            taskBilling={taskBilling}
             tasks={tasks}
             briefs={briefs}
             projectId={activeProjectId}
@@ -4209,9 +4603,10 @@ export function App() {
             onPermissionChoice={handlePermissionChoice}
             onHumanInputChoice={handleHumanInputChoice}
             onOllamaFallbackChoice={handleOllamaFallbackChoice}
-            onSessionExit={handleSessionExit}
             onRestartSession={handleExecuteTask}
             onKillSession={handleKillSession}
+            onKillAgentSession={handleKillAgentSession}
+            onSendTaskMessage={handleSendTaskMessage}
             onArchiveTask={handleArchiveTask}
             onRemoveAiTask={handleRemoveAiTask}
             onPurgeTaskFromAi={handlePurgeTaskFromAi}
@@ -4221,7 +4616,7 @@ export function App() {
             isPanelOpen={isAiPanelOpen}
             onTogglePanel={handleToggleAiPanel}
             agentPipelineOptions={agentPipelineOptions}
-            onSetAgentPipelineOptions={setAgentPipelineOptions}
+            onSetAgentPipelineOptions={updateAgentPipelineOptions}
           />
         </div>
 
@@ -4250,30 +4645,19 @@ export function App() {
             } catch { }
             const next = prev.map((s) => {
               if (s.id !== serverId) return s;
-              // Allow mcp-laya and external services to toggle
-              if (s.id !== 'mcp-laya' && s.id !== 'mcp-github' && s.serverType === 'bundled_harness') return s;
+              // Bundled harness servers stay on; GitHub and external services can be toggled.
+              if (s.id !== 'mcp-github' && s.serverType === 'bundled_harness') return s;
               return { ...s, status: (s.status === 'connected' ? 'disconnected' : 'connected') as 'connected' | 'disconnected' };
             });
             const target = next.find((s) => s.id === serverId);
             if (target) {
               const isNowConnected = target.status === 'connected';
-              if (serverId === 'mcp-laya') {
-                showToast({
-                  type: isNowConnected ? 'success' : 'info',
-                  title: isNowConnected ? 'Laya Local Engine Connected' : 'Laya Local Engine Disconnected',
-                  message: isNowConnected
-                    ? 'Active: Task triage will run locally on your machine.'
-                    : 'Off: Agents will revert to AI-only triage.',
-                  duration: 4000
-                });
-              } else {
-                showToast({
-                  type: 'info',
-                  title: `${target.name} ${isNowConnected ? 'Connected' : 'Disconnected'}`,
-                  message: `Connection status updated to ${target.status}.`,
-                  duration: 3000
-                });
-              }
+              showToast({
+                type: 'info',
+                title: `${target.name} ${isNowConnected ? 'Connected' : 'Disconnected'}`,
+                message: `Connection status updated to ${target.status}.`,
+                duration: 3000
+              });
             }
             return next;
           })
@@ -4341,9 +4725,14 @@ export function App() {
         theme={theme}
         onThemeChange={setTheme}
         agentPipelineOptions={agentPipelineOptions}
-        onSetAgentPipelineOptions={setAgentPipelineOptions}
+        onSetAgentPipelineOptions={updateAgentPipelineOptions}
         autocompleteSettings={autocompleteSettings}
         onSetAutocompleteSettings={setAutocompleteSettings}
+        localModelMode={localModelMode}
+        onSetLocalModelMode={handleSetLocalModelMode}
+        tinyCloudModelLabel={tinyCloudModelLabel}
+        modelData={modelData}
+        onSetModelData={handleSetModelData}
         onClearProjectMemory={handleClearActiveProjectMemory}
         onClearAllMemory={handleClearAllMemory}
         onExportProject={handleExportProject}
@@ -4367,6 +4756,9 @@ export function App() {
         onSaveUserKey={handleSaveUserKey}
         onResetSubscription={handleResetSubscription}
         onCompleteOnboarding={handleCompleteOnboarding}
+        localModelMode={localModelMode}
+        onSetLocalModelMode={handleSetLocalModelMode}
+        tinyCloudModelLabel={tinyCloudModelLabel}
       />
 
       {/* Global Toast Notifications */}

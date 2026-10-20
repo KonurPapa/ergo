@@ -379,7 +379,9 @@ export async function runManager(
   tools: ToolDefinition[],
   locks: FileLockRegistry,
   attempt: number,
-  priorFailureDiagnostics?: string
+  priorFailureDiagnostics?: string,
+  /** A follow-up continuing a finished run: the user's message and what the earlier run did (continuation.ts). */
+  followUp?: { message: string; priorState: string }
 ): Promise<ManagerRunResult> {
   const usage = emptyUsage();
   const createdFiles = new Set<string>([
@@ -416,12 +418,15 @@ export async function runManager(
     cliCustomCommand: managerTarget.cliCustomCommand,
     effort: managerTarget.effort,
     fallbackModel: managerTarget.fallbackModel,
-    permissionLevel: ctx.options.permissionLevel,
+    permissionLevel: ctx.getPermissionLevel(),
+    getPermissionLevel: ctx.getPermissionLevel,
     signal: ctx.signal,
     ollamaFailureState: ctx.ollamaFailureState,
     taskId: ctx.task.id,
     onRequestOllamaFallback: ctx.onRequestOllamaFallback,
-    onSwitchToCloud: async () => resolveRoleTarget(ctx.aiConfig, 'manager')
+    onSwitchToCloud: async () => resolveRoleTarget(ctx.aiConfig, 'manager'),
+    // The user's mid-run messages reach every manager loop at its next round boundary.
+    drainSteering: () => ctx.steering?.drainTexts('manager') ?? []
   } as const;
   const workerProviderBase = {
     provider: workerTarget.provider,
@@ -432,7 +437,8 @@ export async function runManager(
     cliCustomCommand: workerTarget.cliCustomCommand,
     effort: workerTarget.effort,
     fallbackModel: workerTarget.fallbackModel,
-    permissionLevel: ctx.options.permissionLevel,
+    permissionLevel: ctx.getPermissionLevel(),
+    getPermissionLevel: ctx.getPermissionLevel,
     signal: ctx.signal,
     ollamaFailureState: ctx.ollamaFailureState,
     taskId: ctx.task.id,
@@ -443,7 +449,16 @@ export async function runManager(
   const isResuming = ctx.task.status === 'partly_done' ||
     Boolean(ctx.brief?.buildAndVerification && ctx.brief.buildAndVerification.trim().length > 0);
 
-  const resumeNotice = isResuming
+  const followUpNotice = followUp
+    ? `\n## USER FOLLOW-UP (this run continues the finished run — do NOT start the task over):\n` +
+      `${followUp.message.trim()}\n\n` +
+      `### What the earlier run did\n${followUp.priorState.trim()}\n\n` +
+      `- Inspect the existing deliverables (${Array.from(createdFiles).join(', ') || 'in workspace'}) and keep what works.\n` +
+      `- Do what the follow-up asks (and fix anything it reveals); the goals and scenarios above still apply.\n`
+    : '';
+  const resumeNotice = followUp
+    ? followUpNotice
+    : isResuming
     ? `\n## RESUMING TASK PROGRESS:\n` +
       `This task was stopped partway through and is being RESUMED.\n` +
       `- Inspect existing workspace files and check existing deliverable files (${Array.from(createdFiles).join(', ') || 'in workspace'}).\n` +
@@ -856,7 +871,9 @@ export async function runManager(
       initialUserMessage: buildPieceContract(piece),
       maxRounds: effectiveWorkerMaxRounds,
       onToolCalls: executor,
-      onFirstResponse
+      onFirstResponse,
+      // Messages the user addressed to this worker (they were looking at its step) reach it at its next round.
+      drainSteering: () => ctx.steering?.drainTexts('worker', piece.id) ?? []
     });
     addUsage(workerUsage, result.usage);
     if (result.stopReason === 'no_tool_support') usedToolCalling = false;
@@ -913,6 +930,7 @@ export async function runManager(
         }
         void locks.persist();
         piece.status = 'running';
+        ctx.steering?.setWorkerActive(piece.id, true);
         bible.updatePiece(piece.id, { status: 'running' });
         bible.appendEvent({ actor: 'manager', kind: 'piece_start', text: `${piece.title} (${piece.kind}) → worker${piece.files.length ? ` owns ${piece.files.join(', ')}` : ''}`, pieceId: piece.id });
         void bible.persist();
@@ -987,6 +1005,7 @@ export async function runManager(
         bible.appendEvent({ actor: `worker:${piece.id}`, kind: 'error', text: piece.lastError, pieceId: piece.id });
         ctx.emit({ id: stepId, stage: 'subagent', agentRole: 'worker', pieceId: piece.id, title: `Worker ${piece.id}: Error`, detail: piece.lastError, status: 'error' });
       } finally {
+        ctx.steering?.setWorkerActive(piece.id, false);
         locks.release(piece.id);
         void locks.persist();
         void bible.persist();
@@ -1081,6 +1100,7 @@ export async function runManager(
     });
     const verifyMessage =
       `All pieces have finished. Verify each Gherkin scenario against the ACTUAL workspace state (read files, run tests/commands) and the event log — not against what the pieces claimed. Then return ONLY the verification JSON from your skill ({ allPass, scenarioResults, remediation }).\n\n` +
+      (followUp ? `This run continues a finished run for the user's follow-up: also verify that it was done.\n${followUpNotice}\n` : '') +
       `${bible.renderPieces()}\n${bible.renderEventLog({ last: 40 })}` +
       (createdFiles.size > 0 ? `\n### Files written this run\n${Array.from(createdFiles).map((f) => `- ${f}`).join('\n')}\n` : '');
     const result = await runToolLoop({

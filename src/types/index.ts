@@ -12,6 +12,7 @@ export interface TaskItem {
   title: string;
   category: string;
   categoryHeadingPrefix?: string; // e.g. "##", "#", "###"
+  categoryColor?: string; // palette id from headerColors.ts, stored as {color=id} on the heading line
   categoryHasColon?: boolean; // whether heading originally ended with ':'
   listIndex?: number; // 1-based index within its specific section / list
   listType?: 'ordered' | 'bullet'; // whether the task list item is ordered or bullet
@@ -66,6 +67,53 @@ export interface AgentContextItem {
   passes?: Array<{ title: string; content: string }>;
   requiredMcps?: string[];
   selectedMcpTools?: string[];
+  /** Task menu → "QA verification": run the QA verifier (and its retry rounds) on this task. Off unless true. */
+  qaVerification?: boolean;
+  /** runId of the CLI agent run whose completion log was last written into `completion` (finalize once per run). */
+  completionRunId?: string;
+  /**
+   * Where `overview` came from. Unset = not generated yet (new tasks start empty; text copied from the task or
+   * drafted elsewhere is never shown as the Overview). 'generated' = written by a run's Summary step;
+   * 'user' = written or corrected by the user in the Overview card.
+   */
+  overviewSource?: 'generated' | 'user';
+  /** Fingerprint of the task text (title + subtasks) the overview was made for; a change means it's stale. */
+  overviewTaskHash?: string;
+  /** Structured overview saved from the Summary step, reused by reruns instead of generating it again. */
+  overviewDocument?: OverviewDocument;
+  /** How the last run of this task ended and which models it used: a rerun after a failure starts one rung higher. */
+  lastRunOutcome?: RunOutcomeRecord;
+}
+
+/**
+ * passed: QA verified it · completed: finished without a QA check · unverified: QA reached no verdict ·
+ * qa_failed: QA still failed after the retries · failed: the run errored or the agent quit · stopped: by the user.
+ */
+export type RunOutcome = 'passed' | 'completed' | 'unverified' | 'qa_failed' | 'failed' | 'stopped';
+
+/** One stage's model in a run. tier: Auto's pick (1 light · 2 standard · 3 top); calibrated: the learning table moved it a rung. */
+export interface RunStageModel {
+  model?: string;
+  effort?: EffortLevel;
+  tier?: 1 | 2 | 3;
+  calibrated?: -1 | 1;
+}
+
+export interface RunOutcomeRecord {
+  runId: string;
+  at: string;
+  outcome: RunOutcome;
+  /** Rungs the manager and workers started above the plan (an earlier failed run). */
+  escalation: number;
+  /** QA retries used (each one stepped the manager and workers up one more rung). */
+  qaRetries?: number;
+  rating?: TaskRating;
+  /** The models the work ended on (after any QA-retry step-ups). */
+  models?: Partial<Record<'manager' | 'worker' | 'hardener', RunStageModel>>;
+  /** The models the run started on, when QA retries stepped up (otherwise the same as `models`). */
+  startModels?: Partial<Record<'manager' | 'worker' | 'hardener', RunStageModel>>;
+  /** Model family the run used (cli-claude, anthropic, openai …), for model calibration. */
+  family?: string;
 }
 
 export interface MCPServer {
@@ -367,9 +415,16 @@ export interface OverviewDocument {
   context?: string;      // (Optional)
   constraints?: string;  // (Optional)
   raw?: string;          // Raw markdown rendition of the overview
+  requiredMcps?: string[]; // MCP servers the Summary step selected (kept so a reused overview needs no new call)
+  /** Related tasks the Summary step judged useful context (kept so a reused overview reuses the selection too). */
+  relatedTaskIds?: string[];
+  /** Titles of those tasks: task ids are positional and shift when tasks are reordered, titles don't. */
+  relatedTaskTitles?: string[];
   taskKind?: TaskKind;   // Classified by the Summary AI; drives Cleaner/Hardener gating
   requiresHardener?: boolean; // Evaluated by Summary AI: large tasks warrant Hardener QA, small/generic tasks skip it
   hardenerReason?: string;    // Rationale for why Hardener is required or skipped
+  /** How demanding the task is (Auto model selection). Rated once with the overview and reused by reruns. */
+  taskRating?: TaskRating;
 }
 
 /**
@@ -513,6 +568,13 @@ export interface TokenUsage {
   calls: number;
   /** True when any part of this tally was approximated from text length instead of reported by the provider. */
   estimated?: boolean;
+  /**
+   * What these calls cost at the provider's API prices (USD), cache discounts included. For subscription CLIs it's the
+   * API-equivalent value. Absent when no call in the tally could be priced (local models, unknown models).
+   */
+  costUsd?: number;
+  /** Some calls in the tally have tokens but no price (an unknown or local model): costUsd undercounts. */
+  costPartial?: boolean;
 }
 
 export interface ExecutionStep {
@@ -528,6 +590,8 @@ export interface ExecutionStep {
   agentRole?: AgentRole;
   /** Puzzle piece this step belongs to (worker sub-agents). */
   pieceId?: string;
+  /** CLI agent session (SpawnedSession.ptySessionId) whose terminal belongs to this step. */
+  ptySessionId?: string;
   /** Token usage for this step (per-agent or cumulative, see title/detail). */
   usage?: TokenUsage;
   /** Running tally of all tokens used during this task up to this step. */
@@ -571,6 +635,12 @@ export interface AssembledBaselineContext {
   memoryHits: AssembledMemoryHit[];
   guidelines: AssembledGuidelineDoc[];
   timestamp: string;
+  /** Stage 1 of related-task matching: local candidates from the project's workspace index (zero tokens). */
+  relatedCandidates?: import('../lib/memory/types.ts').RelatedTaskCandidate[];
+  /** Freeform workspace text that matched the task. */
+  relatedNotes?: import('../lib/memory/types.ts').RelatedNoteCandidate[];
+  /** Stage 2: the candidate task ids the Summary step judged useful context (undefined until it has run). */
+  selectedRelatedTaskIds?: string[];
 }
 
 export type RootFolderStatus = 'connected' | 'needs_permission' | 'disconnected' | 'server_fallback';
@@ -604,6 +674,22 @@ export interface AppSettings {
   agentPipeline?: Partial<AgentPipelineOptions>;
   /** Autocomplete configuration (toggle, keybinding). */
   autocomplete?: AutocompleteSettings;
+  /**
+   * Engine for small background decisions (CLI run shape, autocomplete): the installed local model, or the AI
+   * profile's tiny cloud model. Absent = never chosen (the cloud model is used).
+   */
+  localModel?: LocalModelSettings;
+  /** Legacy location of the Artificial Analysis key (now in secrets.json); read once to migrate it. */
+  modelData?: ModelDataSettings;
+}
+
+export interface LocalModelSettings {
+  mode: 'local' | 'cloud';
+}
+
+export interface ModelDataSettings {
+  /** Free Artificial Analysis API key: live benchmark scores replace the built-in strengths table. */
+  artificialAnalysisKey?: string;
 }
 
 export interface StorageDirectoryConfig {
@@ -628,6 +714,8 @@ export interface AppSecrets {
   cliAgent?: CliAgentConfig;
   cliAgents?: CliAgentSetup[];
   activeCliAgentId?: string | null;
+  /** Optional Artificial Analysis key for Auto model selection. Omitted on save = keep the stored value. */
+  modelData?: ModelDataSettings;
 }
 
 // ─── CLI Coding Agent Types ──────────────────────────────────────────────────
@@ -663,8 +751,7 @@ export interface CliAgentConfig {
 }
 
 /**
- * Tracks a live or recently-exited PTY terminal session for a specific task.
- * One session per task; concurrent tasks get their own session.
+ * Tracks a live or recently-exited PTY terminal session for one agent of a task run.
  */
 export interface TerminalSession {
   taskId: string | number;
@@ -674,8 +761,73 @@ export interface TerminalSession {
   spawnedAt: string;   // ISO string
 }
 
+/** Which agent of a CLI task run a PTY session belongs to. */
+export type AgentSessionRole = 'manager' | 'worker' | 'qa';
+
+/**
+ * Lifecycle of one agent session:
+ *  - starting:          launch requested, PTY not confirmed yet
+ *  - running:           working
+ *  - awaiting_approval: the CLI is showing a prompt that needs the user (see pendingPrompt)
+ *  - waiting:           manager handed work to workers (or QA) and is waiting for their results
+ *  - done / failed / cancelled: finished
+ */
+export type AgentSessionStatus = 'starting' | 'running' | 'awaiting_approval' | 'waiting' | 'done' | 'failed' | 'cancelled';
+
+/** One option of an interactive CLI prompt (approval menu, yes/no confirmation). */
+export interface CliPromptOption {
+  key: string;
+  label: string;
+  isDefault?: boolean;
+  isDestructive?: boolean;
+  /** False for un-numbered TUI menus ("❯ Yes"), which are answered with arrow keys instead of the key. */
+  numbered?: boolean;
+  /** Position in the menu (0-based). */
+  index?: number;
+  /** This option grants the request ("Yes", "Allow", "Approve"...). */
+  isApprove?: boolean;
+}
+
+/** An interactive prompt a CLI agent is blocked on, parsed from its rendered terminal screen. */
+export interface CliDetectedPrompt {
+  type: 'multiple_choice' | 'confirmation' | 'freeform';
+  /** approval = asks permission for a tool/command/edit; question = agent asks the user something; notice = account/auth problem. */
+  kind: 'approval' | 'question' | 'notice';
+  title?: string;
+  /** Tool header shown by the CLI, e.g. "Bash command", "Edit file", "Shell". */
+  toolLabel?: string;
+  /** The exact command (may be multi-line) the agent wants to run. */
+  targetCommand?: string;
+  /** Description line(s) the CLI shows with the request. */
+  description?: string;
+  /** Extra detail for non-command requests: file path, diff rows, URL, MCP tool + args. */
+  detailLines?: string[];
+  question: string;
+  options?: CliPromptOption[];
+  /** The prompt panel exactly as rendered on screen (fallback so the user never approves blind). */
+  rawSnippet: string;
+  /** Stable identity of this prompt (question + options + command) for dedupe. */
+  signature: string;
+}
+
 export interface SpawnedSession {
   session: TerminalSession;
+  /** Agent role within the task run. Sessions restored from older backends default to 'manager'. */
+  role: AgentSessionRole;
+  /** Human label shown on tabs and terminal headers, e.g. "Manager", "Worker W2 · Login form", "QA Verifier". */
+  label: string;
+  /** Worker piece id (workers only), e.g. "W2". */
+  pieceId?: string;
+  /** Bridge PTY key for this agent: `${taskId}::manager`, `${taskId}::worker::W2`, `${taskId}::qa`. */
+  ptySessionId: string;
+  /** Shared by every agent of one task run; signal files live in `<cwd>/.ergo/runs/<runId>/`. */
+  runId: string;
+  status: AgentSessionStatus;
+  /** Permission level the session is currently running under. */
+  permissionLevel?: PermissionLevel;
+  /** Latest prompt the bridge detected on this agent's screen (null/undefined when none). */
+  pendingPrompt?: CliDetectedPrompt | null;
+  endedAt?: string;
   /** working directory the agent was launched in */
   cwd: string;
   /** resolved command + args */
@@ -683,10 +835,12 @@ export interface SpawnedSession {
   args: string[];
   /** Environment variables forwarded to the spawned process */
   env?: Record<string, string>;
-  /** If true, tells PTY server to kill any prior lingering session for this task */
+  /** @deprecated Sessions are launched by App via POST /api/pty/spawn; views only attach. */
   forceRestart?: boolean;
-  /** Unique per launch; terminal views re-mounting with the same id reattach instead of restarting the agent. */
+  /** Unique per launch. */
   spawnId?: string;
+  /** @deprecated Views always attach only. */
+  attachOnly?: boolean;
 }
 
 // ─── Human Workspace AI Assistant Types ──────────────────────────────────────
@@ -708,6 +862,24 @@ export interface HumanAiAssistantResult {
 /** Coarse classification of a task; gates the Cleaner (lint/format) and shapes the Hardener's QA prompt. */
 export type TaskKind = 'coding' | 'writing' | 'research' | 'ops' | 'data' | 'other';
 
+export type TaskRatingScore = 1 | 2 | 3 | 4 | 5;
+
+/**
+ * How demanding a task is, for Auto model selection (src/lib/agentPipeline/autoRouter.ts).
+ *  - complexity: 1 = trivial one-liner, 3 = a feature touching a few files, 5 = large multi-part / architectural
+ *  - reasoning:  1 = mechanical, 5 = hard design / debugging
+ * `source`: the overview call rated it ('overview'), a separate tiny-model call ('tiny'), or heuristics.
+ */
+export interface TaskRating {
+  kind: TaskKind;
+  complexity: TaskRatingScore;
+  reasoning: TaskRatingScore;
+  source: 'overview' | 'tiny' | 'heuristic';
+}
+
+/** Auto: Ergo picks each stage's model per task. Manual: the per-stage models set in the AI profile. */
+export type ModelSelectionMode = 'auto' | 'manual';
+
 /**
  * How much the agent may do without asking, mirroring Claude Code's permission modes:
  *  - plan:        read-only; edits and commands are refused, nothing is asked
@@ -724,10 +896,10 @@ export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export interface AgentPipelineOptions {
   /** Permission level applied to pipeline tool calls and to spawned CLI agents. */
   permissionLevel: PermissionLevel;
-  /** Effort level: drives each provider's effort parameter and the per-stage model choice. */
+  /** Effort level: each provider's reasoning depth; in Auto model selection also the quality-vs-cost balance. */
   effortLevel: EffortLevel;
-  /** Pick each stage's model from the provider's lineup based on effort (explicit per-role pins still win). */
-  autoModelRouting: boolean;
+  /** Auto: pick each stage's model per task (overrides the AI profile's per-stage models). Manual: use them. */
+  modelSelection: ModelSelectionMode;
   /** Maximum worker sub-agents running concurrently (fan-out limit). */
   maxConcurrentAgents: number;
   /** How many times a Hardener QA failure may trigger a fresh Step 3 retry. */
@@ -736,8 +908,6 @@ export interface AgentPipelineOptions {
   maxToolRoundsPerAgent: number;
   /** Run the Cleaner (lint/format) pass for coding tasks. */
   enableCleaner: boolean;
-  /** Run the Hardener (QA / eval harness) pass. */
-  enableHardener: boolean;
 }
 
 export type PuzzlePieceKind = 'given' | 'when' | 'then' | 'edge';

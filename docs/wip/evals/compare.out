@@ -1,0 +1,52 @@
+##### Coder-1.5B-Q4 — round 1 (plain prompts)
+TASK KIND (model only)        40% {'coding': 22, 'writing': 8, 'other': 6, 'research': 1, 'ops': 3}
+TASK KIND (code rule + model) 40%
+STRAIGHTFORWARD               60%  (always-yes baseline 70%)
+QA NEEDED (complex coding n=6) 100%  — all gold=yes, so not discriminative
+QA on simple coding (gold=no, n=6) 0% correct
+MCP exact set 20%  precision 0.17  recall 0.79  (tp 15 fp 73 fn 4)
+RELATED TASKS  precision 0.33 recall 0.12 F1 0.17 (tp 5 fp 10 fn 38)   [stage-1 strict cut-off: P .59 R .53 F1 .56]
+LATENCY per call: median 535 ms, p90 1181 ms (174 calls)
+##### Coder-1.5B-Q4 — round 2 (examples + per-item)
+TASK KIND (model only)        72% {'coding': 14, 'other': 10, 'writing': 6, 'research': 5, 'ops': 2, 'data': 3}
+TASK KIND (code rule + model) 70%
+STRAIGHTFORWARD               90%  (always-yes baseline 70%)
+QA NEEDED (all 12 coding tasks) 83%  (always-yes baseline 50%)
+MCP exact set 25%  precision 0.09  recall 0.95  (tp 18 fp 181 fn 1)  [no-tools baseline exact 55%]
+RELATED TASKS precision 0.26 recall 0.97 F1 0.41 (tp 35 fp 99 fn 1)  [stage-1 strict cut-off F1 .56]
+LATENCY per call: median 275 ms, p90 372 ms (620 calls)
+##### General-0.5B-Q8 — round 1 (plain prompts)
+TASK KIND (model only)        48% {'ops': 8, 'coding': 17, 'writing': 2, 'research': 4, 'data': 7, 'other': 2}
+TASK KIND (code rule + model) 45%
+STRAIGHTFORWARD               52%  (always-yes baseline 70%)
+QA NEEDED (complex coding n=6) 100%  — all gold=yes, so not discriminative
+QA on simple coding (gold=no, n=6) 17% correct
+MCP exact set 12%  precision 0.16  recall 0.63  (tp 12 fp 62 fn 7)
+RELATED TASKS  precision 0.34 recall 0.56 F1 0.42 (tp 24 fp 46 fn 19)   [stage-1 strict cut-off: P .59 R .53 F1 .56]
+LATENCY per call: median 252 ms, p90 665 ms (174 calls)
+##### General-0.5B-Q8 — round 2 (examples + per-item)
+TASK KIND (model only)        48% {'other': 18, 'coding': 3, 'writing': 4, 'research': 1, 'data': 10, 'ops': 4}
+TASK KIND (code rule + model) 48%
+STRAIGHTFORWARD               88%  (always-yes baseline 70%)
+QA NEEDED (all 12 coding tasks) 100%  (always-yes baseline 50%)
+MCP exact set 32%  precision 0.12  recall 0.84  (tp 16 fp 114 fn 3)  [no-tools baseline exact 55%]
+RELATED TASKS precision 0.39 recall 0.56 F1 0.46 (tp 20 fp 31 fn 16)  [stage-1 strict cut-off F1 .56]
+LATENCY per call: median 133 ms, p90 177 ms (620 calls)
+##### Coder-0.5B-Q4 — round 1 (plain prompts)
+TASK KIND (model only)        35% {'coding': 28, 'writing': 1, 'research': 1, 'data': 6, 'other': 3, 'ops': 1}
+TASK KIND (code rule + model) 32%
+STRAIGHTFORWARD               75%  (always-yes baseline 70%)
+QA NEEDED (complex coding n=6) 100%  — all gold=yes, so not discriminative
+QA on simple coding (gold=no, n=6) 0% correct
+MCP exact set 12%  precision 0.13  recall 0.74  (tp 14 fp 92 fn 5)
+RELATED TASKS  precision 0.33 recall 0.51 F1 0.40 (tp 22 fp 45 fn 21)   [stage-1 strict cut-off: P .59 R .53 F1 .56]
+LATENCY per call: median 243 ms, p90 553 ms (174 calls)
+##### Coder-0.5B-Q4 — round 2 (examples + per-item)
+TASK KIND (model only)        40% {'data': 22, 'writing': 10, 'research': 4, 'ops': 2, 'other': 2}
+TASK KIND (code rule + model) 42%
+STRAIGHTFORWARD               90%  (always-yes baseline 70%)
+QA NEEDED (all 12 coding tasks) 83%  (always-yes baseline 50%)
+MCP exact set 60%  precision 1.00  recall 0.11  (tp 2 fp 0 fn 17)  [no-tools baseline exact 55%]
+RELATED TASKS precision 0.26 recall 0.64 F1 0.37 (tp 23 fp 65 fn 13)  [stage-1 strict cut-off F1 .56]
+LATENCY per call: median 133 ms, p90 190 ms (620 calls)
+ALLDONE

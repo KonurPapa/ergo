@@ -34,6 +34,7 @@ import {
   upsertCustomChunk,
   deleteChunk,
   clearProjectMemory,
+  isHiddenNamespace,
   EMBEDDING_DIM
 } from '../lib/memory';
 import { type TaskItem, type SwimLaneDoc, type AgentContextItem } from '../types';
@@ -103,8 +104,9 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
   const refreshChunks = useCallback(async () => {
     setIsLoading(true);
     try {
+      // AI-only memory (agent-notes) is never listed here.
       const all = await getAllChunks();
-      setChunks(all);
+      setChunks(all.filter((c) => !isHiddenNamespace(c.namespace)));
     } catch (err) {
       console.warn('[ArchivedTasksModal] Failed to load vector chunks:', err);
     } finally {
@@ -141,8 +143,9 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
           minSimilarity: 0.15,
           projectId: projectScope === 'active' ? projectId : undefined,
           namespace: activeNamespace !== 'all' ? activeNamespace : undefined,
+          includeHidden: false, // the archive never shows AI-only memory
         });
-        setSemanticResults(results);
+        setSemanticResults(results.filter((r) => !isHiddenNamespace(r.chunk.namespace)));
       } catch (err) {
         console.warn('[ArchivedTasksModal] Semantic query failed:', err);
         setSemanticResults([]);
@@ -784,7 +787,7 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
                 <span>Add Knowledge to Local Vector Storage</span>
               </div>
               <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                Generates a local 384-dim WASM embedding automatically
+                The local Ergo bridge generates its 384-dim embedding automatically
               </span>
             </div>
 
@@ -1448,11 +1451,16 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
                       </div>
                       <div>
                         <strong style={{ color: 'var(--text-bright)' }}>Embedding Vector:</strong>{' '}
-                        Float32Array[{chunk.embedding.length}] (
-                        {Array.from(chunk.embedding.slice(0, 5))
-                          .map((n) => n.toFixed(4))
-                          .join(', ')}
-                        , …)
+                        Float32Array[{chunk.embeddingDim ?? chunk.embedding.length}]
+                        {chunk.embedding.length > 0 && (
+                          <>
+                            {' ('}
+                            {Array.from(chunk.embedding.slice(0, 5))
+                              .map((n) => n.toFixed(4))
+                              .join(', ')}
+                            , …)
+                          </>
+                        )}
                       </div>
                     </div>
                   )}
@@ -1475,7 +1483,7 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
           }}
         >
           <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            <span>IndexedDB Store: <code style={{ color: '#a5b4fc' }}>ergo-vector-memory</code></span>
+            <span>Bridge Store: <code style={{ color: '#a5b4fc' }}>.ergo/memory</code></span>
             <span>•</span>
             <span>{displayedChunks.length} shown</span>
           </div>

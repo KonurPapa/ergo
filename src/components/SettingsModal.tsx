@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { type ProjectData, type FolderMetadata, type AgentPipelineOptions } from '../types';
+import React, { useEffect, useState } from 'react';
+import { type ProjectData, type FolderMetadata, type AgentPipelineOptions, type ModelDataSettings } from '../types';
 import { type AutosaveStatus } from '../hooks/useAutosave';
 import {
   Settings,
@@ -23,16 +23,26 @@ import {
   Users,
   Repeat,
   Sparkles,
-  FlaskConical,
   Database,
   Trash2,
   Laptop,
   Beaker,
-  Download
+  Download,
+  BarChart3,
+  Eye,
+  EyeOff,
+  Loader2,
+  ExternalLink
 } from 'lucide-react';
 import { getChunkCount } from '../lib/memory';
+import { getCalibration, resetCalibration, subscribeCalibration } from '../lib/agentPipeline/calibrationStore';
+import { buildSummary, CALIBRATION_FILE_PATH, type CalibrationFile } from '../lib/agentPipeline/calibration';
 import { bridgeClient, type BridgeStatus } from '../lib/bridgeClient';
 import { useBeta } from '../context/BetaContext';
+import { LocalModelSettingsSection, useLocalModelInstall, type LocalModelMode } from './LocalModelSetup';
+import { getModelCatalog, formatCatalogAge, snapshotDate, usesArtificialAnalysis } from '../lib/modelCatalog/catalog';
+import type { ModelCatalog } from '../lib/modelCatalog/types';
+import { BUILTIN_STRENGTHS_AS_OF } from '../lib/modelCatalog/builtinStrengths';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -59,7 +69,230 @@ interface SettingsModalProps {
   onSetAutocompleteSettings?: (next: import('../types').AutocompleteSettings) => void;
   onExportProject?: () => void;
   onOpenRawMarkdownModal?: () => void;
+  /** Local AI model preference; 'unset' behaves like cloud. */
+  localModelMode?: LocalModelMode;
+  onSetLocalModelMode?: (mode: 'local' | 'cloud') => void;
+  /** The provider's tiny cloud model used instead of the local one, e.g. "Claude Haiku". */
+  tinyCloudModelLabel?: string;
+  /** Data sources for Auto model selection (Artificial Analysis key). */
+  modelData?: ModelDataSettings;
+  onSetModelData?: (next: ModelDataSettings) => void;
 }
+
+const AA_URL = 'https://artificialanalysis.ai/';
+
+/** "Prices: LiteLLM, updated 3 h ago" — where the catalog's prices came from. */
+function priceSourceText(catalog: ModelCatalog): string {
+  const age = formatCatalogAge(catalog.fetchedAt);
+  if (catalog.sources.prices === 'litellm') return `Live prices from LiteLLM${age ? `, updated ${age}` : ''}.`;
+  if (catalog.sources.prices === 'litellm-cache') return `Prices from LiteLLM, cached${age ? ` ${age}` : ''} (couldn't refresh).`;
+  return `Bridge offline: using bundled prices${snapshotDate(catalog.fetchedAt)}.`;
+}
+
+/**
+ * Settings → Model data: where Auto model selection gets model strengths (built-in table, or live Artificial
+ * Analysis scores with a free key) and prices (LiteLLM, live).
+ */
+const ModelDataSettingsSection: React.FC<{
+  modelData: ModelDataSettings;
+  onSetModelData?: (next: ModelDataSettings) => void;
+}> = ({ modelData, onSetModelData }) => {
+  const savedKey = modelData.artificialAnalysisKey || '';
+  const [draftKey, setDraftKey] = useState(savedKey);
+  const [showKey, setShowKey] = useState(false);
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checkResult, setCheckResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => setDraftKey(savedKey), [savedKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getModelCatalog().then((c) => {
+      if (!cancelled) setCatalog(c);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [savedKey]);
+
+  const commitKey = (key: string) => {
+    if (key.trim() !== savedKey) onSetModelData?.({ artificialAnalysisKey: key.trim() || undefined });
+  };
+
+  const handleCheck = async () => {
+    const key = draftKey.trim();
+    commitKey(key);
+    setChecking(true);
+    setCheckResult(null);
+    try {
+      const c = await getModelCatalog({ artificialAnalysisKey: key, refresh: true });
+      setCatalog(c);
+      if (!key) {
+        setCheckResult({ ok: c.sources.prices !== 'snapshot', text: `Prices for ${c.models.length} models.` });
+      } else if (usesArtificialAnalysis(c)) {
+        const matched = c.models.filter((m) => m.benchmarks).length;
+        setCheckResult({ ok: true, text: `Matched ${matched} model${matched === 1 ? '' : 's'}.` });
+      } else {
+        setCheckResult({ ok: false, text: c.sources.benchmarksError || "Couldn't reach Artificial Analysis." });
+      }
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const aaInUse = Boolean(catalog && usesArtificialAnalysis(catalog));
+  const strengthsText = savedKey
+    ? aaInUse
+      ? 'Using live benchmark scores and live prices.'
+      : catalog?.sources.benchmarksError
+        ? `Artificial Analysis unavailable (${catalog.sources.benchmarksError}). Using built-in strengths.`
+        : 'Using live benchmark scores when available, and live prices.'
+    : `Using built-in strengths${BUILTIN_STRENGTHS_AS_OF ? ` (as of ${BUILTIN_STRENGTHS_AS_OF})` : ''} and live prices.`;
+
+  return (
+    <div className="lm-settings">
+      <div className="lm-settings-head">
+        <div className="lm-settings-title">
+          <BarChart3 size={16} color="var(--accent-cyan)" aria-hidden="true" />
+          <span>Model data</span>
+        </div>
+      </div>
+      <p className="lm-settings-desc">
+        When Models is set to Auto, Ergo picks each stage's model from model strengths and prices. Add a free
+        Artificial Analysis key to use their live benchmark scores.
+      </p>
+
+      <div className="md-key-row">
+        <label htmlFor="settings-aa-key" className="md-key-label">Artificial Analysis key (optional)</label>
+        <div className="md-key-field">
+          <input
+            id="settings-aa-key"
+            type={showKey ? 'text' : 'password'}
+            className="md-key-input"
+            value={draftKey}
+            placeholder="Paste your API key"
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(e) => {
+              setDraftKey(e.target.value);
+              setCheckResult(null);
+            }}
+            onBlur={() => commitKey(draftKey)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void handleCheck();
+            }}
+          />
+          <button
+            type="button"
+            className="md-key-toggle"
+            onClick={() => setShowKey((v) => !v)}
+            aria-label={showKey ? 'Hide key' : 'Show key'}
+            title={showKey ? 'Hide key' : 'Show key'}
+          >
+            {showKey ? <EyeOff size={13} /> : <Eye size={13} />}
+          </button>
+          <button type="button" className="btn btn-secondary lm-settings-btn" onClick={() => void handleCheck()} disabled={checking}>
+            {checking ? <Loader2 size={12} className="spin-animate" /> : <RefreshCw size={12} />}
+            <span>{checking ? 'Checking…' : 'Check'}</span>
+          </button>
+        </div>
+        {checkResult && (
+          <div className={`md-check ${checkResult.ok ? 'is-ok' : 'is-error'}`} role="status">
+            {checkResult.ok ? <Check size={12} aria-hidden="true" /> : <AlertCircle size={12} aria-hidden="true" />}
+            <span>{checkResult.text}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="lm-settings-status md-status">
+        <span>{strengthsText}</span>
+        {catalog && <span>{priceSourceText(catalog)}</span>}
+        <a className="md-attribution" href={AA_URL} target="_blank" rel="noopener noreferrer">
+          Benchmark data: Artificial Analysis <ExternalLink size={11} aria-hidden="true" />
+        </a>
+      </div>
+
+      <LearnedModelsPanel />
+    </div>
+  );
+};
+
+const STAGE_WORDS: Record<string, string> = { manager: 'Manager', worker: 'Workers', hardener: 'QA' };
+const EFFORT_SHORT: Record<string, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra High', max: 'Max' };
+
+/** What Auto mode has learned from past runs (config/model-calibration.json), with a reset. */
+const LearnedModelsPanel: React.FC = () => {
+  const [file, setFile] = useState<CalibrationFile | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void getCalibration().then((f) => alive && setFile(f));
+    const off = subscribeCalibration((f) => setFile(f));
+    return () => {
+      alive = false;
+      off();
+    };
+  }, []);
+  const rows = file ? buildSummary(file) : [];
+  const runCount = file ? file.runs.filter((r) => r.outcome).length : 0;
+  return (
+    <div className="md-learned">
+      <div className="md-learned-head">
+        <span className="md-learned-title">What Ergo has learned</span>
+        <span className="md-learned-meta">
+          {runCount === 0 ? 'No runs recorded yet' : `${runCount} run${runCount === 1 ? '' : 's'} recorded`} · <code>{CALIBRATION_FILE_PATH}</code>
+        </span>
+      </div>
+      {rows.length > 0 ? (
+        <div className="md-learned-table" role="table" aria-label="Model results by task group">
+          <div className="md-learned-row is-head" role="row">
+            <span role="columnheader">Task group</span>
+            <span role="columnheader">Stage</span>
+            <span role="columnheader">Model · effort</span>
+            <span role="columnheader">Passed</span>
+          </div>
+          {rows.slice(0, 24).map((r) => (
+            <div className="md-learned-row" role="row" key={`${r.group}|${r.stage}|${r.model}|${r.effort}`}>
+              <span role="cell">{r.group}</span>
+              <span role="cell">{STAGE_WORDS[r.stage] || r.stage}</span>
+              <span role="cell">{r.model} · {EFFORT_SHORT[r.effort] || r.effort}</span>
+              <span role="cell" className={r.failed > r.passed ? 'is-bad' : ''}>{r.passed} of {r.runs}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="md-learned-empty">
+          After each run, Ergo notes which models did the work and how it went, and adjusts future picks for similar tasks.
+        </p>
+      )}
+      {runCount > 0 && (
+        <div className="md-learned-actions">
+          {confirmReset ? (
+            <>
+              <span>Forget everything Ergo has learned?</span>
+              <button type="button" className="btn btn-secondary lm-settings-btn" onClick={() => setConfirmReset(false)}>Cancel</button>
+              <button
+                type="button"
+                className="btn btn-secondary lm-settings-btn md-learned-reset"
+                onClick={() => {
+                  void resetCalibration();
+                  setConfirmReset(false);
+                }}
+              >
+                <Trash2 size={12} /> <span>Reset</span>
+              </button>
+            </>
+          ) : (
+            <button type="button" className="btn btn-secondary lm-settings-btn" onClick={() => setConfirmReset(true)}>
+              <Trash2 size={12} /> <span>Reset what Ergo has learned</span>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 /** Bounds for the numeric pipeline knobs (kept in sync with the helper text below). */
 const PIPELINE_LIMITS = {
@@ -126,7 +359,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   autocompleteSettings = { enabled: true, keybinding: 'Tab' },
   onSetAutocompleteSettings,
   onExportProject,
-  onOpenRawMarkdownModal
+  onOpenRawMarkdownModal,
+  localModelMode = 'unset',
+  onSetLocalModelMode,
+  tinyCloudModelLabel,
+  modelData = {},
+  onSetModelData
 }) => {
   const [isScanning, setIsScanning] = useState(false);
   const [storagePathInput, setStoragePathInput] = useState(
@@ -143,6 +381,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const { isBetaEnabled, setIsBetaEnabled } = useBeta();
   const [isTestingBridge, setIsTestingBridge] = useState(false);
   const [bridgeNotice, setBridgeNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  // Installing from Settings switches to the local model once it finishes (even if the modal was closed).
+  const localModel = useLocalModelInstall({
+    enabled: isOpen,
+    onInstalled: () => onSetLocalModelMode?.('local')
+  });
 
   React.useEffect(() => {
     const unsub = bridgeClient.subscribe((status) => {
@@ -782,7 +1025,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   />
                   <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>retries (0–5)</span>
                 </div>
-                <p style={pipelineHelpStyle}>Each Hardener failure re-runs the Manager with fresh context plus the diagnostics; 0 means report and stop.</p>
+                <p style={pipelineHelpStyle}>For tasks with QA verification switched on (task menu): each QA failure sends the work back to the manager with the diagnostics; 0 means report and stop.</p>
               </div>
 
               {/* Tool rounds per agent */}
@@ -840,36 +1083,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
               </div>
 
-              {/* Hardener QA toggle */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                    <FlaskConical size={13} color="#a78bfa" />
-                    <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)' }}>Hardener QA pass</span>
-                    <span
-                      className={`badge ${agentPipelineOptions.enableHardener ? 'badge-done' : ''}`}
-                      style={{
-                        fontSize: '0.62rem',
-                        padding: '0.05rem 0.35rem',
-                        background: agentPipelineOptions.enableHardener ? undefined : 'rgba(255,255,255,0.06)',
-                        color: agentPipelineOptions.enableHardener ? undefined : 'var(--text-muted)'
-                      }}
-                    >
-                      {agentPipelineOptions.enableHardener ? 'ON' : 'OFF'}
-                    </span>
-                  </div>
-                  <p style={{ ...pipelineHelpStyle, marginTop: '0.25rem' }}>Independent QA agent proves the Gherkin scenarios pass; catches silent failures at the cost of one more read-only run (plus any retries above).</p>
-                </div>
-                <button
-                  type="button"
-                  className={`toggle-switch-btn ${agentPipelineOptions.enableHardener ? 'is-active' : ''}`}
-                  onClick={() => setPipelineOption('enableHardener', !agentPipelineOptions.enableHardener)}
-                  aria-label="Toggle hardener QA pass"
-                  style={{ flexShrink: 0, marginTop: '0.1rem' }}
-                >
-                  <div className="toggle-switch-thumb" />
-                </button>
-              </div>
             </div>
           </div>
 
@@ -911,14 +1124,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     borderRadius: '4px',
                     padding: '0.1rem 0.4rem'
                   }}
-                  title="Total chunks across all projects in local IndexedDB"
+                  title="Total chunks across all projects in the local memory store"
                 >
                   {totalChunkCount ?? '…'} total
                 </span>
               </div>
             </div>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.85rem', lineHeight: '1.4' }}>
-              Local browser-side vector store (`all-MiniLM-L6-v2`, 384-dim). Every task item is keyed strictly on its internal ID, isolated by project, and automatically overwrites on rerun.
+              Local on-disk vector store run by the Ergo bridge (`all-MiniLM-L6-v2`, 384-dim), so the browser stays light as projects grow. Every task item is keyed strictly on its internal ID, isolated by project, and automatically overwrites on rerun.
             </p>
 
             <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap' }}>
@@ -958,6 +1171,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <span>{isClearingAllMemory ? 'Resetting…' : 'Reset Entire Vector DB'}</span>
               </button>
             </div>
+          </div>
+
+          {/* Section: Local AI model (Qwen 2.5 Coder 0.5B) — also for people who skipped it in onboarding */}
+          <div
+            style={{
+              background: 'rgba(255, 255, 255, 0.025)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: '8px',
+              padding: '1.1rem'
+            }}
+          >
+            <LocalModelSettingsSection
+              controller={localModel}
+              mode={localModelMode}
+              cloudLabel={tinyCloudModelLabel?.trim() || 'a small cloud model'}
+              onSetMode={(mode) => onSetLocalModelMode?.(mode)}
+            />
+          </div>
+
+          {/* Section: Model data for Auto model selection (strengths + prices) */}
+          <div
+            style={{
+              background: 'rgba(255, 255, 255, 0.025)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: '8px',
+              padding: '1.1rem'
+            }}
+          >
+            <ModelDataSettingsSection modelData={modelData} onSetModelData={onSetModelData} />
           </div>
 
           {/* Section: Task Autocomplete Settings */}

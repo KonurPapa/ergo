@@ -13,22 +13,25 @@ import { formatOverviewDocToMarkdown } from './summary';
 
 const LOGGER_SYSTEM =
   `You are the Logger AI in Ergo's task execution pipeline. Write the completion log for a task that was just executed by a manager and its worker sub-agents.\n` +
-  `Write clear, professional markdown. Be accurate and specific — do NOT fabricate details that are not present in the event log, verification or QA sections.\n\n` +
-  `LIST COMPLETED WORK & CREATED ARTIFACTS:\n` +
-  `- In "createdFiles" (array of string file paths), list all files created, written, or modified during execution.\n` +
-  `- In the "completion" markdown field, include a clear "**Completed Work & Created Files:**" section with markdown links (e.g. \`[filename](path/to/file)\`). If code was written, summarize what was implemented so the user can click to inspect it.\n\n` +
-  `EVALUATE HUMAN REVIEW REQUIREMENTS:\n` +
-  `- Determine if the user needs to verify the changes or conduct follow-up verification.\n` +
-  `- Human review is needed for: higher-order or complex tasks, sensitive changes (auth, database schemas, financial/billing, deletion, external API integrations, production deployments), QA verdicts other than pass, or if the task/subtask originally specified human review.\n` +
-  `- If human review is needed, produce clear, actionable verification steps in "humanReviewSteps" (array of strings) and set "needsHumanReview": true.\n` +
-  `- If the task was simple, low-risk, and fully verified automatically, set "needsHumanReview": false and "humanReviewSteps": [].\n\n` +
+  `The completion log is a SHORT note a human scans in a few seconds to confirm the work is right — not a log of the execution. ` +
+  `Be accurate — do NOT fabricate details that are not in the event log, verification or QA sections. No code, no command output, no narrative of the process.\n\n` +
+  `"completion" (markdown, under 120 words) uses exactly these bold headings:\n` +
+  `**Summary:** one or two plain sentences: what now works.\n` +
+  `**Changed:** at most 5 bullets, \`path\` — a few words (group related files).\n` +
+  `**Verified:** one line: what was checked and the result (QA verdict included).\n` +
+  `**Needs your review:** at most 3 "- [ ]" items, or "None".\n\n` +
+  `"buildAndVerification" (markdown, at most 4 short bullets): pieces done, retries, how it was verified.\n` +
+  `"createdFiles": every file created, written or modified (paths only).\n\n` +
+  `HUMAN REVIEW:\n` +
+  `- Needed for complex tasks, sensitive changes (auth, database schemas, billing, deletion, external API integrations, production deployments), QA verdicts other than pass, or if the task asked for human review.\n` +
+  `- If needed: "needsHumanReview": true and at most 3 concrete, actionable "humanReviewSteps". Otherwise false and [].\n\n` +
   `Return ONLY valid JSON (no markdown fences) with exactly these fields:\n` +
   `{\n` +
-  `  "buildAndVerification": "<markdown detailing the implementation journey (pieces, retries, verification) and checks>",\n` +
-  `  "completion": "<markdown detailing the completion summary, what was built, QA outcome, and list of completed files>",\n` +
+  `  "buildAndVerification": "<at most 4 short bullets>",\n` +
+  `  "completion": "<the short note described above>",\n` +
   `  "createdFiles": ["<path 1>", "<path 2>"],\n` +
   `  "needsHumanReview": <boolean>,\n` +
-  `  "humanReviewSteps": ["<verification step 1>", "<verification step 2>"]\n` +
+  `  "humanReviewSteps": ["<step 1>"]\n` +
   `}`;
 
 export interface LoggerArgs {
@@ -95,7 +98,8 @@ export async function runLogger(
         tools: [],
         initialUserMessage: userPrompt,
         maxRounds: 1,
-        maxTokens: 6000,
+        // A short note: a tight cap keeps a verbose model from spending output tokens on a log nobody reads.
+        maxTokens: 1500,
         responseFormat: 'json'
       })
     );
@@ -110,15 +114,17 @@ export async function runLogger(
   } catch (e: any) {
     if (e?.name === 'AbortError') throw e;
     console.warn('[Ergo Logger] falling back to deterministic record:', e?.message || e);
-    buildAndVerificationContent = `**Build Record (${buildDate}):**\n\n${bible.renderPieces()}\n${bible.renderEventLog({ last: 30 })}`;
+    buildAndVerificationContent = `**Build Record (${buildDate}):**\n\n${bible.renderEventLog({ last: 6 })}`;
     completionContent = `**Completion (${buildDate}):**\n\n${args.allScenariosPass ? 'Manager verified all scenarios.' : 'Manager verification did not confirm all scenarios.'} ${hardenerText.split('\n')[0]}.${workerPatternNote}`;
   }
   addUsage(ctx.usage, usage);
 
   // Merge harness-detected files with Logger-reported ones.
   const allCreatedFiles = Array.from(new Set([...args.createdFiles, ...loggedCreatedFiles]));
-  if (allCreatedFiles.length > 0 && !completionContent.toLowerCase().includes('created file') && !completionContent.toLowerCase().includes('artifacts')) {
-    completionContent += `\n\n**Created Files & Artifacts:**\n` + allCreatedFiles.map((f) => `- [${f}](${f})`).join('\n');
+  if (allCreatedFiles.length > 0 && !/\*\*changed:?\*\*|created file|artifacts/i.test(completionContent)) {
+    const shown = allCreatedFiles.slice(0, 5).map((f) => `- [${f}](${f})`);
+    if (allCreatedFiles.length > 5) shown.push(`- …and ${allCreatedFiles.length - 5} more`);
+    completionContent += `\n\n**Changed:**\n${shown.join('\n')}`;
   }
   completionContent += `\n\nExecution bible: [TASK_CONTEXT.md](${bible.filePath})`;
 
@@ -158,11 +164,16 @@ export async function runLogger(
   }));
   const allSubtasks = [...executedSubtasks, ...reviewSubtasks];
 
-  if (combinedReviewSteps.length > 0 && !completionContent.toLowerCase().includes('human review')) {
-    completionContent += `\n\n**Human Review Required:**\n` + combinedReviewSteps.map((s) => `- [ ] **human review** - ${s}`).join('\n');
+  // The review steps all become subtasks; the note only needs the first few.
+  if (combinedReviewSteps.length > 0 && !/needs your review|human review/i.test(completionContent)) {
+    const shown = combinedReviewSteps.slice(0, 3).map((s) => `- [ ] ${s}`);
+    if (combinedReviewSteps.length > 3) shown.push(`- …and ${combinedReviewSteps.length - 3} more (see the task's review items)`);
+    completionContent += `\n\n**Needs your review:**\n${shown.join('\n')}`;
   }
 
+  // A user-written overview stays exactly as the user wrote it.
   const overviewContent =
+    (brief?.overviewSource === 'user' ? brief.overview : '') ||
     (args.overviewDoc ? formatOverviewDocToMarkdown(args.overviewDoc) : '') ||
     brief?.overview ||
     brief?.brief ||

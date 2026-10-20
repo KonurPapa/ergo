@@ -4,6 +4,19 @@ import { FitAddon } from '@xterm/addon-fit';
 import { bridgeClient } from '../lib/bridgeClient';
 import '@xterm/xterm/css/xterm.css';
 
+// spawnIds this page has already sent a launch for. Re-mounts of the same launch (card re-opened, view
+// toggled) attach to the existing PTY instead of asking the server to start the agent again.
+const launchedSpawnIds = new Set<string>();
+
+/** True if this mount may launch the process; false if it should only attach to what already ran. */
+export function claimPtyLaunch(spawnId: string | undefined, attachOnly: boolean | undefined): boolean {
+  if (attachOnly) return false;
+  if (!spawnId) return true;
+  if (launchedSpawnIds.has(spawnId)) return false;
+  launchedSpawnIds.add(spawnId);
+  return true;
+}
+
 export interface AgentTerminalProps {
   cmd: string;
   args?: string[];
@@ -13,6 +26,12 @@ export interface AgentTerminalProps {
   env?: Record<string, string>;
   forceRestart?: boolean;
   spawnId?: string;
+  /**
+   * Attach to an existing PTY session by `sessionId` (`{type:'attach'}`) and never start a process. Task-run agents
+   * are launched by App over REST, so their terminal views always attach. Without it the legacy `spawn` message is
+   * sent (login / onboarding terminals).
+   */
+  attachOnly?: boolean;
   onExit?: (code: number) => void;
   /** Called once the WS + PTY are ready */
   onReady?: () => void;
@@ -31,6 +50,7 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
   env,
   forceRestart,
   spawnId,
+  attachOnly,
   onExit,
   onReady,
   onError,
@@ -41,6 +61,14 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  // Callbacks live in refs so a re-render with new inline handlers never reconnects (and replays) the terminal,
+  // and an exit always reaches the latest handler instead of the one captured at mount.
+  const onExitRef = useRef(onExit);
+  const onReadyRef = useRef(onReady);
+  const onErrorRef = useRef(onError);
+  onExitRef.current = onExit;
+  onReadyRef.current = onReady;
+  onErrorRef.current = onError;
 
   const send = useCallback((obj: object) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -53,6 +81,11 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
   }, []);
 
   const argsKey = JSON.stringify(args);
+  // What the connection depends on: attach-only views follow just the session; legacy spawns restart when the
+  // command line changes.
+  const connectionKey = attachOnly
+    ? `attach:${sessionId || (taskId !== undefined ? String(taskId) : '')}`
+    : `spawn:${JSON.stringify([cmd, argsKey, cwd, taskId ?? null, sessionId ?? null])}`;
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -150,6 +183,20 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
       safeFit();
       const cols = term.cols > 0 ? term.cols : 120;
       const rows = term.rows > 0 ? term.rows : 40;
+      if (attachOnly) {
+        try {
+          ws.send(JSON.stringify({
+            type: 'attach',
+            sessionId: sessionId || (taskId !== undefined ? String(taskId) : undefined),
+            cols,
+            rows,
+          }));
+        } catch (err) {
+          console.error('[Ergo Terminal] Attach send error:', err);
+        }
+        return;
+      }
+      const mayLaunch = claimPtyLaunch(spawnId, attachOnly);
       try {
         ws.send(JSON.stringify({
           type: 'spawn',
@@ -161,8 +208,9 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
           env,
           cols,
           rows,
-          forceRestart,
-          spawnId
+          forceRestart: mayLaunch && forceRestart,
+          spawnId,
+          attachOnly: !mayLaunch,
         }));
       } catch (err) {
         console.error('[Ergo Terminal] Spawn send error:', err);
@@ -179,24 +227,27 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
       }
 
       if (msg.type === 'replay') {
+        // A replay is the session's whole output so far: start from a clean screen so re-attaching never doubles it.
+        term.reset();
         term.write(msg.data);
       } else if (msg.type === 'data') {
         term.write(msg.data);
       } else if (msg.type === 'ready') {
-        onReady?.();
+        onReadyRef.current?.();
       } else if (msg.type === 'exit') {
         term.writeln(`\r\n\x1b[2m─── Process exited with code ${msg.code} ───\x1b[0m`);
-        onExit?.(msg.code);
+        onExitRef.current?.(msg.code);
       } else if (msg.type === 'error') {
         term.writeln(`\r\n\x1b[31m[Ergo PTY error] ${msg.message}\x1b[0m`);
-        onError?.(msg.message);
+        onErrorRef.current?.(msg.message);
       }
+      // 'prompt' / 'auto-approved' notices are for the Notes view; the raw terminal already shows the prompt itself.
     });
 
     ws.addEventListener('error', () => {
       if (isDisposed) return;
       term.writeln(`\r\n\x1b[31m[Ergo] Could not connect to PTY backend. Is the dev server running?\x1b[0m`);
-      onError?.('WebSocket connection failed');
+      onErrorRef.current?.('WebSocket connection failed');
     });
 
     // ── Forward keystrokes to PTY ─────────────────────────────────────────
@@ -241,7 +292,7 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
       fitRef.current = null;
       wsRef.current = null;
     };
-  }, [cmd, argsKey, cwd, taskId, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [connectionKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const isLightTheme = typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'light';
 

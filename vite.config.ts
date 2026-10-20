@@ -4,7 +4,51 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import net from 'node:net';
+import { createHash, randomBytes } from 'node:crypto';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { TerminalScreen, ScreenTranscript } from './src/lib/cliScreen.ts';
+import {
+  parseCliScreenPrompt,
+  keystrokesForOption,
+  pickApproveOption,
+  isBypassAcceptanceDialog,
+  promptSummary,
+} from './src/lib/cliPromptParser.ts';
+import type { CliDetectedPrompt } from './src/types/index.ts';
+import { createMemoryStore, MEMORY_NAMESPACES, AGENT_NOTE_KINDS, WORKSPACE_MAX_ITEMS, type MemoryStore, type MemoryStoreIo } from './src/lib/memory/memoryStore.ts';
+import type {
+  AgentNoteKind,
+  ChunkMetadata,
+  MemoryChunkDTO,
+  MemoryNamespace,
+  MemorySearchRequest,
+  RelatedTasksRequest,
+  WorkspaceIndexItem,
+} from './src/lib/memory/types.ts';
+import type {
+  BenchmarkSource,
+  CatalogModel,
+  ModelCatalog,
+  ModelCatalogRequest,
+  ModelCatalogResponse,
+  PriceSource,
+} from './src/lib/modelCatalog/types.ts';
+import {
+  CATALOG_NORMALIZER_VERSION,
+  attachBenchmarks,
+  normalizeLiteLlmPrices,
+  parseArtificialAnalysisRows,
+  sanitizeAaRow,
+  sanitizeCatalogModel,
+  type AaBenchmarkRow,
+} from './src/lib/modelCatalog/normalize.ts';
+import { PRICE_SNAPSHOT } from './src/lib/modelCatalog/priceSnapshot.ts';
+import { priceUsage, resolveAliasModelId } from './src/lib/modelCatalog/pricing.ts';
 
 /**
  * Hosted Ergo web app origin(s) allowed to use this machine's local bridge out of the box.
@@ -246,7 +290,15 @@ async function runShellCommand(command: string, cwd: string, timeoutMs: number):
   const { exec } = await import('node:child_process');
   const started = Date.now();
   return new Promise((resolve) => {
-    exec(command, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env: process.env }, (error: any, stdout: any, stderr: any) => {
+    // Agent tools auto-allow "read-only" git commands, and file edits outside `.git` are auto-allowed too. Without
+    // this, an agent could write a bare repo (HEAD + config with diff.external / core.fsmonitor) and have git run
+    // it from inside that folder. Command-line config (GIT_CONFIG_COUNT) counts as protected config for this key.
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    const gitConfigCount = Number.parseInt(env.GIT_CONFIG_COUNT || '0', 10) || 0;
+    env.GIT_CONFIG_COUNT = String(gitConfigCount + 1);
+    env[`GIT_CONFIG_KEY_${gitConfigCount}`] = 'safe.bareRepository';
+    env[`GIT_CONFIG_VALUE_${gitConfigCount}`] = 'explicit';
+    exec(command, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env }, (error: any, stdout: any, stderr: any) => {
       const timedOut = Boolean(error && error.killed && error.signal === 'SIGTERM');
       let exitCode = 0;
       let extraErr = '';
@@ -480,6 +532,26 @@ interface BridgeUsage {
   cacheWriteTokens: number;
   calls: number;
   estimated?: boolean;
+  /** API-price value of these calls (USD), cache discounts included; absent when no call could be priced. */
+  costUsd?: number;
+  /** Some calls have tokens but no price. */
+  costPartial?: boolean;
+}
+
+/** Prices the bridge uses for usage costs: the model catalog's latest list once loaded, else the bundled snapshot. */
+let bridgePriceModels: CatalogModel[] = PRICE_SNAPSHOT.models;
+
+/** API-price cost of `usage` on `model` (aliases like "sonnet" resolve to the newest model), or undefined. */
+function bridgeUsageCost(model: string | undefined | null, usage: BridgeUsage): number | undefined {
+  if (!model) return undefined;
+  return priceUsage(bridgePriceModels, resolveAliasModelId(bridgePriceModels, model), usage);
+}
+
+/** The value of a CLI's --model / -m argument. */
+function modelArgOf(args: string[]): string | undefined {
+  for (let i = 0; i < args.length - 1; i++) if (args[i] === '--model' || args[i] === '-m') return args[i + 1];
+  const eq = args.find((a) => a.startsWith('--model='));
+  return eq ? eq.slice('--model='.length) : undefined;
 }
 
 const EFFORT_VALUES = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -534,6 +606,9 @@ function addBridgeUsage(target: BridgeUsage, delta: BridgeUsage | null) {
   target.cachedInputTokens += delta.cachedInputTokens;
   target.cacheWriteTokens += delta.cacheWriteTokens;
   target.calls += delta.calls;
+  if (typeof delta.costUsd === 'number') target.costUsd = (target.costUsd || 0) + delta.costUsd;
+  else if (delta.inputTokens + delta.outputTokens > 0) target.costPartial = true;
+  if (delta.costPartial) target.costPartial = true;
 }
 
 function emptyBridgeUsage(): BridgeUsage {
@@ -550,6 +625,8 @@ function parseClaudeJsonResult(stdout: string): { text: string; usage: BridgeUsa
       if (obj && typeof obj === 'object' && (obj.type === 'result' || 'result' in obj)) {
         const usage = normalizeUsageObject(obj.usage);
         if (usage) usage.calls = typeof obj.num_turns === 'number' && obj.num_turns > 0 ? obj.num_turns : 1;
+        // Claude Code reports the API-price value of the call itself (cache discounts included).
+        if (usage && typeof obj.total_cost_usd === 'number' && Number.isFinite(obj.total_cost_usd)) usage.costUsd = obj.total_cost_usd;
         return { text: typeof obj.result === 'string' ? obj.result : '', usage, isError: Boolean(obj.is_error) };
       }
     } catch {}
@@ -621,6 +698,12 @@ async function runCliProcess(options: {
   model?: string;
   effort?: BridgeEffort;
   permissionLevel?: BridgePermission;
+  /**
+   * A one-shot answer (overview, rating, autocomplete…), not agent work. Claude Code then runs without its built-in
+   * tools, MCP servers, settings / CLAUDE.md and default system prompt, and with `systemPrompt` as the system prompt:
+   * a measured ~25k tokens of per-call overhead (30.7k → 4.4k for an overview) with the same answer.
+   */
+  completion?: boolean;
   req?: any;
 }): Promise<{ exitCode: number; stdout: string; stderr: string; timedOut: boolean; durationMs: number; output?: string; usage?: BridgeUsage | null }> {
   const { spawn } = await import('node:child_process');
@@ -638,9 +721,11 @@ async function runCliProcess(options: {
   const cliBase = path.basename(executable).toLowerCase();
   let args: string[] = Array.isArray(options.customArgs) && options.customArgs.length > 0 ? [...options.customArgs] : [];
 
-  const combinedPrompt = options.systemPrompt
+  const completionMode = Boolean(options.completion) && /claude/.test(path.basename(executable).toLowerCase()) && args.length === 0;
+  const combinedPrompt = options.systemPrompt && !completionMode
     ? `${options.systemPrompt.trim()}\n\nTask:\n${options.prompt.trim()}`
     : options.prompt.trim();
+  let completionSystemFile: string | null = null;
 
   let passedPromptInArgs = false;
   const userSetPermissions = args.some((a) => PERMISSION_FLAG_PATTERN.test(a));
@@ -655,7 +740,25 @@ async function runCliProcess(options: {
     if (!args.includes('-p') && !args.includes('--print')) {
       args.unshift('-p');
     }
-    if (!userSetPermissions) {
+    if (completionMode) {
+      args.push(
+        '--tools', '',
+        '--strict-mcp-config',
+        '--setting-sources', '',
+        '--disable-slash-commands',
+        '--no-session-persistence',
+        '--exclude-dynamic-system-prompt-sections'
+      );
+      const system = (options.systemPrompt || '').trim() || 'You are a helpful assistant. Answer the request directly.';
+      if (system.length > 60_000) {
+        completionSystemFile = path.join(os.tmpdir(), `ergo-system-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
+        await fs.writeFile(completionSystemFile, system, 'utf-8');
+        args.push('--system-prompt-file', completionSystemFile);
+      } else {
+        args.push('--system-prompt', system);
+      }
+    }
+    if (!userSetPermissions && !completionMode) {
       // Print mode can't answer prompts. Ergo's own tool layer gates <tool_call> actions, so "ask" denies the
       // CLI's built-in tools (dontAsk) to route every edit and command through Ergo's approval flow.
       if (level === 'plan') args.push('--permission-mode', 'plan');
@@ -673,7 +776,16 @@ async function runCliProcess(options: {
       args.push('--output-format', 'json');
       outputMode = 'claude-json';
     }
-    if (anthropicKey && !args.includes('--settings')) {
+    // Agent work (not completion mode): the user's settings minus plugins, as for PTY task agents.
+    const agentSettings = !completionMode && !args.includes('--settings') && !args.includes('--setting-sources')
+      ? writeAgentClaudeSettings({ apiKeyHelperOff: Boolean(anthropicKey), keepModel: !args.includes('--model') })
+      : null;
+    if (completionMode) {
+      // --setting-sources '' above already skips user settings (and their plugins).
+      if (anthropicKey && !args.includes('--settings')) args.push('--settings', '{"apiKeyHelper":""}');
+    } else if (agentSettings) {
+      args.push('--setting-sources', 'project,local', '--settings', agentSettings);
+    } else if (anthropicKey && !args.includes('--settings')) {
       args.push('--settings', '{"apiKeyHelper":""}');
     }
     // For Claude Code CLI, pass the prompt directly as argument when under 8000 chars for reliable single-command dispatch
@@ -845,6 +957,11 @@ async function runCliProcess(options: {
             } catch {}
           }
           output = (lastMessage || parsed.text).trim();
+        }
+        if (completionSystemFile) {
+          try {
+            fsSync.unlinkSync(completionSystemFile);
+          } catch {}
         }
         resolve({
           exitCode: code ?? (timedOut ? 124 : 0),
@@ -1059,6 +1176,8 @@ function setupProjectWatcher(storageDir: string) {
       if (!filename) return;
       const normalizedFilename = filename.replace(/\\/g, '/');
       if (!normalizedFilename.endsWith('.md')) return;
+      // Agent run files (<project>/.ergo/runs/…) are read by the PTY bridge, not synced as notes.
+      if (`/${normalizedFilename}`.includes('/.ergo/')) return;
 
       if (watchDebounceTimer) {
         clearTimeout(watchDebounceTimer);
@@ -1103,6 +1222,9 @@ function setupProjectWatcher(storageDir: string) {
     console.warn('[Ergo Watcher] Could not initialize file watcher:', err);
   }
 }
+
+/** Files in <storage>/config that /api/config/read|write may touch (model-calibration: Auto mode's learning table). */
+const CONFIG_FILE_TYPES = new Set(['settings', 'secrets', 'model-calibration']);
 
 function ergoFileSystemPlugin(): Plugin {
   const attachMiddleware = (server: { middlewares: { use: Function } }) => {
@@ -1393,9 +1515,9 @@ function ergoFileSystemPlugin(): Plugin {
       if (url === '/api/config/read' && req.method === 'POST') {
         try {
           const body = await parseJsonBody(req);
-          const configType = body.type; // 'settings' | 'secrets'
-          if (!configType || (configType !== 'settings' && configType !== 'secrets')) {
-            return sendJson(res, 400, { error: 'type must be either "settings" or "secrets"' });
+          const configType = body.type; // 'settings' | 'secrets' | 'model-calibration'
+          if (!CONFIG_FILE_TYPES.has(configType)) {
+            return sendJson(res, 400, { error: 'type must be "settings", "secrets" or "model-calibration"' });
           }
 
           const configDir = path.resolve(storageDir, 'config');
@@ -1417,8 +1539,8 @@ function ergoFileSystemPlugin(): Plugin {
         try {
           const body = await parseJsonBody(req);
           const { type: configType, data } = body;
-          if (!configType || (configType !== 'settings' && configType !== 'secrets')) {
-            return sendJson(res, 400, { error: 'type must be either "settings" or "secrets"' });
+          if (!CONFIG_FILE_TYPES.has(configType)) {
+            return sendJson(res, 400, { error: 'type must be "settings", "secrets" or "model-calibration"' });
           }
 
           const configDir = path.resolve(storageDir, 'config');
@@ -1776,24 +1898,6 @@ function ergoFileSystemPlugin(): Plugin {
         }
       }
 
-      if (url === '/api/mcp/laya/status' && req.method === 'GET') {
-        const layaHost = 'http://127.0.0.1:8440';
-        let daemonOnline = false;
-        try {
-          const ping = await fetch(`${layaHost}/health`, { method: 'GET', signal: AbortSignal.timeout(1000) }).catch(() => null);
-          if (ping && ping.ok) daemonOnline = true;
-        } catch {}
-        return sendJson(res, 200, {
-          success: true,
-          daemonOnline,
-          port: 8440,
-          mode: daemonOnline ? 'neural_service' : 'local_deterministic_fast_head',
-          message: daemonOnline
-            ? 'Connected to local laya-serve daemon on port 8440'
-            : 'Operational via local high-speed deterministic decision head ($0 token cost)'
-        });
-      }
-
       // ── GitHub MCP Integration Endpoints ──
       if (url === '/api/mcp/github/status' && req.method === 'GET') {
         try {
@@ -2105,7 +2209,7 @@ function ergoFileSystemPlugin(): Plugin {
             }
           }
 
-          // 2. Bundled Harnesses (filesystem, fetch, git, laya)
+          // 2. Bundled Harnesses (filesystem, fetch, git)
           if (serverId === 'mcp-filesystem') {
             const tools = [
               { id: 'fs_read_file', name: 'read_file', description: 'Read a file within allowed directory roots; supports offset/limit line paging for large files', autoApprove: true, serverId: 'mcp-filesystem' },
@@ -2136,15 +2240,6 @@ function ergoFileSystemPlugin(): Plugin {
               { id: 'git_commit', name: 'git_commit', description: 'Record changes to the repository with a commit message', autoApprove: false, serverId: 'mcp-git' }
             ];
             return sendJson(res, 200, { success: true, serverId: 'mcp-git', tools });
-          }
-
-          if (serverId === 'mcp-laya') {
-            const tools = [
-              { id: 'laya_choice', name: 'laya_choice', description: 'Choose the best option among candidates (max 15-20 options per batch) with calibrated probability', autoApprove: true, serverId: 'mcp-laya' },
-              { id: 'laya_score', name: 'laya_score', description: 'Evaluate deliverable quality or relevance with calibrated confidence score (0.0 to 1.0)', autoApprove: true, serverId: 'mcp-laya' },
-              { id: 'laya_noul', name: 'laya_noul', description: 'Evaluate binary yes/no decision propositions without generating tokens', autoApprove: true, serverId: 'mcp-laya' }
-            ];
-            return sendJson(res, 200, { success: true, serverId: 'mcp-laya', tools });
           }
 
           // 3. Remote HTTP/SSE MCP Endpoint
@@ -2248,7 +2343,7 @@ function ergoFileSystemPlugin(): Plugin {
                   return;
                 }
 
-                if (server.id === 'mcp-filesystem' || server.id === 'mcp-fetch' || server.id === 'mcp-git' || server.id === 'mcp-laya') {
+                if (server.id === 'mcp-filesystem' || server.id === 'mcp-fetch' || server.id === 'mcp-git') {
                   // Bundled harness tool specs are deterministic
                   updates[server.id] = { success: true, tools: [], hasChanges: false };
                   return;
@@ -2741,160 +2836,7 @@ function ergoFileSystemPlugin(): Plugin {
             });
           }
 
-          // 4. Laya Local Decision Engine MCP Harness
-          if (serverId === 'mcp-laya' || toolName.startsWith('laya_')) {
-            // Check if local laya-serve is running at localhost:8440
-            const layaHost = 'http://127.0.0.1:8440';
-            let layaOnline = false;
-            try {
-              const ping = await fetch(`${layaHost}/health`, { method: 'GET', signal: AbortSignal.timeout(1200) }).catch(() => null);
-              if (ping && ping.ok) layaOnline = true;
-            } catch {}
-
-            if (layaOnline) {
-              try {
-                if (toolName === 'laya_choice') {
-                  const candidateOptions = Array.isArray(args.options) ? args.options.slice(0, 20) : [];
-                  const resLaya = await fetch(`${layaHost}/v1/systemone`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      question: args.prompt || args.question || '',
-                      options: candidateOptions
-                    }),
-                    signal: AbortSignal.timeout(8000)
-                  });
-                  if (resLaya.ok) {
-                    const data: any = await resLaya.json();
-                    return sendJson(res, 200, {
-                      success: true,
-                      data: {
-                        choice: data.choice || candidateOptions[0],
-                        confidence: typeof data.confidence === 'number' ? data.confidence : (data.answer_confidence || 0.88),
-                        source: 'laya_local_service'
-                      }
-                    });
-                  }
-                } else if (toolName === 'laya_noul') {
-                  const resLaya = await fetch(`${layaHost}/v1/systemone`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      proposition: args.prompt || args.proposition || ''
-                    }),
-                    signal: AbortSignal.timeout(8000)
-                  });
-                  if (resLaya.ok) {
-                    const data: any = await resLaya.json();
-                    return sendJson(res, 200, {
-                      success: true,
-                      data: {
-                        value: Boolean(data.value ?? (data.choice === 'yes')),
-                        confidence: typeof data.confidence === 'number' ? data.confidence : 0.88,
-                        source: 'laya_local_service'
-                      }
-                    });
-                  }
-                } else if (toolName === 'laya_score') {
-                  const resLaya = await fetch(`${layaHost}/v1/systemone`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      text: args.text || args.prompt || '',
-                      criteria: args.criteria || ''
-                    }),
-                    signal: AbortSignal.timeout(8000)
-                  });
-                  if (resLaya.ok) {
-                    const data: any = await resLaya.json();
-                    return sendJson(res, 200, {
-                      success: true,
-                      data: {
-                        score: typeof data.score === 'number' ? data.score : 0.85,
-                        confidence: typeof data.confidence === 'number' ? data.confidence : 0.88,
-                        source: 'laya_local_service'
-                      }
-                    });
-                  }
-                }
-              } catch (e: any) {
-                console.warn('[Vite MCP API] Error forwarding to laya-serve, falling back to local heuristic head:', e.message);
-              }
-            }
-
-            // High-speed deterministic fallback decision head when laya daemon is not running
-            if (toolName === 'laya_choice') {
-              const options: string[] = Array.isArray(args.options) ? args.options : [];
-              const prompt: string = String(args.prompt || '').toLowerCase();
-              let selected = options[0] || '';
-              // Match best option based on lexical similarity
-              let bestScore = -1;
-              for (const opt of options) {
-                const optWords = opt.toLowerCase().split(/[\s_-]+/);
-                const score = optWords.reduce((acc, w) => acc + (w.length >= 3 && prompt.includes(w) ? 2 : 0), 0);
-                if (score > bestScore) {
-                  bestScore = score;
-                  selected = opt;
-                }
-              }
-              return sendJson(res, 200, {
-                success: true,
-                data: {
-                  choice: selected,
-                  confidence: bestScore > 0 ? 0.92 : 0.75,
-                  source: 'laya_local_deterministic_head'
-                }
-              });
-            }
-
-            if (toolName === 'laya_noul') {
-              const prompt: string = String(args.prompt || '').toLowerCase();
-              // Check for strong negative or positive cues
-              const isYes = /\b(yes|true|standalone|single|simple|straightforward|pass|verified)\b/.test(prompt);
-              return sendJson(res, 200, {
-                success: true,
-                data: {
-                  value: isYes,
-                  confidence: 0.85,
-                  source: 'laya_local_deterministic_head'
-                }
-              });
-            }
-
-            if (toolName === 'laya_filter') {
-              const items: Array<{ id: string; description: string }> = Array.isArray(args.items) ? args.items : [];
-              const context: string = String(args.context || '').toLowerCase();
-              const selectedIds = items
-                .filter((item) => {
-                  const id = item.id.toLowerCase();
-                  const desc = (item.description || '').toLowerCase();
-                  if (id === 'mcp-filesystem') return true;
-                  if ((id.includes('git') || desc.includes('git') || desc.includes('commit')) && (context.includes('git') || context.includes('commit') || context.includes('repo'))) return true;
-                  if ((id.includes('fetch') || desc.includes('web') || desc.includes('url')) && (context.includes('fetch') || context.includes('url') || context.includes('http') || context.includes('api'))) return true;
-                  if (id.includes('github') && (context.includes('github') || context.includes('pr') || context.includes('issue'))) return true;
-                  if (id.includes('slack') && (context.includes('slack') || context.includes('channel') || context.includes('message'))) return true;
-                  return false;
-                })
-                .map((i) => i.id);
-
-              return sendJson(res, 200, {
-                success: true,
-                data: {
-                  selectedIds,
-                  source: 'laya_local_deterministic_head'
-                }
-              });
-            }
-
-            if (toolName === 'laya_score') {
-              return sendJson(res, 200, {
-                success: true,
-                data: { score: 0.9, confidence: 0.88, source: 'laya_local_deterministic_head' }
-              });
-            }
-          }
-
-          // 4.5. GitHub MCP Stdio Runner
+          // 4. GitHub MCP Stdio Runner
           const GITHUB_TOOLS = new Set([
             'create_or_update_file', 'search_repositories', 'create_repository', 'get_file_contents',
             'push_files', 'create_issue', 'create_pull_request', 'fork_repository', 'create_branch',
@@ -3184,7 +3126,7 @@ function ergoFileSystemPlugin(): Plugin {
       if (url === '/api/cli/execute' && req.method === 'POST') {
         try {
           const body = await parseJsonBody(req);
-          const { cli = 'claude', prompt, systemPrompt, cwd, args, timeoutMs, env, model, effort, permissionLevel } = body;
+          const { cli = 'claude', prompt, systemPrompt, cwd, args, timeoutMs, env, model, effort, permissionLevel, mode } = body;
 
           if (!prompt || typeof prompt !== 'string') {
             return sendJson(res, 400, { error: 'prompt is required and must be a string' });
@@ -3206,6 +3148,7 @@ function ergoFileSystemPlugin(): Plugin {
             model,
             effort: asEffort(effort),
             permissionLevel: asPermission(permissionLevel),
+            completion: mode === 'completion',
             req
           });
 
@@ -3222,6 +3165,31 @@ function ergoFileSystemPlugin(): Plugin {
         } catch (err: any) {
           console.error('[Ergo CLI API] Execute error:', err);
           return sendJson(res, 500, { error: err.message });
+        }
+      }
+
+      // The subscription plan's usage limits as the CLI last saw them (Claude Code caches them in ~/.claude.json).
+      // Percentages only: plans don't publish their size, so a single task's share can't be computed.
+      if (url === '/api/cli/plan-usage' && req.method === 'GET') {
+        const fullUrl = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+        const cli = fullUrl.searchParams.get('cli')?.trim() || 'claude';
+        if (cli !== 'claude') return sendJson(res, 200, { cli, available: false });
+        try {
+          const raw = JSON.parse(await fs.readFile(path.join(os.homedir(), '.claude.json'), 'utf-8'));
+          const cached = raw?.cachedUsageUtilization;
+          const u = cached?.utilization;
+          if (!u) return sendJson(res, 200, { cli, available: false });
+          const pick = (w: any) =>
+            w && typeof w.utilization === 'number' ? { percent: w.utilization, resetsAt: typeof w.resets_at === 'string' ? w.resets_at : null } : null;
+          return sendJson(res, 200, {
+            cli,
+            available: true,
+            fetchedAt: typeof cached.fetchedAtMs === 'number' ? new Date(cached.fetchedAtMs).toISOString() : null,
+            session: pick(u.five_hour),
+            weekly: pick(u.seven_day),
+          });
+        } catch {
+          return sendJson(res, 200, { cli, available: false });
         }
       }
 
@@ -3430,8 +3398,6 @@ function ergoFileSystemPlugin(): Plugin {
             installCmd = 'npm install -g grok-cli';
           } else if (cli === 'aider') {
             installCmd = 'pip install aider-chat';
-          } else if (cli === 'laya') {
-            installCmd = 'pip install laya';
           }
 
           const result = await runShellCommand(installCmd, storageDir, 180_000);
@@ -3753,13 +3719,15 @@ function ergoFileSystemPlugin(): Plugin {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PTY WebSocket Plugin — one WS connection per task terminal
-// Listens on ws://localhost:<PORT>/api/pty
-// Messages in:  { type:'spawn', cmd, args, cwd, cols, rows }
-//               { type:'input', data }      (keystrokes from xterm.js)
-//               { type:'resize', cols, rows }
-// Messages out: { type:'data', data }       (raw PTY output)
-//               { type:'exit', code }       (process exited)
+// PTY Plugin — CLI agent sessions (one PTY per agent: `${taskId}::manager`, `${taskId}::worker::<id>`, `${taskId}::qa`)
+// REST (App):   POST /api/pty/spawn | /api/pty/input | /api/pty/kill | /api/pty/policy
+//               GET  /api/pty/sessions | /api/pty/usage | /api/pty/transcript | /api/pty/events (SSE)
+// WebSocket ws://localhost:<PORT>/api/pty (views):
+// Messages in:  { type:'attach', sessionId, cols?, rows?, observe? }   (task agents: attach only)
+//               { type:'spawn', cmd, args, cwd, cols, rows, ... }     (legacy: login / onboarding terminals)
+//               { type:'input', data } | { type:'resize', cols, rows } | { type:'kill' }
+// Messages out: { type:'ready', cols, rows } | { type:'replay', data } | { type:'data', data } | { type:'exit', code }
+//               { type:'resized', cols, rows } | { type:'prompt', prompt } | { type:'auto-approved', summary } | { type:'error', message }
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3779,16 +3747,70 @@ interface PtyUsageMeta {
   buffer: string[];
 }
 
-/** Sessions removed by /api/pty/kill or respawn, kept briefly so their final usage can still be read. */
-const endedPtySessions = new Map<string, PtyUsageMeta>();
+type BridgeAgentRole = 'manager' | 'worker' | 'qa';
+type AgentSignalKind = 'delegate' | 'worker-done' | 'complete' | 'qa-verdict';
 
-function rememberEndedPtySession(id: string, meta: PtyUsageMeta) {
-  endedPtySessions.set(id, { cmd: meta.cmd, args: [...meta.args], cwd: meta.cwd, startedAt: meta.startedAt, buffer: [...meta.buffer] });
-  while (endedPtySessions.size > 25) {
+interface AgentSignalRecord {
+  signal: AgentSignalKind;
+  /** Path relative to the session cwd. */
+  file: string;
+  mtime: number;
+  content: string;
+  verdict?: 'PASS' | 'FAIL';
+}
+
+/** What is kept of a PTY session after it was killed or replaced: enough to replay it, read usage and transcripts. */
+interface EndedPtySession extends PtyUsageMeta {
+  id: string;
+  taskId: string | number;
+  projectId?: string;
+  role?: BridgeAgentRole;
+  label?: string;
+  pieceId?: string;
+  runId?: string;
+  spawnId?: string;
+  permissionLevel?: BridgePermission;
+  exitCode: number | null;
+  endedAt: string;
+  transcript?: ScreenTranscript;
+  signals: AgentSignalRecord[];
+}
+
+/** Sessions removed by /api/pty/kill or respawn, kept so views can replay them and usage/transcripts stay readable. */
+const endedPtySessions = new Map<string, EndedPtySession>();
+const MAX_ENDED_PTY_SESSIONS = 100;
+
+function rememberEndedPtySession(id: string, session: PtySessionState): EndedPtySession {
+  const meta: EndedPtySession = {
+    id,
+    taskId: session.taskId,
+    projectId: session.projectId,
+    role: session.role,
+    label: session.label,
+    pieceId: session.pieceId,
+    runId: session.runId,
+    spawnId: session.spawnId,
+    permissionLevel: session.permissionLevel,
+    cmd: session.cmd,
+    args: [...session.args],
+    cwd: session.cwd,
+    startedAt: session.startedAt,
+    buffer: [...session.buffer],
+    exitCode: session.exitCode,
+    endedAt: new Date().toISOString(),
+    transcript: session.transcript,
+    signals: Array.from(session.signals.values()),
+  };
+  // Re-insert so the map stays ordered oldest → newest.
+  endedPtySessions.delete(id);
+  endedPtySessions.set(id, meta);
+  session.endedMeta = meta;
+  while (endedPtySessions.size > MAX_ENDED_PTY_SESSIONS) {
     const oldest = endedPtySessions.keys().next().value;
     if (oldest === undefined) break;
     endedPtySessions.delete(oldest);
   }
+  return meta;
 }
 
 function argValue(args: string[], flag: string): string | undefined {
@@ -3796,6 +3818,11 @@ function argValue(args: string[], flag: string): string | undefined {
   if (idx !== -1 && idx + 1 < args.length) return args[idx + 1];
   const inline = args.find((a) => a.startsWith(`${flag}=`));
   return inline ? inline.slice(flag.length + 1) : undefined;
+}
+
+/** Claude Code session id of a launch: `--session-id <uuid>`, or `--resume <uuid>` (a resumed conversation keeps its id and log). */
+function claudeSessionIdArg(args: string[]): string | undefined {
+  return argValue(args, '--session-id') || argValue(args, '--resume');
 }
 
 async function readJsonlFile(file: string): Promise<any[]> {
@@ -3808,7 +3835,8 @@ async function readJsonlFile(file: string): Promise<any[]> {
   return out;
 }
 
-async function readClaudeSessionUsage(sessionId: string, cwd: string): Promise<BridgeUsage | null> {
+/** Locates Claude Code's session log (~/.claude/projects/<cwd-slug>/<session-id>.jsonl). */
+async function findClaudeSessionLog(sessionId: string, cwd: string): Promise<{ sessionDir: string; file: string } | null> {
   if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return null;
   const projectsDir = path.join(os.homedir(), '.claude', 'projects');
   let sessionDir = path.join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'));
@@ -3818,25 +3846,39 @@ async function readClaudeSessionUsage(sessionId: string, cwd: string): Promise<B
     if (!hit) return null;
     sessionDir = path.join(projectsDir, hit);
   }
-  const files = [path.join(sessionDir, `${sessionId}.jsonl`)];
-  const subagentDir = path.join(sessionDir, sessionId, 'subagents');
+  return { sessionDir, file: path.join(sessionDir, `${sessionId}.jsonl`) };
+}
+
+async function readClaudeSessionUsage(sessionId: string, cwd: string): Promise<BridgeUsage | null> {
+  const log = await findClaudeSessionLog(sessionId, cwd);
+  if (!log) return null;
+  const files = [log.file];
+  const subagentDir = path.join(log.sessionDir, sessionId, 'subagents');
   for (const f of await fs.readdir(subagentDir).catch(() => [] as string[])) {
     if (f.endsWith('.jsonl')) files.push(path.join(subagentDir, f));
   }
   // One API response is logged as several lines (one per content block) sharing message.id — count it once.
-  const byMessage = new Map<string, any>();
+  const byMessage = new Map<string, { usage: any; model?: string }>();
   for (const file of files) {
     for (const entry of await readJsonlFile(file)) {
       const usage = entry?.message?.usage;
       if (entry?.type !== 'assistant' || !usage) continue;
       const key = `${file}:${entry.message.id || entry.uuid}`;
       const prev = byMessage.get(key);
-      if (!prev || (usage.output_tokens || 0) >= (prev.output_tokens || 0)) byMessage.set(key, usage);
+      if (!prev || (usage.output_tokens || 0) >= (prev.usage.output_tokens || 0)) byMessage.set(key, { usage, model: entry.message.model });
     }
   }
   if (byMessage.size === 0) return null;
   const total = emptyBridgeUsage();
-  for (const u of byMessage.values()) addBridgeUsage(total, normalizeUsageObject(u));
+  // Each response names its model (a subagent or /model switch can differ), so each is priced on its own.
+  for (const { usage, model } of byMessage.values()) {
+    const delta = normalizeUsageObject(usage);
+    if (delta) {
+      const cost = bridgeUsageCost(model, delta);
+      if (typeof cost === 'number') delta.costUsd = cost;
+    }
+    addBridgeUsage(total, delta);
+  }
   return total;
 }
 
@@ -3855,29 +3897,153 @@ function codexDayDirs(startMs: number): string[] {
   return Array.from(dirs);
 }
 
-async function readCodexSessionUsage(cwd: string, startMs: number): Promise<BridgeUsage | null> {
-  let best: { file: string; started: number } | null = null;
+// ── Binding a session to its own CLI log ──
+// Every agent of a run shares one cwd, so "the log started in this cwd after this session" can be another agent's.
+// A session is bound to the log whose user message is its launch prompt; a bound log is never given to another session.
+
+/** Session (owner key) → its log file, and log file → the owner that claimed it. */
+const sessionLogBindings = new Map<string, string>();
+const sessionLogClaims = new Map<string, string>();
+const MAX_SESSION_LOG_BINDINGS = 500;
+/** How far a log's start may be from the session's start when it cannot be matched by prompt. */
+const LOG_LOOSE_EARLY_MS = 5_000;
+const LOG_LOOSE_LATE_MS = 60_000;
+
+interface SessionLogCandidate {
+  file: string;
+  /** When the CLI session started (from the log), ms. */
+  started: number;
+  /** The log's user messages (the launch prompt is one of the first). */
+  userTexts: string[];
+}
+
+/** Identifies one launch: the live session and its ended copy share it. */
+function sessionLogOwner(meta: PtyUsageMeta): string {
+  return `${meta.startedAt}\u0000${meta.cmd}\u0000${meta.cwd}\u0000${meta.args.join('\u0000')}`;
+}
+
+const normalizeForMatch = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+/** The task prompt the CLI was launched with (Ergo appends it as the last argument), whitespace-collapsed. */
+function launchPromptOf(meta: PtyUsageMeta): string {
+  const last = meta.args[meta.args.length - 1];
+  if (typeof last !== 'string' || last.startsWith('-')) return '';
+  const prompt = normalizeForMatch(last);
+  return prompt.length >= 12 ? prompt : '';
+}
+
+function userTextsMatchPrompt(texts: string[], prompt: string): boolean {
+  if (!prompt) return false;
+  const head = prompt.slice(0, 300);
+  return texts.some((t) => {
+    const n = normalizeForMatch(t);
+    return n.includes(head) || (n.length >= 40 && prompt.startsWith(n.slice(0, 300)));
+  });
+}
+
+function bindSessionLog(owner: string, file: string) {
+  const previous = sessionLogBindings.get(owner);
+  if (previous && previous !== file && sessionLogClaims.get(previous) === owner) sessionLogClaims.delete(previous);
+  sessionLogBindings.delete(owner);
+  sessionLogBindings.set(owner, file);
+  sessionLogClaims.set(file, owner);
+  while (sessionLogBindings.size > MAX_SESSION_LOG_BINDINGS) {
+    const oldest = sessionLogBindings.entries().next().value;
+    if (!oldest) break;
+    sessionLogBindings.delete(oldest[0]);
+    if (sessionLogClaims.get(oldest[1]) === oldest[0]) sessionLogClaims.delete(oldest[1]);
+  }
+}
+
+/** The log already bound to this session, if it still exists. */
+function boundSessionLog(meta: PtyUsageMeta): string | null {
+  const file = sessionLogBindings.get(sessionLogOwner(meta));
+  return file && fsSync.existsSync(file) ? file : null;
+}
+
+/** Launch prompts of the other known sessions in the same cwd (their logs are not this session's). */
+function otherLaunchPrompts(meta: PtyUsageMeta): string[] {
+  const owner = sessionLogOwner(meta);
+  const own = launchPromptOf(meta);
+  const out = new Set<string>();
+  for (const s of [...activePtySessions.values(), ...endedPtySessions.values()]) {
+    if (s.cwd !== meta.cwd || sessionLogOwner(s) === owner) continue;
+    const prompt = launchPromptOf(s);
+    if (prompt && prompt !== own) out.add(prompt);
+  }
+  return Array.from(out);
+}
+
+/**
+ * Picks this session's own log: one whose user message is its launch prompt (bound for good), else — when no log
+ * carries the prompt — the log that started closest to the session and belongs to no other known session (not bound,
+ * so a later read can still find the exact match). Never a log another session has claimed.
+ */
+function pickSessionLog(meta: PtyUsageMeta, candidates: SessionLogCandidate[]): string | null {
+  const owner = sessionLogOwner(meta);
+  const startMs = Date.parse(meta.startedAt) || Date.now();
+  const free = candidates.filter((c) => {
+    const claimedBy = sessionLogClaims.get(c.file);
+    return !claimedBy || claimedBy === owner;
+  });
+  const byCloseness = (a: SessionLogCandidate, b: SessionLogCandidate) => Math.abs(a.started - startMs) - Math.abs(b.started - startMs);
+  const prompt = launchPromptOf(meta);
+  if (prompt) {
+    const matched = free.filter((c) => c.started >= startMs - 15_000 && userTextsMatchPrompt(c.userTexts, prompt)).sort(byCloseness);
+    if (matched.length > 0) {
+      bindSessionLog(owner, matched[0].file);
+      return matched[0].file;
+    }
+  }
+  const others = otherLaunchPrompts(meta);
+  const loose = free
+    .filter((c) => c.started >= startMs - LOG_LOOSE_EARLY_MS && c.started <= startMs + LOG_LOOSE_LATE_MS)
+    .filter((c) => !others.some((p) => userTextsMatchPrompt(c.userTexts, p)))
+    .sort(byCloseness);
+  return loose[0]?.file ?? null;
+}
+
+/** The Codex rollout log of this session (rollouts of every session in the cwd are candidates). */
+async function findCodexRollout(meta: PtyUsageMeta): Promise<string | null> {
+  const bound = boundSessionLog(meta);
+  if (bound) return bound;
+  const startMs = Date.parse(meta.startedAt) || Date.now();
+  const candidates: SessionLogCandidate[] = [];
   for (const dir of codexDayDirs(startMs)) {
     for (const f of await fs.readdir(dir).catch(() => [] as string[])) {
       if (!f.startsWith('rollout-') || !f.endsWith('.jsonl')) continue;
       const file = path.join(dir, f);
       const stat = await fs.stat(file).catch(() => null);
       if (!stat || stat.mtimeMs < startMs - 5_000) continue;
-      const head = (await fs.readFile(file, 'utf-8').catch(() => '')).split('\n', 1)[0];
-      let meta: any = null;
-      try { meta = JSON.parse(head); } catch {}
-      const payload = meta?.payload ?? meta;
+      const lines = (await fs.readFile(file, 'utf-8').catch(() => '')).split('\n', 200);
+      let meta0: any = null;
+      try { meta0 = JSON.parse(lines[0]); } catch {}
+      const payload = meta0?.payload ?? meta0;
       const metaCwd = payload?.cwd;
-      const started = Date.parse(payload?.timestamp || meta?.timestamp || '');
-      if (!metaCwd || path.resolve(metaCwd) !== path.resolve(cwd)) continue;
+      const started = Date.parse(payload?.timestamp || meta0?.timestamp || '');
+      if (!metaCwd || path.resolve(metaCwd) !== path.resolve(meta.cwd)) continue;
       if (!Number.isFinite(started) || started < startMs - 15_000) continue;
-      if (!best || started < best.started) best = { file, started };
+      const userTexts: string[] = [];
+      for (const line of lines.slice(1)) {
+        if (!line.trim()) continue;
+        let ev: any = null;
+        try { ev = JSON.parse(line); } catch { continue; }
+        const p = ev?.payload ?? ev?.msg ?? ev;
+        if (p?.type === 'user_message' && typeof p.message === 'string') userTexts.push(p.message);
+        else if (p?.type === 'message' && p.role === 'user') userTexts.push(textOfContent(p.content));
+      }
+      candidates.push({ file, started, userTexts });
     }
   }
-  if (!best) return null;
+  return pickSessionLog(meta, candidates);
+}
+
+async function readCodexSessionUsage(meta: PtyUsageMeta): Promise<BridgeUsage | null> {
+  const file = await findCodexRollout(meta);
+  if (!file) return null;
   let last: BridgeUsage | null = null;
   let turns = 0;
-  for (const ev of await readJsonlFile(best.file)) {
+  for (const ev of await readJsonlFile(file)) {
     const info = ev?.payload?.info ?? ev?.msg?.info;
     if ((ev?.payload?.type === 'token_count' || ev?.msg?.type === 'token_count') && info?.total_token_usage) {
       last = normalizeUsageObject(info.total_token_usage);
@@ -3888,12 +4054,30 @@ async function readCodexSessionUsage(cwd: string, startMs: number): Promise<Brid
   return last;
 }
 
-async function readGeminiCliSessionUsage(cwd: string, startMs: number): Promise<BridgeUsage | null> {
+async function readGeminiChat(file: string): Promise<any | null> {
+  try {
+    return JSON.parse(await fs.readFile(file, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+function geminiUserTexts(session: any): string[] {
+  const messages = Array.isArray(session?.messages) ? session.messages : [];
+  return messages.filter((m: any) => m?.type === 'user' || m?.role === 'user').map((m: any) => textOfContent(m.content ?? m.parts));
+}
+
+/** This session's Gemini CLI chat log (~/.gemini/tmp/<project>/chats/session-*.json), parsed. */
+async function findGeminiSession(meta: PtyUsageMeta): Promise<any | null> {
+  const bound = boundSessionLog(meta);
+  if (bound) return readGeminiChat(bound);
+  const startMs = Date.parse(meta.startedAt) || Date.now();
   const { createHash } = await import('node:crypto');
-  const hash = createHash('sha256').update(cwd).digest('hex');
+  const hash = createHash('sha256').update(meta.cwd).digest('hex');
   const root = path.join(os.homedir(), '.gemini', 'tmp');
   const dirs = await fs.readdir(root).catch(() => [] as string[]);
-  const total = emptyBridgeUsage();
+  const candidates: SessionLogCandidate[] = [];
+  const parsed = new Map<string, any>();
   for (const d of dirs) {
     const chats = path.join(root, d, 'chats');
     for (const f of await fs.readdir(chats).catch(() => [] as string[])) {
@@ -3901,15 +4085,24 @@ async function readGeminiCliSessionUsage(cwd: string, startMs: number): Promise<
       const file = path.join(chats, f);
       const stat = await fs.stat(file).catch(() => null);
       if (!stat || stat.mtimeMs < startMs - 5_000) continue;
-      let session: any = null;
-      try { session = JSON.parse(await fs.readFile(file, 'utf-8')); } catch { continue; }
-      if (d !== hash && session?.projectHash !== hash) continue;
-      const started = Date.parse(session?.startTime || '');
-      if (Number.isFinite(started) && started < startMs - 15_000) continue;
-      for (const msg of Array.isArray(session?.messages) ? session.messages : []) {
-        if (msg?.tokens) addBridgeUsage(total, normalizeUsageObject(msg.tokens));
-      }
+      const session = await readGeminiChat(file);
+      if (!session || (d !== hash && session?.projectHash !== hash)) continue;
+      const startTime = Date.parse(session?.startTime || '');
+      const started = Number.isFinite(startTime) ? startTime : stat.birthtimeMs || stat.mtimeMs;
+      if (started < startMs - 15_000) continue;
+      parsed.set(file, session);
+      candidates.push({ file, started, userTexts: geminiUserTexts(session) });
     }
+  }
+  const file = pickSessionLog(meta, candidates);
+  return file ? parsed.get(file) ?? null : null;
+}
+
+async function readGeminiCliSessionUsage(meta: PtyUsageMeta): Promise<BridgeUsage | null> {
+  const session = await findGeminiSession(meta);
+  const total = emptyBridgeUsage();
+  for (const msg of Array.isArray(session?.messages) ? session.messages : []) {
+    if (msg?.tokens) addBridgeUsage(total, normalizeUsageObject(msg.tokens));
   }
   return total.calls > 0 ? total : null;
 }
@@ -3947,30 +4140,166 @@ function estimatePtyUsage(meta: PtyUsageMeta): BridgeUsage {
   };
 }
 
+/** Prices a session's usage on the model it was launched with, when its log didn't price it already. */
+function withArgModelCost(usage: BridgeUsage, meta: PtyUsageMeta): BridgeUsage {
+  if (typeof usage.costUsd === 'number') return usage;
+  const cost = bridgeUsageCost(modelArgOf(meta.args), usage);
+  return typeof cost === 'number' ? { ...usage, costUsd: cost, costPartial: false } : { ...usage, costPartial: usage.inputTokens + usage.outputTokens > 0 };
+}
+
 async function resolvePtySessionUsage(meta: PtyUsageMeta): Promise<{ usage: BridgeUsage; source: string }> {
   const base = path.basename(meta.cmd).toLowerCase();
-  const startMs = Date.parse(meta.startedAt) || Date.now();
   try {
     if (base.includes('claude')) {
-      const sessionId = argValue(meta.args, '--session-id');
+      const sessionId = claudeSessionIdArg(meta.args);
       const usage = sessionId ? await readClaudeSessionUsage(sessionId, meta.cwd) : null;
       if (usage) return { usage, source: 'claude-session-log' };
     } else if (base.includes('codex')) {
-      const usage = await readCodexSessionUsage(meta.cwd, startMs);
-      if (usage) return { usage, source: 'codex-session-log' };
+      const usage = await readCodexSessionUsage(meta);
+      if (usage) return { usage: withArgModelCost(usage, meta), source: 'codex-session-log' };
     } else if (base === 'gemini') {
-      const usage = await readGeminiCliSessionUsage(meta.cwd, startMs);
-      if (usage) return { usage, source: 'gemini-session-log' };
+      const usage = await readGeminiCliSessionUsage(meta);
+      if (usage) return { usage: withArgModelCost(usage, meta), source: 'gemini-session-log' };
     }
   } catch (err) {
     console.warn('[Ergo PTY] Usage lookup failed, falling back to estimate:', err);
   }
-  return { usage: estimatePtyUsage(meta), source: 'estimate' };
+  return { usage: withArgModelCost(estimatePtyUsage(meta), meta), source: 'estimate' };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent final messages (for completion logs)
+// The agent's last reply, read from the CLI's own session log; else the last assistant-looking block of the
+// rendered transcript. Every reader fails soft.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type FinalMessageSource = 'claude-session-log' | 'codex-session-log' | 'gemini-session-log' | 'transcript' | 'none';
+
+function textOfContent(content: any): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part: any) => (typeof part === 'string' ? part : part && (part.type === 'text' || part.type === 'output_text' || part.text) ? String(part.text ?? '') : ''))
+    .filter((t: string) => t.trim())
+    .join('\n\n');
+}
+
+async function readClaudeFinalMessage(meta: PtyUsageMeta): Promise<string | null> {
+  const sessionId = claudeSessionIdArg(meta.args);
+  if (!sessionId) return null;
+  const log = await findClaudeSessionLog(sessionId, meta.cwd);
+  if (!log) return null;
+  const entries = (await readJsonlFile(log.file)).filter((e) => e?.type === 'assistant' && !e?.isSidechain && e?.message);
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const text = textOfContent((entries[i].message.content || []).filter?.((b: any) => b?.type === 'text') ?? entries[i].message.content);
+    if (!text.trim()) continue;
+    // One response is logged as one line per content block: collect the text blocks of the same message.
+    const id = entries[i].message.id;
+    const parts: string[] = [];
+    for (let j = i; j >= 0 && id && entries[j].message.id === id; j--) {
+      const t = textOfContent((entries[j].message.content || []).filter?.((b: any) => b?.type === 'text') ?? '');
+      if (t.trim()) parts.unshift(t);
+    }
+    return (parts.length ? parts.join('\n\n') : text).trim();
+  }
+  return null;
+}
+
+async function readCodexFinalMessage(meta: PtyUsageMeta): Promise<string | null> {
+  const file = await findCodexRollout(meta);
+  if (!file) return null;
+  let last: string | null = null;
+  for (const ev of await readJsonlFile(file)) {
+    const payload = ev?.payload ?? ev?.msg;
+    if (!payload) continue;
+    if (payload.type === 'agent_message' && typeof payload.message === 'string' && payload.message.trim()) {
+      last = payload.message;
+    } else if (payload.type === 'message' && payload.role === 'assistant') {
+      const text = textOfContent(payload.content);
+      if (text.trim()) last = text;
+    }
+  }
+  return last?.trim() || null;
+}
+
+async function readGeminiFinalMessage(meta: PtyUsageMeta): Promise<string | null> {
+  // Only this session's own chat log: other agents of the run share the cwd.
+  const session = await findGeminiSession(meta);
+  const messages = Array.isArray(session?.messages) ? session.messages : [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg?.type !== 'gemini' && msg?.type !== 'model' && msg?.role !== 'model') continue;
+    const text = textOfContent(msg.content ?? msg.parts);
+    if (text.trim()) return text.trim();
+  }
+  return null;
+}
+
+/** Last block of agent prose in a rendered transcript ("● text" / "⏺ text" / "✦ text" / "• text"), skipping tool calls. */
+function lastAssistantBlock(lines: string[]): string | null {
+  const BULLET_RE = /^\s*[●⏺✦•]\s+\S/;
+  const TOOL_RE = /^\s*[●⏺✦•]\s+(?:[A-Z][A-Za-z]*\(|(?:Ran|Read|Explored|Edited|Updated|Update|Wrote|Write|Searched|Search|Running|Called|Bash|Fetch|Task|Shell|Edit|ReadFile|WriteFile)\b)/;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!BULLET_RE.test(lines[i]) || TOOL_RE.test(lines[i])) continue;
+    const block = [lines[i].replace(/^\s*[●⏺✦•]\s+/, '').trim()];
+    for (let j = i + 1; j < lines.length; j++) {
+      const line = lines[j];
+      if (BULLET_RE.test(line) || /^\s*(?:[❯›>]|⎿)/.test(line) || !/^\s{2,}\S/.test(line)) break;
+      block.push(line.trim());
+    }
+    const text = block.join('\n').trim();
+    if (text) return text;
+  }
+  return null;
+}
+
+async function readAgentFinalMessage(meta: PtyUsageMeta, transcript?: ScreenTranscript): Promise<{ text?: string; source: FinalMessageSource }> {
+  const base = path.basename(meta.cmd).toLowerCase();
+  try {
+    if (base.includes('claude')) {
+      const text = await readClaudeFinalMessage(meta);
+      if (text) return { text, source: 'claude-session-log' };
+    } else if (base.includes('codex')) {
+      const text = await readCodexFinalMessage(meta);
+      if (text) return { text, source: 'codex-session-log' };
+    } else if (base === 'gemini' || base.startsWith('gemini')) {
+      const text = await readGeminiFinalMessage(meta);
+      if (text) return { text, source: 'gemini-session-log' };
+    }
+  } catch (err) {
+    console.warn('[Ergo PTY] Reading the agent session log failed, falling back to the transcript:', err);
+  }
+  const fromTranscript = transcript ? lastAssistantBlock(transcript.lines()) : null;
+  if (fromTranscript) return { text: fromTranscript, source: 'transcript' };
+  return { source: 'none' };
+}
+
+/** Transcript of a session that has no screen model (fallback): unique non-empty lines of the stripped log. */
+function transcriptFromBuffer(buffer: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of stripTerminalCodes(buffer.join('')).split('\n')) {
+    const l = line.replace(/\s+$/, '');
+    if (!l.trim() || seen.has(l)) continue;
+    seen.add(l);
+    out.push(l);
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PTY sessions
+// App launches every task agent (manager, workers, QA) over REST and views attach over the WebSocket. The bridge
+// keeps a VT screen per session, detects prompts on the rendered rows, auto-approves them under Full access,
+// applies live permission changes and watches the run's signal files. Everything is reported to attached views
+// (WebSocket) and to App (SSE /api/pty/events).
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface PtySessionState {
   id: string;
   taskId: string | number;
+  /** Ergo project the agent works for (from the spawn request); scopes its memory. */
+  projectId?: string;
   cmd: string;
   args: string[];
   cwd: string;
@@ -3982,103 +4311,1245 @@ interface PtySessionState {
   isActive: boolean;
   exitCode: number | null;
   startedAt: string;
+  /** When the process ended (exit or kill). */
+  endedAt?: string;
   /** Client-generated id of the launch that created this process; re-mounts with the same id reattach. */
   spawnId?: string;
+  role?: BridgeAgentRole;
+  label?: string;
+  pieceId?: string;
+  runId?: string;
+  /** `<cwd>/.ergo/runs/<runId>` */
+  runDir?: string;
+  /** Level the session runs under now (changed by /api/pty/policy). */
+  permissionLevel?: BridgePermission;
+  /** Level the CLI was launched with (its flags). */
+  launchPermissionLevel?: BridgePermission;
+  /** Text the CLI echoes back (its launch args), never read as menu content. */
+  echoedText: string;
+  screen: TerminalScreen;
+  transcript: ScreenTranscript;
+  observedScroll: number;
+  /** Confirmed prompt on screen (null when none). */
+  prompt: CliDetectedPrompt | null;
+  /** False while the prompt is being auto-approved (views and App are not told about it). */
+  promptVisible: boolean;
+  candidate: { signature: string | null; prompt: CliDetectedPrompt | null; count: number };
+  lastEvalAt: number;
+  evalTimer: ReturnType<typeof setTimeout> | null;
+  trailingEvalTimer: ReturnType<typeof setTimeout> | null;
+  autoApproved: Map<string, { at: number; attempts: number }>;
+  signals: Map<string, AgentSignalRecord>;
+  signalMtimes: Map<string, number>;
+  signalTimer: ReturnType<typeof setInterval> | null;
+  signalPoll: Promise<void>;
+  signalPollQueued: boolean;
+  /** Latest requested permission mode, and a mode switch waiting for the on-screen prompt to clear. */
+  modeTarget: BridgePermission | null;
+  pendingModeTarget: BridgePermission | null;
+  modeChain: Promise<unknown>;
+  /** Mode transitions seen after a mode key (`<cli>:<mode>:<key>` → next mode), so later switches can plan ahead. */
+  modeCycle: Map<string, Exclude<ScreenMode, null>>;
+  /** Time of the last output chunk (mode keys wait for a pause in output). */
+  lastOutputAt: number;
+  /** Size the process was launched with, and the views that size it (not observers); restored when the last one leaves. */
+  launchCols: number;
+  launchRows: number;
+  resizers: Set<any>;
+  /** Replaced by a newer process under the same id: its late events are dropped. */
+  superseded: boolean;
+  endedMeta?: EndedPtySession;
 }
 
 const activePtySessions = new Map<string, PtySessionState>();
+/** WebSockets attached to an id that has no live process yet (App may still be launching it). */
+const ptyKeyWatchers = new Map<string, Set<any>>();
+/** SSE clients of /api/pty/events. */
+const agentEventClients = new Set<ServerResponse>();
+
+const PROMPT_EVAL_THROTTLE_MS = 300;
+const PROMPT_EVAL_TRAILING_MS = 250;
+const AUTO_APPROVE_DEDUPE_MS = 5_000;
+const AUTO_APPROVE_MAX_ATTEMPTS = 3;
+const SIGNAL_POLL_MS = 1_500;
+const SIGNAL_MAX_BYTES = 64 * 1024;
+const MODE_SWITCH_STEP_MS = 350;
+const MODE_SWITCH_MAX_PRESSES = 6;
+const SAFE_RUN_ID_RE = /^[A-Za-z0-9._-]{1,80}$/;
+const SAFE_PIECE_ID_RE = /^[A-Za-z0-9_-]{1,12}$/;
+const AGENT_ROLES = new Set<BridgeAgentRole>(['manager', 'worker', 'qa']);
+
+let nodePtyModule: Promise<any> | null = null;
+
+/** node-pty is imported lazily so Vite never tries to bundle it. */
+function loadNodePty(): Promise<any> {
+  if (!nodePtyModule) {
+    nodePtyModule = import('node-pty')
+      .then((m: any) => m.default ?? m)
+      .catch((err) => {
+        nodePtyModule = null;
+        throw err;
+      });
+  }
+  return nodePtyModule;
+}
+
+function safeWsSend(ws: any, obj: Record<string, unknown>) {
+  if (ws?.readyState === 1 /* OPEN */) {
+    try {
+      ws.send(JSON.stringify(obj));
+    } catch {}
+  }
+}
+
+function sendToSubscribers(session: PtySessionState, obj: Record<string, unknown>) {
+  if (session.subscribers.size === 0) return;
+  const payload = JSON.stringify(obj);
+  for (const subscriber of session.subscribers) {
+    if (subscriber.readyState === 1 /* OPEN */) {
+      try {
+        subscriber.send(payload);
+      } catch {}
+    }
+  }
+}
+
+/** SSE event for App. Only task-agent sessions (launched with a role) are reported; login/onboarding terminals are not. */
+function broadcastAgentEvent(session: PtySessionState, event: Record<string, unknown>) {
+  if (session.superseded || !session.role) return;
+  const payload = {
+    ...event,
+    sessionId: session.id,
+    taskId: String(session.taskId),
+    role: session.role,
+    ...(session.runId ? { runId: session.runId } : {}),
+    at: new Date().toISOString(),
+  };
+  const data = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const client of agentEventClients) {
+    try {
+      client.write(data);
+    } catch {
+      agentEventClients.delete(client);
+    }
+  }
+}
+
+function cliKindOf(cmd: string): 'claude' | 'gemini' | 'other' {
+  const base = path.basename(cmd || '').toLowerCase();
+  if (base.includes('claude')) return 'claude';
+  if (base === 'gemini' || base.startsWith('gemini')) return 'gemini';
+  return 'other';
+}
+
+function resolvePtyCwd(raw: unknown): string {
+  let cwd = resolveStoragePath(typeof raw === 'string' && raw ? raw : os.homedir());
+  try {
+    if (!fsSync.existsSync(cwd)) cwd = process.cwd();
+  } catch {
+    cwd = process.cwd();
+  }
+  return cwd;
+}
+
+/** Creates `<cwd>/.ergo/runs/<runId>` and `<cwd>/.ergo/.gitignore` (`*`) so run files never reach git. */
+function ensureRunDir(cwd: string, runId: string): string {
+  const ergoDir = path.join(cwd, '.ergo');
+  const runDir = path.join(ergoDir, 'runs', runId);
+  fsSync.mkdirSync(runDir, { recursive: true });
+  const gitignore = path.join(ergoDir, '.gitignore');
+  if (!fsSync.existsSync(gitignore)) {
+    try {
+      fsSync.writeFileSync(gitignore, '*\n', 'utf-8');
+    } catch {}
+  }
+  return runDir;
+}
+
+function signalFilesFor(session: PtySessionState): Array<{ name: string; signal: AgentSignalKind }> {
+  if (!session.runId || !session.role) return [];
+  if (session.role === 'manager') {
+    return [
+      { name: 'delegate.json', signal: 'delegate' },
+      { name: 'completion.md', signal: 'complete' },
+    ];
+  }
+  if (session.role === 'worker') {
+    return session.pieceId && SAFE_PIECE_ID_RE.test(session.pieceId) ? [{ name: `worker-${session.pieceId}.md`, signal: 'worker-done' }] : [];
+  }
+  return [{ name: 'qa.md', signal: 'qa-verdict' }];
+}
+
+/** "VERDICT: PASS" / "**VERDICT:** FAIL" / "# Verdict: pass" on one of the first non-empty lines. */
+function parseQaVerdict(content: string): 'PASS' | 'FAIL' | undefined {
+  const lines = content.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 5);
+  for (const line of lines) {
+    const m = line.match(/verdict\W{0,6}(pass|fail)/i);
+    if (m) return m[1].toUpperCase() as 'PASS' | 'FAIL';
+  }
+  return undefined;
+}
+
+/**
+ * Reads the session's signal files. Emits a file when it is new or rewritten (mtime later than the last one emitted
+ * and not older than the session), non-empty and finished writing (≥ 400 ms old, unless `final`).
+ */
+function pollSignals(session: PtySessionState, final: boolean): Promise<void> {
+  const files = signalFilesFor(session);
+  if (files.length === 0 || !session.runDir) return Promise.resolve();
+  if (!final && session.signalPollQueued) return session.signalPoll;
+  session.signalPollQueued = true;
+  const run = async () => {
+    session.signalPollQueued = false;
+    const startedMs = Date.parse(session.startedAt) || 0;
+    for (const { name, signal } of files) {
+      try {
+        const abs = path.join(session.runDir!, name);
+        const stat = await fs.stat(abs).catch(() => null);
+        if (!stat || !stat.isFile() || stat.size === 0) continue;
+        const mtime = Math.round(stat.mtimeMs);
+        if (mtime <= (session.signalMtimes.get(name) ?? 0)) continue;
+        if (mtime < startedMs - 2_000) continue;
+        if (!final && Date.now() - mtime < 400) continue;
+        const full = await fs.readFile(abs, 'utf-8');
+        if (!full.trim()) continue;
+        let verdict: 'PASS' | 'FAIL' | undefined;
+        if (signal === 'delegate') {
+          try {
+            JSON.parse(full);
+          } catch {
+            continue; // still being written (or invalid): look again on the next poll
+          }
+        } else if (signal === 'qa-verdict') {
+          verdict = parseQaVerdict(full);
+          if (!verdict) {
+            if (!final) continue;
+            verdict = 'FAIL'; // QA ended without a verdict line: treat as not verified
+          }
+        }
+        const content = full.length > SIGNAL_MAX_BYTES ? full.slice(0, SIGNAL_MAX_BYTES) : full;
+        session.signalMtimes.set(name, mtime);
+        const record: AgentSignalRecord = {
+          signal,
+          file: `.ergo/runs/${session.runId}/${name}`,
+          mtime,
+          content,
+          ...(verdict ? { verdict } : {}),
+        };
+        session.signals.set(name, record);
+        if (session.endedMeta) session.endedMeta.signals = Array.from(session.signals.values());
+        console.log(`[Ergo PTY] Signal ${signal} from [${session.id}] (${name})`);
+        await ingestRunSignal(session, name, signal, full);
+        broadcastAgentEvent(session, { type: 'signal', ...record });
+      } catch (err) {
+        console.warn(`[Ergo PTY] Reading signal file ${name} for [${session.id}] failed:`, err);
+      }
+    }
+    // Agent notes (<runDir>/notes/) and CLI artifacts (Claude Code todo lists) go to the AI-only memory namespace.
+    await pollMemoryArtifacts(session, final);
+  };
+  session.signalPoll = session.signalPoll.then(run, run);
+  return session.signalPoll;
+}
+
+function stopSessionTimers(session: PtySessionState) {
+  if (session.evalTimer) clearTimeout(session.evalTimer);
+  if (session.trailingEvalTimer) clearTimeout(session.trailingEvalTimer);
+  if (session.signalTimer) clearInterval(session.signalTimer);
+  session.evalTimer = null;
+  session.trailingEvalTimer = null;
+  session.signalTimer = null;
+}
+
+// ── Prompt detection ──
+
+function observeTranscript(session: PtySessionState) {
+  const screen = session.screen;
+  const scrolled = screen.scrollCount - session.observedScroll;
+  session.observedScroll = screen.scrollCount;
+  const rows = scrolled > 0 && !screen.isAltScreen() ? screen.tailRows(screen.rows + Math.min(scrolled, 1500)) : screen.visibleRows();
+  session.transcript.observe(rows);
+}
+
+/** Evaluate at most every 300 ms while output flows, plus once 250 ms after the last chunk (no quiet period needed). */
+function schedulePromptEval(session: PtySessionState) {
+  if (!session.evalTimer) {
+    const wait = Math.max(0, PROMPT_EVAL_THROTTLE_MS - (Date.now() - session.lastEvalAt));
+    session.evalTimer = setTimeout(() => {
+      session.evalTimer = null;
+      evaluateSessionScreen(session);
+    }, wait);
+  }
+  if (session.trailingEvalTimer) clearTimeout(session.trailingEvalTimer);
+  session.trailingEvalTimer = setTimeout(() => {
+    session.trailingEvalTimer = null;
+    evaluateSessionScreen(session);
+  }, PROMPT_EVAL_TRAILING_MS);
+}
+
+function defaultOptionIndex(prompt: CliDetectedPrompt | null): number {
+  return prompt?.options?.findIndex((o) => o.isDefault) ?? -1;
+}
+
+/** A prompt is confirmed (or cleared) when two consecutive evaluations agree. */
+function evaluateSessionScreen(session: PtySessionState) {
+  if (!session.isActive || session.superseded) return;
+  session.lastEvalAt = Date.now();
+  let parsed: CliDetectedPrompt | null = null;
+  try {
+    observeTranscript(session);
+    parsed = parseCliScreenPrompt(session.screen.visibleRows(), { echoedText: session.echoedText });
+  } catch (err) {
+    console.warn(`[Ergo PTY] Prompt detection failed for [${session.id}]:`, err);
+    return;
+  }
+  const signature = parsed?.signature ?? null;
+  if (signature === session.candidate.signature) session.candidate.count++;
+  else session.candidate = { signature, prompt: parsed, count: 1 };
+  if (parsed) session.candidate.prompt = parsed;
+  if (session.candidate.count < 2) return;
+
+  if (signature === (session.prompt?.signature ?? null)) {
+    // Same prompt; keep the latest rendering (the highlighted option may have moved — answers depend on it).
+    if (parsed && session.prompt && defaultOptionIndex(parsed) !== defaultOptionIndex(session.prompt)) {
+      session.prompt = parsed;
+      if (session.promptVisible) {
+        // App (toast Approve) needs the moved highlight too: Enter answers whichever option is highlighted.
+        sendToSubscribers(session, { type: 'prompt', prompt: parsed });
+        broadcastAgentEvent(session, { type: 'prompt', prompt: parsed });
+      }
+    } else if (parsed) {
+      session.prompt = parsed;
+    }
+    return;
+  }
+  setSessionPrompt(session, parsed);
+}
+
+function setSessionPrompt(session: PtySessionState, prompt: CliDetectedPrompt | null) {
+  const wasVisible = session.promptVisible;
+  session.prompt = prompt;
+  session.promptVisible = false;
+  const visible = prompt ? !tryAutoApprove(session, prompt) : false;
+  if (visible) {
+    session.promptVisible = true;
+    sendToSubscribers(session, { type: 'prompt', prompt });
+    broadcastAgentEvent(session, { type: 'prompt', prompt });
+  } else if (wasVisible) {
+    sendToSubscribers(session, { type: 'prompt', prompt: null });
+    broadcastAgentEvent(session, { type: 'prompt', prompt: null });
+  }
+  if (!prompt) {
+    // The previous prompt was answered: auto-approvals for it succeeded.
+    for (const rec of session.autoApproved.values()) rec.attempts = 0;
+    if (session.pendingModeTarget) {
+      const target = session.pendingModeTarget;
+      session.pendingModeTarget = null;
+      void runModeSwitch(session, target).then((result) => {
+        broadcastAgentEvent(session, { type: 'policy', permissionLevel: target, applied: result.applied, deferred: true, ...(result.detail ? { detail: result.detail } : {}) });
+      });
+    }
+  }
+}
+
+/**
+ * Under Full access, answers an approval prompt with its plain "Yes / Allow once" option. Returns true when the
+ * prompt is being handled (keys sent, or waiting out the dedupe window), false when the user must answer it.
+ */
+function tryAutoApprove(session: PtySessionState, prompt: CliDetectedPrompt): boolean {
+  // Only task agents: the user's own terminals (login / onboarding shells) are never answered for them.
+  if (!session.role || session.permissionLevel !== 'bypass' || prompt.kind !== 'approval' || isBypassAcceptanceDialog(prompt)) return false;
+  const option = pickApproveOption(prompt);
+  if (!option || !session.isActive || !session.ptyProcess) return false;
+  const now = Date.now();
+  for (const [sig, rec] of session.autoApproved) if (now - rec.at > 60_000) session.autoApproved.delete(sig);
+  const rec = session.autoApproved.get(prompt.signature);
+  const scheduleRecheck = (delay: number) => {
+    setTimeout(() => {
+      if (session.isActive && !session.superseded && session.prompt?.signature === prompt.signature && !session.promptVisible) {
+        setSessionPrompt(session, session.prompt);
+      }
+    }, delay);
+  };
+  if (rec && now - rec.at < AUTO_APPROVE_DEDUPE_MS) {
+    scheduleRecheck(rec.at + AUTO_APPROVE_DEDUPE_MS - now + 50);
+    return true;
+  }
+  if (rec && rec.attempts >= AUTO_APPROVE_MAX_ATTEMPTS) {
+    console.warn(`[Ergo PTY] Auto-approve did not clear the prompt on [${session.id}] after ${rec.attempts} attempts; asking the user.`);
+    return false;
+  }
+  try {
+    session.ptyProcess.write(keystrokesForOption(prompt, option));
+  } catch {
+    return false;
+  }
+  session.autoApproved.set(prompt.signature, { at: now, attempts: (rec?.attempts ?? 0) + 1 });
+  scheduleRecheck(AUTO_APPROVE_DEDUPE_MS + 50);
+  const summary = promptSummary(prompt);
+  console.log(`[Ergo PTY] Auto-approved on [${session.id}]: ${summary}`);
+  sendToSubscribers(session, { type: 'auto-approved', summary });
+  broadcastAgentEvent(session, { type: 'auto-approved', summary });
+  return true;
+}
+
+// ── Live permission changes ──
+
+type PolicyApplied = 'live' | 'auto-approve-only' | 'restart-required' | 'unchanged';
+type ScreenMode = BridgePermission | 'auto' | null;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Claude Code's permission mode, from its footer ("⏵⏵ accept edits on", "⏸ plan mode on", "⏸ manual mode on"…). */
+function readClaudeMode(rows: string[]): ScreenMode {
+  const bottom = rows.map((r) => r.trim()).filter(Boolean).slice(-8);
+  const text = bottom.join('\n');
+  if (/bypass permissions on/i.test(text)) return 'bypass';
+  if (/accept edits on/i.test(text)) return 'acceptEdits';
+  if (/plan mode on/i.test(text)) return 'plan';
+  if (/auto mode on/i.test(text)) return 'auto';
+  if (/manual mode on|default mode on/i.test(text)) return 'ask';
+  // Older versions show no footer in the default mode: accept it only when the input box is clearly on screen.
+  if (bottom.some((r) => /^❯(?:\s|$)/.test(r)) && /\? for shortcuts|shift\+tab|esc to interrupt|^─{20,}$/m.test(text)) return 'ask';
+  return null;
+}
+
+/**
+ * Gemini CLI's approval mode, from its footer indicator: "YOLO ctrl+y", "auto-accept edits shift+tab to plan|manual",
+ * "plan shift+tab to manual", and "shift+tab to accept edits" in the default mode (minimal UI: "● auto edit" /
+ * "● plan" / "● YOLO", nothing in the default mode, and nothing at all while Gemini is busy).
+ */
+function readGeminiMode(rows: string[]): ScreenMode {
+  const text = rows.map((r) => r.trim()).filter(Boolean).slice(-8).join('\n');
+  if (/\bYOLO\b/.test(text) || /yolo mode/i.test(text)) return 'bypass';
+  if (/accepting edits|auto[- ]?accept(?:ing)? edits|\bauto[_ ]edit\b/i.test(text)) return 'acceptEdits';
+  if (/plan mode|(?:^|[\s●])plan\b[^\n]*\bto manual\b|●\s*plan\b/im.test(text)) return 'plan';
+  if (/\bto accept edits\b/i.test(text)) return 'ask';
+  // No indicator: the minimal UI's default mode, unless Gemini is busy (every indicator is hidden then).
+  if (/esc to cancel/i.test(text)) return null;
+  return 'ask';
+}
+
+function promptOnScreen(session: PtySessionState): boolean {
+  if (session.prompt) return true;
+  try {
+    return Boolean(parseCliScreenPrompt(session.screen.visibleRows(), { echoedText: session.echoedText }));
+  } catch {
+    return false;
+  }
+}
+
+type ModeSwitchResult = { ok: boolean; queued?: boolean; detail?: string };
+
+/** How much a mode lets the agent do without asking. Never rest on a mode above both the start and the target. */
+const MODE_RANK: Record<string, number> = { plan: 0, ask: 1, acceptEdits: 2, auto: 3, bypass: 4 };
+const modeRank = (mode: ScreenMode) => (mode ? MODE_RANK[mode] ?? 0 : 0);
+const MODE_POLL_MS = 25;
+/** Keys are sent only after the CLI's output has paused this long (bounded), so they never race a frame in flight. */
+const MODE_QUIET_MS = 80;
+const MODE_QUIET_MAX_WAIT_MS = 600;
+const MODE_QUIET_ESCALATED_MAX_WAIT_MS = 150;
+
+async function waitForQuietOutput(session: PtySessionState, maxWaitMs = MODE_QUIET_MAX_WAIT_MS) {
+  const deadline = Date.now() + maxWaitMs;
+  while (session.isActive && Date.now() < deadline && Date.now() - session.lastOutputAt < MODE_QUIET_MS) await sleep(MODE_POLL_MS);
+}
+
+/** Polls the screen after a key press until it shows a mode other than `from`; null when it never changes. */
+async function waitForModeChange(session: PtySessionState, read: () => ScreenMode, from: ScreenMode): Promise<ScreenMode> {
+  const deadline = Date.now() + MODE_SWITCH_STEP_MS * 2;
+  while (Date.now() < deadline) {
+    await sleep(MODE_POLL_MS);
+    if (!session.isActive || session.superseded) return null;
+    const mode = read();
+    if (mode !== null && mode !== from) return mode;
+  }
+  return null;
+}
+
+interface ModeDriver {
+  /** "Claude Code" / "Gemini CLI", for messages. */
+  name: string;
+  read: () => ScreenMode;
+  /** Keys that move `mode` one step toward `goal`, or why no safe step exists. */
+  step: (mode: Exclude<ScreenMode, null>, goal: BridgePermission) => { keys: string } | { refuse: string };
+  /** Checked once against the starting mode, before any key is sent; returns why the switch must not start. */
+  precheck?: (initial: Exclude<ScreenMode, null>, goal: BridgePermission) => string | null;
+}
+
+/**
+ * Steps a CLI's permission mode toward `goal` one key at a time, reading the screen after every key. Never presses
+ * while a prompt is open (re-checked right before each key), and moves straight on from a mode that is more
+ * permissive than both the start and the goal. On failure it steps back to the starting mode where that is safe.
+ */
+async function driveModeSwitch(session: PtySessionState, goal: BridgePermission, driver: ModeDriver, rollback = false): Promise<ModeSwitchResult> {
+  const ended = (): ModeSwitchResult | null => {
+    if (!session.isActive || session.superseded) return { ok: false, detail: 'The session has ended.' };
+    if (!rollback && session.modeTarget !== goal) return { ok: false, detail: 'Superseded by a newer permission change.' };
+    return null;
+  };
+  let initial: ScreenMode = null;
+  let unreadable = 0;
+  let stalls = 0;
+  let presses = 0;
+  const left = new Set<ScreenMode>();
+  const fail = async (detail: string): Promise<ModeSwitchResult> => {
+    // Go back to the starting mode rather than leaving an arbitrary one on, but only when that is no more permissive.
+    const start = initial;
+    const now = driver.read();
+    if (!rollback && start && start !== 'auto' && now && now !== start && modeRank(start) <= modeRank(now) && !ended()) {
+      await driveModeSwitch(session, start, driver, true).catch(() => undefined);
+    }
+    return { ok: false, detail };
+  };
+  while (true) {
+    const stop = ended();
+    if (stop) return stop;
+    if (promptOnScreen(session)) return { ok: false, queued: true };
+    const mode = driver.read();
+    if (mode === goal) return { ok: true };
+    if (mode === null) {
+      // Mode not readable right now (repaint, overlay, busy): wait a moment, but never press blind.
+      if (++unreadable > 4) return fail(`Could not read ${driver.name}'s permission mode.`);
+      await sleep(MODE_SWITCH_STEP_MS);
+      continue;
+    }
+    if (initial === null) {
+      initial = mode;
+      const refused = driver.precheck?.(mode, goal);
+      if (refused) return { ok: false, detail: refused };
+    }
+    // Back at a mode already left once: the goal is not in this cycle.
+    if (left.has(mode)) return fail(`This mode is not in ${driver.name}'s mode cycle.`);
+    if (presses >= MODE_SWITCH_MAX_PRESSES) return fail(`${driver.name} did not reach this mode after ${presses} key presses.`);
+    const step = driver.step(mode, goal);
+    if ('refuse' in step) return fail(step.refuse);
+    // A mode more permissive than both the start and the goal (auto) is left quickly, but still only after a short
+    // pause in output: a dialog drawn in that gap would take the key (shift+tab answers Claude's edit dialog).
+    const escalated = modeRank(mode) > Math.max(modeRank(initial), modeRank(goal));
+    await waitForQuietOutput(session, escalated ? MODE_QUIET_ESCALATED_MAX_WAIT_MS : MODE_QUIET_MAX_WAIT_MS);
+    const again = ended();
+    if (again) return again;
+    if (driver.read() !== mode) continue;
+    // Checked immediately before the key: a key landing in a permission dialog would answer it.
+    if (promptOnScreen(session)) return { ok: false, queued: true };
+    try {
+      session.ptyProcess.write(step.keys);
+    } catch {
+      return { ok: false, detail: 'Could not write to the terminal.' };
+    }
+    presses++;
+    const next = await waitForModeChange(session, driver.read, mode);
+    if (next === null) {
+      if (++stalls >= 2) return fail(`${driver.name} did not respond to the mode key.`);
+      continue;
+    }
+    left.add(mode);
+    session.modeCycle.set(`${driver.name}:${mode}:${step.keys}`, next);
+  }
+}
+
+/** True when Claude Code's shift+tab cycle includes bypass permissions (observed, else from its launch flags). */
+function claudeBypassInCycle(session: PtySessionState): boolean {
+  const seen = session.modeCycle.get('Claude Code:plan:\x1b[Z');
+  if (seen !== undefined) return seen === 'bypass';
+  if (session.args.some((a) => /^--(?:allow-)?dangerously-skip-permissions(?:=|$)/.test(a))) return true;
+  return argValue(session.args, '--permission-mode') === 'bypassPermissions';
+}
+
+/** Claude Code 2.1's shift+tab cycle: default → acceptEdits → plan → [bypassPermissions] → [auto] → default. */
+function predictClaudeNext(session: PtySessionState, mode: Exclude<ScreenMode, null>): Exclude<ScreenMode, null> {
+  const seen = session.modeCycle.get(`Claude Code:${mode}:\x1b[Z`);
+  if (seen) return seen;
+  switch (mode) {
+    case 'ask':
+      return 'acceptEdits';
+    case 'acceptEdits':
+      return 'plan';
+    case 'plan':
+      return claudeBypassInCycle(session) ? 'bypass' : 'auto';
+    case 'bypass':
+      return 'auto';
+    default:
+      return 'ask';
+  }
+}
+
+const CLAUDE_CROSSES_BYPASS =
+  "Claude Code can only reach this mode by cycling through bypass permissions, which would let tools run unapproved in between; restart the agent to apply it.";
+
+/**
+ * Cycles Claude Code's mode with shift+tab (there is no reverse key). It never passes through bypass permissions on
+ * the way to another mode, and moves straight on from auto mode; such a switch needs a restart instead.
+ */
+function switchClaudeMode(session: PtySessionState, target: BridgePermission): Promise<ModeSwitchResult> {
+  return driveModeSwitch(session, target, {
+    name: 'Claude Code',
+    read: () => readClaudeMode(session.screen.visibleRows()),
+    precheck: (initial, goal) => {
+      let mode = initial;
+      for (let i = 0; i < MODE_SWITCH_MAX_PRESSES && mode !== goal; i++) {
+        const next = predictClaudeNext(session, mode);
+        if (next === 'bypass' && goal !== 'bypass') return CLAUDE_CROSSES_BYPASS;
+        mode = next;
+      }
+      if (mode === goal) return null;
+      return goal === 'bypass'
+        ? "Bypass permissions is not in this Claude Code session's shift+tab cycle."
+        : "This mode is not in Claude Code's shift+tab cycle.";
+    },
+    step: (mode, goal) =>
+      predictClaudeNext(session, mode) === 'bypass' && goal !== 'bypass' ? { refuse: CLAUDE_CROSSES_BYPASS } : { keys: '\x1b[Z' },
+  });
+}
+
+/**
+ * Gemini CLI: Ctrl+Y toggles YOLO (off lands in DEFAULT, not the launch mode); shift+tab cycles
+ * DEFAULT → AUTO_EDIT → [PLAN] → DEFAULT, and YOLO → AUTO_EDIT. The result is read back from the footer.
+ */
+function switchGeminiMode(session: PtySessionState, target: BridgePermission): Promise<ModeSwitchResult> {
+  return driveModeSwitch(session, target, {
+    name: 'Gemini CLI',
+    read: () => readGeminiMode(session.screen.visibleRows()),
+    step: (mode, goal) => {
+      if (goal === 'bypass') return { keys: '\x19' };
+      if (mode === 'bypass') return { keys: goal === 'ask' ? '\x19' : '\x1b[Z' };
+      if (mode === 'acceptEdits' && goal === 'plan') {
+        const footer = session.screen.visibleRows().map((r) => r.trim()).filter(Boolean).slice(-8).join('\n');
+        if (/\bto manual\b/i.test(footer) && !/\bto plan\b/i.test(footer)) return { refuse: "Gemini CLI's plan mode is not enabled in this session." };
+      }
+      return { keys: '\x1b[Z' };
+    },
+  });
+}
+
+function policyFallback(session: PtySessionState, target: BridgePermission, detail?: string): { applied: PolicyApplied; detail?: string } {
+  if (target === 'bypass') return { applied: 'auto-approve-only', detail: detail ? `${detail} Ergo approves its prompts instead.` : 'Ergo approves its prompts automatically.' };
+  return { applied: 'restart-required', detail: detail || `${path.basename(session.cmd)} can't change this permission level while running.` };
+}
+
+/** Runs one mode switch for `target` after any switch already in progress. */
+function runModeSwitch(session: PtySessionState, target: BridgePermission): Promise<{ applied: PolicyApplied; detail?: string }> {
+  session.modeTarget = target;
+  const kind = cliKindOf(session.cmd);
+  const job = session.modeChain.then(async (): Promise<{ applied: PolicyApplied; detail?: string }> => {
+    if (session.modeTarget !== target) return { applied: 'unchanged', detail: 'Superseded by a newer permission change.' };
+    const result = kind === 'claude' ? await switchClaudeMode(session, target) : await switchGeminiMode(session, target);
+    if (result.ok) return { applied: 'live' };
+    if (result.queued) {
+      session.pendingModeTarget = target;
+      if (!session.prompt) {
+        // Only a passing frame parsed as a prompt (never confirmed), so no prompt-cleared event will run the queued
+        // switch. Retry on our own once the screen has had time to settle.
+        setTimeout(() => {
+          if (session.pendingModeTarget !== target || session.prompt || !session.isActive) return;
+          session.pendingModeTarget = null;
+          void runModeSwitch(session, target).then((retry) => {
+            broadcastAgentEvent(session, { type: 'policy', permissionLevel: target, applied: retry.applied, deferred: true, ...(retry.detail ? { detail: retry.detail } : {}) });
+          });
+        }, 1500);
+      }
+      return target === 'bypass'
+        ? { applied: 'auto-approve-only', detail: 'Ergo approves the open prompt now and switches the mode once it is answered.' }
+        : { applied: 'live', detail: 'Switches as soon as the open prompt is answered.' };
+    }
+    return policyFallback(session, target, result.detail);
+  });
+  session.modeChain = job.catch(() => undefined);
+  return job.catch((err) => policyFallback(session, target, String(err?.message || err)));
+}
+
+async function applySessionPolicy(session: PtySessionState, level: BridgePermission): Promise<{ sessionId: string; applied: PolicyApplied; detail?: string }> {
+  const previous = session.permissionLevel;
+  session.permissionLevel = level;
+  // A prompt already on screen: approve it now (bypass), or show it again (it was being auto-approved).
+  if (session.prompt && (level === 'bypass' ? session.promptVisible : !session.promptVisible)) setSessionPrompt(session, session.prompt);
+  let result: { applied: PolicyApplied; detail?: string };
+  if (!session.isActive) {
+    result = { applied: 'unchanged', detail: 'The session has ended.' };
+  } else {
+    const kind = cliKindOf(session.cmd);
+    if (kind === 'claude' || kind === 'gemini') {
+      result = await runModeSwitch(session, level);
+    } else if (level === 'bypass') {
+      result = { applied: 'auto-approve-only', detail: 'Ergo approves its prompts automatically.' };
+    } else if (level !== (session.launchPermissionLevel ?? previous)) {
+      result = { applied: 'restart-required', detail: `${path.basename(session.cmd)} can't change this permission level while running.` };
+    } else {
+      result = { applied: 'unchanged' };
+    }
+  }
+  broadcastAgentEvent(session, { type: 'policy', permissionLevel: level, applied: result.applied, ...(result.detail ? { detail: result.detail } : {}) });
+  return { sessionId: session.id, ...result };
+}
+
+// ── Spawn / kill ──
+
+interface PtySpawnOptions {
+  sessionKey: string;
+  taskId: string | number;
+  projectId?: string;
+  cmd: string;
+  args: string[];
+  cwd: string;
+  env?: Record<string, string>;
+  cols?: number;
+  rows?: number;
+  spawnId?: string;
+  role?: BridgeAgentRole;
+  label?: string;
+  pieceId?: string;
+  runId?: string;
+  runDir?: string;
+  permissionLevel?: BridgePermission;
+  /** The WebSocket that asked for the launch (legacy WS spawn). */
+  subscriber?: any;
+}
+
+function terminateProcess(session: PtySessionState) {
+  if (!session.isActive) return; // never signal a pid that may already belong to another process
+  try {
+    if (typeof session.ptyProcess?.pid === 'number' && session.ptyProcess.pid > 0) {
+      const pid = session.ptyProcess.pid;
+      try {
+        // Kill the process group first to stop child CLI processes (e.g. gemini-cli, node, bash)
+        process.kill(-pid, 'SIGTERM');
+      } catch {
+        try {
+          process.kill(pid, 'SIGTERM');
+        } catch {}
+      }
+      try {
+        session.ptyProcess.kill('SIGKILL');
+      } catch {
+        try {
+          session.ptyProcess.kill();
+        } catch {}
+      }
+      // Ensure the process group is gone
+      setTimeout(() => {
+        try {
+          process.kill(-pid, 'SIGKILL');
+        } catch {}
+      }, 200);
+    }
+  } catch {}
+}
+
+/** Kills a session (if running) and moves it to endedPtySessions. Its exit is reported when the process dies. */
+function killPtySession(session: PtySessionState, reason: string) {
+  const wasActive = session.isActive;
+  terminateProcess(session);
+  session.isActive = false;
+  session.endedAt = session.endedAt || new Date().toISOString();
+  if (session.evalTimer) clearTimeout(session.evalTimer);
+  if (session.trailingEvalTimer) clearTimeout(session.trailingEvalTimer);
+  session.evalTimer = null;
+  session.trailingEvalTimer = null;
+  rememberEndedPtySession(session.id, session);
+  if (activePtySessions.get(session.id) === session) activePtySessions.delete(session.id);
+  if (!wasActive) stopSessionTimers(session);
+  // The exit handler stops the signal watcher after its final poll; this is the backstop if the exit never comes.
+  else setTimeout(() => stopSessionTimers(session), 10_000);
+  console.log(`[Ergo PTY] Session [${session.id}] killed (${reason}).`);
+}
+
+function resizeSession(session: PtySessionState, cols: unknown, rows: unknown) {
+  if (typeof cols !== 'number' || typeof rows !== 'number' || cols < 2 || rows < 1) return;
+  const c = Math.min(500, Math.floor(cols));
+  const r = Math.min(300, Math.floor(rows));
+  if (c === session.screen.cols && r === session.screen.rows) return;
+  if (session.isActive) {
+    try {
+      session.ptyProcess?.resize(c, r);
+    } catch {}
+  }
+  session.screen.resize(c, r);
+  // Observers (Notes view) keep their own screen model in sync with the PTY size.
+  sendToSubscribers(session, { type: 'resized', cols: c, rows: r });
+}
+
+/**
+ * The user's Claude Code user settings (~/.claude/settings.json) without `enabledPlugins` (and without `model` when
+ * Ergo passes --model), written to a private temp file for `--settings`, used with `--setting-sources project,local`.
+ * Permissions, API-key helper, effort and hooks carry over unchanged. Null when it can't be written (the agent then
+ * starts with the full settings, as before).
+ */
+function writeAgentClaudeSettings(opts: { apiKeyHelperOff: boolean; keepModel: boolean }): string | null {
+  try {
+    let user: Record<string, unknown> = {};
+    try {
+      user = JSON.parse(fsSync.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf-8')) || {};
+    } catch {}
+    const { enabledPlugins: _plugins, ...rest } = user;
+    if (!opts.keepModel) delete rest.model;
+    if (opts.apiKeyHelperOff) rest.apiKeyHelper = '';
+    const file = path.join(os.tmpdir(), `ergo-agent-claude-settings-${process.getuid?.() ?? 'u'}.json`);
+    fsSync.writeFileSync(file, JSON.stringify(rest), { mode: 0o600 });
+    fsSync.chmodSync(file, 0o600);
+    return file;
+  } catch (err) {
+    console.warn('[Ergo PTY] Could not write agent Claude settings; using the full settings:', err);
+    return null;
+  }
+}
+
+/**
+ * Starts a PTY process under `sessionKey` (both REST /api/pty/spawn and the legacy WS spawn use this).
+ * A session already running under that key is killed and replaced; views attached to it (or waiting for the
+ * key) follow the new process. Throws when the process cannot be spawned.
+ */
+function spawnPtySession(pty: any, opts: PtySpawnOptions): PtySessionState {
+  const sessionKey = opts.sessionKey;
+  const cmd = opts.cmd || 'bash';
+  const args = [...opts.args];
+  const customEnv: Record<string, string> = {};
+  for (const [k, v] of Object.entries(opts.env && typeof opts.env === 'object' ? opts.env : {})) {
+    if (typeof v === 'string') customEnv[k] = v;
+  }
+
+  if (cmd.includes('agy') || cmd === 'antigravity') {
+    const flag = path.join(os.homedir(), '.gemini', '.ergo_disconnected_agy');
+    if (fsSync.existsSync(flag)) {
+      try { fsSync.unlinkSync(flag); } catch {}
+    }
+  }
+
+  const cwd = opts.cwd;
+  // Task agents get Ergo's memory MCP server: launch flags before the prompt (claude, codex) or a config file
+  // entry (gemini, agy). Fails soft.
+  if (opts.role) {
+    getMemoryStore().warm(); // the agent's first signal / memory call should not wait for the model
+    registerMemoryMcp({ cmd, args, cwd, projectId: opts.projectId, taskId: opts.taskId, runId: opts.runId, sessionId: sessionKey });
+  }
+  // If running Claude CLI, sync API key approval and workspace trust into ~/.claude.json
+  if (cmd.toLowerCase().includes('claude')) {
+    const anthropicKey = customEnv.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
+    syncClaudeConfig(anthropicKey, cwd);
+    // Task agents run with the user's Claude Code settings minus their plugins: plugin skill and agent listings are
+    // ~9k tokens in every agent's first prompt (28.6k → 19.6k measured) and Ergo's agents follow Ergo's own skills.
+    const agentSettings = opts.role && !args.includes('--settings') && !args.includes('--setting-sources')
+      ? writeAgentClaudeSettings({ apiKeyHelperOff: Boolean(anthropicKey), keepModel: !args.includes('--model') })
+      : null;
+    if (agentSettings) {
+      args.push('--setting-sources', 'project,local', '--settings', agentSettings);
+    } else if (anthropicKey && !args.includes('--settings')) {
+      args.push('--settings', '{"apiKeyHelper":""}');
+    }
+  }
+  const cols = typeof opts.cols === 'number' && opts.cols > 1 ? Math.min(500, Math.floor(opts.cols)) : 120;
+  const rows = typeof opts.rows === 'number' && opts.rows > 0 ? Math.min(300, Math.floor(opts.rows)) : 40;
+
+  // Replace whatever runs under this key; its views follow the new process.
+  const previous = activePtySessions.get(sessionKey);
+  const followers = new Set<any>();
+  if (previous) {
+    previous.superseded = true;
+    if (previous.isActive) {
+      console.log(`[Ergo PTY] Replacing session [${sessionKey}] (pid ${previous.ptyProcess?.pid})`);
+      killPtySession(previous, 'replaced by a new launch');
+    } else {
+      rememberEndedPtySession(sessionKey, previous);
+      activePtySessions.delete(sessionKey);
+      stopSessionTimers(previous);
+    }
+    for (const ws of previous.subscribers) followers.add(ws);
+    previous.subscribers.clear();
+  }
+  for (const ws of ptyKeyWatchers.get(sessionKey) || []) followers.add(ws);
+  ptyKeyWatchers.delete(sessionKey);
+  if (opts.subscriber) followers.delete(opts.subscriber);
+
+  console.log(`[Ergo PTY] Spawning session [${sessionKey}]: ${cmd} ${args.join(' ')} in ${cwd}`);
+  const proc = pty.spawn(cmd, args, {
+    name: 'xterm-256color',
+    cols,
+    rows,
+    cwd,
+    env: {
+      ...process.env,
+      ...customEnv,
+    } as Record<string, string>,
+  });
+
+  const session: PtySessionState = {
+    id: sessionKey,
+    taskId: opts.taskId,
+    projectId: opts.projectId,
+    cmd,
+    args,
+    cwd,
+    ptyProcess: proc,
+    buffer: [],
+    bufferLength: 0,
+    maxBufferChars: 200000,
+    subscribers: new Set(opts.subscriber ? [opts.subscriber] : []),
+    isActive: true,
+    exitCode: null,
+    startedAt: new Date().toISOString(),
+    spawnId: opts.spawnId,
+    role: opts.role,
+    label: opts.label,
+    pieceId: opts.pieceId,
+    runId: opts.runId,
+    runDir: opts.runDir,
+    permissionLevel: opts.permissionLevel,
+    launchPermissionLevel: opts.permissionLevel,
+    echoedText: args.join('\n'),
+    screen: new TerminalScreen(cols, rows),
+    transcript: new ScreenTranscript(),
+    observedScroll: 0,
+    prompt: null,
+    promptVisible: false,
+    candidate: { signature: null, prompt: null, count: 0 },
+    lastEvalAt: 0,
+    evalTimer: null,
+    trailingEvalTimer: null,
+    autoApproved: new Map(),
+    signals: new Map(),
+    signalMtimes: new Map(),
+    signalTimer: null,
+    signalPoll: Promise.resolve(),
+    signalPollQueued: false,
+    modeTarget: null,
+    pendingModeTarget: null,
+    modeChain: Promise.resolve(),
+    modeCycle: new Map(),
+    lastOutputAt: 0,
+    launchCols: cols,
+    launchRows: rows,
+    resizers: new Set(opts.subscriber ? [opts.subscriber] : []),
+    superseded: false,
+  };
+  activePtySessions.set(sessionKey, session);
+
+  proc.onData((data: string) => {
+    session.lastOutputAt = Date.now();
+    session.buffer.push(data);
+    session.bufferLength += data.length;
+    while (session.bufferLength > session.maxBufferChars && session.buffer.length > 1) {
+      const removed = session.buffer.shift();
+      if (removed) session.bufferLength -= removed.length;
+    }
+    sendToSubscribers(session, { type: 'data', data });
+    try {
+      session.screen.write(data);
+    } catch (err) {
+      console.warn(`[Ergo PTY] Screen model error for [${sessionKey}]:`, err);
+    }
+    schedulePromptEval(session);
+  });
+
+  proc.onExit(({ exitCode }: { exitCode: number }) => {
+    console.log(`[Ergo PTY] Session [${sessionKey}] exited with code ${exitCode}`);
+    session.isActive = false;
+    session.endedAt = session.endedAt || new Date().toISOString();
+    session.exitCode = exitCode;
+    if (session.endedMeta) session.endedMeta.exitCode = exitCode;
+    if (session.evalTimer) clearTimeout(session.evalTimer);
+    if (session.trailingEvalTimer) clearTimeout(session.trailingEvalTimer);
+    session.evalTimer = null;
+    session.trailingEvalTimer = null;
+    try {
+      observeTranscript(session);
+    } catch {}
+    if (session.prompt) {
+      const wasVisible = session.promptVisible;
+      session.prompt = null;
+      session.promptVisible = false;
+      if (wasVisible) {
+        sendToSubscribers(session, { type: 'prompt', prompt: null });
+        broadcastAgentEvent(session, { type: 'prompt', prompt: null });
+      }
+    }
+    // Signal files written just before exiting are reported before the exit itself.
+    void pollSignals(session, true).finally(() => {
+      stopSessionTimers(session);
+      sendToSubscribers(session, { type: 'exit', code: exitCode });
+      broadcastAgentEvent(session, { type: 'exit', code: exitCode });
+    });
+  });
+
+  if (signalFilesFor(session).length > 0 && session.runDir) {
+    session.signalTimer = setInterval(() => {
+      if (session.isActive) void pollSignals(session, false);
+    }, SIGNAL_POLL_MS);
+  }
+
+  for (const ws of followers) {
+    if (ws.readyState !== 1 /* OPEN */) continue;
+    session.subscribers.add(ws);
+    safeWsSend(ws, { type: 'ready', reattached: false, restarted: true, taskId: session.taskId, sessionId: sessionKey, cols, rows });
+    safeWsSend(ws, { type: 'replay', data: '' }); // clears the view for the new process
+  }
+  return session;
+}
+
+function sessionInfo(s: PtySessionState) {
+  return {
+    id: s.id,
+    taskId: s.taskId,
+    ...(s.projectId ? { projectId: s.projectId } : {}),
+    ...(s.role ? { role: s.role } : {}),
+    ...(s.label ? { label: s.label } : {}),
+    ...(s.pieceId ? { pieceId: s.pieceId } : {}),
+    ...(s.runId ? { runId: s.runId } : {}),
+    ...(s.spawnId ? { spawnId: s.spawnId } : {}),
+    ...(s.permissionLevel ? { permissionLevel: s.permissionLevel } : {}),
+    cmd: s.cmd,
+    args: s.args,
+    cwd: s.cwd,
+    isActive: s.isActive,
+    exitCode: s.exitCode,
+    startedAt: s.startedAt,
+    ...(s.endedAt ? { endedAt: s.endedAt } : {}),
+    hasSubscribers: s.subscribers.size > 0,
+    prompt: s.promptVisible ? s.prompt : null,
+    signals: Array.from(s.signals.values()),
+  };
+}
 
 function ergoPtyPlugin(): Plugin {
   return {
     name: 'ergo-pty',
     configureServer(server) {
-      // REST middleware for querying active background sessions and killing them
+      // REST API: App launches and steers agent sessions; views only attach over the WebSocket.
       server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
         const url = req.url?.split('?')[0];
-        if (url?.startsWith('/api/pty/') && !guardBridgeRequest(req, res)) return;
+        if (!url?.startsWith('/api/pty/')) return next();
+        if (!guardBridgeRequest(req, res)) return;
+
         if (url === '/api/pty/sessions' && req.method === 'GET') {
-          const sessions = Array.from(activePtySessions.values()).map((s) => ({
-            id: s.id,
-            taskId: s.taskId,
-            cmd: s.cmd,
-            args: s.args,
-            cwd: s.cwd,
-            isActive: s.isActive,
-            exitCode: s.exitCode,
-            startedAt: s.startedAt,
-            hasSubscribers: s.subscribers.size > 0,
-          }));
-          res.setHeader('Content-Type', 'application/json');
-          res.statusCode = 200;
-          return res.end(JSON.stringify({ success: true, sessions }));
+          const sessions = Array.from(activePtySessions.values()).map(sessionInfo);
+          return sendJson(res, 200, { success: true, sessions });
+        }
+
+        if (url === '/api/pty/events' && req.method === 'GET') {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache, no-transform',
+            'Connection': 'keep-alive',
+          });
+          res.write('data: {"type":"connected"}\n\n');
+          agentEventClients.add(res);
+          const heartbeat = setInterval(() => {
+            try {
+              res.write(': keep-alive\n\n');
+            } catch {
+              clearInterval(heartbeat);
+              agentEventClients.delete(res);
+            }
+          }, 20_000);
+          req.on('close', () => {
+            clearInterval(heartbeat);
+            agentEventClients.delete(res);
+          });
+          return;
         }
 
         if (url === '/api/pty/usage' && req.method === 'GET') {
           const fullUrl = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
           const id = fullUrl.searchParams.get('sessionId') || '';
           const meta: PtyUsageMeta | undefined = activePtySessions.get(id) || endedPtySessions.get(id);
-          res.setHeader('Content-Type', 'application/json');
-          if (!meta) {
-            res.statusCode = 404;
-            return res.end(JSON.stringify({ success: false, error: 'No PTY session with that id.' }));
-          }
+          if (!meta) return sendJson(res, 404, { success: false, error: 'No PTY session with that id.' });
           const { usage, source } = await resolvePtySessionUsage(meta);
-          res.statusCode = 200;
-          return res.end(JSON.stringify({ success: true, usage, source, cli: path.basename(meta.cmd) }));
+          return sendJson(res, 200, { success: true, usage, source, cli: path.basename(meta.cmd) });
+        }
+
+        if (url === '/api/pty/cli-session' && req.method === 'GET') {
+          // The agent CLI's own resumable conversation id (a follow-up resumes the manager with it): Claude's
+          // --session-id / --resume, Codex's rollout session id. Null when unknown (e.g. Antigravity: read from its
+          // exit text instead).
+          const fullUrl = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+          const id = fullUrl.searchParams.get('sessionId') || '';
+          const meta: PtyUsageMeta | undefined = activePtySessions.get(id) || endedPtySessions.get(id);
+          if (!meta) return sendJson(res, 404, { success: false, error: 'No PTY session with that id.' });
+          const base = path.basename(meta.cmd).toLowerCase();
+          let cliSessionId: string | null = null;
+          try {
+            if (base.includes('claude')) {
+              cliSessionId = claudeSessionIdArg(meta.args) || null;
+            } else if (base.includes('codex')) {
+              const file = await findCodexRollout(meta);
+              const uuidRe = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+              if (file) {
+                const first = (await fs.readFile(file, 'utf-8').catch(() => '')).split('\n', 1)[0];
+                let head: any = null;
+                try { head = JSON.parse(first); } catch {}
+                const fromMeta = head?.payload?.id ?? head?.id;
+                cliSessionId = typeof fromMeta === 'string' && uuidRe.test(fromMeta) ? fromMeta : path.basename(file).match(uuidRe)?.[1] ?? null;
+              }
+            }
+          } catch (err) {
+            console.warn('[Ergo PTY] CLI session id lookup failed:', err);
+          }
+          return sendJson(res, 200, { success: true, cliSessionId, cli: base });
+        }
+
+        if (url === '/api/pty/transcript' && req.method === 'GET') {
+          const fullUrl = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+          const id = fullUrl.searchParams.get('sessionId') || '';
+          const live = activePtySessions.get(id);
+          const ended = live ? undefined : endedPtySessions.get(id);
+          const meta: PtyUsageMeta | undefined = live || ended;
+          if (!meta) {
+            return sendJson(res, 404, { success: false, exitCode: null, isActive: false, transcriptTail: '', error: 'No PTY session with that id.' });
+          }
+          const transcript = live ? live.transcript : ended?.transcript;
+          if (live) {
+            try {
+              observeTranscript(live);
+            } catch {}
+          }
+          const tailLines = transcript ? transcript.tail(300) : transcriptFromBuffer(meta.buffer).slice(-300);
+          let transcriptTail = tailLines.join('\n');
+          if (transcriptTail.length > 20_000) transcriptTail = transcriptTail.slice(-20_000);
+          const final = await readAgentFinalMessage(meta, transcript);
+          return sendJson(res, 200, {
+            success: true,
+            cli: path.basename(meta.cmd),
+            exitCode: live ? live.exitCode : ended?.exitCode ?? null,
+            isActive: Boolean(live?.isActive),
+            startedAt: meta.startedAt,
+            ...(final.text ? { finalMessage: final.text } : {}),
+            finalMessageSource: final.source,
+            transcriptTail,
+          });
+        }
+
+        if (url === '/api/pty/spawn' && req.method === 'POST') {
+          let body: any;
+          try {
+            body = await parseJsonBody(req);
+          } catch {
+            return sendJson(res, 400, { success: false, error: 'Invalid JSON body.' });
+          }
+          const sessionId = typeof body?.sessionId === 'string' ? body.sessionId.trim() : '';
+          const cmd = typeof body?.cmd === 'string' ? body.cmd.trim() : '';
+          if (!sessionId || sessionId.length > 200) return sendJson(res, 400, { success: false, error: 'sessionId is required.' });
+          if (!cmd) return sendJson(res, 400, { success: false, error: 'cmd is required.' });
+          if (body.args !== undefined && (!Array.isArray(body.args) || body.args.some((a: unknown) => typeof a !== 'string'))) {
+            return sendJson(res, 400, { success: false, error: 'args must be an array of strings.' });
+          }
+          const role: BridgeAgentRole = AGENT_ROLES.has(body.role) ? body.role : 'manager';
+          const runId = typeof body.runId === 'string' && SAFE_RUN_ID_RE.test(body.runId) ? body.runId : undefined;
+          if (body.runId !== undefined && body.runId !== '' && !runId) return sendJson(res, 400, { success: false, error: 'runId may only contain letters, digits, ".", "_" and "-".' });
+          const pieceId = typeof body.pieceId === 'string' && SAFE_PIECE_ID_RE.test(body.pieceId) ? body.pieceId : undefined;
+          if (role === 'worker' && !pieceId) return sendJson(res, 400, { success: false, error: 'Workers need a pieceId matching [A-Za-z0-9_-]{1,12}.' });
+          const taskId = typeof body.taskId === 'number' || (typeof body.taskId === 'string' && body.taskId) ? body.taskId : sessionId;
+          const cwd = resolvePtyCwd(body.cwd);
+          const projectId = typeof body.projectId === 'string' && body.projectId.trim() ? body.projectId.trim().slice(0, 200) : undefined;
+          let runDir: string | undefined;
+          if (runId) {
+            try {
+              runDir = ensureRunDir(cwd, runId);
+            } catch (err: any) {
+              return sendJson(res, 500, { success: false, error: `Could not create the run folder: ${err?.message || err}` });
+            }
+          }
+          try {
+            const pty = await loadNodePty();
+            const session = spawnPtySession(pty, {
+              sessionKey: sessionId,
+              taskId,
+              projectId,
+              cmd,
+              args: Array.isArray(body.args) ? body.args : [],
+              cwd,
+              env: body.env,
+              cols: body.cols,
+              rows: body.rows,
+              spawnId: typeof body.spawnId === 'string' ? body.spawnId : undefined,
+              role,
+              label: typeof body.label === 'string' && body.label.trim() ? body.label.trim().slice(0, 120) : undefined,
+              pieceId,
+              runId,
+              runDir,
+              permissionLevel: asPermission(body.permissionLevel),
+            });
+            broadcastAgentEvent(session, { type: 'spawned', label: session.label || role, ...(pieceId ? { pieceId } : {}) });
+            return sendJson(res, 200, { success: true, sessionId, cwd, ...(runDir ? { runDir } : {}) });
+          } catch (err: any) {
+            console.error(`[Ergo PTY] Spawn error for [${sessionId}]:`, err);
+            return sendJson(res, 500, { success: false, error: err?.message || String(err) });
+          }
+        }
+
+        if (url === '/api/pty/input' && req.method === 'POST') {
+          let body: any;
+          try {
+            body = await parseJsonBody(req);
+          } catch {
+            return sendJson(res, 400, { success: false, error: 'Invalid JSON body.' });
+          }
+          const session = activePtySessions.get(String(body?.sessionId || ''));
+          if (!session || !session.isActive || typeof body?.data !== 'string') {
+            return sendJson(res, 200, { success: false, error: session ? 'The session has ended.' : 'No PTY session with that id.' });
+          }
+          // Ergo's own hand-off messages end with Enter, which would answer an approval menu that opened before the
+          // client heard about it (or one being auto-answered). Refuse them while anything prompt-like is on screen.
+          if (body?.handoff === true && promptOnScreen(session)) {
+            return sendJson(res, 200, { success: false, promptOpen: true });
+          }
+          try {
+            session.ptyProcess.write(body.data);
+          } catch (err: any) {
+            return sendJson(res, 200, { success: false, error: err?.message || String(err) });
+          }
+          return sendJson(res, 200, { success: true });
         }
 
         if (url === '/api/pty/kill' && req.method === 'POST') {
-          let bodyText = '';
-          req.on('data', (chunk) => {
-            bodyText += chunk;
-          });
-          req.on('end', () => {
-            let body: any = {};
-            try {
-              body = JSON.parse(bodyText);
-            } catch {}
-            const targetId = String(body.taskId || body.sessionId || '');
-            const session = activePtySessions.get(targetId);
-            if (session) {
-              try {
-                if (typeof session.ptyProcess?.pid === 'number' && session.ptyProcess.pid > 0) {
-                  const pid = session.ptyProcess.pid;
-                  try {
-                    // Kill process group first to stop any child CLI processes (e.g. gemini-cli, node, bash)
-                    process.kill(-pid, 'SIGTERM');
-                  } catch {
-                    try {
-                      process.kill(pid, 'SIGTERM');
-                    } catch {}
-                  }
-                  // Also invoke ptyProcess.kill() with SIGKILL fallback
-                  try {
-                    session.ptyProcess.kill('SIGKILL');
-                  } catch {
-                    try {
-                      session.ptyProcess.kill();
-                    } catch {}
-                  }
-                  // Ensure process group is killed forcefully
-                  setTimeout(() => {
-                    try {
-                      process.kill(-pid, 'SIGKILL');
-                    } catch {}
-                  }, 200);
-                }
-              } catch {}
-              session.isActive = false;
-              rememberEndedPtySession(targetId, session);
-              activePtySessions.delete(targetId);
-              res.setHeader('Content-Type', 'application/json');
-              res.statusCode = 200;
-              return res.end(JSON.stringify({ success: true, killed: true }));
-            }
-            res.setHeader('Content-Type', 'application/json');
-            res.statusCode = 200;
-            return res.end(JSON.stringify({ success: true, killed: false }));
-          });
-          return;
+          let body: any = {};
+          try {
+            body = await parseJsonBody(req);
+          } catch {}
+          let targets: PtySessionState[] = [];
+          if (body?.sessionId) {
+            const s = activePtySessions.get(String(body.sessionId));
+            if (s) targets = [s];
+          } else if (body?.taskId !== undefined && body?.taskId !== null && body?.taskId !== '') {
+            const taskKey = String(body.taskId);
+            // `projectKey` (optional) keeps the same task id in another project apart: agent ids start with `<projectKey>~`.
+            const projectKey = typeof body.projectKey === 'string' && body.projectKey ? `${body.projectKey}~` : null;
+            targets = Array.from(activePtySessions.values()).filter(
+              (s) => (String(s.taskId) === taskKey || s.id === taskKey) && (!projectKey || s.id.startsWith(projectKey))
+            );
+          }
+          for (const s of targets) killPtySession(s, 'requested by the app');
+          return sendJson(res, 200, { success: true, killed: targets.length > 0, count: targets.length });
+        }
+
+        if (url === '/api/pty/policy' && req.method === 'POST') {
+          let body: any;
+          try {
+            body = await parseJsonBody(req);
+          } catch {
+            return sendJson(res, 400, { success: false, error: 'Invalid JSON body.' });
+          }
+          const level = asPermission(body?.permissionLevel);
+          if (!level) return sendJson(res, 400, { success: false, error: 'permissionLevel must be one of plan, ask, acceptEdits, bypass.' });
+          let targets: PtySessionState[];
+          if (body.sessionId) {
+            const s = activePtySessions.get(String(body.sessionId));
+            targets = s ? [s] : [];
+          } else if (Array.isArray(body.sessionIds)) {
+            targets = body.sessionIds
+              .filter((id: unknown) => typeof id === 'string')
+              .map((id: string) => activePtySessions.get(id))
+              .filter((s: PtySessionState | undefined): s is PtySessionState => Boolean(s));
+          } else if (body.taskId !== undefined && body.taskId !== null && body.taskId !== '') {
+            const taskKey = String(body.taskId);
+            targets = Array.from(activePtySessions.values()).filter((s) => String(s.taskId) === taskKey || s.id === taskKey);
+          } else {
+            targets = Array.from(activePtySessions.values());
+          }
+          // Only task agents (launched with a role) follow Ergo's permission level; login/onboarding terminals never do.
+          // `projectKey` limits the change to one project's agents (their ids start with `<projectKey>~`).
+          const projectKey = typeof body.projectKey === 'string' && body.projectKey ? `${body.projectKey}~` : null;
+          targets = targets.filter((s) => s.isActive && s.role && (!projectKey || s.id.startsWith(projectKey)));
+          const results = await Promise.all(targets.map((s) => applySessionPolicy(s, level)));
+          return sendJson(res, 200, { success: true, results });
         }
 
         next();
@@ -4087,8 +5558,7 @@ function ergoPtyPlugin(): Plugin {
       // Defer WSS creation until the underlying http.Server is available
       server.httpServer?.once('listening', async () => {
         const { WebSocketServer } = await import('ws');
-        // node-pty must be imported dynamically so Vite doesn't try to bundle it
-        const pty = (await import('node-pty')).default;
+        const pty = await loadNodePty();
 
         const wss = new WebSocketServer({ noServer: true });
 
@@ -4111,13 +5581,62 @@ function ergoPtyPlugin(): Plugin {
 
         wss.on('connection', (ws: any) => {
           let currentSessionKey: string | null = null;
+          /** Attached with observe: true (Notes view) — never resizes the PTY. */
+          let observeOnly = false;
+          let attachTimer: ReturnType<typeof setTimeout> | null = null;
 
-          const send = (obj: Record<string, unknown>) => {
-            if (ws.readyState === 1 /* OPEN */) {
-              try {
-                ws.send(JSON.stringify(obj));
-              } catch {}
+          const send = (obj: Record<string, unknown>) => safeWsSend(ws, obj);
+
+          const detach = () => {
+            if (attachTimer) clearTimeout(attachTimer);
+            attachTimer = null;
+            if (!currentSessionKey) return;
+            const session = activePtySessions.get(currentSessionKey);
+            if (session) {
+              session.subscribers.delete(ws);
+              // The last view that sized the PTY left: give the agent its launch size back, so later prompts are not
+              // drawn (and parsed) on a small embedded terminal's screen.
+              if (session.resizers.delete(ws) && session.resizers.size === 0 && session.isActive) {
+                resizeSession(session, session.launchCols, session.launchRows);
+              }
             }
+            const watchers = ptyKeyWatchers.get(currentSessionKey);
+            if (watchers) {
+              watchers.delete(ws);
+              if (watchers.size === 0) ptyKeyWatchers.delete(currentSessionKey);
+            }
+          };
+
+          const watchKey = (key: string) => {
+            let watchers = ptyKeyWatchers.get(key);
+            if (!watchers) {
+              watchers = new Set();
+              ptyKeyWatchers.set(key, watchers);
+            }
+            watchers.add(ws);
+          };
+
+          /** Subscribe to a session: ready, replay of everything so far, the open prompt, and the exit if it ended. */
+          const subscribe = (session: PtySessionState, opts: { resize: boolean; cols?: unknown; rows?: unknown }) => {
+            session.subscribers.add(ws);
+            if (opts.resize && session.isActive) {
+              session.resizers.add(ws);
+              resizeSession(session, opts.cols, opts.rows);
+            }
+            send({ type: 'ready', reattached: true, taskId: session.taskId, sessionId: session.id, cols: session.screen.cols, rows: session.screen.rows });
+            if (session.buffer.length > 0) send({ type: 'replay', data: session.buffer.join('') });
+            if (session.prompt && session.promptVisible) send({ type: 'prompt', prompt: session.prompt });
+            if (!session.isActive) send({ type: 'exit', code: session.exitCode ?? 0 });
+          };
+
+          /** Replays a killed/replaced session; returns false when nothing is known about the key. */
+          const replayEnded = (key: string): boolean => {
+            const ended = endedPtySessions.get(key);
+            if (!ended) return false;
+            send({ type: 'ready', reattached: true, ended: true, taskId: ended.taskId, sessionId: key });
+            if (ended.buffer.length > 0) send({ type: 'replay', data: ended.buffer.join('') });
+            send({ type: 'exit', code: ended.exitCode ?? -1 });
+            return true;
           };
 
           ws.on('message', (raw: Buffer | string) => {
@@ -4128,226 +5647,147 @@ function ergoPtyPlugin(): Plugin {
               return;
             }
 
+            if (msg.type === 'attach') {
+              const key = String(msg.sessionId || msg.taskId || '');
+              if (!key) {
+                send({ type: 'error', message: 'attach needs a sessionId.' });
+                return;
+              }
+              detach();
+              currentSessionKey = key;
+              observeOnly = msg.observe === true;
+              const live = activePtySessions.get(key);
+              if (live) {
+                subscribe(live, { resize: !observeOnly, cols: msg.cols, rows: msg.rows });
+                return;
+              }
+              // No live process: follow the key so a launch (or relaunch) under it reaches this view.
+              watchKey(key);
+              if (replayEnded(key)) return;
+              attachTimer = setTimeout(() => {
+                attachTimer = null;
+                if (ws.readyState !== 1 /* OPEN */ || currentSessionKey !== key) return;
+                const late = activePtySessions.get(key);
+                if (late) {
+                  if (!late.subscribers.has(ws)) subscribe(late, { resize: !observeOnly, cols: msg.cols, rows: msg.rows });
+                  return;
+                }
+                if (!replayEnded(key)) send({ type: 'exit', code: -1 });
+              }, 5_000);
+              return;
+            }
+
             if (msg.type === 'spawn') {
-              const sessionKey = String(msg.taskId || msg.sessionId || 'default');
+              // Legacy launch path (login / onboarding terminals). Task agents are launched over REST.
+              const sessionKey = String(msg.sessionId || msg.taskId || 'default');
+              detach();
               currentSessionKey = sessionKey;
+              observeOnly = false;
 
               const existingSession = activePtySessions.get(sessionKey);
               const spawnId = typeof msg.spawnId === 'string' ? msg.spawnId : undefined;
               if (existingSession && spawnId && existingSession.spawnId === spawnId) {
                 // Same launch re-mounted (view switch, card re-expand): reattach — never restart or re-run the agent.
+                subscribe(existingSession, { resize: true, cols: msg.cols, rows: msg.rows });
+                return;
+              }
+              if (msg.attachOnly) {
+                // A view re-mounting for a launch that already happened: show what exists, never start the agent again.
+                if (existingSession) {
+                  subscribe(existingSession, { resize: true, cols: msg.cols, rows: msg.rows });
+                  return;
+                }
+                // A sibling view's launch message may still be in flight on its own socket; give it a moment.
+                watchKey(sessionKey);
+                attachTimer = setTimeout(() => {
+                  attachTimer = null;
+                  if (ws.readyState !== 1 /* OPEN */ || currentSessionKey !== sessionKey) return;
+                  const late = activePtySessions.get(sessionKey);
+                  if (late) {
+                    if (!late.subscribers.has(ws)) subscribe(late, { resize: true, cols: msg.cols, rows: msg.rows });
+                    return;
+                  }
+                  const ended = endedPtySessions.get(sessionKey);
+                  if (ended && ended.buffer.length > 0) send({ type: 'replay', data: ended.buffer.join('') });
+                  send({ type: 'exit', code: -1 });
+                }, 750);
+                return;
+              }
+              if (existingSession && !msg.forceRestart && existingSession.isActive && existingSession.ptyProcess) {
+                // Re-attach to the live, running background process!
+                console.log(`[Ergo PTY] Reattached to running persistent session [${sessionKey}] (pid ${existingSession.ptyProcess.pid})`);
                 existingSession.subscribers.add(ws);
-                if (existingSession.isActive && typeof msg.cols === 'number' && typeof msg.rows === 'number') {
-                  try {
-                    existingSession.ptyProcess?.resize(msg.cols, msg.rows);
-                  } catch {}
-                }
+                existingSession.resizers.add(ws);
+                resizeSession(existingSession, msg.cols, msg.rows);
                 send({ type: 'ready', reattached: true, taskId: existingSession.taskId, sessionId: sessionKey });
-                if (existingSession.buffer.length > 0) {
-                  send({ type: 'replay', data: existingSession.buffer.join('') });
-                }
-                if (!existingSession.isActive) {
-                  send({ type: 'exit', code: existingSession.exitCode ?? 0 });
-                }
+                if (existingSession.buffer.length > 0) send({ type: 'replay', data: existingSession.buffer.join('') });
+                if (existingSession.prompt && existingSession.promptVisible) send({ type: 'prompt', prompt: existingSession.prompt });
                 return;
               }
               if (existingSession && msg.forceRestart) {
                 console.log(`[Ergo PTY] Force-restarting persistent session [${sessionKey}] (pid ${existingSession.ptyProcess?.pid})`);
-                try { existingSession.ptyProcess?.kill(); } catch {}
-                rememberEndedPtySession(sessionKey, existingSession);
-                activePtySessions.delete(sessionKey);
-              } else if (existingSession && existingSession.isActive && existingSession.ptyProcess) {
-                // Re-attach to the live, running background process!
-                existingSession.subscribers.add(ws);
-                console.log(`[Ergo PTY] Reattached to running persistent session [${sessionKey}] (pid ${existingSession.ptyProcess.pid})`);
-
-                if (typeof msg.cols === 'number' && typeof msg.rows === 'number') {
-                  try {
-                    existingSession.ptyProcess.resize(msg.cols, msg.rows);
-                  } catch {}
-                }
-
-                send({ type: 'ready', reattached: true, taskId: existingSession.taskId, sessionId: sessionKey });
-                if (existingSession.buffer.length > 0) {
-                  send({ type: 'replay', data: existingSession.buffer.join('') });
-                }
-                return;
               }
-
-              // If an old inactive process was cached, remove it
-              if (existingSession && !existingSession.isActive) {
-                rememberEndedPtySession(sessionKey, existingSession);
-                activePtySessions.delete(sessionKey);
-              }
-
-              const cmd: string = msg.cmd || 'bash';
-              let args: string[] = Array.isArray(msg.args) ? [...msg.args] : [];
-              const customEnv: Record<string, string> = msg.env && typeof msg.env === 'object' ? msg.env : {};
-
-              if (cmd.includes('agy') || cmd === 'antigravity') {
-                const flag = path.join(os.homedir(), '.gemini', '.ergo_disconnected_agy');
-                if (fsSync.existsSync(flag)) {
-                  try { fsSync.unlinkSync(flag); } catch {}
-                }
-              }
-
-              let cwd: string = resolveStoragePath(msg.cwd || os.homedir());
-              try {
-                if (!fsSync.existsSync(cwd)) {
-                  cwd = process.cwd();
-                }
-              } catch {
-                cwd = process.cwd();
-              }
-
-              // If running Claude CLI, sync API key approval and workspace trust into ~/.claude.json
-              if (cmd.toLowerCase().includes('claude')) {
-                const anthropicKey = customEnv.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
-                syncClaudeConfig(anthropicKey, cwd);
-                if (anthropicKey && !args.includes('--settings')) {
-                  args.push('--settings', '{"apiKeyHelper":""}');
-                }
-              }
-              const cols: number = typeof msg.cols === 'number' && msg.cols > 0 ? msg.cols : 120;
-              const rows: number = typeof msg.rows === 'number' && msg.rows > 0 ? msg.rows : 40;
-
-              console.log(`[Ergo PTY] Spawning persistent session [${sessionKey}]: ${cmd} ${args.join(' ')} in ${cwd}`);
 
               try {
-                const proc = pty.spawn(cmd, args, {
-                  name: 'xterm-256color',
-                  cols,
-                  rows,
-                  cwd,
-                  env: {
-                    ...process.env,
-                    ...customEnv,
-                  } as Record<string, string>,
-                });
-
-                const newSession: PtySessionState = {
-                  id: sessionKey,
+                const session = spawnPtySession(pty, {
+                  sessionKey,
                   taskId: msg.taskId || sessionKey,
-                  cmd,
-                  args,
-                  cwd,
-                  ptyProcess: proc,
-                  buffer: [],
-                  bufferLength: 0,
-                  maxBufferChars: 200000,
-                  subscribers: new Set([ws]),
-                  isActive: true,
-                  exitCode: null,
-                  startedAt: new Date().toISOString(),
+                  cmd: typeof msg.cmd === 'string' && msg.cmd ? msg.cmd : 'bash',
+                  args: Array.isArray(msg.args) ? msg.args.filter((a: unknown) => typeof a === 'string') : [],
+                  cwd: resolvePtyCwd(msg.cwd),
+                  env: msg.env,
+                  cols: msg.cols,
+                  rows: msg.rows,
                   spawnId,
-                };
-                activePtySessions.set(sessionKey, newSession);
-
-                proc.onData((data: string) => {
-                  newSession.buffer.push(data);
-                  newSession.bufferLength += data.length;
-                  while (newSession.bufferLength > newSession.maxBufferChars && newSession.buffer.length > 1) {
-                    const removed = newSession.buffer.shift();
-                    if (removed) newSession.bufferLength -= removed.length;
-                  }
-                  for (const subscriber of newSession.subscribers) {
-                    if (subscriber.readyState === 1 /* OPEN */) {
-                      try {
-                        subscriber.send(JSON.stringify({ type: 'data', data }));
-                      } catch {}
-                    }
-                  }
+                  role: AGENT_ROLES.has(msg.role) ? msg.role : undefined,
+                  label: typeof msg.label === 'string' ? msg.label : undefined,
+                  permissionLevel: asPermission(msg.permissionLevel),
+                  subscriber: ws,
                 });
-
-                proc.onExit(({ exitCode }: { exitCode: number }) => {
-                  console.log(`[Ergo PTY] Persistent session [${sessionKey}] exited with code ${exitCode}`);
-                  newSession.isActive = false;
-                  newSession.exitCode = exitCode;
-                  for (const subscriber of newSession.subscribers) {
-                    if (subscriber.readyState === 1 /* OPEN */) {
-                      try {
-                        subscriber.send(JSON.stringify({ type: 'exit', code: exitCode }));
-                      } catch {}
-                    }
-                  }
-                });
-
-                send({ type: 'ready', taskId: newSession.taskId, sessionId: sessionKey });
+                send({ type: 'ready', taskId: session.taskId, sessionId: sessionKey });
               } catch (err: any) {
                 console.error(`[Ergo PTY] Spawn error for [${sessionKey}]:`, err);
-                send({ type: 'error', message: err.message });
+                send({ type: 'error', message: err?.message || String(err) });
               }
 
             } else if (msg.type === 'input') {
-              const sessionKey = currentSessionKey || String(msg.taskId || msg.sessionId || '');
+              const sessionKey = currentSessionKey || String(msg.sessionId || msg.taskId || '');
               const session = activePtySessions.get(sessionKey);
-              if (session?.ptyProcess && typeof msg.data === 'string') {
-                session.ptyProcess.write(msg.data);
+              if (session?.isActive && session.ptyProcess && typeof msg.data === 'string') {
+                try {
+                  session.ptyProcess.write(msg.data);
+                } catch {}
               }
 
             } else if (msg.type === 'resize') {
-              const sessionKey = currentSessionKey || String(msg.taskId || msg.sessionId || '');
+              if (observeOnly) return;
+              const sessionKey = currentSessionKey || String(msg.sessionId || msg.taskId || '');
               const session = activePtySessions.get(sessionKey);
-              if (session?.ptyProcess && typeof msg.cols === 'number' && typeof msg.rows === 'number') {
-                try {
-                  session.ptyProcess.resize(msg.cols, msg.rows);
-                } catch {}
+              if (session?.subscribers.has(ws)) {
+                session.resizers.add(ws);
+                resizeSession(session, msg.cols, msg.rows);
               }
 
             } else if (msg.type === 'kill') {
-              const sessionKey = currentSessionKey || String(msg.taskId || msg.sessionId || '');
+              const sessionKey = currentSessionKey || String(msg.sessionId || msg.taskId || '');
               const session = activePtySessions.get(sessionKey);
-              if (session) {
-                try {
-                  if (typeof session.ptyProcess?.pid === 'number' && session.ptyProcess.pid > 0) {
-                    const pid = session.ptyProcess.pid;
-                    try {
-                      process.kill(-pid, 'SIGTERM');
-                    } catch {
-                      try {
-                        process.kill(pid, 'SIGTERM');
-                      } catch {}
-                    }
-                    try {
-                      session.ptyProcess.kill('SIGKILL');
-                    } catch {
-                      try {
-                        session.ptyProcess.kill();
-                      } catch {}
-                    }
-                    setTimeout(() => {
-                      try {
-                        process.kill(-pid, 'SIGKILL');
-                      } catch {}
-                    }, 200);
-                  }
-                } catch {}
-                session.isActive = false;
-                rememberEndedPtySession(sessionKey, session);
-                activePtySessions.delete(sessionKey);
-                console.log(`[Ergo PTY] Session [${sessionKey}] explicitly killed by user.`);
-              }
+              if (session) killPtySession(session, 'killed from the terminal view');
             }
           });
 
           ws.on('close', () => {
             if (currentSessionKey) {
               const session = activePtySessions.get(currentSessionKey);
-              if (session) {
-                session.subscribers.delete(ws);
+              if (session?.subscribers.has(ws)) {
                 console.log(`[Ergo PTY] WebSocket closed for session [${currentSessionKey}] — PTY process pid ${session.ptyProcess?.pid} keeps running in background`);
               }
             }
+            detach();
           });
 
           ws.on('error', (err: Error) => {
             console.error('[Ergo PTY] WebSocket error:', err);
-            if (currentSessionKey) {
-              const session = activePtySessions.get(currentSessionKey);
-              if (session) {
-                session.subscribers.delete(ws);
-              }
-            }
+            detach();
           });
         });
 
@@ -4357,7 +5797,2288 @@ function ergoPtyPlugin(): Plugin {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Ergo memory (vector store on disk) — src/lib/memory/memoryStore.ts
+// REST (App):  POST /api/memory/search | add | upsert-doc | update | remove | import | embed
+//                   /api/memory/workspace-sync (live index of the human workspace, namespace `workspace`)
+//                   /api/memory/related (stage-1 related tasks: centered multi-vector search over that index)
+//              GET  /api/memory/chunks | count | has | status
+// MCP (agents): POST /api/mcp/ergo-memory — stateless streamable-HTTP JSON-RPC with memory_search / memory_get /
+//              memory_save. CLI agents call it from localhost without an Origin header (allowed by the bridge guard).
+// Ingestion:   run signal files, <runDir>/notes/** and Claude Code todo lists → the AI-only `agent-notes` namespace.
+// Registration: task-agent launches get the MCP server (claude/codex flags; gemini/agy config files).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MEMORY_MCP_PATH = '/api/mcp/ergo-memory';
+const MEMORY_MCP_NAME = 'ergo-memory';
+const MEMORY_TOOL_NAMES = ['memory_search', 'memory_get', 'memory_save'] as const;
+const MEMORY_DOC_MAX_CHARS = 200_000;
+const MEMORY_GET_MAX_CHARS = 6_000;
+const MEMORY_SNIPPET_CHARS = 280;
+const MEMORY_NOTE_MAX_FILES = 200;
+const MEMORY_NOTE_MAX_DEPTH = 4;
+const MEMORY_SETTLE_MS = 400;
+/** Longest a signal event waits for its file to be embedded (first use may still be loading the model). */
+const MEMORY_INGEST_WAIT_MS = 20_000;
+
+let memoryStoreInstance: MemoryStore | null = null;
+let atomicWriteSeq = 0;
+
+function atomicTmpPath(file: string): string {
+  return `${file}.${process.pid}.${Date.now().toString(36)}.${++atomicWriteSeq}.tmp`;
+}
+
+const memoryIo: MemoryStoreIo = {
+  async readText(file) {
+    try {
+      return await fs.readFile(file, 'utf-8');
+    } catch (err: any) {
+      if (err?.code === 'ENOENT') return null;
+      throw err;
+    }
+  },
+  async readBytes(file) {
+    try {
+      return new Uint8Array(await fs.readFile(file));
+    } catch (err: any) {
+      if (err?.code === 'ENOENT') return null;
+      throw err;
+    }
+  },
+  async writeAtomic(file, data) {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const tmp = atomicTmpPath(file);
+    try {
+      await fs.writeFile(tmp, data);
+      await fs.rename(tmp, file);
+    } catch (err) {
+      await fs.rm(tmp, { force: true }).catch(() => {});
+      throw err;
+    }
+  },
+  writeAtomicSync(file, data) {
+    fsSync.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = atomicTmpPath(file);
+    try {
+      fsSync.writeFileSync(tmp, data);
+      fsSync.renameSync(tmp, file);
+    } catch (err) {
+      try {
+        fsSync.rmSync(tmp, { force: true });
+      } catch {}
+      throw err;
+    }
+  },
+};
+
+/**
+ * The store under `<storage root>/memory`, or `<storage root>/.ergo/memory` when the user pointed the storage root
+ * at a visible folder (the default root is already `~/.ergo`). Re-created when the storage root changes.
+ */
+function getMemoryStore(): MemoryStore {
+  const root = getActiveStorageDir();
+  const base = path.basename(root) === '.ergo' ? root : path.join(root, '.ergo');
+  const dir = path.join(base, 'memory');
+  if (!memoryStoreInstance || memoryStoreInstance.dir !== dir) {
+    memoryStoreInstance?.flushSync();
+    memoryStoreInstance = createMemoryStore({
+      dir,
+      chunksFile: path.join(dir, 'chunks.json'),
+      vectorsFile: path.join(dir, 'vectors.f32'),
+      modelsDir: path.join(base, 'models'),
+      io: memoryIo,
+    });
+  }
+  return memoryStoreInstance;
+}
+
+/**
+ * Registers a synchronous cleanup that runs on exit / SIGINT / SIGHUP. (Vite handles SIGTERM itself: it closes the
+ * server, which fires the plugins' `close` hooks, then exits.) The signal handlers are installed once per process and
+ * survive config reloads; `name` keeps a single entry per subsystem, so a reloaded config replaces its own hook.
+ */
+function registerBridgeExitHook(name: string, hook: () => void) {
+  const g = globalThis as any;
+  const hooksKey = Symbol.for('ergo.bridge.exitHooks');
+  const hooks: Map<string, () => void> = g[hooksKey] || (g[hooksKey] = new Map());
+  hooks.set(name, hook);
+  const installed = Symbol.for('ergo.bridge.exitHooksInstalled');
+  if (g[installed]) return;
+  g[installed] = true;
+  const runAll = () => {
+    for (const fn of hooks.values()) {
+      try {
+        fn();
+      } catch {}
+    }
+  };
+  process.once('exit', runAll);
+  for (const sig of ['SIGINT', 'SIGHUP'] as const) {
+    process.once(sig, () => {
+      runAll();
+      // Nobody else handles it: keep the default behaviour (terminate).
+      if (process.listenerCount(sig) === 0) process.kill(process.pid, sig);
+    });
+  }
+}
+
+/** Flushes pending memory writes on exit / SIGINT / SIGHUP. */
+function installMemoryExitFlush() {
+  registerBridgeExitHook('memory', () => memoryStoreInstance?.flushSync());
+}
+
+const isMemoryNamespace = (v: unknown): v is MemoryNamespace => typeof v === 'string' && (MEMORY_NAMESPACES as readonly string[]).includes(v);
+const isAgentNoteKind = (v: unknown): v is AgentNoteKind => typeof v === 'string' && (AGENT_NOTE_KINDS as readonly string[]).includes(v);
+const optString = (v: unknown, max = 200): string | undefined => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
+const optTaskId = (v: unknown): string | number | undefined =>
+  typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() ? v.trim().slice(0, 200) : undefined;
+
+function capMemoryText(text: string, max = MEMORY_DOC_MAX_CHARS): string {
+  return text.length > max ? `${text.slice(0, max)}\n…[truncated]` : text;
+}
+
+function sanitizeSearchRequest(body: any): MemorySearchRequest {
+  const req: MemorySearchRequest = { query: typeof body?.query === 'string' ? body.query.slice(0, 4_000) : '' };
+  if (isMemoryNamespace(body?.namespace)) req.namespace = body.namespace;
+  if (Array.isArray(body?.namespaces)) req.namespaces = body.namespaces.filter(isMemoryNamespace);
+  if (typeof body?.topK === 'number') req.topK = body.topK;
+  if (typeof body?.minSimilarity === 'number') req.minSimilarity = body.minSimilarity;
+  const projectId = optString(body?.projectId);
+  if (projectId) req.projectId = projectId;
+  const excludeTaskId = optTaskId(body?.excludeTaskId);
+  if (excludeTaskId !== undefined) req.excludeTaskId = excludeTaskId;
+  const taskId = optTaskId(body?.taskId);
+  if (taskId !== undefined) req.taskId = taskId;
+  const runId = optString(body?.runId);
+  if (runId) req.runId = runId;
+  if (Array.isArray(body?.kinds)) req.kinds = body.kinds.filter(isAgentNoteKind);
+  if (body?.includeHidden === true) req.includeHidden = true;
+  return req;
+}
+
+function sanitizeChunkInput(c: any): { id: string; namespace: MemoryNamespace; text: string; metadata: ChunkMetadata } | null {
+  if (!c || typeof c.id !== 'string' || !c.id || typeof c.text !== 'string' || !isMemoryNamespace(c.namespace)) return null;
+  const metadata = c.metadata && typeof c.metadata === 'object' && !Array.isArray(c.metadata) ? (c.metadata as ChunkMetadata) : {};
+  return { id: c.id.slice(0, 500), namespace: c.namespace, text: capMemoryText(c.text), metadata };
+}
+
+/** Workspace items as the app sent them (shape only; the store normalizes and caps the text). */
+function sanitizeWorkspaceItems(list: unknown): WorkspaceIndexItem[] {
+  if (!Array.isArray(list)) return [];
+  const out: WorkspaceIndexItem[] = [];
+  for (const it of list.slice(0, WORKSPACE_MAX_ITEMS)) {
+    if (!it || typeof it !== 'object') continue;
+    const id = optTaskId((it as any).id);
+    const title = typeof (it as any).title === 'string' ? (it as any).title : '';
+    if (id === undefined) continue;
+    out.push({
+      id: String(id),
+      kind: (it as any).kind === 'note' ? 'note' : 'task',
+      title,
+      category: optString((it as any).category),
+      subtasks: Array.isArray((it as any).subtasks) ? (it as any).subtasks.filter((s: unknown) => typeof s === 'string') : undefined,
+      text: typeof (it as any).text === 'string' ? (it as any).text : undefined,
+      status: optString((it as any).status, 40),
+      isDone: typeof (it as any).isDone === 'boolean' ? (it as any).isDone : undefined,
+    });
+  }
+  return out;
+}
+
+function sanitizeRelatedRequest(body: any): RelatedTasksRequest | null {
+  const projectId = optString(body?.projectId);
+  if (!projectId) return null;
+  const taskId = optTaskId(body?.taskId);
+  return {
+    projectId,
+    taskId: taskId === undefined ? '' : String(taskId),
+    title: typeof body?.title === 'string' ? body.title.slice(0, 2_000) : '',
+    subtasks: Array.isArray(body?.subtasks) ? body.subtasks.filter((s: unknown) => typeof s === 'string').slice(0, 100) : undefined,
+    text: typeof body?.text === 'string' ? body.text.slice(0, 4_000) : undefined,
+    topK: typeof body?.topK === 'number' ? body.topK : undefined,
+  };
+}
+
+// ── CLI registration of the memory MCP server ──
+
+/** `http://127.0.0.1:<port>` (or `http://[::1]:<port>`) — the bridge as local processes reach it; set on listen. */
+let bridgeLocalOrigin: string | null = null;
+
+function memoryMcpUrl(params: Record<string, string | undefined>): string {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) qs.set(k, v);
+  const q = qs.toString();
+  return `${bridgeLocalOrigin}${MEMORY_MCP_PATH}${q ? `?${q}` : ''}`;
+}
+
+function tomlString(s: string): string {
+  return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function detectJsonIndent(text: string): string | number {
+  const m = text.match(/\n([ \t]+)"/);
+  if (!m) return 2;
+  return m[1][0] === '\t' ? '\t' : m[1].length;
+}
+
+/**
+ * Merges `mcpServers[name] = { ...existing, ...entry }` into a JSON config file, preserving everything else and its
+ * indentation. Writes through symlinks (atomically, keeping the file mode), only when one of `compareKeys` differs.
+ * Throws on unreadable / invalid JSON (callers fail soft; the file is never clobbered).
+ */
+function mergeMcpServerEntry(
+  file: string,
+  name: string,
+  entry: Record<string, unknown>,
+  compareKeys: string[],
+  opts: { backup: boolean; defaultIndent: string | number }
+): 'unchanged' | 'written' {
+  let target = file;
+  try {
+    target = fsSync.realpathSync(file);
+  } catch {}
+  let text: string | null = null;
+  let mode: number | undefined;
+  try {
+    text = fsSync.readFileSync(target, 'utf-8');
+    mode = fsSync.statSync(target).mode & 0o777;
+  } catch (err: any) {
+    if (err?.code !== 'ENOENT') throw err;
+  }
+  let data: any = {};
+  if (text !== null && text.trim()) {
+    data = JSON.parse(text);
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error(`${file} is not a JSON object`);
+  }
+  if (!data.mcpServers || typeof data.mcpServers !== 'object' || Array.isArray(data.mcpServers)) data.mcpServers = {};
+  const existing = data.mcpServers[name];
+  const existingObj = existing && typeof existing === 'object' && !Array.isArray(existing) ? existing : null;
+  if (existingObj && compareKeys.every((k) => JSON.stringify(existingObj[k]) === JSON.stringify(entry[k]))) return 'unchanged';
+  data.mcpServers[name] = { ...(existingObj || {}), ...entry };
+  const indent = text !== null && text.trim() ? detectJsonIndent(text) : opts.defaultIndent;
+  const out = JSON.stringify(data, null, indent) + (text === null || !text.trim() || text.endsWith('\n') ? '\n' : '');
+  // Ergo's own backup of the file as it was before Ergo first touched it: never overwrite the user's `.backup`, and
+  // keep the pre-Ergo original rather than replacing it on every re-registration.
+  if (opts.backup && text !== null && !fsSync.existsSync(`${file}.ergo-backup`)) {
+    fsSync.writeFileSync(`${file}.ergo-backup`, text, 'utf-8');
+  }
+  fsSync.mkdirSync(path.dirname(target), { recursive: true });
+  const tmp = atomicTmpPath(target);
+  try {
+    fsSync.writeFileSync(tmp, out, { encoding: 'utf-8', ...(mode !== undefined ? { mode } : {}) });
+    if (mode !== undefined) fsSync.chmodSync(tmp, mode);
+    fsSync.renameSync(tmp, target);
+  } catch (err) {
+    try {
+      fsSync.rmSync(tmp, { force: true });
+    } catch {}
+    throw err;
+  }
+  return 'written';
+}
+
+/** Per cwd: is `.gemini/settings.json` tracked by git (then Ergo leaves it alone), and was it excluded already. */
+const geminiGitState = new Map<string, { tracked: boolean; excluded: boolean }>();
+
+function geminiSettingsGitState(cwd: string): { tracked: boolean; excluded: boolean; gitDir?: string; prefix?: string } {
+  const cached = geminiGitState.get(cwd);
+  if (cached) return cached;
+  let state: { tracked: boolean; excluded: boolean; gitDir?: string; prefix?: string } = { tracked: false, excluded: true };
+  try {
+    const out = execFileSync('git', ['rev-parse', '--git-common-dir', '--show-prefix'], {
+      cwd,
+      encoding: 'utf-8',
+      timeout: 3_000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const [gitDirRaw, prefixRaw = ''] = out.split('\n');
+    let tracked = false;
+    try {
+      execFileSync('git', ['ls-files', '--error-unmatch', '--', '.gemini/settings.json'], { cwd, timeout: 3_000, stdio: 'ignore' });
+      tracked = true;
+    } catch {}
+    state = { tracked, excluded: false, gitDir: path.resolve(cwd, gitDirRaw.trim()), prefix: prefixRaw.trim() };
+  } catch {
+    // not a git repo (or no git): nothing to exclude
+  }
+  if (state.tracked || state.excluded) geminiGitState.set(cwd, { tracked: state.tracked, excluded: state.excluded });
+  return state;
+}
+
+function registerGeminiProjectMcp(cwd: string, url: string) {
+  const git = geminiSettingsGitState(cwd);
+  if (git.tracked) {
+    console.warn(`[Ergo Memory] ${cwd}/.gemini/settings.json is tracked by git; not adding the memory server to it.`);
+    return;
+  }
+  const settingsFile = path.join(cwd, '.gemini', 'settings.json');
+  const result = mergeMcpServerEntry(settingsFile, MEMORY_MCP_NAME, { httpUrl: url, trust: true }, ['httpUrl', 'trust'], {
+    backup: false,
+    defaultIndent: 2,
+  });
+  if (result === 'written') console.log(`[Ergo Memory] Registered the memory MCP server in ${settingsFile}`);
+  if (!git.excluded && git.gitDir) {
+    const pattern = `/${git.prefix || ''}.gemini/settings.json`;
+    const excludeFile = path.join(git.gitDir, 'info', 'exclude');
+    let current = '';
+    try {
+      current = fsSync.readFileSync(excludeFile, 'utf-8');
+    } catch {}
+    if (!current.split('\n').some((l) => l.trim() === pattern)) {
+      fsSync.mkdirSync(path.dirname(excludeFile), { recursive: true });
+      fsSync.appendFileSync(excludeFile, `${current && !current.endsWith('\n') ? '\n' : ''}${pattern}\n`, 'utf-8');
+      console.log(`[Ergo Memory] Added ${pattern} to ${excludeFile}`);
+    }
+    geminiGitState.set(cwd, { tracked: false, excluded: true });
+  }
+}
+
+function registerAgyMcp(url: string) {
+  const file = path.join(os.homedir(), '.gemini', 'antigravity', 'mcp_config.json');
+  const result = mergeMcpServerEntry(file, MEMORY_MCP_NAME, { serverUrl: url }, ['serverUrl'], { backup: true, defaultIndent: '\t' });
+  if (result === 'written') console.log(`[Ergo Memory] Registered the memory MCP server in ${file}`);
+}
+
+/**
+ * Gives a task-agent launch Ergo's memory MCP server. claude / codex: flags inserted before the positional prompt
+ * (the last arg); gemini: `<cwd>/.gemini/settings.json`; agy: `~/.gemini/antigravity/mcp_config.json`. Fails soft.
+ */
+function registerMemoryMcp(o: { cmd: string; args: string[]; cwd: string; projectId?: string; taskId: string | number; runId?: string; sessionId: string }) {
+  if (!bridgeLocalOrigin) return;
+  try {
+    const base = path.basename(o.cmd || '').toLowerCase().replace(/\.(cmd|exe)$/, '');
+    const at = Math.max(0, o.args.length - 1);
+    const runUrl = () => memoryMcpUrl({ project: o.projectId, task: String(o.taskId), run: o.runId, session: o.sessionId });
+    if (base.includes('claude')) {
+      if (o.args.some((a) => a === '--mcp-config' || a.startsWith('--mcp-config=') || a === '--strict-mcp-config')) return;
+      const config = JSON.stringify({ mcpServers: { [MEMORY_MCP_NAME]: { type: 'http', url: runUrl() } } });
+      // `--opt=value` form: both options are variadic, and the space form would swallow the prompt as a value.
+      o.args.splice(
+        at,
+        0,
+        `--mcp-config=${config}`,
+        `--allowedTools=${MEMORY_TOOL_NAMES.map((t) => `mcp__${MEMORY_MCP_NAME}__${t}`).join(',')}`
+      );
+    } else if (base === 'codex') {
+      if (o.args.some((a) => a.includes('mcp_servers.ergo_memory'))) return;
+      o.args.splice(
+        at,
+        0,
+        '-c',
+        `mcp_servers.ergo_memory.url=${tomlString(runUrl())}`,
+        '-c',
+        'mcp_servers.ergo_memory.default_tools_approval_mode="approve"'
+      );
+    } else if (base === 'gemini' || base.startsWith('gemini-')) {
+      registerGeminiProjectMcp(o.cwd, memoryMcpUrl({ project: o.projectId }));
+    } else if (base === 'agy' || base === 'antigravity') {
+      registerAgyMcp(memoryMcpUrl({}));
+    }
+  } catch (err) {
+    console.warn(`[Ergo Memory] Could not register the memory MCP server for ${o.cmd}:`, err);
+  }
+}
+
+// ── Automatic ingestion into `agent-notes` ──
+
+const SIGNAL_MEMORY_KIND: Record<AgentSignalKind, AgentNoteKind> = {
+  delegate: 'plan',
+  complete: 'completion',
+  'worker-done': 'worker',
+  'qa-verdict': 'qa',
+};
+
+function sessionMemoryMeta(session: PtySessionState): ChunkMetadata {
+  return {
+    ...(session.projectId ? { projectId: session.projectId } : {}),
+    taskId: session.taskId,
+    ...(session.runId ? { runId: session.runId } : {}),
+    sessionId: session.id,
+  };
+}
+
+/** delegate.json → one line per worker: id, title, files. */
+function renderDelegatePlan(json: string): string {
+  try {
+    const data = JSON.parse(json);
+    const list: any[] = Array.isArray(data) ? data : Array.isArray(data?.workers) ? data.workers : Array.isArray(data?.pieces) ? data.pieces : [];
+    const lines = list
+      .filter((w) => w && typeof w === 'object')
+      .map((w, i) => {
+        const id = typeof w.id === 'string' || typeof w.id === 'number' ? String(w.id) : String(i + 1);
+        const title = String(w.title || w.name || w.instructions || w.task || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+        const files = Array.isArray(w.files) ? w.files.filter((f: unknown) => typeof f === 'string') : typeof w.files === 'string' ? [w.files] : [];
+        return `- Worker ${id}: ${title}${files.length ? ` — files: ${files.join(', ')}` : ''}`;
+      });
+    if (lines.length > 0) return `Delegation plan (${lines.length} worker${lines.length === 1 ? '' : 's'}):\n${lines.join('\n')}`;
+  } catch {}
+  return json;
+}
+
+/**
+ * Upserts a run signal file into memory. Awaited (bounded) before the signal event goes out, so a hand-off sent right
+ * after the event never reads the previous round's version from memory.
+ */
+async function ingestRunSignal(session: PtySessionState, name: string, signal: AgentSignalKind, text: string): Promise<void> {
+  if (!session.runId) return;
+  const title =
+    signal === 'delegate' ? 'Delegation plan'
+    : signal === 'complete' ? 'Completion record'
+    : signal === 'worker-done' ? `Worker ${session.pieceId || ''} report`.replace(/\s+report$/, ' report')
+    : 'QA report';
+  const body = signal === 'delegate' ? renderDelegatePlan(text) : text;
+  const work = getMemoryStore()
+    .upsertDocument({
+      docId: `run:${session.runId}:${name}`,
+      namespace: 'agent-notes',
+      text: capMemoryText(body),
+      metadata: { ...sessionMemoryMeta(session), kind: SIGNAL_MEMORY_KIND[signal], title, source: 'run-signal' },
+    })
+    .then(
+      () => {},
+      (err) => console.warn(`[Ergo Memory] Ingesting ${name} of run ${session.runId} failed:`, err)
+    );
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  await Promise.race([work, new Promise<void>((resolve) => (timer = setTimeout(resolve, MEMORY_INGEST_WAIT_MS)))]);
+  if (timer) clearTimeout(timer);
+}
+
+/** Last ingested state per note file / todo list (shared by every session of a run, so each file is ingested once). */
+const memoryArtifactState = new Map<string, string>();
+
+function rememberArtifactState(key: string, state: string) {
+  memoryArtifactState.delete(key);
+  memoryArtifactState.set(key, state);
+  if (memoryArtifactState.size > 5_000) {
+    const oldest = memoryArtifactState.keys().next().value;
+    if (oldest !== undefined) memoryArtifactState.delete(oldest);
+  }
+}
+
+async function listNoteFiles(dir: string, rel = '', depth = 0, out: Array<{ abs: string; rel: string }> = []) {
+  if (depth > MEMORY_NOTE_MAX_DEPTH || out.length >= MEMORY_NOTE_MAX_FILES) return out;
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (out.length >= MEMORY_NOTE_MAX_FILES) break;
+    if (entry.name.startsWith('.')) continue;
+    const abs = path.join(dir, entry.name);
+    const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) await listNoteFiles(abs, childRel, depth + 1, out);
+    else if (entry.isFile() && /\.(md|txt)$/i.test(entry.name)) out.push({ abs, rel: childRel }); // symlinks are skipped
+  }
+  return out;
+}
+
+async function pollRunNotes(session: PtySessionState, final: boolean) {
+  const runId = session.runId!;
+  const files = await listNoteFiles(path.join(session.runDir!, 'notes'));
+  for (const { abs, rel } of files) {
+    const stat = await fs.stat(abs).catch(() => null);
+    if (!stat || stat.size === 0) continue;
+    const state = `${Math.round(stat.mtimeMs)}:${stat.size}`;
+    if (memoryArtifactState.get(abs) === state) continue;
+    if (!final && Date.now() - stat.mtimeMs < MEMORY_SETTLE_MS) continue;
+    rememberArtifactState(abs, state);
+    const text = (await fs.readFile(abs, 'utf-8').catch(() => '')).trim();
+    if (!text) continue;
+    const heading = text.match(/^#{1,6}\s+(.+)$/m)?.[1]?.trim();
+    const { sessionId: _sessionId, ...meta } = sessionMemoryMeta(session); // any agent of the run may have written it
+    await getMemoryStore()
+      .upsertDocument({
+        docId: `run:${runId}:notes/${rel}`,
+        namespace: 'agent-notes',
+        text: capMemoryText(text),
+        metadata: { ...meta, kind: 'note', title: (heading || rel).slice(0, 160), source: 'agent' },
+      })
+      .catch((err) => console.warn(`[Ergo Memory] Ingesting note ${rel} of run ${runId} failed:`, err));
+  }
+}
+
+function renderClaudeTodos(lists: any[]): string {
+  const lines: string[] = [];
+  for (const list of lists) {
+    const items: any[] = Array.isArray(list) ? list : Array.isArray(list?.todos) ? list.todos : [];
+    for (const item of items) {
+      const content = String(item?.content || item?.activeForm || '').replace(/\s+/g, ' ').trim();
+      if (!content) continue;
+      const mark = item?.status === 'completed' ? '[x]' : item?.status === 'in_progress' ? '[~]' : '[ ]';
+      lines.push(`${mark} ${content}`);
+    }
+  }
+  return lines.length ? `Claude Code todo list:\n${lines.join('\n')}` : '';
+}
+
+/** `~/.claude/todos/<session uuid>*.json` of a claude session launched with `--session-id <uuid>`. */
+async function pollClaudeTodos(session: PtySessionState, final: boolean) {
+  const uuid = claudeSessionIdArg(session.args);
+  if (!uuid || !/^[A-Za-z0-9-]{8,64}$/.test(uuid)) return;
+  const dir = path.join(os.homedir(), '.claude', 'todos');
+  const names = (await fs.readdir(dir).catch(() => [] as string[])).filter((n) => n.startsWith(uuid) && n.endsWith('.json')).sort();
+  if (names.length === 0) return;
+  const stats = await Promise.all(names.map((n) => fs.stat(path.join(dir, n)).catch(() => null)));
+  const state = names.map((n, i) => `${n}:${Math.round(stats[i]?.mtimeMs ?? 0)}:${stats[i]?.size ?? 0}`).join('|');
+  const key = `cc-todos:${session.id}:${uuid}`;
+  if (memoryArtifactState.get(key) === state) return;
+  if (!final && stats.some((s) => s && Date.now() - s.mtimeMs < MEMORY_SETTLE_MS)) return;
+  rememberArtifactState(key, state);
+  const lists: any[] = [];
+  for (const n of names) {
+    try {
+      lists.push(JSON.parse(await fs.readFile(path.join(dir, n), 'utf-8')));
+    } catch {}
+  }
+  const text = renderClaudeTodos(lists);
+  if (!text) return;
+  await getMemoryStore()
+    .upsertDocument({
+      docId: `cc-todos:${session.runId}:${session.id}`,
+      namespace: 'agent-notes',
+      text: capMemoryText(text),
+      metadata: { ...sessionMemoryMeta(session), kind: 'artifact', title: 'Claude Code todo list', source: 'cli-artifact' },
+    })
+    .catch((err) => console.warn(`[Ergo Memory] Ingesting the todo list of [${session.id}] failed:`, err));
+}
+
+/** Called from the signal watcher (every poll, and once more when the agent exits). */
+async function pollMemoryArtifacts(session: PtySessionState, final: boolean) {
+  if (!session.runId || !session.runDir) return;
+  try {
+    await pollRunNotes(session, final);
+  } catch (err) {
+    console.warn(`[Ergo Memory] Polling notes of run ${session.runId} failed:`, err);
+  }
+  if (cliKindOf(session.cmd) === 'claude') {
+    try {
+      await pollClaudeTodos(session, final);
+    } catch (err) {
+      console.warn(`[Ergo Memory] Polling the todo list of [${session.id}] failed:`, err);
+    }
+  }
+}
+
+// ── Memory MCP server ──
+
+interface MemoryCallContext {
+  projectId?: string;
+  taskId?: string;
+  runId?: string;
+  sessionId?: string;
+}
+
+/** Project + task of a run, from the agent sessions (live first, then ended), else from memory it already holds. */
+async function resolveRunContext(runId: string): Promise<MemoryCallContext> {
+  const sessions: Array<{ runId?: string; projectId?: string; taskId: string | number }> = [
+    ...activePtySessions.values(),
+    ...Array.from(endedPtySessions.values()).reverse(),
+  ];
+  const s = sessions.find((x) => x.runId === runId && x.projectId) || sessions.find((x) => x.runId === runId);
+  if (s) return { runId, projectId: s.projectId, taskId: String(s.taskId) };
+  const meta = await getMemoryStore().findMetadata((m) => m.runId === runId);
+  if (meta) return { runId, projectId: meta.projectId, taskId: meta.taskId != null ? String(meta.taskId) : undefined };
+  return { runId };
+}
+
+async function memoryCallContext(base: MemoryCallContext, runIdArg: unknown): Promise<MemoryCallContext> {
+  const runId = typeof runIdArg === 'string' ? runIdArg.trim() : '';
+  if (!runId || !SAFE_RUN_ID_RE.test(runId) || runId === base.runId) return base;
+  const resolved = await resolveRunContext(runId);
+  return { ...resolved, projectId: resolved.projectId || base.projectId, taskId: resolved.taskId || (resolved.projectId ? undefined : base.taskId) };
+}
+
+const oneLineSnippet = (text: string, max: number) => {
+  const s = text.replace(/\s+/g, ' ').trim();
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+};
+
+function memoryHitLabel(c: MemoryChunkDTO): string {
+  const what = c.metadata.kind || c.namespace;
+  const title = c.metadata.title || c.metadata.taskTitle;
+  return title ? `${what} · ${oneLineSnippet(String(title), 80)}` : what;
+}
+
+const MEMORY_MCP_TOOLS = [
+  {
+    name: 'memory_search',
+    description: 'Search Ergo memory (run reports, plans, notes, past tasks, learnings). Compact hits; use memory_get for full text.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+        scope: { type: 'string', enum: ['run', 'task', 'project'], description: 'Default project.' },
+        kinds: { type: 'array', items: { type: 'string', enum: [...AGENT_NOTE_KINDS] } },
+        top_k: { type: 'integer', minimum: 1, maximum: 8 },
+        run_id: { type: 'string' },
+      },
+      required: ['query'],
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'memory_get',
+    description: 'Full text of a memory entry by id.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'memory_save',
+    description: 'Save a finding, decision or plan to Ergo memory. Same title updates it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        text: { type: 'string' },
+        kind: { type: 'string', enum: ['note', 'plan', 'artifact'] },
+        run_id: { type: 'string' },
+      },
+      required: ['title', 'text'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+];
+
+function slugify(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'note';
+}
+
+async function callMemoryTool(name: string, args: any, base: MemoryCallContext): Promise<{ text: string; isError?: boolean }> {
+  const store = getMemoryStore();
+  args = args && typeof args === 'object' ? args : {};
+
+  if (name === 'memory_search') {
+    const query = typeof args.query === 'string' ? args.query.trim().slice(0, 2_000) : '';
+    if (!query) return { text: 'query is required.', isError: true };
+    const ctx = await memoryCallContext(base, args.run_id);
+    const scope = args.scope === 'run' || args.scope === 'task' ? args.scope : 'project';
+    const topK = Math.max(1, Math.min(8, Math.floor(Number(args.top_k) || 5)));
+    const req: MemorySearchRequest = { query, topK: topK * 3, minSimilarity: 0.3, includeHidden: true };
+    if (Array.isArray(args.kinds)) {
+      const kinds = args.kinds.filter(isAgentNoteKind);
+      if (kinds.length) req.kinds = kinds;
+    }
+    if (scope === 'run' && ctx.runId) req.runId = ctx.runId;
+    else if (scope !== 'project' && ctx.taskId) req.taskId = ctx.taskId;
+    if (ctx.projectId) req.projectId = ctx.projectId;
+    const hits = await store.search(req);
+    // One hit per document (memory_get returns the whole document anyway).
+    const seen = new Set<string>();
+    const lines: string[] = [];
+    for (const { chunk, similarity } of hits) {
+      const doc = chunk.metadata.docId || chunk.id;
+      if (seen.has(doc)) continue;
+      seen.add(doc);
+      lines.push(`[${chunk.id}] ${memoryHitLabel(chunk)} · sim ${similarity.toFixed(2)} — ${oneLineSnippet(chunk.text, MEMORY_SNIPPET_CHARS)}`);
+      if (lines.length >= topK) break;
+    }
+    if (lines.length === 0) return { text: 'No relevant memory found.' };
+    return { text: `${lines.join('\n')}\nUse memory_get with an id for the full text.` };
+  }
+
+  if (name === 'memory_get') {
+    const id = typeof args.id === 'string' ? args.id.trim() : '';
+    if (!id) return { text: 'id is required.', isError: true };
+    const chunk = await store.get(id);
+    const docId = chunk ? chunk.metadata.docId : id.replace(/#\d+$/, '');
+    let parts = docId ? await store.getDocument(docId) : [];
+    if (chunk && parts.length <= 1) parts = [chunk];
+    if (parts.length === 0) return { text: `No memory entry with id ${id}.`, isError: true };
+    const head = parts[0];
+    const label = memoryHitLabel(head);
+    let text = parts.map((p) => p.text).join('\n\n');
+    const total = text.length;
+    if (total > MEMORY_GET_MAX_CHARS) text = `${text.slice(0, MEMORY_GET_MAX_CHARS)}\n…[truncated: ${total - MEMORY_GET_MAX_CHARS} more chars]`;
+    const shownId = head.metadata.docId || head.id;
+    return { text: `[${shownId}] ${label}${parts.length > 1 ? ` (${parts.length} parts)` : ''}\n${text}` };
+  }
+
+  if (name === 'memory_save') {
+    const title = typeof args.title === 'string' ? args.title.replace(/\s+/g, ' ').trim().slice(0, 160) : '';
+    const text = typeof args.text === 'string' ? args.text.trim() : '';
+    if (!title || !text) return { text: 'title and text are required.', isError: true };
+    const ctx = await memoryCallContext(base, args.run_id);
+    if (!ctx.runId) return { text: 'No run context: pass run_id (your Ergo run id) to memory_save.', isError: true };
+    const kind: AgentNoteKind = args.kind === 'plan' || args.kind === 'artifact' ? args.kind : 'note';
+    const docId = `note:${ctx.runId}:${slugify(title)}`;
+    await store.upsertDocument({
+      docId,
+      namespace: 'agent-notes',
+      text: capMemoryText(text, 50_000),
+      metadata: {
+        ...(ctx.projectId ? { projectId: ctx.projectId } : {}),
+        ...(ctx.taskId ? { taskId: ctx.taskId } : {}),
+        runId: ctx.runId,
+        ...(ctx.sessionId && ctx.runId === base.runId ? { sessionId: ctx.sessionId } : {}),
+        kind,
+        title,
+        source: 'agent',
+      },
+    });
+    return { text: `Saved to Ergo memory as ${docId}.` };
+  }
+
+  return { text: `Unknown tool ${name}.`, isError: true };
+}
+
+/** One JSON-RPC message → response object, or null for notifications. */
+async function handleMemoryMcpMessage(msg: any, ctx: MemoryCallContext): Promise<Record<string, unknown> | null> {
+  const isRequest = msg && typeof msg === 'object' && msg.id !== undefined && msg.id !== null;
+  if (!msg || typeof msg !== 'object' || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') {
+    return { jsonrpc: '2.0', id: isRequest ? msg.id : null, error: { code: -32600, message: 'Invalid Request' } };
+  }
+  if (!isRequest) return null; // notifications (notifications/initialized, cancelled, …)
+  const reply = (result: unknown) => ({ jsonrpc: '2.0', id: msg.id, result });
+  const params = msg.params && typeof msg.params === 'object' ? msg.params : {};
+  switch (msg.method) {
+    case 'initialize':
+      return reply({
+        protocolVersion: typeof params.protocolVersion === 'string' ? params.protocolVersion : '2025-06-18',
+        capabilities: { tools: {} },
+        serverInfo: { name: MEMORY_MCP_NAME, version: '1.0.0' },
+      });
+    case 'ping':
+      return reply({});
+    case 'tools/list':
+      return reply({ tools: MEMORY_MCP_TOOLS });
+    case 'tools/call': {
+      const toolName = String(params.name || '');
+      try {
+        const out = await callMemoryTool(toolName, params.arguments, ctx);
+        return reply({ content: [{ type: 'text', text: out.text }], ...(out.isError ? { isError: true } : {}) });
+      } catch (err: any) {
+        console.warn(`[Ergo Memory] MCP ${toolName} failed:`, err);
+        return reply({ content: [{ type: 'text', text: `Ergo memory error: ${err?.message || err}` }], isError: true });
+      }
+    }
+    default:
+      return { jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: `Method not found: ${msg.method}` } };
+  }
+}
+
+function ergoMemoryPlugin(): Plugin {
+  return {
+    name: 'ergo-memory',
+    configureServer(server) {
+      installMemoryExitFlush();
+      server.httpServer?.once('listening', () => {
+        const addr = server.httpServer?.address();
+        if (addr && typeof addr === 'object') {
+          bridgeLocalOrigin = addr.address === '::1' ? `http://[::1]:${addr.port}` : `http://127.0.0.1:${addr.port}`;
+        }
+      });
+      server.httpServer?.once('close', () => memoryStoreInstance?.flushSync());
+
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
+        const url = req.url?.split('?')[0];
+        if (!url || !(url.startsWith('/api/memory/') || url === MEMORY_MCP_PATH)) return next();
+        if (!guardBridgeRequest(req, res)) return;
+        const fullUrl = new URL(req.url || '', 'http://localhost');
+        const q = fullUrl.searchParams;
+
+        if (url === MEMORY_MCP_PATH) {
+          if (req.method !== 'POST') {
+            res.statusCode = 405;
+            res.setHeader('Allow', 'POST');
+            return res.end();
+          }
+          let body: any;
+          try {
+            body = await parseJsonBody(req);
+          } catch {
+            return sendJson(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
+          }
+          const ctx: MemoryCallContext = {
+            projectId: optString(q.get('project')),
+            taskId: optString(q.get('task')),
+            runId: optString(q.get('run'), 80),
+            sessionId: optString(q.get('session')),
+          };
+          if (Array.isArray(body)) {
+            if (body.length === 0) return sendJson(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } });
+            const replies = (await Promise.all(body.map((m) => handleMemoryMcpMessage(m, ctx)))).filter(Boolean);
+            if (replies.length === 0) {
+              res.statusCode = 202;
+              return res.end();
+            }
+            return sendJson(res, 200, replies);
+          }
+          const reply = await handleMemoryMcpMessage(body, ctx);
+          if (!reply) {
+            res.statusCode = 202;
+            return res.end();
+          }
+          return sendJson(res, 200, reply);
+        }
+
+        const store = getMemoryStore();
+        try {
+          if (req.method === 'GET') {
+            const filter = {
+              namespace: isMemoryNamespace(q.get('namespace')) ? (q.get('namespace') as MemoryNamespace) : undefined,
+              projectId: optString(q.get('projectId')),
+              includeHidden: q.get('includeHidden') === '1' || q.get('includeHidden') === 'true',
+            };
+            if (url === '/api/memory/chunks') return sendJson(res, 200, { success: true, chunks: await store.list(filter) });
+            if (url === '/api/memory/count') return sendJson(res, 200, { success: true, count: await store.count(filter) });
+            if (url === '/api/memory/has') return sendJson(res, 200, { success: true, exists: await store.has(q.get('id') || '') });
+            if (url === '/api/memory/status') {
+              if (q.get('warm') === '1') store.warm();
+              return sendJson(res, 200, { success: true, ...store.status() });
+            }
+            return next();
+          }
+          if (req.method !== 'POST') return next();
+
+          let body: any;
+          try {
+            body = await parseJsonBody(req);
+          } catch {
+            return sendJson(res, 400, { success: false, error: 'Invalid JSON body.' });
+          }
+
+          if (url === '/api/memory/search') {
+            const results = await store.search(sanitizeSearchRequest(body));
+            return sendJson(res, 200, { success: true, results });
+          }
+          if (url === '/api/memory/add') {
+            if (!Array.isArray(body?.chunks)) return sendJson(res, 400, { success: false, error: 'chunks must be an array.' });
+            const chunks = body.chunks.map(sanitizeChunkInput).filter(Boolean) as NonNullable<ReturnType<typeof sanitizeChunkInput>>[];
+            return sendJson(res, 200, { success: true, added: await store.add(chunks) });
+          }
+          if (url === '/api/memory/upsert-doc') {
+            const docId = optString(body?.docId, 300);
+            if (!docId || typeof body?.text !== 'string' || !isMemoryNamespace(body?.namespace)) {
+              return sendJson(res, 400, { success: false, error: 'docId, namespace and text are required.' });
+            }
+            const metadata = body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata) ? body.metadata : {};
+            const count = await store.upsertDocument({ docId, namespace: body.namespace, text: capMemoryText(body.text), metadata });
+            return sendJson(res, 200, { success: true, chunks: count });
+          }
+          if (url === '/api/memory/update') {
+            if (typeof body?.id !== 'string' || !body.id) return sendJson(res, 400, { success: false, error: 'id is required.' });
+            const chunk = await store.update(body.id, {
+              ...(typeof body.text === 'string' ? { text: capMemoryText(body.text) } : {}),
+              ...(isMemoryNamespace(body.namespace) ? { namespace: body.namespace } : {}),
+              ...(body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata) ? { metadata: body.metadata } : {}),
+            });
+            return sendJson(res, 200, { success: true, chunk });
+          }
+          if (url === '/api/memory/remove') {
+            let removed = 0;
+            if (body?.all === true) removed = await store.remove({ all: true });
+            else if (Array.isArray(body?.ids)) removed = await store.remove({ ids: body.ids.filter((x: unknown) => typeof x === 'string') });
+            else if (optTaskId(body?.taskId) !== undefined) removed = await store.remove({ taskId: optTaskId(body.taskId)!, projectId: optString(body.projectId) });
+            else if (optString(body?.projectId)) removed = await store.remove({ projectId: optString(body.projectId)! });
+            else if (isMemoryNamespace(body?.namespace)) removed = await store.remove({ namespace: body.namespace });
+            else return sendJson(res, 400, { success: false, error: 'Pass ids, taskId, projectId, namespace or all: true.' });
+            return sendJson(res, 200, { success: true, removed });
+          }
+          if (url === '/api/memory/import') {
+            if (!Array.isArray(body?.chunks)) return sendJson(res, 400, { success: false, error: 'chunks must be an array.' });
+            const chunks = body.chunks
+              .map((c: any) => {
+                const base = sanitizeChunkInput(c);
+                if (!base) return null;
+                return {
+                  ...base,
+                  createdAt: typeof c.createdAt === 'number' ? c.createdAt : undefined,
+                  embedding: Array.isArray(c.embedding) ? c.embedding : null,
+                };
+              })
+              .filter(Boolean);
+            return sendJson(res, 200, { success: true, imported: await store.importChunks(chunks) });
+          }
+          if (url === '/api/memory/workspace-sync') {
+            const projectId = optString(body?.projectId);
+            if (!projectId || !Array.isArray(body?.items)) {
+              return sendJson(res, 400, { success: false, error: 'projectId and items are required.' });
+            }
+            return sendJson(res, 200, await store.syncWorkspace(projectId, sanitizeWorkspaceItems(body.items)));
+          }
+          if (url === '/api/memory/related') {
+            const related = sanitizeRelatedRequest(body);
+            if (!related) return sendJson(res, 400, { success: false, error: 'projectId is required.' });
+            return sendJson(res, 200, await store.relatedTasks(related));
+          }
+          if (url === '/api/memory/embed') {
+            if (!Array.isArray(body?.texts) || body.texts.length > 256) {
+              return sendJson(res, 400, { success: false, error: 'texts must be an array of at most 256 strings.' });
+            }
+            const vectors = await store.embed(body.texts.map((t: unknown) => (typeof t === 'string' ? t : String(t ?? ''))));
+            return sendJson(res, 200, { success: true, embeddings: vectors.map((v) => Array.from(v)) });
+          }
+          return next();
+        } catch (err: any) {
+          console.warn(`[Ergo Memory] ${req.method} ${url} failed:`, err);
+          return sendJson(res, 500, { success: false, error: err?.message || String(err) });
+        }
+      });
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Local decision model — llama.cpp `llama-server` running Qwen 2.5 Coder 0.5B Instruct (GGUF Q4_K_M).
+// Installed per user under <storage root>/.ergo/local-model (no system install, no sudo). The server is a child
+// process bound to 127.0.0.1 with a random per-start API key. It makes the CLI-run shape decision (single
+// deliverable? QA verifier?) and serves autocomplete; the client falls back to the provider's tiny cloud model when
+// it is missing, so nothing here may make a task fail.
+// REST (all behind guardBridgeRequest):
+//   GET  /api/local-model/status
+//   POST /api/local-model/install | cancel | uninstall
+//   POST /api/local-model/shape     { title, subtasks?, kindHint? } → { success, single, needsQa, source: 'local', ms }
+//   POST /api/local-model/complete  { prefix, suffix?, maxTokens? } → { success, text, source: 'local', ms }
+// ─────────────────────────────────────────────────────────────────────────────
+
+const LOCAL_MODEL_RUNTIME_VERSION = 'b11669';
+const LOCAL_MODEL_ID = 'qwen2.5-coder-0.5b-instruct-q4_k_m';
+
+type LocalModelAsset = { file: string; bytes: number; sha256: string };
+
+/** Pinned llama.cpp CPU builds, keyed by `${process.platform}-${process.arch}`. */
+const LOCAL_MODEL_RUNTIMES: Record<string, LocalModelAsset> = {
+  'linux-x64': { file: 'llama-b11669-bin-ubuntu-x64.tar.gz', bytes: 17_851_611, sha256: 'cf07c1c112d709bd67e522017471de57ed0ec8bea031d732c5422351c07f65ac' },
+  'linux-arm64': { file: 'llama-b11669-bin-ubuntu-arm64.tar.gz', bytes: 13_900_160, sha256: '9ac6fda2058d35677608a06f751a50122ddfa4ce0ddb7f084466b8e79b6d4a99' },
+  'darwin-arm64': { file: 'llama-b11669-bin-macos-arm64.tar.gz', bytes: 12_191_582, sha256: 'dbed55493d72bc1ba2babc8770d669c2289b5bc4ee9fb2a4dfc158d45b7d13fd' },
+  'darwin-x64': { file: 'llama-b11669-bin-macos-x64.tar.gz', bytes: 11_677_404, sha256: 'cab28238d78158109b48deb27b05d50e0dcef56275d2e76da9ca8281526c7532' },
+  'win32-x64': { file: 'llama-b11669-bin-win-cpu-x64.zip', bytes: 19_537_886, sha256: '37b3efcf962847ca869745fd4ccf7f5e7e8dacfeff9fa3523b4ca8cdc66d632b' },
+  'win32-arm64': { file: 'llama-b11669-bin-win-cpu-arm64.zip', bytes: 12_442_177, sha256: '9cff39ffed17edcd03a7d876073f74d7b48cd43a1e5eafdd59ee094185ad871b' },
+};
+
+const LOCAL_MODEL_GGUF: LocalModelAsset = {
+  file: 'qwen2.5-coder-0.5b-instruct-q4_k_m.gguf',
+  bytes: 491_400_064,
+  sha256: '1d9614638d18024d0fbb36575a15f1302a3adf044df10345688ec4f6e1c4ff32',
+};
+
+const LOCAL_MODEL_PLATFORM = `${process.platform}-${process.arch}`;
+const LOCAL_MODEL_RUNTIME: LocalModelAsset | undefined = LOCAL_MODEL_RUNTIMES[LOCAL_MODEL_PLATFORM];
+
+const LOCAL_MODEL_PORT_MIN = 11500;
+const LOCAL_MODEL_PORT_MAX = 11599;
+const LOCAL_MODEL_HEALTH_TIMEOUT_MS = 20_000;
+const LOCAL_MODEL_REQUEST_TIMEOUT_MS = 15_000;
+/** The server stops after this long without a request, so the model only holds RAM while it's being used. */
+const LOCAL_MODEL_IDLE_STOP_MS = 10 * 60_000;
+const LOCAL_MODEL_STALL_TIMEOUT_MS = 60_000;
+const LOCAL_MODEL_CRASH_WINDOW_MS = 120_000;
+const LOCAL_MODEL_MAX_CRASHES = 3;
+
+/**
+ * Download URLs. ERGO_LOCAL_MODEL_RUNTIME_URL (a base the asset name is appended to) and ERGO_LOCAL_MODEL_MODEL_URL
+ * override them for mirrors and tests; the pinned sizes and SHA-256 sums are enforced either way.
+ */
+function localModelRuntimeUrl(asset: LocalModelAsset): string {
+  const base = process.env.ERGO_LOCAL_MODEL_RUNTIME_URL || `https://github.com/ggml-org/llama.cpp/releases/download/${LOCAL_MODEL_RUNTIME_VERSION}/`;
+  return base.endsWith('/') ? base + asset.file : `${base}/${asset.file}`;
+}
+
+function localModelGgufUrl(): string {
+  return (
+    process.env.ERGO_LOCAL_MODEL_MODEL_URL ||
+    `https://huggingface.co/Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF/resolve/ebb2015119c907b064c512bf053e945850b5875f/${LOCAL_MODEL_GGUF.file}`
+  );
+}
+
+/** `<storage root>/local-model` when the root is a `.ergo` folder, else `<storage root>/.ergo/local-model` (as the memory store). */
+function localModelInstallDir(): string {
+  const root = getActiveStorageDir();
+  const base = path.basename(root) === '.ergo' ? root : path.join(root, '.ergo');
+  return path.join(base, 'local-model');
+}
+
+// Few-shot prompts, exactly as evaluated (scratchpad qwen/qeval2.py, round 2). The assistant turns keep the
+// evaluation's `{"key": value}` formatting.
+type LocalBoolQuestion = { key: string; system: string; shots: Array<[string, boolean]> };
+
+const LOCAL_SINGLE_QUESTION: LocalBoolQuestion = {
+  key: 'single',
+  system:
+    'Decide if a to-do item is one small, self-contained job (single=true) or a bigger job with several distinct parts (single=false). Reply with JSON.',
+  shots: [
+    ['Fix the typo in the footer', true],
+    ['Build user accounts | Subtasks: sign-up; login; password reset; profile page', false],
+    ['Write a short release announcement', true],
+    ['Migrate the app to the new payment provider | Subtasks: API client; webhooks; data migration; remove old SDK', false],
+  ],
+};
+
+const LOCAL_QA_QUESTION: LocalBoolQuestion = {
+  key: 'needs_qa',
+  system:
+    'Decide if a coding change is risky or broad enough that an independent reviewer should test it (needs_qa=true), or a small contained change (needs_qa=false). Reply with JSON.',
+  shots: [
+    ['Change the button color on the settings page', false],
+    ['Rewrite the authentication system to use OAuth | Subtasks: providers; token storage; migrate sessions', true],
+    ['Add a tooltip to the export icon', false],
+    ['Move all data from SQLite to Postgres with a migration script', true],
+  ],
+};
+
+function localBoolMessages(question: LocalBoolQuestion, query: string) {
+  const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [{ role: 'system', content: question.system }];
+  for (const [text, answer] of question.shots) {
+    messages.push({ role: 'user', content: text }, { role: 'assistant', content: `{"${question.key}": ${answer}}` });
+  }
+  messages.push({ role: 'user', content: query });
+  return messages;
+}
+
+type LocalModelState = 'not_installed' | 'installing' | 'installed' | 'starting' | 'ready' | 'error';
+type LocalModelPhase = 'runtime' | 'model' | 'verifying' | 'extracting';
+
+interface LocalModelRecord {
+  version: 1;
+  platform: string;
+  runtime: { version: string; file: string; sha256: string; server: string };
+  model: { id: string; file: string; bytes: number; sha256: string };
+  installedAt: string;
+}
+
+interface LocalModelInstallJob {
+  abort: AbortController;
+  phase: LocalModelPhase;
+  bytesDone: number;
+  bytesTotal: number;
+  done: Promise<void>;
+}
+
+type LocalModelPaths = { dir: string; record: string; pidFile: string; downloads: string; runtime: string; model: string };
+
+function localModelPaths(dir: string): LocalModelPaths {
+  return {
+    dir,
+    record: path.join(dir, 'install.json'),
+    pidFile: path.join(dir, 'server.pid'),
+    downloads: path.join(dir, 'downloads'),
+    runtime: path.join(dir, 'runtime', `llama-${LOCAL_MODEL_RUNTIME_VERSION}`),
+    model: path.join(dir, 'models', LOCAL_MODEL_GGUF.file),
+  };
+}
+
+const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+const toMb = (bytes: number) => Math.round(bytes / 1_000_000);
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Removes a directory tree, retrying briefly when Windows still holds a handle open. */
+async function removeTree(target: string) {
+  await fs.rm(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
+}
+
+async function ensureFreeDiskSpace(dir: string, needed: number) {
+  let free: number;
+  try {
+    const stats = await fs.statfs(dir);
+    free = Number(stats.bavail) * Number(stats.bsize);
+  } catch {
+    return; // statfs unsupported here: let the download find out
+  }
+  if (free < needed) throw new Error(`not enough disk space (${toMb(needed)} MB needed, ${toMb(free)} MB free)`);
+}
+
+/**
+ * Streams `url` to `<dest>.part` while hashing it, then renames it to `dest` — only when the size and SHA-256 match
+ * the pinned values. Anything else (wrong size, wrong hash, oversized body, stall, cancel) removes the .part file.
+ */
+async function downloadVerified(
+  url: string,
+  dest: string,
+  expected: LocalModelAsset,
+  signal: AbortSignal,
+  onBytes: (count: number) => void,
+  onVerify: () => void
+): Promise<void> {
+  const part = `${dest}.part`;
+  // Aborted by a cancel (`signal`) or by a stall. (Built by hand: AbortSignal.any needs Node 20.3+, Vite 5 runs on 18.)
+  const combined = new AbortController();
+  const onCancel = () => combined.abort(new Error('cancelled'));
+  if (signal.aborted) onCancel();
+  else signal.addEventListener('abort', onCancel, { once: true });
+  let stallError: Error | null = null;
+  let stallTimer: NodeJS.Timeout | undefined;
+  const armStall = () => {
+    clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      stallError = new Error(`the download of ${expected.file} stalled for ${LOCAL_MODEL_STALL_TIMEOUT_MS / 1000} s`);
+      combined.abort(stallError);
+    }, LOCAL_MODEL_STALL_TIMEOUT_MS);
+  };
+  armStall();
+  try {
+    const res = await fetch(url, { signal: combined.signal, redirect: 'follow', headers: { 'User-Agent': 'Ergo-local-model' } });
+    if (!res.ok || !res.body) throw new Error(`downloading ${expected.file} failed: HTTP ${res.status} from ${new URL(url).host}`);
+    const announced = Number(res.headers.get('content-length') || 0);
+    if (announced && announced !== expected.bytes) {
+      throw new Error(`${expected.file} is ${announced} bytes on the server, expected ${expected.bytes}; refusing it`);
+    }
+    const hash = createHash('sha256');
+    let received = 0;
+    const meter = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        received += chunk.length;
+        if (received > expected.bytes) {
+          callback(new Error(`${expected.file} is larger than the expected ${expected.bytes} bytes; refusing it`));
+          return;
+        }
+        hash.update(chunk);
+        onBytes(chunk.length);
+        armStall();
+        callback(null, chunk);
+      },
+    });
+    await pipeline(Readable.fromWeb(res.body as NodeWebReadableStream<Uint8Array>), meter, fsSync.createWriteStream(part), { signal: combined.signal });
+    onVerify();
+    if (received !== expected.bytes) throw new Error(`${expected.file} ended after ${received} of ${expected.bytes} bytes`);
+    const digest = hash.digest('hex');
+    if (digest !== expected.sha256) {
+      throw new Error(`checksum mismatch for ${expected.file} (sha256 ${digest.slice(0, 16)}…, expected ${expected.sha256.slice(0, 16)}…); refusing to install it`);
+    }
+    await fs.rename(part, dest);
+  } catch (err) {
+    await fs.rm(part, { force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
+    if (signal.aborted) throw new Error('cancelled');
+    throw stallError ?? err;
+  } finally {
+    clearTimeout(stallTimer);
+    signal.removeEventListener('abort', onCancel);
+  }
+}
+
+async function findFileByName(dir: string, name: string, depth: number): Promise<string | null> {
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => [] as fsSync.Dirent[]);
+  for (const entry of entries) if (entry.isFile() && entry.name === name) return path.join(dir, entry.name);
+  if (depth <= 0) return null;
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const hit = await findFileByName(path.join(dir, entry.name), name, depth - 1);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * Unpacks the (already verified) runtime archive with the system `tar` into a temp dir inside the install dir, then
+ * moves the whole tree (llama-server plus the libraries next to it) to `runtimeDir`. Returns the server's path
+ * relative to `installDir`, '/'-separated.
+ */
+async function extractLocalRuntime(archive: string, installDir: string, runtimeDir: string, signal: AbortSignal): Promise<string> {
+  const tmp = await fs.mkdtemp(path.join(installDir, '.extract-'));
+  try {
+    // Windows 10+ ships bsdtar, which also reads .zip; prefer it over a GNU tar (Git Bash) earlier on PATH.
+    const systemTar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+    const tar = process.platform === 'win32' && fsSync.existsSync(systemTar) ? systemTar : 'tar';
+    const args = archive.endsWith('.zip') ? ['-xf', archive, '-C', tmp] : ['-xzf', archive, '-C', tmp];
+    await new Promise<void>((resolve, reject) => {
+      execFile(tar, args, { signal, timeout: 120_000, windowsHide: true }, (err, _stdout, stderr) => {
+        if (err) reject(new Error(`could not unpack the runtime: ${String(stderr || err.message).trim().slice(0, 300)}`));
+        else resolve();
+      });
+    });
+    const entries = await fs.readdir(tmp, { withFileTypes: true });
+    const root = entries.length === 1 && entries[0].isDirectory() ? path.join(tmp, entries[0].name) : tmp;
+    const exe = process.platform === 'win32' ? 'llama-server.exe' : 'llama-server';
+    const found = await findFileByName(root, exe, 4);
+    if (!found) throw new Error(`${exe} is missing from the runtime archive`);
+    const relInRoot = path.relative(root, found);
+    await removeTree(runtimeDir);
+    await fs.mkdir(path.dirname(runtimeDir), { recursive: true });
+    await fs.rename(root, runtimeDir);
+    const serverPath = path.join(runtimeDir, relInRoot);
+    if (process.platform !== 'win32') await fs.chmod(serverPath, 0o755);
+    if (process.platform === 'darwin') {
+      await new Promise<void>((resolve) => execFile('xattr', ['-dr', 'com.apple.quarantine', runtimeDir], () => resolve()));
+    }
+    return path.relative(installDir, serverPath).split(path.sep).join('/');
+  } finally {
+    await removeTree(tmp);
+  }
+}
+
+function isLocalPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = net.createServer();
+    probe.once('error', () => resolve(false));
+    probe.listen({ host: '127.0.0.1', port, exclusive: true }, () => probe.close(() => resolve(true)));
+  });
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: any) {
+    return err?.code === 'EPERM';
+  }
+}
+
+/**
+ * Owns the install and the llama-server child process for the current storage root. One per bridge process: a config
+ * reload disposes the previous one (see replaceLocalModelManager).
+ */
+class LocalModelManager {
+  private dir = localModelInstallDir();
+  private job: LocalModelInstallJob | null = null;
+  /** Install / start failure shown by status until the next attempt succeeds. */
+  private lastError: string | null = null;
+  private child: ChildProcess | null = null;
+  /** Servers sent SIGTERM whose exit hasn't been seen yet. */
+  private stopping = new Set<ChildProcess>();
+  private port = 0;
+  private apiKey = '';
+  private serverState: 'stopped' | 'starting' | 'ready' = 'stopped';
+  private startPromise: Promise<void> | null = null;
+  /** Bumped by every stop, so a start or exit that belongs to an older server is ignored. */
+  private generation = 0;
+  private crashTimes: number[] = [];
+  private gaveUp = false;
+  private logTail: string[] = [];
+  private disposed = false;
+  private inFlight = 0;
+  private idleTimer: NodeJS.Timeout | null = null;
+
+  private get paths(): LocalModelPaths {
+    return localModelPaths(this.dir);
+  }
+
+  /** Follows a storage-root change: the old root's download and server stop. */
+  private syncDir() {
+    const dir = localModelInstallDir();
+    if (dir === this.dir) return;
+    this.job?.abort.abort(); // its own cleanup removes the old partial install
+    this.job = null;
+    void this.stopServer();
+    this.dir = dir;
+    this.lastError = null;
+    this.crashTimes = [];
+    this.gaveUp = false;
+  }
+
+  /** The install when its record matches the pinned versions and its files are present; otherwise null. */
+  private installed(): { serverPath: string; modelPath: string } | null {
+    const p = this.paths;
+    let record: LocalModelRecord;
+    try {
+      record = JSON.parse(fsSync.readFileSync(p.record, 'utf-8'));
+    } catch {
+      return null;
+    }
+    if (
+      record?.platform !== LOCAL_MODEL_PLATFORM ||
+      record?.runtime?.version !== LOCAL_MODEL_RUNTIME_VERSION ||
+      record?.model?.sha256 !== LOCAL_MODEL_GGUF.sha256 ||
+      typeof record.runtime.server !== 'string'
+    ) {
+      return null;
+    }
+    const serverPath = path.resolve(p.dir, ...record.runtime.server.split('/'));
+    if (!serverPath.startsWith(p.dir + path.sep)) return null;
+    try {
+      if (!fsSync.statSync(serverPath).isFile()) return null;
+      if (fsSync.statSync(p.model).size !== LOCAL_MODEL_GGUF.bytes) return null;
+    } catch {
+      return null;
+    }
+    return { serverPath, modelPath: p.model };
+  }
+
+  status() {
+    this.syncDir();
+    const job = this.job;
+    const isInstalled = !job && this.installed() !== null;
+    let state: LocalModelState;
+    if (job) state = 'installing';
+    else if (!isInstalled) state = this.lastError ? 'error' : 'not_installed';
+    else if (this.serverState === 'ready') state = 'ready';
+    else if (this.serverState === 'starting') state = 'starting';
+    else state = this.lastError || this.gaveUp ? 'error' : 'installed';
+    return {
+      success: true,
+      state,
+      ...(job ? { phase: job.phase, bytesDone: job.bytesDone, bytesTotal: job.bytesTotal } : {}),
+      ...(state === 'error' && this.lastError ? { error: this.lastError } : {}),
+      platformSupported: Boolean(LOCAL_MODEL_RUNTIME),
+      sizes: { runtimeBytes: LOCAL_MODEL_RUNTIME?.bytes ?? 0, modelBytes: LOCAL_MODEL_GGUF.bytes },
+      installDir: this.dir,
+      version: { runtime: LOCAL_MODEL_RUNTIME_VERSION, model: LOCAL_MODEL_ID },
+    };
+  }
+
+  /** Starts a background install (idempotent). When already installed, (re)starts the server instead. */
+  install(): { ok: boolean; error?: string } {
+    this.syncDir();
+    if (this.job) return { ok: true };
+    const runtime = LOCAL_MODEL_RUNTIME;
+    if (!runtime) {
+      return { ok: false, error: `The local model isn't available for this platform (${LOCAL_MODEL_PLATFORM}). Use the cloud model instead.` };
+    }
+    if (this.installed()) {
+      // Also the way out of a crash-loop error: try again from a clean slate.
+      this.gaveUp = false;
+      this.crashTimes = [];
+      this.lastError = null;
+      this.inUse(() => this.ensureStarted()).catch(() => {}); // starts the idle countdown too
+      return { ok: true };
+    }
+    const job: LocalModelInstallJob = {
+      abort: new AbortController(),
+      phase: 'runtime',
+      bytesDone: 0,
+      bytesTotal: runtime.bytes + LOCAL_MODEL_GGUF.bytes,
+      done: Promise.resolve(),
+    };
+    this.job = job;
+    this.lastError = null;
+    this.gaveUp = false;
+    this.crashTimes = [];
+    job.done = this.runInstall(job, runtime, this.paths);
+    return { ok: true };
+  }
+
+  private async runInstall(job: LocalModelInstallJob, runtime: LocalModelAsset, p: LocalModelPaths): Promise<void> {
+    const signal = job.abort.signal;
+    try {
+      if (path.basename(p.dir) !== 'local-model') throw new Error(`unexpected install folder ${p.dir}`);
+      await removeTree(p.dir); // leftovers of an interrupted install
+      await fs.mkdir(p.downloads, { recursive: true });
+      await ensureFreeDiskSpace(p.dir, runtime.bytes * 6 + LOCAL_MODEL_GGUF.bytes + 64_000_000);
+
+      // 1. Runtime: download + verify, unpack into a temp dir, move into place.
+      const archive = path.join(p.downloads, runtime.file);
+      await downloadVerified(localModelRuntimeUrl(runtime), archive, runtime, signal, (n) => (job.bytesDone += n), () => (job.phase = 'verifying'));
+      job.phase = 'extracting';
+      const serverRel = await extractLocalRuntime(archive, p.dir, p.runtime, signal);
+      await fs.rm(archive, { force: true });
+
+      // 2. Model.
+      job.phase = 'model';
+      await fs.mkdir(path.dirname(p.model), { recursive: true });
+      await downloadVerified(localModelGgufUrl(), p.model, LOCAL_MODEL_GGUF, signal, (n) => (job.bytesDone += n), () => (job.phase = 'verifying'));
+      await removeTree(p.downloads);
+
+      if (signal.aborted) throw new Error('cancelled');
+      const record: LocalModelRecord = {
+        version: 1,
+        platform: LOCAL_MODEL_PLATFORM,
+        runtime: { version: LOCAL_MODEL_RUNTIME_VERSION, file: runtime.file, sha256: runtime.sha256, server: serverRel },
+        model: { id: LOCAL_MODEL_ID, file: LOCAL_MODEL_GGUF.file, bytes: LOCAL_MODEL_GGUF.bytes, sha256: LOCAL_MODEL_GGUF.sha256 },
+        installedAt: new Date().toISOString(),
+      };
+      const tmpRecord = `${p.record}.tmp`;
+      await fs.writeFile(tmpRecord, JSON.stringify(record, null, 2), 'utf-8');
+      await fs.rename(tmpRecord, p.record);
+    } catch (err) {
+      // Nothing half-installed stays behind: a failed or cancelled install removes the whole folder.
+      await removeTree(p.dir);
+      if (this.job === job) {
+        this.job = null;
+        this.lastError = signal.aborted ? null : `Installing the local model failed: ${errorText(err)}`;
+        if (this.lastError) console.warn(`[Ergo Local Model] ${this.lastError}`);
+      }
+      return;
+    }
+    if (this.job !== job) return;
+    this.job = null;
+    console.log(`[Ergo Local Model] Installed ${LOCAL_MODEL_ID} (llama.cpp ${LOCAL_MODEL_RUNTIME_VERSION}) in ${p.dir}.`);
+    this.inUse(() => this.ensureStarted()).catch(() => {}); // starts the idle countdown too
+  }
+
+  /** Aborts a running install; its cleanup removes the partial files before this resolves. */
+  async cancel(): Promise<void> {
+    this.syncDir();
+    const job = this.job;
+    if (!job) return;
+    job.abort.abort();
+    await Promise.race([job.done, delay(15_000)]);
+  }
+
+  async uninstall(): Promise<void> {
+    this.syncDir();
+    await this.cancel();
+    await this.stopServer();
+    if (path.basename(this.dir) === 'local-model') await removeTree(this.dir);
+    this.lastError = null;
+    this.crashTimes = [];
+    this.gaveUp = false;
+  }
+
+  /** Starts the server when installed (serialized: concurrent callers share one start). */
+  ensureStarted(): Promise<void> {
+    if (this.serverState === 'ready' && this.child) return Promise.resolve();
+    if (this.startPromise) return this.startPromise;
+    if (this.disposed) return Promise.reject(new Error('The bridge is shutting down.'));
+    if (this.job) return Promise.reject(new Error('The local model is still installing.'));
+    const install = this.installed();
+    if (!install) return Promise.reject(new Error('The local model is not installed.'));
+    if (this.gaveUp) return Promise.reject(new Error(this.lastError || 'The local model is off after repeated crashes.'));
+    const gen = this.generation;
+    this.serverState = 'starting';
+    const run: Promise<void> = (async () => {
+      try {
+        await this.startServer(install.serverPath, install.modelPath, gen);
+        this.serverState = 'ready';
+        this.lastError = null;
+        console.log(`[Ergo Local Model] llama-server ready on 127.0.0.1:${this.port}.`);
+      } catch (err) {
+        if (gen === this.generation) {
+          this.serverState = 'stopped';
+          if (this.child) {
+            const child = this.child;
+            this.child = null;
+            this.port = 0;
+            try {
+              child.kill('SIGKILL');
+            } catch {}
+          }
+          this.noteCrash(`could not start: ${errorText(err)}`);
+        }
+        throw err;
+      }
+    })();
+    this.startPromise = run;
+    const clear = () => {
+      if (this.startPromise === run) this.startPromise = null;
+    };
+    run.then(clear, clear);
+    return run;
+  }
+
+  private noteCrash(reason: string) {
+    const now = Date.now();
+    this.crashTimes = this.crashTimes.filter((t) => now - t < LOCAL_MODEL_CRASH_WINDOW_MS);
+    this.crashTimes.push(now);
+    // llama-server log lines look like "0.00.553.718 E srv  …": keep the last error-level lines as the explanation.
+    const hints = this.logTail
+      .filter((line) => /^[\d.]+ E /.test(line) || /error|failed|unable|cannot/i.test(line))
+      .slice(-2)
+      .map((line) => line.replace(/^[\d.]+ [A-Z] +/, '').slice(0, 200));
+    const detail = `${reason}${hints.length ? ` (${hints.join(' | ')})` : ''}`;
+    if (this.crashTimes.length >= LOCAL_MODEL_MAX_CRASHES) {
+      this.gaveUp = true;
+      this.lastError = `The local model server failed ${this.crashTimes.length} times in 2 minutes, so Ergo stopped restarting it. Last: ${detail}.`;
+    } else {
+      this.lastError = `The local model server ${detail}.`;
+    }
+    console.warn(`[Ergo Local Model] ${this.lastError}`);
+  }
+
+  private async startServer(serverPath: string, modelPath: string, gen: number): Promise<void> {
+    const stopped = () => new Error('The local model server was stopped.');
+    await this.killOrphanServer(serverPath);
+    let port = 0;
+    for (let candidate = LOCAL_MODEL_PORT_MIN; candidate <= LOCAL_MODEL_PORT_MAX && !port; candidate++) {
+      if (await isLocalPortFree(candidate)) port = candidate;
+    }
+    if (!port) throw new Error(`no free port in ${LOCAL_MODEL_PORT_MIN}-${LOCAL_MODEL_PORT_MAX}`);
+    if (gen !== this.generation) throw stopped();
+
+    const apiKey = randomBytes(24).toString('hex');
+    const cpus = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
+    const threads = Math.max(1, Math.min(8, cpus - 1));
+    // Drop the user's LLAMA_* variables (e.g. LLAMA_ARG_HOST): only the flags below configure this server.
+    const env: NodeJS.ProcessEnv = {};
+    for (const [key, value] of Object.entries(process.env)) if (!/^LLAMA_/i.test(key)) env[key] = value;
+    env.LLAMA_API_KEY = apiKey; // via env, not argv, so other local users can't read it from `ps`
+    const binDir = path.dirname(serverPath);
+    if (process.platform === 'linux') env.LD_LIBRARY_PATH = [binDir, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':');
+    if (process.platform === 'darwin') env.DYLD_LIBRARY_PATH = [binDir, process.env.DYLD_LIBRARY_PATH].filter(Boolean).join(':');
+
+    const args = ['-m', modelPath, '--host', '127.0.0.1', '--port', String(port), '-c', '4096', '--parallel', '2', '-t', String(threads), '--no-webui', '--no-slots'];
+    const child = spawn(serverPath, args, { cwd: binDir, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    this.child = child;
+    this.port = port;
+    this.apiKey = apiKey;
+    const tail: string[] = [];
+    this.logTail = tail;
+    const collect = (chunk: Buffer) => {
+      for (const line of chunk.toString('utf-8').split(/\r?\n/)) {
+        const text = line.trim();
+        if (text) tail.push(text.slice(0, 300));
+      }
+      if (tail.length > 60) tail.splice(0, tail.length - 60);
+    };
+    child.stdout?.on('data', collect);
+    child.stderr?.on('data', collect);
+
+    const exit = { reason: '' };
+    const onGone = (reason: string) => {
+      if (exit.reason) return;
+      exit.reason = reason;
+      this.removePidFile(child.pid);
+      if (this.child !== child) return; // stopped on purpose
+      const wasReady = this.serverState === 'ready';
+      this.child = null;
+      this.port = 0;
+      this.serverState = 'stopped';
+      if (!wasReady) return; // a failed start: ensureStarted reports it
+      this.noteCrash(`crashed (${reason})`);
+      // Restart once per crash; noteCrash gives up after LOCAL_MODEL_MAX_CRASHES in the window.
+      if (!this.gaveUp && !this.disposed) this.ensureStarted().catch(() => {});
+    };
+    child.once('error', (err) => onGone(`failed to launch: ${err.message}`));
+    child.once('exit', (code, signal) => onGone(signal ? `killed by ${signal}` : `exit code ${code}`));
+    if (child.pid) this.writePidFile(child.pid, serverPath);
+
+    const deadline = Date.now() + LOCAL_MODEL_HEALTH_TIMEOUT_MS;
+    for (;;) {
+      if (exit.reason) throw new Error(`llama-server ${exit.reason}`);
+      if (gen !== this.generation) throw stopped();
+      if (Date.now() > deadline) throw new Error(`llama-server was not ready within ${LOCAL_MODEL_HEALTH_TIMEOUT_MS / 1000} s`);
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1_000) });
+        await res.arrayBuffer().catch(() => null); // release the connection
+        if (res.ok && !exit.reason) return; // 503 while the model loads
+      } catch {}
+      await delay(150);
+    }
+  }
+
+  private async stopServer(): Promise<void> {
+    this.generation++;
+    this.startPromise = null;
+    const child = this.child;
+    this.child = null;
+    this.port = 0;
+    this.serverState = 'stopped';
+    if (!child) return;
+    if (child.exitCode === null && child.signalCode === null) {
+      this.stopping.add(child);
+      await new Promise<void>((resolve) => {
+        const force = setTimeout(() => {
+          try {
+            child.kill('SIGKILL');
+          } catch {}
+        }, 3_000);
+        const giveUp = setTimeout(finish, 6_000);
+        function finish() {
+          clearTimeout(force);
+          clearTimeout(giveUp);
+          resolve();
+        }
+        child.once('exit', finish);
+        try {
+          child.kill('SIGTERM');
+        } catch {
+          finish();
+        }
+      });
+      this.stopping.delete(child);
+    }
+    this.removePidFile(child.pid);
+  }
+
+  private writePidFile(pid: number, serverPath: string) {
+    try {
+      fsSync.writeFileSync(this.paths.pidFile, JSON.stringify({ pid, ownerPid: process.pid, server: serverPath, startedAt: new Date().toISOString() }));
+    } catch {}
+  }
+
+  private removePidFile(pid: number | undefined) {
+    const file = this.paths.pidFile;
+    try {
+      if (JSON.parse(fsSync.readFileSync(file, 'utf-8'))?.pid === pid) fsSync.rmSync(file, { force: true });
+    } catch {}
+  }
+
+  /** Stops a server left behind by a bridge that was killed outright (SIGKILL), so orphans don't pile up. */
+  private async killOrphanServer(serverPath: string) {
+    if (process.platform === 'win32') return;
+    const file = this.paths.pidFile;
+    let info: any;
+    try {
+      info = JSON.parse(await fs.readFile(file, 'utf-8'));
+    } catch {
+      return;
+    }
+    const pid = Number(info?.pid);
+    const owner = Number(info?.ownerPid);
+    if (!Number.isInteger(pid) || pid <= 1 || pid === this.child?.pid) return;
+    // A server owned by another live bridge on the same storage root is not an orphan.
+    if (Number.isInteger(owner) && owner !== process.pid && isPidAlive(owner)) return;
+    if (isPidAlive(pid)) {
+      const command = await new Promise<string>((resolve) =>
+        execFile('ps', ['-o', 'command=', '-p', String(pid)], { timeout: 3_000 }, (err, stdout) => resolve(err ? '' : String(stdout)))
+      );
+      if (info?.server === serverPath && command.includes(serverPath)) {
+        try {
+          process.kill(pid, 'SIGKILL');
+          console.log(`[Ergo Local Model] Stopped an orphaned llama-server (pid ${pid}).`);
+          for (let i = 0; i < 20 && isPidAlive(pid); i++) await delay(100); // let it release its port
+        } catch {}
+      }
+    }
+    await fs.rm(file, { force: true }).catch(() => {});
+  }
+
+  private async llamaPost(route: string, body: unknown): Promise<any> {
+    if (!this.port) throw new Error('The local model server is not running.');
+    const res = await fetch(`http://127.0.0.1:${this.port}${route}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(LOCAL_MODEL_REQUEST_TIMEOUT_MS),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`llama-server answered HTTP ${res.status}: ${text.slice(0, 200)}`);
+    return JSON.parse(text);
+  }
+
+  private async askBool(question: LocalBoolQuestion, query: string): Promise<boolean> {
+    const out = await this.llamaPost('/v1/chat/completions', {
+      messages: localBoolMessages(question, query),
+      temperature: 0,
+      max_tokens: 32,
+      cache_prompt: true,
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'a', schema: { type: 'object', properties: { [question.key]: { type: 'boolean' } }, required: [question.key] } },
+      },
+    });
+    const content = out?.choices?.[0]?.message?.content;
+    let value: unknown;
+    try {
+      value = JSON.parse(typeof content === 'string' ? content : '')?.[question.key];
+    } catch {}
+    if (typeof value !== 'boolean') throw new Error(`The local model gave no usable "${question.key}" answer.`);
+    return value;
+  }
+
+  /** Runs a model request; the idle countdown restarts once no request is in flight. */
+  private async inUse<T>(fn: () => Promise<T>): Promise<T> {
+    this.inFlight++;
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+    try {
+      return await fn();
+    } finally {
+      this.inFlight--;
+      if (this.inFlight === 0 && !this.disposed) {
+        this.idleTimer = setTimeout(() => {
+          this.idleTimer = null;
+          if (this.inFlight > 0 || this.serverState === 'stopped') return;
+          console.log('[Ergo Local Model] Stopping the idle model server; the next request starts it again.');
+          void this.stopServer();
+        }, LOCAL_MODEL_IDLE_STOP_MS);
+        this.idleTimer.unref();
+      }
+    }
+  }
+
+  async shape(input: { title: string; subtasks: string[]; skipQa: boolean }): Promise<{ single: boolean; needsQa: boolean; ms: number }> {
+    this.syncDir();
+    return this.inUse(async () => {
+      const started = Date.now();
+      await this.ensureStarted();
+      const query = input.title + (input.subtasks.length ? ` | Subtasks: ${input.subtasks.join('; ')}` : '');
+      const [single, needsQa] = await Promise.all([
+        this.askBool(LOCAL_SINGLE_QUESTION, query),
+        input.skipQa ? Promise.resolve(false) : this.askBool(LOCAL_QA_QUESTION, query),
+      ]);
+      return { single, needsQa, ms: Date.now() - started };
+    });
+  }
+
+  async complete(input: { prefix: string; suffix: string; maxTokens: number }): Promise<{ text: string; ms: number }> {
+    this.syncDir();
+    const started = Date.now();
+    if (!input.prefix.trim()) return { text: '', ms: 0 };
+    return this.inUse(async () => {
+      await this.ensureStarted();
+      const out = await this.llamaPost('/infill', {
+        input_prefix: input.prefix,
+        input_suffix: input.suffix,
+        n_predict: input.maxTokens,
+        temperature: 0,
+        stop: ['\n'],
+      });
+      return { text: typeof out?.content === 'string' ? out.content.trim() : '', ms: Date.now() - started };
+    });
+  }
+
+  /** Config reload / server close: abort an install (its cleanup removes partial files) and stop the server. */
+  async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.job?.abort.abort();
+    await this.stopServer();
+  }
+
+  /** Process exit / SIGINT / SIGHUP: only synchronous work runs here. */
+  killSync() {
+    this.disposed = true;
+    this.generation++;
+    this.job?.abort.abort();
+    // Includes a server still being stopped: Vite exits right after closing, before an async stop completes.
+    const children = [this.child, ...this.stopping];
+    this.child = null;
+    this.stopping.clear();
+    this.serverState = 'stopped';
+    for (const child of children) {
+      if (!child) continue;
+      if (child.exitCode === null && child.signalCode === null) {
+        try {
+          child.kill('SIGKILL');
+        } catch {}
+      }
+      this.removePidFile(child.pid);
+    }
+  }
+}
+
+/** One manager per process: a config reload disposes the previous one (its server and any install in progress). */
+function replaceLocalModelManager(): LocalModelManager {
+  const g = globalThis as any;
+  const key = Symbol.for('ergo.localModel.manager');
+  const previous = g[key];
+  if (previous && typeof previous.dispose === 'function') void previous.dispose();
+  const manager = new LocalModelManager();
+  g[key] = manager;
+  return manager;
+}
+
+const cleanLine = (value: unknown, max: number): string => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, max) : '');
+
+function ergoLocalModelPlugin(): Plugin {
+  return {
+    name: 'ergo-local-model',
+    configureServer(server) {
+      const manager = replaceLocalModelManager();
+      registerBridgeExitHook('localModel', () => manager.killSync());
+      // No eager start: the server comes up on the first request, so cloud-mode users never load the model.
+      server.httpServer?.once('close', () => {
+        void manager.dispose();
+      });
+
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
+        const url = req.url?.split('?')[0];
+        if (!url?.startsWith('/api/local-model/')) return next();
+        if (!guardBridgeRequest(req, res)) return;
+        const route = url.slice('/api/local-model/'.length);
+        const postRoutes = ['install', 'cancel', 'uninstall', 'shape', 'complete'];
+        if (route !== 'status' && !postRoutes.includes(route)) return next();
+        const method = route === 'status' ? 'GET' : 'POST';
+        if (req.method !== method) {
+          res.setHeader('Allow', method);
+          return sendJson(res, 405, { success: false, error: `Use ${method}.` });
+        }
+
+        try {
+          if (route === 'status') return sendJson(res, 200, manager.status());
+          if (route === 'install') {
+            const started = manager.install();
+            return sendJson(res, 200, { ...manager.status(), success: started.ok, ...(started.error ? { error: started.error } : {}) });
+          }
+          if (route === 'cancel') {
+            await manager.cancel();
+            return sendJson(res, 200, manager.status());
+          }
+          if (route === 'uninstall') {
+            await manager.uninstall();
+            return sendJson(res, 200, manager.status());
+          }
+
+          let body: any;
+          try {
+            body = await parseJsonBody(req);
+          } catch {
+            return sendJson(res, 400, { success: false, error: 'Invalid JSON body.' });
+          }
+
+          if (route === 'shape') {
+            const title = cleanLine(body?.title, 500);
+            if (!title) return sendJson(res, 400, { success: false, error: 'title is required.' });
+            const subtasks = (Array.isArray(body?.subtasks) ? body.subtasks : [])
+              .map((s: unknown) => cleanLine(s, 200))
+              .filter(Boolean)
+              .slice(0, 12);
+            // The QA question only applies to coding work: a known non-coding kind skips it.
+            const kindHint = cleanLine(body?.kindHint, 40).toLowerCase();
+            const skipQa = Boolean(kindHint) && kindHint !== 'coding' && kindHint !== 'code';
+            try {
+              const decision = await manager.shape({ title, subtasks, skipQa });
+              return sendJson(res, 200, { success: true, single: decision.single, needsQa: decision.needsQa, source: 'local', ms: decision.ms });
+            } catch (err) {
+              return sendJson(res, 200, { success: false, error: errorText(err) });
+            }
+          }
+
+          // route === 'complete'
+          if (typeof body?.prefix !== 'string') return sendJson(res, 400, { success: false, error: 'prefix is required.' });
+          const requested = Math.floor(Number(body?.maxTokens));
+          const maxTokens = Number.isFinite(requested) && requested > 0 ? Math.min(48, requested) : 24;
+          try {
+            const completion = await manager.complete({
+              prefix: body.prefix.slice(-4_000), // the text nearest the cursor matters most
+              suffix: typeof body?.suffix === 'string' ? body.suffix.slice(0, 2_000) : '',
+              maxTokens,
+            });
+            return sendJson(res, 200, { success: true, text: completion.text, source: 'local', ms: completion.ms });
+          } catch (err) {
+            return sendJson(res, 200, { success: false, error: errorText(err) });
+          }
+        } catch (err) {
+          console.warn(`[Ergo Local Model] ${req.method} ${url} failed:`, err);
+          return sendJson(res, 500, { success: false, error: errorText(err) });
+        }
+      });
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Model catalog — POST /api/models/catalog (Auto model selection; docs/wip/AUTO_MODEL_SPEC.md)
+// Prices come from LiteLLM's public price list, benchmarks from Artificial Analysis when the caller sends its key.
+// Both are cached under <storage>/.ergo/model-catalog/ and served stale-while-revalidate.
+//
+// sources.prices / sources.benchmarks:
+//   'litellm' / 'artificial-analysis'             data younger than the freshness window (just fetched, or a fresh cache)
+//   'litellm-cache' / 'artificial-analysis-cache' an older cache: a background refresh is running, or the last fetch failed
+//   'snapshot'                                    no usable cache and the fetch failed (bundled priceSnapshot.ts)
+//   'none'                                        no key, the key was rejected, or no benchmark data at all
+//
+// The Artificial Analysis key lives only in the request handling it: it is sent as the x-api-key header and never
+// logged, written to disk or echoed in an error (errors are scrubbed of it). Only a SHA-256 fingerprint is kept in
+// memory, to tell whether this key has been checked yet in this bridge process.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MODEL_PRICES_URL_DEFAULT = 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json';
+const MODEL_BENCHMARKS_URL_DEFAULT = 'https://artificialanalysis.ai/api/v2/data/llms/models';
+const CATALOG_PRICES_TTL_MS = 12 * 60 * 60_000;
+const CATALOG_BENCHMARKS_TTL_MS = 24 * 60 * 60_000;
+/** `refresh: true` bypasses the age check at most this often, and a failed fetch isn't retried sooner than this. */
+const CATALOG_REFRESH_MIN_INTERVAL_MS = 5 * 60_000;
+const CATALOG_FETCH_TIMEOUT_MS = 10_000;
+const CATALOG_MAX_BODY_BYTES = 20 * 1024 * 1024;
+/** A normalized price list smaller than this is treated as a broken download (the live list yields ~150). */
+const CATALOG_MIN_PRICE_MODELS = 20;
+const CATALOG_CACHE_VERSION = 1;
+
+/** ERGO_MODEL_PRICES_URL / ERGO_MODEL_BENCHMARKS_URL override the sources (mirrors and tests). Read per fetch. */
+const modelPricesUrl = () => process.env.ERGO_MODEL_PRICES_URL || MODEL_PRICES_URL_DEFAULT;
+const modelBenchmarksUrl = () => process.env.ERGO_MODEL_BENCHMARKS_URL || MODEL_BENCHMARKS_URL_DEFAULT;
+
+/** `<storage root>/model-catalog` when the root is a `.ergo` folder, else `<storage root>/.ergo/model-catalog` (as the memory store). */
+function modelCatalogCacheDir(): string {
+  const root = getActiveStorageDir();
+  const base = path.basename(root) === '.ergo' ? root : path.join(root, '.ergo');
+  return path.join(base, 'model-catalog');
+}
+
+interface PriceCache {
+  fetchedAt: string;
+  models: CatalogModel[];
+  /** False when written by an older normalizer: served, but refreshed as if stale. */
+  current: boolean;
+}
+
+interface BenchmarkCache {
+  fetchedAt: string;
+  rows: AaBenchmarkRow[];
+  current: boolean;
+}
+
+type CatalogFetchErrorKind = 'http' | 'timeout' | 'network' | 'size' | 'parse';
+
+class CatalogFetchError extends Error {
+  kind: CatalogFetchErrorKind;
+  status?: number;
+  constructor(kind: CatalogFetchErrorKind, message: string, status?: number) {
+    super(message);
+    this.kind = kind;
+    this.status = status;
+  }
+}
+
+/** GET a JSON document with a 10 s deadline (covering the body) and a 20 MB cap. Error messages never include headers. */
+async function fetchCatalogJson(url: string, headers: Record<string, string> = {}): Promise<unknown> {
+  const signal = AbortSignal.timeout(CATALOG_FETCH_TIMEOUT_MS);
+  const timedOut = () => new CatalogFetchError('timeout', `no response within ${CATALOG_FETCH_TIMEOUT_MS / 1000} s`);
+  let res: Response;
+  try {
+    // No redirects: a redirect would carry the x-api-key header to wherever it points.
+    res = await fetch(url, { headers: { Accept: 'application/json', ...headers }, signal, redirect: 'error' });
+  } catch (err: any) {
+    if (signal.aborted) throw timedOut();
+    const cause = err?.cause?.code || err?.cause?.message || err?.message || 'network error';
+    throw new CatalogFetchError('network', String(cause).slice(0, 200));
+  }
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => {});
+    throw new CatalogFetchError('http', `HTTP ${res.status}`, res.status);
+  }
+  const tooLarge = () => new CatalogFetchError('size', `response larger than ${CATALOG_MAX_BODY_BYTES / (1024 * 1024)} MB`);
+  if (Number(res.headers.get('content-length')) > CATALOG_MAX_BODY_BYTES) {
+    await res.body?.cancel().catch(() => {});
+    throw tooLarge();
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    const reader = res.body?.getReader();
+    if (!reader) throw new CatalogFetchError('parse', 'empty response');
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > CATALOG_MAX_BODY_BYTES) {
+        await reader.cancel().catch(() => {});
+        throw tooLarge();
+      }
+      chunks.push(value);
+    }
+  } catch (err) {
+    if (err instanceof CatalogFetchError) throw err;
+    if (signal.aborted) throw timedOut();
+    throw new CatalogFetchError('network', errorText(err).slice(0, 200));
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf-8'));
+  } catch {
+    throw new CatalogFetchError('parse', 'response is not valid JSON');
+  }
+}
+
+async function writeCatalogCacheFile(file: string, data: unknown): Promise<void> {
+  try {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const tmp = atomicTmpPath(file);
+    try {
+      await fs.writeFile(tmp, JSON.stringify(data), 'utf-8');
+      await fs.rename(tmp, file);
+    } catch (err) {
+      await fs.rm(tmp, { force: true }).catch(() => {});
+      throw err;
+    }
+  } catch (err) {
+    console.warn(`[Ergo Model Catalog] Could not write ${path.basename(file)}: ${errorText(err)}`);
+  }
+}
+
+async function readCatalogCacheFile(file: string): Promise<any | null> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(file, 'utf-8'));
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.fetchedAt !== 'string' || !Number.isFinite(Date.parse(parsed.fetchedAt))) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/** Fresh = written by the current normalizer, and younger than `ttl` (a timestamp in the future counts as stale). */
+function catalogCacheFresh(entry: { fetchedAt: string; current: boolean }, ttl: number): boolean {
+  const age = Date.now() - Date.parse(entry.fetchedAt);
+  return entry.current && age >= 0 && age < ttl;
+}
+
+const aaKeyFingerprint = (key: string) => createHash('sha256').update(key).digest('hex');
+
+/** Replaces the key with "[key]" in a message before it can reach a log or a response (belt and braces). */
+function scrubAaKey(message: string, key: string): string {
+  return key ? message.split(key).join('[key]') : message;
+}
+
+function aaErrorMessage(err: unknown, key: string): string {
+  if (err instanceof CatalogFetchError) {
+    if (err.kind === 'http') {
+      if (err.status === 401 || err.status === 403) return `Artificial Analysis rejected the key (${err.status})`;
+      if (err.status === 429) return 'Artificial Analysis rate limit reached (429); try again later';
+      return `Artificial Analysis returned an error (HTTP ${err.status})`;
+    }
+    if (err.kind === 'timeout') return `Artificial Analysis did not respond within ${CATALOG_FETCH_TIMEOUT_MS / 1000} s`;
+    if (err.kind === 'network') return scrubAaKey(`Could not reach Artificial Analysis (${err.message})`, key);
+    return scrubAaKey(`Artificial Analysis returned an unexpected response (${err.message})`, key);
+  }
+  return scrubAaKey(`Artificial Analysis request failed (${errorText(err)})`, key);
+}
+
+/**
+ * Cache state for one storage root. Replaced when the root changes; fetches still running for the old root finish
+ * into their own directory.
+ */
+class ModelCatalogService {
+  readonly dir: string;
+  private loaded: Promise<void> | null = null;
+  private prices: PriceCache | null = null;
+  private benchmarks: BenchmarkCache | null = null;
+
+  private pricesInFlight: Promise<PriceCache> | null = null;
+  private pricesForcedAt = 0;
+  private pricesFailedAt = 0;
+
+  /** In-flight AA fetches by key fingerprint (two different keys don't share a result). */
+  private benchInFlight = new Map<string, Promise<BenchmarkCache>>();
+  private benchForcedAt = 0;
+  private benchFailedAt = 0;
+  private benchLastError: string | null = null;
+  /** Fingerprint of the last key AA accepted in this process (null until the first successful fetch). */
+  private goodKeyFp: string | null = null;
+  /** Fingerprint and message of the last key AA rejected (401 / 403). */
+  private rejectedKey: { fp: string; error: string } | null = null;
+
+  constructor(dir: string) {
+    this.dir = dir;
+  }
+
+  private get pricesFile() {
+    return path.join(this.dir, 'prices.json');
+  }
+
+  private get benchmarksFile() {
+    return path.join(this.dir, 'benchmarks.json');
+  }
+
+  private load(): Promise<void> {
+    this.loaded ??= (async () => {
+      const [p, b] = await Promise.all([readCatalogCacheFile(this.pricesFile), readCatalogCacheFile(this.benchmarksFile)]);
+      if (p && Array.isArray(p.models)) {
+        const models = p.models.map(sanitizeCatalogModel).filter((m: CatalogModel | null): m is CatalogModel => m !== null);
+        if (models.length) {
+          this.prices = { fetchedAt: p.fetchedAt, models, current: p.version === CATALOG_CACHE_VERSION && p.normalizer === CATALOG_NORMALIZER_VERSION };
+          if (models.length > 20) bridgePriceModels = models;
+        }
+      }
+      if (b && Array.isArray(b.rows)) {
+        const rows = b.rows.map(sanitizeAaRow).filter((r: AaBenchmarkRow | null): r is AaBenchmarkRow => r !== null);
+        if (rows.length) {
+          this.benchmarks = { fetchedAt: b.fetchedAt, rows, current: b.version === CATALOG_CACHE_VERSION && b.normalizer === CATALOG_NORMALIZER_VERSION };
+        }
+      }
+    })();
+    return this.loaded;
+  }
+
+  private fetchPrices(): Promise<PriceCache> {
+    this.pricesInFlight ??= (async () => {
+      try {
+        const models = normalizeLiteLlmPrices(await fetchCatalogJson(modelPricesUrl()));
+        if (models.length < CATALOG_MIN_PRICE_MODELS) {
+          throw new CatalogFetchError('parse', `only ${models.length} usable models in the price list`);
+        }
+        const entry: PriceCache = { fetchedAt: new Date().toISOString(), models, current: true };
+        this.prices = entry;
+        if (entry.models.length > 20) bridgePriceModels = entry.models;
+        this.pricesFailedAt = 0;
+        await writeCatalogCacheFile(this.pricesFile, { version: CATALOG_CACHE_VERSION, normalizer: CATALOG_NORMALIZER_VERSION, fetchedAt: entry.fetchedAt, models });
+        return entry;
+      } catch (err) {
+        this.pricesFailedAt = Date.now();
+        console.warn(`[Ergo Model Catalog] Fetching LiteLLM prices failed: ${errorText(err)}`);
+        throw err;
+      } finally {
+        this.pricesInFlight = null;
+      }
+    })();
+    return this.pricesInFlight;
+  }
+
+  private fetchBenchmarks(key: string, fp: string): Promise<BenchmarkCache> {
+    let pending = this.benchInFlight.get(fp);
+    if (!pending) {
+      pending = (async () => {
+        try {
+          const rows = parseArtificialAnalysisRows(await fetchCatalogJson(modelBenchmarksUrl(), { 'x-api-key': key }));
+          if (!rows.length) throw new CatalogFetchError('parse', 'no scored models in the response');
+          const entry: BenchmarkCache = { fetchedAt: new Date().toISOString(), rows, current: true };
+          this.benchmarks = entry;
+          this.benchFailedAt = 0;
+          this.benchLastError = null;
+          this.goodKeyFp = fp;
+          if (this.rejectedKey?.fp === fp) this.rejectedKey = null;
+          // The rows only: the key is never written.
+          await writeCatalogCacheFile(this.benchmarksFile, { version: CATALOG_CACHE_VERSION, normalizer: CATALOG_NORMALIZER_VERSION, fetchedAt: entry.fetchedAt, rows });
+          return entry;
+        } catch (err) {
+          const message = aaErrorMessage(err, key);
+          if (err instanceof CatalogFetchError && err.kind === 'http' && (err.status === 401 || err.status === 403)) {
+            this.rejectedKey = { fp, error: message };
+            if (this.goodKeyFp === fp) this.goodKeyFp = null;
+          } else {
+            this.benchFailedAt = Date.now();
+            this.benchLastError = message;
+          }
+          console.warn(`[Ergo Model Catalog] Fetching Artificial Analysis benchmarks failed: ${message}`);
+          throw new CatalogFetchError(err instanceof CatalogFetchError ? err.kind : 'network', message);
+        } finally {
+          this.benchInFlight.delete(fp);
+        }
+      })();
+      this.benchInFlight.set(fp, pending);
+    }
+    return pending;
+  }
+
+  /** Prices: fresh cache → as is; stale cache → served while a background refresh runs; no cache → fetch, else snapshot. */
+  async getPrices(refresh: boolean): Promise<{ fetchedAt: string; models: CatalogModel[]; source: PriceSource }> {
+    await this.load();
+    const now = Date.now();
+    const backedOff = now - this.pricesFailedAt < CATALOG_REFRESH_MIN_INTERVAL_MS;
+    const snapshot = () => ({ fetchedAt: PRICE_SNAPSHOT.fetchedAt, models: PRICE_SNAPSHOT.models, source: 'snapshot' as const });
+
+    if (refresh && now - this.pricesForcedAt >= CATALOG_REFRESH_MIN_INTERVAL_MS) {
+      this.pricesForcedAt = now;
+      try {
+        const entry = await this.fetchPrices();
+        return { fetchedAt: entry.fetchedAt, models: entry.models, source: 'litellm' };
+      } catch {
+        return this.prices ? { fetchedAt: this.prices.fetchedAt, models: this.prices.models, source: 'litellm-cache' } : snapshot();
+      }
+    }
+
+    const cache = this.prices;
+    if (cache && catalogCacheFresh(cache, CATALOG_PRICES_TTL_MS)) {
+      return { fetchedAt: cache.fetchedAt, models: cache.models, source: 'litellm' };
+    }
+    if (cache) {
+      if (!backedOff) this.fetchPrices().catch(() => {});
+      return { fetchedAt: cache.fetchedAt, models: cache.models, source: 'litellm-cache' };
+    }
+    if (backedOff && !this.pricesInFlight) return snapshot();
+    try {
+      const entry = await this.fetchPrices();
+      return { fetchedAt: entry.fetchedAt, models: entry.models, source: 'litellm' };
+    } catch {
+      return snapshot();
+    }
+  }
+
+  /**
+   * Benchmarks for `key`. A key AA rejected gets 'none' + the error until it's retried with `refresh`. A key not yet
+   * checked in this process is fetched on `refresh` regardless of the rate limit (so "Check" verifies a new key), and
+   * on any request once another key has been accepted (so changing keys is noticed). Otherwise as prices.
+   */
+  async getBenchmarks(key: string, refresh: boolean): Promise<{ rows: AaBenchmarkRow[]; source: BenchmarkSource; error?: string }> {
+    await this.load();
+    const fp = aaKeyFingerprint(key);
+    const now = Date.now();
+    const backedOff = now - this.benchFailedAt < CATALOG_REFRESH_MIN_INTERVAL_MS;
+    const unchecked = fp !== this.goodKeyFp;
+    const forced =
+      (refresh && (unchecked || now - this.benchForcedAt >= CATALOG_REFRESH_MIN_INTERVAL_MS)) ||
+      (unchecked && this.goodKeyFp !== null && !backedOff);
+
+    const fromCache = (error?: string) => {
+      const cache = this.benchmarks;
+      if (!cache) return { rows: [], source: 'none' as const, error: error ?? this.benchLastError ?? undefined };
+      const fresh = catalogCacheFresh(cache, CATALOG_BENCHMARKS_TTL_MS);
+      // Report the last failure only when it's newer than the cached data.
+      const failedSince = this.benchFailedAt > Date.parse(cache.fetchedAt) ? this.benchLastError ?? undefined : undefined;
+      const err = error ?? failedSince;
+      return { rows: cache.rows, source: fresh ? ('artificial-analysis' as const) : ('artificial-analysis-cache' as const), ...(err ? { error: err } : {}) };
+    };
+
+    if (this.rejectedKey?.fp === fp && !(refresh && now - this.benchForcedAt >= CATALOG_REFRESH_MIN_INTERVAL_MS)) {
+      return { rows: [], source: 'none', error: this.rejectedKey.error };
+    }
+
+    if (forced) {
+      if (refresh) this.benchForcedAt = now;
+      try {
+        const entry = await this.fetchBenchmarks(key, fp);
+        return { rows: entry.rows, source: 'artificial-analysis' };
+      } catch (err) {
+        if (this.rejectedKey?.fp === fp) return { rows: [], source: 'none', error: this.rejectedKey.error };
+        return fromCache(errorText(err));
+      }
+    }
+
+    const cache = this.benchmarks;
+    if (cache && catalogCacheFresh(cache, CATALOG_BENCHMARKS_TTL_MS)) return fromCache();
+    if (cache) {
+      if (!backedOff) this.fetchBenchmarks(key, fp).catch(() => {});
+      return fromCache();
+    }
+    if (backedOff && !this.benchInFlight.has(fp)) return fromCache();
+    try {
+      const entry = await this.fetchBenchmarks(key, fp);
+      return { rows: entry.rows, source: 'artificial-analysis' };
+    } catch (err) {
+      if (this.rejectedKey?.fp === fp) return { rows: [], source: 'none', error: this.rejectedKey.error };
+      return fromCache(errorText(err));
+    }
+  }
+}
+
+let modelCatalogService: ModelCatalogService | null = null;
+
+/** The service for the current storage root (follows storage-root changes). */
+function getModelCatalogService(): ModelCatalogService {
+  const dir = modelCatalogCacheDir();
+  if (!modelCatalogService || modelCatalogService.dir !== dir) modelCatalogService = new ModelCatalogService(dir);
+  return modelCatalogService;
+}
+
+/** Printable ASCII without spaces: anything else can't be a valid key and would make fetch() reject the header. */
+const AA_KEY_RE = /^[\x21-\x7e]{8,512}$/;
+
+async function buildModelCatalog(request: ModelCatalogRequest): Promise<ModelCatalog> {
+  const service = getModelCatalogService();
+  const key = typeof request.artificialAnalysisKey === 'string' ? request.artificialAnalysisKey.trim() : '';
+  const refresh = request.refresh === true;
+
+  const [prices, bench] = await Promise.all([
+    service.getPrices(refresh),
+    key
+      ? AA_KEY_RE.test(key)
+        ? service.getBenchmarks(key, refresh)
+        : Promise.resolve({ rows: [] as AaBenchmarkRow[], source: 'none' as const, error: 'The Artificial Analysis key is malformed (expected a single token of printable characters).' })
+      : Promise.resolve(null),
+  ]);
+
+  let models = prices.models;
+  let benchmarks: BenchmarkSource = 'none';
+  let benchmarksError = bench?.error;
+  if (bench && bench.source !== 'none') {
+    const result = attachBenchmarks(prices.models, bench.rows);
+    models = result.models;
+    benchmarks = bench.source;
+    if (!result.matched) benchmarksError ??= 'No Artificial Analysis model matched the price list.';
+  }
+  if (benchmarksError) benchmarksError = scrubAaKey(benchmarksError, key);
+  return {
+    fetchedAt: prices.fetchedAt,
+    sources: { prices: prices.source, benchmarks, ...(benchmarksError ? { benchmarksError } : {}) },
+    models,
+  };
+}
+
+function ergoModelCatalogPlugin(): Plugin {
+  return {
+    name: 'ergo-model-catalog',
+    configureServer(server) {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
+        const url = req.url?.split('?')[0];
+        if (url !== '/api/models/catalog') return next();
+        if (!guardBridgeRequest(req, res)) return;
+        if (req.method !== 'POST') {
+          res.setHeader('Allow', 'POST');
+          return sendJson(res, 405, { success: false, error: 'Use POST.' } satisfies ModelCatalogResponse);
+        }
+        let body: any;
+        try {
+          body = await parseJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { success: false, error: 'Invalid JSON body.' } satisfies ModelCatalogResponse);
+        }
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+          return sendJson(res, 400, { success: false, error: 'Expected a JSON object.' } satisfies ModelCatalogResponse);
+        }
+        const key = typeof body.artificialAnalysisKey === 'string' ? body.artificialAnalysisKey.trim() : '';
+        try {
+          const catalog = await buildModelCatalog({ artificialAnalysisKey: key || undefined, refresh: body.refresh === true });
+          return sendJson(res, 200, { success: true, ...catalog } satisfies ModelCatalogResponse);
+        } catch (err) {
+          const message = scrubAaKey(errorText(err), key);
+          console.warn(`[Ergo Model Catalog] ${message}`);
+          return sendJson(res, 500, { success: false, error: message } satisfies ModelCatalogResponse);
+        }
+      });
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), ergoFileSystemPlugin(), ergoPtyPlugin()]
+  plugins: [react(), ergoFileSystemPlugin(), ergoPtyPlugin(), ergoMemoryPlugin(), ergoLocalModelPlugin(), ergoModelCatalogPlugin()],
+  server: {
+    // Agent run files (.ergo/runs/…) change constantly during a task run; never reload the app for them.
+    watch: { ignored: ['**/.ergo/**'] },
+  },
 });

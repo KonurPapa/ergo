@@ -155,24 +155,19 @@ Initial project structure initialized. All core links verified.`,
 
 export const DEMO_PROJECTS = INITIAL_PROJECTS;
 
+/** Bundled MCP servers that were removed from Ergo (the Laya decision engine); dropped from saved server lists. */
+export const RETIRED_MCP_SERVER_IDS: ReadonlySet<string> = new Set(['mcp-laya']);
+
+/**
+ * A saved MCP server list (e.g. localStorage `ergo_mcp_servers`) without retired servers, so existing users lose
+ * them cleanly instead of keeping them as "custom" servers. Anything that isn't an array is returned unchanged.
+ */
+export function removeRetiredMcpServers<T>(saved: T): T {
+  if (!Array.isArray(saved)) return saved;
+  return saved.filter((s) => !(s && typeof s === 'object' && RETIRED_MCP_SERVER_IDS.has(String((s as { id?: unknown }).id)))) as T;
+}
+
 export const INITIAL_MCP_SERVERS: MCPServer[] = [
-  {
-    id: 'mcp-laya',
-    name: 'Laya Local Decision Engine',
-    description: 'Local non-autoregressive System 1 decision engine for micro-decisions, tool routing, and classification at $0 token cost in ~30–75ms. Runs entirely on your CPU/GPU.',
-    iconName: 'Zap',
-    category: 'developer',
-    status: 'connected',
-    transport: 'Local Stdio',
-    endpoint: 'stdio://ergo-mcp-laya',
-    serverType: 'bundled_harness',
-    lastSyncedAt: new Date().toISOString(),
-    tools: [
-      { id: 'laya_choice', name: 'laya_choice', description: 'Choose the best option among candidates (max 15-20 options per batch) with calibrated probability', autoApprove: true, serverId: 'mcp-laya' },
-      { id: 'laya_score', name: 'laya_score', description: 'Evaluate deliverable quality or relevance with calibrated confidence score (0.0 to 1.0)', autoApprove: true, serverId: 'mcp-laya' },
-      { id: 'laya_noul', name: 'laya_noul', description: 'Evaluate binary yes/no decision propositions without generating tokens', autoApprove: true, serverId: 'mcp-laya' }
-    ]
-  },
   {
     id: 'mcp-filesystem',
     name: 'Filesystem MCP',

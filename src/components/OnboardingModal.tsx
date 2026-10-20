@@ -10,6 +10,12 @@ import {
 } from '../lib/aiProviders';
 import { AgentTerminal } from './AgentTerminal';
 import { ResizableTerminalContainer } from './ResizableTerminalContainer';
+import {
+  LocalModelOnboardingStep,
+  isLocalModelInstalled,
+  useLocalModelInstall,
+  type LocalModelMode
+} from './LocalModelSetup';
 import { bridgeClient, type BridgeStatus, DEFAULT_BRIDGE_URL } from '../lib/bridgeClient';
 import ergoIcon from '../assets/ergo_icon_2.png';
 import {
@@ -28,7 +34,6 @@ import {
   X,
   RefreshCw,
   RotateCcw,
-  Cpu,
   Laptop,
   Monitor,
   Check,
@@ -42,6 +47,11 @@ interface OnboardingModalProps {
   onSaveUserKey: (key: Omit<UserApiKey, 'id'> & { id?: string }) => void;
   onResetSubscription?: (cliAgentId: string) => void;
   onCompleteOnboarding: (key?: UserApiKey) => void;
+  /** Local AI model preference ('unset' until the user picks in step 2 or Settings). */
+  localModelMode?: LocalModelMode;
+  onSetLocalModelMode?: (mode: 'local' | 'cloud') => void;
+  /** What "Skip" uses instead, e.g. "Claude Haiku". */
+  tinyCloudModelLabel?: string;
 }
 
 export type ProviderChoice = 'claude' | 'codex' | 'gemini' | 'other';
@@ -140,9 +150,12 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   onClose,
   onSaveUserKey,
   onResetSubscription,
-  onCompleteOnboarding
+  onCompleteOnboarding,
+  localModelMode = 'unset',
+  onSetLocalModelMode,
+  tinyCloudModelLabel
 }) => {
-  // Wizard Steps: 1 = AI Account Connection, 2 = Optional Laya Download Step, 3 = Local Device Bridge
+  // Wizard Steps: 1 = AI Account Connection, 2 = Optional Local AI Model, 3 = Local Device Bridge
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
 
   // Splash Animation state: show centered brand, then slide to top & fade in content
@@ -172,9 +185,13 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   const [isValidatingKey, setIsValidatingKey] = useState(false);
   const [keyValidationError, setKeyValidationError] = useState<string | null>(null);
 
-  // Step 2: Laya Local Decision Engine Optional Download State
-  const [showLayaTerminal, setShowLayaTerminal] = useState(false);
-  const [layaInstallDone, setLayaInstallDone] = useState(false);
+  // Step 2: Local AI model (managed install through the bridge). An install started here keeps
+  // being watched after the wizard moves on/closes, so finishing it still switches the mode to local.
+  const cloudModelLabel = tinyCloudModelLabel?.trim() || 'a small cloud model';
+  const localModel = useLocalModelInstall({
+    enabled: isOpen && currentStep === 2,
+    onInstalled: () => onSetLocalModelMode?.('local')
+  });
 
   // Step 3: Local Device Bridge State
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>(() => bridgeClient.getStatus());
@@ -314,8 +331,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Complete helper: advances to Laya Step 2 instead of exiting immediately
-  const proceedToLayaStep = (key?: UserApiKey) => {
+  // Complete helper: advances to the Local AI model step (2) instead of exiting immediately
+  const proceedToLocalModelStep = (key?: UserApiKey) => {
     if (key) {
       setConnectedUserKey(key);
       onSaveUserKey(key);
@@ -370,7 +387,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   // - If CLI is not installed, installs CLI and automatically starts browser login in a single click
   const handleOneClickSubscriptionConnect = async () => {
     if (selectedProvider === 'other') {
-      proceedToLayaStep();
+      proceedToLocalModelStep();
       return;
     }
 
@@ -397,7 +414,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           isConnected: true,
           createdAt: new Date().toISOString()
         };
-        proceedToLayaStep(newKey);
+        proceedToLocalModelStep(newKey);
         return;
       }
 
@@ -470,7 +487,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             isConnected: true,
             createdAt: new Date().toISOString()
           };
-          proceedToLayaStep(newKey);
+          proceedToLocalModelStep(newKey);
         }
       }, 2000);
     } catch (err: any) {
@@ -529,7 +546,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         createdAt: new Date().toISOString()
       };
 
-      proceedToLayaStep(newKey);
+      proceedToLocalModelStep(newKey);
     } catch (err: any) {
       setKeyValidationError(err.message || 'Connection error.');
     } finally {
@@ -537,8 +554,27 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     }
   };
 
-  // Finish Onboarding from Step 2
+  // Step 2 → cloud: "Skip — use <tiny cloud model> instead" (nothing is downloaded).
+  const handleUseCloudModel = () => {
+    onSetLocalModelMode?.('cloud');
+    proceedToBridgeStep();
+  };
+
+  // Step 2 footer "Next": moving on without installing counts as skipping, unless the user already chose.
+  const handleLocalModelNext = () => {
+    const st = localModel.status;
+    const installingOrInstalled = st?.state === 'installing' || isLocalModelInstalled(st);
+    if (!installingOrInstalled && localModelMode === 'unset') onSetLocalModelMode?.('cloud');
+    proceedToBridgeStep();
+  };
+
+  // Finish Onboarding from Step 3
   const handleFinishOnboarding = () => {
+    // A download started in step 2 is still running: the user chose local, and the fallback covers
+    // the gap until it's ready (also survives a page reload, which would drop the completion watcher).
+    if (localModel.installRequested && localModel.status?.state === 'installing') {
+      onSetLocalModelMode?.('local');
+    }
     onCompleteOnboarding(connectedUserKey || undefined);
   };
 
@@ -548,7 +584,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         position: 'fixed',
         inset: 0,
         zIndex: 9999,
-        background: 'rgba(5, 7, 12, 0.88)',
+        background: 'rgba(0, 0, 0, 0.65)',
         backdropFilter: 'blur(16px)',
         display: 'flex',
         alignItems: 'center',
@@ -559,8 +595,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     >
       <div
         style={{
-          background: 'linear-gradient(180deg, #131722 0%, #0d1017 100%)',
-          border: '1px solid rgba(255, 255, 255, 0.1)',
+          background: 'var(--modal-bg, var(--bg-card, #ffffff))',
+          border: '1px solid var(--border-strong, var(--border, #e2e8f0))',
           borderRadius: '20px',
           width: '100%',
           maxWidth: '680px',
@@ -568,7 +604,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           maxHeight: '92vh',
           display: 'flex',
           flexDirection: 'column',
-          boxShadow: '0 30px 80px -15px rgba(0, 0, 0, 0.9), 0 0 40px rgba(99, 102, 241, 0.18)',
+          boxShadow: 'var(--shadow-lg, 0 20px 50px rgba(0, 0, 0, 0.25))',
           overflow: 'hidden',
           position: 'relative',
           transition: 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
@@ -578,7 +614,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         <div
           style={{
             padding: isIntroAnimating ? '0 2rem' : '1.75rem 2rem 1.25rem 2rem',
-            borderBottom: isIntroAnimating ? 'none' : '1px solid rgba(255, 255, 255, 0.08)',
+            borderBottom: isIntroAnimating ? 'none' : '1px solid var(--border-subtle, var(--border, #e2e8f0))',
             position: isIntroAnimating ? 'absolute' : 'relative',
             inset: isIntroAnimating ? '0' : 'auto',
             display: 'flex',
@@ -590,7 +626,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             transition: 'all 0.65s cubic-bezier(0.16, 1, 0.3, 1)',
             background: isIntroAnimating
               ? 'transparent'
-              : 'linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, transparent 100%)'
+              : 'var(--modal-header-bg, var(--bg-pane, transparent))'
           }}
         >
           {/* Top Brand Line: Logo Icon + Stylized Name */}
@@ -670,8 +706,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 type="button"
                 onClick={onClose}
                 style={{
-                  background: 'rgba(255, 255, 255, 0.05)',
-                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  background: 'var(--bg-hover, rgba(0, 0, 0, 0.05))',
+                  border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
                   borderRadius: '10px',
                   width: 32,
                   height: 32,
@@ -698,7 +734,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 gap: '0.65rem',
                 marginTop: '1.25rem',
                 paddingTop: '0.85rem',
-                borderTop: '1px solid rgba(255, 255, 255, 0.06)'
+                borderTop: '1px solid var(--border-subtle, var(--border, #e2e8f0))'
               }}
             >
               {/* Step 1: Connect AI */}
@@ -738,9 +774,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 <span>Connect AI</span>
               </div>
 
-              <div style={{ flex: 1, height: '1.5px', background: currentStep > 1 ? 'var(--accent-emerald)' : 'rgba(255, 255, 255, 0.1)' }} />
+              <div style={{ flex: 1, height: '1.5px', background: currentStep > 1 ? 'var(--accent-emerald)' : 'var(--border-subtle, var(--border, #e2e8f0))' }} />
 
-              {/* Step 2: Local Verifier */}
+              {/* Step 2: Local AI model */}
               <div
                 onClick={() => setCurrentStep(2)}
                 style={{
@@ -756,15 +792,15 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 }}
                 role="button"
                 tabIndex={0}
-                title="Go to Step 2: Local Verifier"
+                title="Go to Step 2: Local AI model"
               >
                 <div
                   style={{
                     width: 22,
                     height: 22,
                     borderRadius: '50%',
-                    background: currentStep === 2 ? 'var(--accent-cyan)' : currentStep > 2 ? 'rgba(16, 185, 129, 0.2)' : 'rgba(255, 255, 255, 0.05)',
-                    border: `1.5px solid ${currentStep === 2 ? 'var(--accent-cyan)' : currentStep > 2 ? 'var(--accent-emerald)' : 'rgba(255, 255, 255, 0.2)'}`,
+                    background: currentStep === 2 ? 'var(--accent-cyan)' : currentStep > 2 ? 'rgba(16, 185, 129, 0.2)' : 'var(--bg-hover, rgba(0, 0, 0, 0.05))',
+                    border: `1.5px solid ${currentStep === 2 ? 'var(--accent-cyan)' : currentStep > 2 ? 'var(--accent-emerald)' : 'var(--border-strong, var(--border, #cbd5e1))'}`,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -774,10 +810,10 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 >
                   {currentStep > 2 ? <CheckCircle2 size={13} color="var(--accent-emerald)" /> : '2'}
                 </div>
-                <span>Local Verifier</span>
+                <span>Local AI Model</span>
               </div>
 
-              <div style={{ flex: 1, height: '1.5px', background: currentStep > 2 ? 'var(--accent-emerald)' : 'rgba(255, 255, 255, 0.1)' }} />
+              <div style={{ flex: 1, height: '1.5px', background: currentStep > 2 ? 'var(--accent-emerald)' : 'var(--border-subtle, var(--border, #e2e8f0))' }} />
 
               {/* Step 3: Connect Device Bridge */}
               <div
@@ -802,8 +838,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     width: 22,
                     height: 22,
                     borderRadius: '50%',
-                    background: currentStep === 3 ? 'var(--accent-primary)' : 'rgba(255, 255, 255, 0.05)',
-                    border: `1.5px solid ${currentStep === 3 ? 'var(--accent-primary)' : 'rgba(255, 255, 255, 0.2)'}`,
+                    background: currentStep === 3 ? 'var(--accent-primary)' : 'var(--bg-hover, rgba(0, 0, 0, 0.05))',
+                    border: `1.5px solid ${currentStep === 3 ? 'var(--accent-primary)' : 'var(--border-strong, var(--border, #cbd5e1))'}`,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -844,10 +880,10 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   display: 'flex',
                   gap: '0.5rem',
                   marginBottom: '1.25rem',
-                  background: 'rgba(0, 0, 0, 0.35)',
+                  background: 'var(--bg-hover, rgba(0, 0, 0, 0.04))',
                   padding: '0.3rem',
                   borderRadius: '10px',
-                  border: '1px solid rgba(255, 255, 255, 0.08)'
+                  border: '1px solid var(--border-subtle, var(--border, #e2e8f0))'
                 }}
               >
                 <button
@@ -905,10 +941,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 <div>
                   {/* Provider Grid with Authentic SVG Logos */}
                   <div style={{ marginBottom: '1.25rem' }}>
-                    {/* <label style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-bright)', marginBottom: '0.6rem', display: 'block' }}>
-                      Select Your Subscription Provider:
-                    </label> */}
-
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.65rem' }}>
                       {(['codex', 'claude', 'gemini', 'other'] as ProviderChoice[]).map((pId) => {
                         const p = PROVIDER_METAS[pId];
@@ -925,14 +957,14 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                             style={{
                               padding: '0.65rem 0.8rem',
                               borderRadius: '12px',
-                              border: `1.5px solid ${isSelected ? p.brandColor : 'rgba(255, 255, 255, 0.08)'}`,
-                              background: isSelected ? 'rgba(255, 255, 255, 0.04)' : 'rgba(255, 255, 255, 0.015)',
+                              border: `1.5px solid ${isSelected ? p.brandColor : 'var(--border-subtle, var(--border, #e2e8f0))'}`,
+                              background: isSelected ? 'var(--accent-subtle, rgba(37, 99, 235, 0.08))' : 'var(--bg-card, var(--card, #ffffff))',
                               cursor: 'pointer',
                               display: 'flex',
                               flexDirection: 'column',
                               gap: '0.45rem',
                               transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
-                              boxShadow: isSelected ? `0 0 20px ${p.brandColor}33` : 'none',
+                              boxShadow: isSelected ? `0 0 16px ${p.brandColor}33` : 'var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.04))',
                               position: 'relative'
                             }}
                           >
@@ -943,7 +975,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                                   width: 32,
                                   height: 32,
                                   borderRadius: '8px',
-                                  background: 'rgba(255, 255, 255, 0.06)',
+                                  background: 'var(--bg-hover, rgba(0, 0, 0, 0.05))',
                                   display: 'flex',
                                   alignItems: 'center',
                                   justifyContent: 'center',
@@ -971,7 +1003,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                                   width: 16,
                                   height: 16,
                                   borderRadius: '50%',
-                                  border: `2px solid ${isSelected ? p.brandColor : 'rgba(255, 255, 255, 0.25)'}`,
+                                  border: `2px solid ${isSelected ? p.brandColor : 'var(--border-strong, var(--border, #cbd5e1))'}`,
                                   display: 'flex',
                                   alignItems: 'center',
                                   justifyContent: 'center',
@@ -1105,13 +1137,14 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   {/* 1-Click Connection Card */}
                   <div
                     style={{
-                      background: 'rgba(255, 255, 255, 0.025)',
-                      border: '1px solid rgba(255, 255, 255, 0.08)',
+                      background: 'var(--bg-card, var(--card, #ffffff))',
+                      border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
                       borderRadius: '14px',
                       padding: '1.35rem',
                       display: 'flex',
                       flexDirection: 'column',
-                      gap: '1rem'
+                      gap: '1rem',
+                      boxShadow: 'var(--shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.04))'
                     }}
                   >
                     {selectedProvider !== 'other' && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -1210,8 +1243,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           style={{
                             padding: '0.75rem 1rem',
                             borderRadius: '10px',
-                            background: 'rgba(255, 255, 255, 0.05)',
-                            border: '1px solid rgba(255, 255, 255, 0.12)',
+                            background: 'var(--btn-secondary-bg, var(--bg-card, #ffffff))',
+                            border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
                             color: 'var(--text-muted)',
                             fontSize: '0.8rem',
                             fontWeight: 600,
@@ -1248,8 +1281,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           style={{
                             padding: '0.75rem 1rem',
                             borderRadius: '10px',
-                            background: 'rgba(255, 255, 255, 0.05)',
-                            border: '1px solid rgba(255, 255, 255, 0.15)',
+                            background: 'var(--bg-hover, rgba(0, 0, 0, 0.05))',
+                            border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
                             color: 'var(--text-dim)',
                             fontSize: '0.8rem',
                             fontWeight: 600,
@@ -1305,7 +1338,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
                     {/* Interactive terminal container - only shown for Gemini when user initiates connection and authentication is needed */}
                     {selectedProvider === 'gemini' && (isConnectingSubscription || (authStatus && !authStatus.isAuthenticated && geminiTerminalActive)) && (
-                      <div style={{ marginTop: '0.5rem', borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '0.85rem' }}>
+                      <div style={{ marginTop: '0.5rem', borderTop: '1px solid var(--border-subtle, var(--border, #e2e8f0))', paddingTop: '0.85rem' }}>
                         <div style={{ marginBottom: '0.5rem', fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
                           Antigravity CLI authenticates directly via the interactive console below. Follow the on-screen prompt:
                         </div>
@@ -1316,7 +1349,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           maximizedHeight={480}
                           storageKey="ergo_terminal_height_onboarding"
                           style={{
-                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
                             borderRadius: '8px',
                             overflow: 'hidden'
                           }}
@@ -1350,13 +1383,14 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 /* Developer API Key Tab */
                 <div
                   style={{
-                    background: 'rgba(255, 255, 255, 0.025)',
-                    border: '1px solid rgba(255, 255, 255, 0.08)',
+                    background: 'var(--bg-card, var(--card, #ffffff))',
+                    border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
                     borderRadius: '14px',
                     padding: '1.0rem',
                     display: 'flex',
                     flexDirection: 'column',
-                    gap: '1.25rem'
+                    gap: '1.25rem',
+                    boxShadow: 'var(--shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.04))'
                   }}
                 >
                   <div>
@@ -1402,8 +1436,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                             gap: '0.25rem',
                             padding: '0.22rem 0.55rem',
                             borderRadius: '6px',
-                            background: apiKeyProvider === 'openai' ? 'rgba(16, 163, 127, 0.2)' : 'rgba(255, 255, 255, 0.05)',
-                            border: `1px solid ${apiKeyProvider === 'openai' ? 'rgba(16, 163, 127, 0.4)' : 'rgba(255, 255, 255, 0.1)'}`,
+                            background: apiKeyProvider === 'openai' ? 'rgba(16, 163, 127, 0.15)' : 'var(--bg-hover, rgba(0, 0, 0, 0.04))',
+                            border: `1px solid ${apiKeyProvider === 'openai' ? 'rgba(16, 163, 127, 0.4)' : 'var(--border-subtle, var(--border, #e2e8f0))'}`,
                             color: apiKeyProvider === 'openai' ? '#10b981' : 'var(--text-muted)',
                             fontSize: '0.72rem',
                             fontWeight: 600,
@@ -1426,8 +1460,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                             gap: '0.25rem',
                             padding: '0.22rem 0.55rem',
                             borderRadius: '6px',
-                            background: apiKeyProvider === 'anthropic' ? 'rgba(217, 119, 87, 0.2)' : 'rgba(255, 255, 255, 0.05)',
-                            border: `1px solid ${apiKeyProvider === 'anthropic' ? 'rgba(217, 119, 87, 0.4)' : 'rgba(255, 255, 255, 0.1)'}`,
+                            background: apiKeyProvider === 'anthropic' ? 'rgba(217, 119, 87, 0.15)' : 'var(--bg-hover, rgba(0, 0, 0, 0.04))',
+                            border: `1px solid ${apiKeyProvider === 'anthropic' ? 'rgba(217, 119, 87, 0.4)' : 'var(--border-subtle, var(--border, #e2e8f0))'}`,
                             color: apiKeyProvider === 'anthropic' ? '#D97757' : 'var(--text-muted)',
                             fontSize: '0.72rem',
                             fontWeight: 600,
@@ -1450,8 +1484,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                             gap: '0.25rem',
                             padding: '0.22rem 0.55rem',
                             borderRadius: '6px',
-                            background: apiKeyProvider === 'gemini' ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255, 255, 255, 0.05)',
-                            border: `1px solid ${apiKeyProvider === 'gemini' ? 'rgba(59, 130, 246, 0.4)' : 'rgba(255, 255, 255, 0.1)'}`,
+                            background: apiKeyProvider === 'gemini' ? 'rgba(59, 130, 246, 0.15)' : 'var(--bg-hover, rgba(0, 0, 0, 0.04))',
+                            border: `1px solid ${apiKeyProvider === 'gemini' ? 'rgba(59, 130, 246, 0.4)' : 'var(--border-subtle, var(--border, #e2e8f0))'}`,
                             color: apiKeyProvider === 'gemini' ? '#60a5fa' : 'var(--text-muted)',
                             fontSize: '0.72rem',
                             fontWeight: 600,
@@ -1539,204 +1573,16 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             </div>
           )}
 
-          {/* STEP 2: Optional Laya Engine Download Screen */}
+          {/* STEP 2: Optional Local AI Model */}
           {currentStep === 2 && (
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '1.25rem',
-                animation: 'fadeIn 0.25s ease-out'
-              }}
-            >
-              {/* Laya Engine Feature Showcase */}
-              <div
-                style={{
-                  background: 'rgba(6, 182, 212, 0.04)',
-                  border: '1.5px solid rgba(6, 182, 212, 0.25)',
-                  borderRadius: '16px',
-                  padding: '1.5rem',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '1rem'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                  <div
-                    style={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: '10px',
-                      background: 'rgba(6, 182, 212, 0.15)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: 'var(--accent-cyan)'
-                    }}
-                  >
-                    <Cpu size={22} />
-                  </div>
-
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <span style={{ fontSize: '1rem', fontWeight: 800, color: '#ffffff' }}>
-                        Local Verifier Engine
-                      </span>
-                      {/* <span
-                        style={{
-                          fontSize: '0.68rem',
-                          fontWeight: 700,
-                          background: 'rgba(16, 185, 129, 0.15)',
-                          color: 'var(--accent-emerald)',
-                          border: '1px solid rgba(16, 185, 129, 0.3)',
-                          borderRadius: '4px',
-                          padding: '1px 7px'
-                        }}
-                      >
-                        $0 Token Cost
-                      </span> */}
-                    </div>
-                    <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                      Laya local decision engine for agent verification
-                    </div>
-                  </div>
-                </div>
-
-                <p style={{ fontSize: '0.82rem', color: 'var(--text-main)', lineHeight: 1.5, margin: 0 }}>
-                  Laya is a zero-cost decision engine that runs locally in the background.
-                  It makes decisions for AI agents on relevant knowledge, task classification, tool routing, etc. without spending any of your AI usage.
-                </p>
-
-                {/* <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem' }}>
-                  <div
-                    style={{
-                      padding: '0.75rem',
-                      borderRadius: '8px',
-                      background: 'rgba(255, 255, 255, 0.02)',
-                      border: '1px solid rgba(255, 255, 255, 0.06)'
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--accent-cyan)', fontSize: '0.78rem', fontWeight: 700 }}>
-                      <Zap size={14} />
-                      <span>Instant Subtasks</span>
-                    </div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: '4px' }}>
-                      Splits and classifies human workspace tasks locally in 40ms.
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      padding: '0.75rem',
-                      borderRadius: '8px',
-                      background: 'rgba(255, 255, 255, 0.02)',
-                      border: '1px solid rgba(255, 255, 255, 0.06)'
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--accent-emerald)', fontSize: '0.78rem', fontWeight: 700 }}>
-                      <Layers size={14} />
-                      <span>Dual-Layer Context</span>
-                    </div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: '4px' }}>
-                      Zero external API calls for routing decisions.
-                    </div>
-                  </div>
-                </div> */}
-
-                {/* Download Action Area */}
-                {!showLayaTerminal && !layaInstallDone && (
-                  <button
-                    type="button"
-                    onClick={() => setShowLayaTerminal(true)}
-                    style={{
-                      padding: '0.75rem 1.25rem',
-                      borderRadius: '10px',
-                      background: 'rgba(6, 182, 212, 0.18)',
-                      color: 'var(--accent-cyan)',
-                      border: '1.5px solid rgba(6, 182, 212, 0.4)',
-                      fontSize: '0.85rem',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '0.45rem',
-                      transition: 'all 0.15s ease'
-                    }}
-                  >
-                    <Terminal size={15} />
-                    <span>Download (one-click install)</span>
-                  </button>
-                )}
-
-                {layaInstallDone && (
-                  <div
-                    style={{
-                      background: 'rgba(16, 185, 129, 0.1)',
-                      border: '1px solid rgba(16, 185, 129, 0.3)',
-                      borderRadius: '8px',
-                      padding: '0.75rem 1rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      color: 'var(--accent-emerald)',
-                      fontSize: '0.82rem',
-                      fontWeight: 700
-                    }}
-                  >
-                    <CheckCircle2 size={16} />
-                    <span>Laya Engine successfully installed & enabled!</span>
-                  </div>
-                )}
-
-                {/* Embedded Terminal for pip install laya */}
-                {showLayaTerminal && !layaInstallDone && (
-                  <div style={{ marginTop: '0.25rem' }}>
-                    <ResizableTerminalContainer
-                      defaultHeight={240}
-                      minHeight={180}
-                      maxHeight={450}
-                      maximizedHeight={400}
-                      storageKey="ergo_terminal_height_laya_onboarding"
-                      style={{
-                        border: '1px solid rgba(6, 182, 212, 0.3)',
-                        borderRadius: '8px',
-                        overflow: 'hidden'
-                      }}
-                      headerLeft={
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.73rem', fontWeight: 700, color: 'var(--accent-cyan)' }}>
-                          <Terminal size={13} />
-                          <span>Installing Laya Local Engine (pip install laya)</span>
-                        </div>
-                      }
-                      headerRight={
-                        <button
-                          type="button"
-                          onClick={() => setShowLayaTerminal(false)}
-                          style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.72rem' }}
-                        >
-                          Dismiss
-                        </button>
-                      }
-                    >
-                      <AgentTerminal
-                        cmd="pip"
-                        args={['install', '--break-system-packages', 'laya']}
-                        cwd="~"
-                        sessionId="onboarding-laya-installer"
-                        forceRestart={true}
-                        killOnUnmount={true}
-                        onExit={(code) => {
-                          if (code === 0) {
-                            setLayaInstallDone(true);
-                            setShowLayaTerminal(false);
-                          }
-                        }}
-                      />
-                    </ResizableTerminalContainer>
-                  </div>
-                )}
-              </div>
+            <div style={{ animation: 'fadeIn 0.25s ease-out' }}>
+              <LocalModelOnboardingStep
+                controller={localModel}
+                mode={localModelMode}
+                cloudLabel={cloudModelLabel}
+                onUseCloud={handleUseCloudModel}
+                onUseLocal={() => onSetLocalModelMode?.('local')}
+              />
             </div>
           )}
 
@@ -1821,9 +1667,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   style={{
                     padding: '0.55rem 1rem',
                     borderRadius: '8px',
-                    background: bridgeStatus.isConnected ? 'rgba(255, 255, 255, 0.06)' : 'var(--accent-primary)',
-                    color: '#ffffff',
-                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    background: bridgeStatus.isConnected ? 'var(--bg-hover, rgba(0, 0, 0, 0.05))' : 'var(--accent-primary)',
+                    color: bridgeStatus.isConnected ? 'var(--text-main)' : '#ffffff',
+                    border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
                     fontSize: '0.78rem',
                     fontWeight: 600,
                     cursor: isTestingBridge ? 'wait' : 'pointer',
@@ -1858,11 +1704,11 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '2px' }} />
                   <div>
                     <div style={{ fontWeight: 600 }}>Connection Notice</div>
-                    <div style={{ marginTop: '2px', color: 'rgba(255, 255, 255, 0.75)', lineHeight: 1.45 }}>
+                    <div style={{ marginTop: '2px', color: 'var(--text-main)', lineHeight: 1.45 }}>
                       {bridgeConnectError}
                     </div>
                     {bridgeStatus.isMixedContentBlocked && (
-                      <div style={{ marginTop: '0.5rem', padding: '0.45rem 0.65rem', background: 'rgba(0, 0, 0, 0.3)', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.08)', color: 'var(--text-bright)', fontSize: '0.74rem' }}>
+                      <div style={{ marginTop: '0.5rem', padding: '0.45rem 0.65rem', background: 'var(--bg-hover, rgba(0, 0, 0, 0.05))', borderRadius: '6px', border: '1px solid var(--border-subtle, var(--border, #e2e8f0))', color: 'var(--text-bright)', fontSize: '0.74rem' }}>
                         💡 <strong>Why this happens:</strong> Mobile browsers and HTTPS websites restrict connecting to <code>localhost</code> over unencrypted HTTP. To use Ergo on this device, either use an <strong>API Key</strong> in Step 1, or open Ergo directly on your computer at <code>http://localhost:5173</code>.
                       </div>
                     )}
@@ -1876,8 +1722,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   marginTop: '1.25rem',
                   padding: '1rem 1.15rem',
                   borderRadius: '10px',
-                  background: 'rgba(0, 0, 0, 0.25)',
-                  border: '1px solid rgba(255, 255, 255, 0.06)'
+                  background: 'var(--bg-card, var(--card, #ffffff))',
+                  border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
+                  boxShadow: 'var(--shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.04))'
                 }}
               >
                 <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-bright)', marginBottom: '0.5rem' }}>
@@ -1910,10 +1757,11 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 style={{
                   marginTop: '0.85rem',
                   borderRadius: '10px',
-                  background: 'rgba(0, 0, 0, 0.2)',
-                  border: '1px solid rgba(255, 255, 255, 0.07)',
+                  background: 'var(--bg-card, var(--card, #ffffff))',
+                  border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
                   overflow: 'hidden',
-                  transition: 'all 0.2s ease'
+                  transition: 'all 0.2s ease',
+                  boxShadow: 'var(--shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.04))'
                 }}
               >
                 <button
@@ -1952,7 +1800,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   <div
                     style={{
                       padding: '0.85rem 1rem 1rem 1rem',
-                      borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+                      borderTop: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
                       display: 'flex',
                       flexDirection: 'column',
                       gap: '0.9rem'
@@ -1971,8 +1819,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           style={{
                             display: 'flex',
                             alignItems: 'center',
-                            background: 'rgba(0, 0, 0, 0.4)',
-                            border: '1px solid rgba(255, 255, 255, 0.12)',
+                            background: 'var(--bg-hover, rgba(0, 0, 0, 0.04))',
+                            border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
                             borderRadius: '6px',
                             padding: '0 0.5rem',
                             flex: 1
@@ -2012,8 +1860,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           style={{
                             padding: '0.42rem 0.85rem',
                             borderRadius: '6px',
-                            background: 'rgba(255, 255, 255, 0.06)',
-                            border: '1px solid rgba(255, 255, 255, 0.12)',
+                            background: 'var(--btn-secondary-bg, var(--bg-card, #ffffff))',
+                            border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
                             color: 'var(--text-bright)',
                             fontSize: '0.74rem',
                             fontWeight: 600,
@@ -2047,10 +1895,10 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                               display: 'flex',
                               alignItems: 'center',
                               justifyContent: 'space-between',
-                              background: 'rgba(0, 0, 0, 0.45)',
+                              background: 'var(--code-bg, #0f172a)',
                               padding: '0.45rem 0.75rem',
                               borderRadius: '6px',
-                              border: '1px solid rgba(255, 255, 255, 0.08)',
+                              border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
                               fontFamily: 'monospace',
                               fontSize: '0.75rem',
                               color: 'var(--accent-emerald)',
@@ -2097,8 +1945,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         <div
           style={{
             padding: '1.15rem 2rem',
-            borderTop: '1px solid rgba(255, 255, 255, 0.08)',
-            background: 'rgba(0, 0, 0, 0.3)',
+            borderTop: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
+            background: 'var(--modal-footer-bg, var(--bg-hover, transparent))',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -2113,7 +1961,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
               <button
                 type="button"
-                onClick={() => proceedToLayaStep()}
+                onClick={() => proceedToLocalModelStep()}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -2133,25 +1981,13 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             </>
           ) : currentStep === 2 ? (
             <>
-              <button
-                type="button"
-                onClick={proceedToBridgeStep}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: 'var(--text-muted)',
-                  fontSize: '0.8rem',
-                  cursor: 'pointer',
-                  textDecoration: 'underline',
-                  padding: '0.4rem 0'
-                }}
-              >
-                Skip for now
-              </button>
+              <div style={{ fontSize: '0.74rem', color: 'var(--text-dim)' }}>
+                You can change this anytime in Settings.
+              </div>
 
               <button
                 type="button"
-                onClick={proceedToBridgeStep}
+                onClick={handleLocalModelNext}
                 style={{
                   padding: '0.65rem 1.4rem',
                   borderRadius: '10px',

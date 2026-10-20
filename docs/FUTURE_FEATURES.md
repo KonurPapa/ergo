@@ -42,7 +42,6 @@
         - does this open a modal to select the file, which is a deep link to the file on disk?
     - needs a `/remember` skill that the user can call to force the AI to store that knowledge in its vector DB
     - **can we use a lightweight AI for scanning files (i.e. Sonnet), and then pass that to a more powerful AI that actually does the work (i.e. Opus)?**
-        - see if we can do this w/ Laya instead
     - **Run as...**
         - Single task
         - Tasks in sequence

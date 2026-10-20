@@ -65,6 +65,25 @@ function truncate(text: string | undefined, max: number): string {
 
 import { type SearchResult } from '../memory';
 
+/** discoveredContext entry holding the selected related tasks' context block. */
+const RELATED_TASKS_SOURCE = 'related-tasks';
+const MAX_RELATED_CONTEXT_CHARS = 1600;
+
+type DiscoveredEntry = BibleSections['discoveredContext'][number];
+
+function relatedContextOf(entries: DiscoveredEntry[]): string {
+  const text = entries.find((c) => c.source === RELATED_TASKS_SOURCE)?.text?.trim() || '';
+  return text.length > MAX_RELATED_CONTEXT_CHARS ? `${text.slice(0, MAX_RELATED_CONTEXT_CHARS - 1)}…` : text;
+}
+
+function pushRelatedSection(out: string[], entries: DiscoveredEntry[]): void {
+  const related = relatedContextOf(entries);
+  if (!related) return;
+  out.push('## Related Tasks (context from this project — read before starting)');
+  out.push('_Selected as useful context for this task. Reference only: they are not requirements of this task._');
+  out.push(related, '');
+}
+
 export function buildBibleSections(args: {
   task: TaskItem;
   project: ProjectData;
@@ -76,6 +95,8 @@ export function buildBibleSections(args: {
   allowedRoots: McpRootBoundary[];
   guidelines?: Array<{ path: string; excerpt: string }>;
   memoryHits?: SearchResult[];
+  /** Context block for the related tasks the Summary step selected (formatSelectedRelatedContext). */
+  relatedContext?: string;
   discoveryPayload?: DiscoveryJobPayload;
   runId: string;
 }): BibleSections {
@@ -90,6 +111,7 @@ export function buildBibleSections(args: {
     allowedRoots,
     guidelines,
     memoryHits,
+    relatedContext,
     discoveryPayload,
     runId
   } = args;
@@ -102,6 +124,7 @@ export function buildBibleSections(args: {
     snippet?: string;
     similarity?: number;
     source?: string;
+    text?: string;
   }> = [];
 
   if (memoryHits && memoryHits.length > 0) {
@@ -118,6 +141,11 @@ export function buildBibleSections(args: {
       sourceDocument: c.sourceDocument,
       snippet: truncate(c.overview || c.buildAndVerification || c.completion, 250) || undefined
     }));
+  }
+
+  // Selected related tasks ride along as one discovered-context entry, rendered as its own section.
+  if (relatedContext && relatedContext.trim()) {
+    discoveredContext.push({ source: RELATED_TASKS_SOURCE, text: relatedContext.trim() });
   }
 
   const effectiveGuidelines =
@@ -221,9 +249,12 @@ export class BibleStore {
     out.push(`- **Required MCPs**: ${s.requiredMcps.length > 0 ? s.requiredMcps.join(', ') : '(none — pure reasoning/text)'}`);
     out.push(`- **Allowed Boundaries**: ${s.allowedRoots.length > 0 ? s.allowedRoots.join(', ') : s.metadata.projectPath}`, '');
 
-    if (s.discoveredContext.length > 0) {
+    pushRelatedSection(out, s.discoveredContext);
+
+    const priorKnowledge = s.discoveredContext.filter((c) => c.source !== RELATED_TASKS_SOURCE);
+    if (priorKnowledge.length > 0) {
       out.push('## Prior Knowledge & Context (Vector Memory)');
-      for (const c of s.discoveredContext) {
+      for (const c of priorKnowledge) {
         if (c.similarity !== undefined) {
           const sim = ` [${(c.similarity * 100).toFixed(0)}% match]`;
           const src = c.source ? ` (${c.source})` : '';
@@ -290,6 +321,8 @@ export class BibleStore {
     out.push(`- **Destination**: ${s.outputAs || 'Record results in build log.'}`);
     out.push(`- **Required MCPs**: ${s.requiredMcps.length > 0 ? s.requiredMcps.join(', ') : '(none — pure reasoning/text)'}`);
     out.push(`- **Allowed Boundaries**: ${s.allowedRoots.length > 0 ? s.allowedRoots.join(', ') : s.metadata.projectPath}`, '');
+
+    pushRelatedSection(out, s.discoveredContext);
 
     return out.join('\n').trimEnd() + '\n';
   }

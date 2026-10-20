@@ -1,45 +1,51 @@
 /**
- * Local Vector Memory Engine — Zero-token, in-browser semantic search.
+ * Vector Memory client — semantic project memory, stored and searched by the local Ergo bridge.
  *
- * Uses @huggingface/transformers (WASM/ONNX) to generate 384-dim embeddings
- * from `all-MiniLM-L6-v2` and stores them in IndexedDB for persistence across
- * sessions. Replaces the monolithic AGENT_CONTEXT.md dump with a queryable,
- * namespace-partitioned vector store.
+ * The vector store lives on disk next to the bridge (`<storage root>/.ergo/memory/`, see memoryStore.ts) and
+ * embeddings are computed there (all-MiniLM-L6-v2, 384-dim). This module is a thin REST client with the
+ * same API the in-browser engine had, so the page never loads the model or holds every vector in memory.
  *
- * Namespaces:
- *   - `learnings`  — Durable project knowledge (architectural decisions, gotchas, patterns)
- *   - `tasks`      — Completed task summaries and acceptance criteria
- *   - `code-map`   — High-level file/component index (future)
+ * Namespaces: see ./types. `agent-notes` (the AI's own working memory) is hidden from searches and listings
+ * that don't name a namespace unless `includeHidden` is set — the archive UI never sees it, agents do.
  *
- * All operations are local, zero API-token cost, and async-safe.
+ * Legacy data: chunks the old in-browser engine left in IndexedDB are imported into the bridge once
+ * (with their embeddings), then the IndexedDB database is deleted. See ensureMigrated().
  */
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+import { bridgeClient } from '../bridgeClient';
+import {
+  HIDDEN_MEMORY_NAMESPACES,
+  type AgentNoteKind,
+  type ChunkMetadata,
+  type MemoryChunkDTO,
+  type MemoryNamespace,
+  type MemorySearchRequest,
+} from './types';
 
-export type MemoryNamespace = 'learnings' | 'tasks' | 'code-map';
+export {
+  HIDDEN_MEMORY_NAMESPACES,
+  type AgentNoteKind,
+  type ChunkMetadata,
+  type MemoryChunkDTO,
+  type MemoryNamespace,
+  type MemorySearchRequest,
+} from './types';
+
+// ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface MemoryChunk {
   id: string;
   namespace: MemoryNamespace;
   text: string;
+  /**
+   * The first few embedding dimensions only (for inspection); the full vector stays on the bridge.
+   * Use `embeddingDim` for the real dimension.
+   */
   embedding: Float32Array;
+  /** Dimension of the stored embedding (384). */
+  embeddingDim?: number;
   metadata: ChunkMetadata;
   createdAt: number;
-}
-
-export interface ChunkMetadata {
-  taskId?: string | number;
-  taskTitle?: string;
-  category?: string;
-  projectId?: string;
-  /** Free-form tags for filtering (e.g. 'architecture', 'gotcha', 'pattern') */
-  tags?: string[];
-  /** Source of the chunk (e.g. 'session-retrospective', 'migration', 'manual') */
-  source?: string;
-  /** Subtasks associated with this task if archived from workspace */
-  subtasks?: Array<{ text: string; isDone?: boolean; isHumanReview?: boolean }>;
-  /** JSON-serialized subtasks for persistent roundtripping */
-  serializedSubtasks?: string;
 }
 
 export interface SearchResult {
@@ -47,208 +53,123 @@ export interface SearchResult {
   similarity: number;
 }
 
-/** Serializable form for IndexedDB storage (Float32Array → number[]). */
-interface StoredChunk {
-  id: string;
-  namespace: MemoryNamespace;
-  text: string;
-  embedding: number[];
-  metadata: ChunkMetadata;
-  createdAt: number;
-}
-
-// ─── Constants ──────────────────────────────────────────────────────────────
-
-const DB_NAME = 'ergo-vector-memory';
-const DB_VERSION = 2;
-const STORE_NAME = 'chunks';
-const MODEL_ID = 'Xenova/all-MiniLM-L6-v2';
-export const EMBEDDING_DIM = 384;
-
 export interface SearchMemoryOptions {
   namespace?: MemoryNamespace;
+  namespaces?: MemoryNamespace[];
   topK?: number;
   minSimilarity?: number;
   projectId?: string;
   excludeTaskId?: string | number;
+  taskId?: string | number;
+  runId?: string;
+  kinds?: AgentNoteKind[];
+  /** Include AI-only namespaces (agent-notes) when no namespace is given. Default false. */
+  includeHidden?: boolean;
 }
 
-// ─── Embedding Pipeline (lazy singleton) ────────────────────────────────────
+export const EMBEDDING_DIM = 384;
 
-let pipelinePromise: Promise<any> | null = null;
-let pipelineReady = false;
-
-/**
- * Lazily initializes the embedding pipeline. The ONNX/WASM model is downloaded
- * and cached by the browser on first use (~25MB). Subsequent loads are instant.
- */
-async function getEmbeddingPipeline(): Promise<any> {
-  if (pipelinePromise) return pipelinePromise;
-
-  pipelinePromise = (async () => {
-    try {
-      // Dynamic import so the ~2MB transformers.js bundle is only loaded when needed
-      const { pipeline, env } = await import('@huggingface/transformers');
-
-      // Use WASM backend (no WebGPU required, works everywhere)
-      if (env.backends?.onnx?.wasm) {
-        (env.backends.onnx.wasm as any).numThreads = 1;
-      }
-
-      const pipe = await pipeline('feature-extraction', MODEL_ID, {
-        dtype: 'fp32',
-        device: 'wasm',
-      });
-      pipelineReady = true;
-      console.log('[VectorEngine] Embedding pipeline ready (all-MiniLM-L6-v2, 384-dim, WASM)');
-      return pipe;
-    } catch (err) {
-      pipelinePromise = null;
-      console.error('[VectorEngine] Failed to initialize embedding pipeline:', err);
-      throw err;
-    }
-  })();
-
-  return pipelinePromise;
+export function isHiddenNamespace(namespace: string | undefined): boolean {
+  return Boolean(namespace) && (HIDDEN_MEMORY_NAMESPACES as readonly string[]).includes(namespace as string);
 }
 
-/** Returns true if the embedding model has been loaded and is ready. */
+// ─── REST plumbing ──────────────────────────────────────────────────────────
+
+class MemoryBridgeError extends Error {}
+
+async function memoryRequest<T>(endpoint: string, body?: unknown): Promise<T> {
+  await ensureMigrated();
+  return rawMemoryRequest<T>(endpoint, body);
+}
+
+/** One JSON request to the bridge's memory API; throws on network / HTTP / `success: false`. */
+async function rawMemoryRequest<T>(endpoint: string, body?: unknown): Promise<T> {
+  const init: RequestInit = body === undefined
+    ? { method: 'GET' }
+    : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+  const res = await bridgeClient.fetch(endpoint, init);
+  const json = (await res.json().catch(() => null)) as (T & { success?: boolean; error?: string }) | null;
+  if (!res.ok || !json || json.success === false) {
+    throw new MemoryBridgeError(json?.error || `${endpoint} failed (HTTP ${res.status})`);
+  }
+  return json;
+}
+
+function query(params: Record<string, string | undefined | false>): string {
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === false || v === '') continue;
+    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
+  }
+  return parts.length ? `?${parts.join('&')}` : '';
+}
+
+function fromDto(dto: MemoryChunkDTO): MemoryChunk {
+  const preview = Array.isArray(dto.embeddingPreview) ? dto.embeddingPreview : [];
+  return {
+    id: dto.id,
+    namespace: dto.namespace,
+    text: dto.text,
+    embedding: Float32Array.from(preview),
+    embeddingDim: typeof dto.embeddingDim === 'number' ? dto.embeddingDim : undefined,
+    metadata: dto.metadata || {},
+    createdAt: dto.createdAt,
+  };
+}
+
+function warn(op: string, err: unknown): void {
+  console.warn(`[VectorMemory] ${op} failed:`, err instanceof Error ? err.message : err);
+}
+
+// ─── Embedding status ───────────────────────────────────────────────────────
+
+let modelLoaded = false;
+
+/** True once the bridge reports its embedding model loaded (or an embedding / search came back). */
 export function isEmbeddingReady(): boolean {
-  return pipelineReady;
+  return modelLoaded;
 }
 
 /**
- * Generate a 384-dim embedding for a text string.
- * Returns null if the pipeline is not available (graceful degradation).
+ * Generate a 384-dim embedding for a text string (computed by the bridge).
+ * Returns null if the bridge is unavailable (graceful degradation).
  */
 export async function embed(text: string): Promise<Float32Array | null> {
-  try {
-    const pipe = await getEmbeddingPipeline();
-    const output = await pipe(text, { pooling: 'mean', normalize: true });
-    // output.data is a Float32Array of shape [1, 384]
-    return new Float32Array(output.data);
-  } catch (err) {
-    console.warn('[VectorEngine] Embedding failed, returning null:', err);
-    return null;
-  }
+  const [first] = await embedBatch([text]);
+  return first ?? null;
 }
 
-/**
- * Batch-embed multiple texts. More efficient than calling embed() in a loop
- * because the pipeline can batch internally.
- */
+/** Batch-embed multiple texts on the bridge. */
 export async function embedBatch(texts: string[]): Promise<(Float32Array | null)[]> {
   if (texts.length === 0) return [];
   try {
-    const pipe = await getEmbeddingPipeline();
-    const results: (Float32Array | null)[] = [];
-    // Process sequentially to avoid WASM memory pressure in-browser
-    for (const text of texts) {
-      const output = await pipe(text, { pooling: 'mean', normalize: true });
-      results.push(new Float32Array(output.data));
-    }
-    return results;
+    const json = await memoryRequest<{ embeddings: number[][] }>('/api/memory/embed', { texts });
+    modelLoaded = true;
+    return texts.map((_, i) => (Array.isArray(json.embeddings?.[i]) ? Float32Array.from(json.embeddings[i]) : null));
   } catch (err) {
-    console.warn('[VectorEngine] Batch embedding failed:', err);
+    warn('embed', err);
     return texts.map(() => null);
   }
 }
 
-// ─── Cosine Similarity ──────────────────────────────────────────────────────
-
-function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-  if (a.length !== b.length) return 0;
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  return denom === 0 ? 0 : dot / denom;
-}
-
-// ─── IndexedDB Persistence ──────────────────────────────────────────────────
-
-function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    if (typeof indexedDB === 'undefined') {
-      return reject(new Error('IndexedDB is not supported'));
-    }
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-      let store: IDBObjectStore;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-      } else {
-        store = (event.target as any).transaction.objectStore(STORE_NAME);
-      }
-      if (!store.indexNames.contains('namespace')) store.createIndex('namespace', 'namespace', { unique: false });
-      if (!store.indexNames.contains('taskId')) store.createIndex('taskId', 'metadata.taskId', { unique: false });
-      if (!store.indexNames.contains('projectId')) store.createIndex('projectId', 'metadata.projectId', { unique: false });
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-function toStored(chunk: MemoryChunk): StoredChunk {
-  return {
-    ...chunk,
-    embedding: Array.from(chunk.embedding),
-  };
-}
-
-function fromStored(stored: StoredChunk): MemoryChunk {
-  return {
-    ...stored,
-    embedding: new Float32Array(stored.embedding),
-  };
-}
-
-// ─── In-Memory Cache ────────────────────────────────────────────────────────
-
-/** In-memory cache of all chunks, loaded from IndexedDB on first access. */
-let memoryCache: MemoryChunk[] | null = null;
-let cacheLoadPromise: Promise<void> | null = null;
-
-async function ensureCacheLoaded(): Promise<MemoryChunk[]> {
-  if (memoryCache !== null) return memoryCache;
-  if (cacheLoadPromise) {
-    await cacheLoadPromise;
-    return memoryCache!;
-  }
-
-  cacheLoadPromise = (async () => {
-    try {
-      const db = await openDb();
-      const tx = db.transaction(STORE_NAME, 'readonly');
-      const store = tx.objectStore(STORE_NAME);
-      const all: StoredChunk[] = await new Promise((resolve, reject) => {
-        const req = store.getAll();
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-      });
-      memoryCache = all.map(fromStored);
-      console.log(`[VectorEngine] Loaded ${memoryCache.length} chunks from IndexedDB`);
-    } catch (err) {
-      console.warn('[VectorEngine] Failed to load from IndexedDB, starting empty:', err);
-      memoryCache = [];
-    }
-  })();
-
-  await cacheLoadPromise;
-  return memoryCache!;
+/**
+ * Ask the bridge to load its embedding model in the background, and start the one-time IndexedDB
+ * migration. Non-blocking; failures are logged.
+ */
+export function preWarmEmbeddings(): void {
+  void ensureMigrated();
+  void rawMemoryRequest<{ modelLoaded?: boolean; ready?: boolean }>('/api/memory/status?warm=1')
+    .then((s) => {
+      if (s.modelLoaded) modelLoaded = true;
+    })
+    .catch((err) => warn('pre-warm', err));
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 /**
- * Add one or more text chunks to the vector memory store.
- * Each chunk is embedded, stored in IndexedDB, and added to the in-memory cache.
+ * Add (or replace, by id) one or more text chunks. The bridge embeds and stores them.
+ * Returns the number stored (0 when the bridge is unavailable).
  */
 export async function addChunks(
   chunks: Array<{
@@ -259,274 +180,179 @@ export async function addChunks(
   }>
 ): Promise<number> {
   if (chunks.length === 0) return 0;
-
-  const cache = await ensureCacheLoaded();
-  const texts = chunks.map((c) => c.text);
-  const embeddings = await embedBatch(texts);
-
-  const newChunks: MemoryChunk[] = [];
-  for (let i = 0; i < chunks.length; i++) {
-    const emb = embeddings[i];
-    if (!emb) continue; // Skip chunks that failed to embed
-
-    const chunk: MemoryChunk = {
-      id: chunks[i].id,
-      namespace: chunks[i].namespace,
-      text: chunks[i].text,
-      embedding: emb,
-      metadata: chunks[i].metadata || {},
-      createdAt: Date.now(),
-    };
-    newChunks.push(chunk);
-  }
-
-  if (newChunks.length === 0) return 0;
-
-  // Persist to IndexedDB
   try {
-    const db = await openDb();
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    for (const chunk of newChunks) {
-      store.put(toStored(chunk));
-    }
-    await new Promise<void>((resolve, reject) => {
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+    const json = await memoryRequest<{ added: number }>('/api/memory/add', {
+      chunks: chunks.map((c) => ({ id: c.id, namespace: c.namespace, text: c.text, metadata: c.metadata || {} })),
     });
+    return Number(json.added) || 0;
   } catch (err) {
-    console.warn('[VectorEngine] IndexedDB write failed (chunks cached in memory only):', err);
+    warn('addChunks', err);
+    return 0;
   }
-
-  // Update in-memory cache (replace existing by id, append new)
-  const existingIds = new Set(cache.map((c) => c.id));
-  for (const chunk of newChunks) {
-    if (existingIds.has(chunk.id)) {
-      const idx = cache.findIndex((c) => c.id === chunk.id);
-      if (idx >= 0) cache[idx] = chunk;
-    } else {
-      cache.push(chunk);
-    }
-  }
-
-  console.log(`[VectorEngine] Added ${newChunks.length} chunks (${chunks[0].namespace})`);
-  return newChunks.length;
 }
 
 /**
  * Semantic search across the vector memory store.
  *
  * Supports both positional arguments and an options object:
- *   searchMemory(query, { namespace, topK, minSimilarity, projectId, excludeTaskId })
+ *   searchMemory(query, { namespace, topK, minSimilarity, projectId, excludeTaskId, includeHidden, … })
  *   searchMemory(query, namespace, topK, minSimilarity, projectId, excludeTaskId)
  *
- * @param query - Natural language search query
- * @param namespaceOrOptions - Optional namespace filter (e.g. 'learnings', 'tasks') or SearchMemoryOptions
- * @param topK - Maximum number of results to return (default: 5)
- * @param minSimilarity - Minimum cosine similarity threshold (default: 0.3)
- * @param projectId - Optional project ID filter (strictly isolates memory to the active project)
- * @param excludeTaskId - Optional task ID to exclude (prevents a task from matching its own prior runs)
- * @returns Sorted array of search results with similarity scores
+ * Without a namespace, AI-only namespaces (agent-notes) are excluded unless `includeHidden` is true.
+ * Returns [] when the bridge is unavailable.
  */
 export async function searchMemory(
-  query: string,
+  queryText: string,
   namespaceOrOptions?: MemoryNamespace | SearchMemoryOptions,
   topK = 5,
   minSimilarity = 0.3,
   projectId?: string,
   excludeTaskId?: string | number
 ): Promise<SearchResult[]> {
-  let namespace: MemoryNamespace | undefined;
-  let effectiveTopK = topK;
-  let effectiveMinSim = minSimilarity;
-  let effectiveProjectId = projectId;
-  let effectiveExcludeTaskId = excludeTaskId;
-
-  if (typeof namespaceOrOptions === 'object' && namespaceOrOptions !== null) {
-    namespace = namespaceOrOptions.namespace;
-    effectiveTopK = namespaceOrOptions.topK ?? 5;
-    effectiveMinSim = namespaceOrOptions.minSimilarity ?? 0.3;
-    effectiveProjectId = namespaceOrOptions.projectId;
-    effectiveExcludeTaskId = namespaceOrOptions.excludeTaskId;
-  } else {
-    namespace = namespaceOrOptions;
+  const request: MemorySearchRequest =
+    typeof namespaceOrOptions === 'object' && namespaceOrOptions !== null
+      ? {
+          query: queryText,
+          namespace: namespaceOrOptions.namespace,
+          namespaces: namespaceOrOptions.namespaces,
+          topK: namespaceOrOptions.topK ?? 5,
+          minSimilarity: namespaceOrOptions.minSimilarity ?? 0.3,
+          projectId: namespaceOrOptions.projectId,
+          excludeTaskId: namespaceOrOptions.excludeTaskId,
+          taskId: namespaceOrOptions.taskId,
+          runId: namespaceOrOptions.runId,
+          kinds: namespaceOrOptions.kinds,
+          includeHidden: namespaceOrOptions.includeHidden ?? false,
+        }
+      : {
+          query: queryText,
+          namespace: namespaceOrOptions,
+          topK,
+          minSimilarity,
+          projectId,
+          excludeTaskId,
+          includeHidden: false,
+        };
+  if (!request.query || !request.query.trim()) return [];
+  // Drop undefined keys so the bridge sees only the filters actually set.
+  for (const key of Object.keys(request) as Array<keyof MemorySearchRequest>) {
+    if (request[key] === undefined) delete request[key];
   }
-
-  const cache = await ensureCacheLoaded();
-  if (cache.length === 0) return [];
-
-  const queryEmb = await embed(query);
-  if (!queryEmb) return [];
-
-  let candidates = namespace ? cache.filter((c) => c.namespace === namespace) : cache;
-
-  // Strict project isolation: only return memory chunks created within the specified project
-  if (effectiveProjectId) {
-    candidates = candidates.filter((c) => c.metadata.projectId === effectiveProjectId);
-  }
-
-  // Self-exclusion: omit chunks belonging to the currently running task
-  if (effectiveExcludeTaskId != null) {
-    const strExclude = String(effectiveExcludeTaskId);
-    candidates = candidates.filter(
-      (c) => c.metadata.taskId == null || String(c.metadata.taskId) !== strExclude
+  try {
+    const json = await memoryRequest<{ results: Array<{ chunk: MemoryChunkDTO; similarity: number }> }>(
+      '/api/memory/search',
+      request
     );
+    modelLoaded = true;
+    return (json.results || []).map((r) => ({ chunk: fromDto(r.chunk), similarity: r.similarity }));
+  } catch (err) {
+    warn('searchMemory', err);
+    return [];
   }
-
-  const scored: SearchResult[] = [];
-  for (const chunk of candidates) {
-    const sim = cosineSimilarity(queryEmb, chunk.embedding);
-    if (sim >= effectiveMinSim) {
-      scored.push({ chunk, similarity: sim });
-    }
-  }
-
-  scored.sort((a, b) => b.similarity - a.similarity);
-  return scored.slice(0, effectiveTopK);
 }
 
-/**
- * Remove chunks by ID(s).
- */
+async function removeWhere(body: Record<string, unknown>): Promise<number> {
+  try {
+    const json = await memoryRequest<{ removed: number }>('/api/memory/remove', body);
+    return Number(json.removed) || 0;
+  } catch (err) {
+    warn('remove', err);
+    return 0;
+  }
+}
+
+/** Remove chunks by ID(s). */
 export async function removeChunksById(ids: string[]): Promise<number> {
   if (ids.length === 0) return 0;
-
-  const cache = await ensureCacheLoaded();
-  const idSet = new Set(ids);
-  const before = cache.length;
-
-  // Remove from cache
-  memoryCache = cache.filter((c) => !idSet.has(c.id));
-
-  // Remove from IndexedDB
-  try {
-    const db = await openDb();
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    for (const id of ids) {
-      store.delete(id);
-    }
-    await new Promise<void>((resolve, reject) => {
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-  } catch (err) {
-    console.warn('[VectorEngine] IndexedDB delete failed:', err);
-  }
-
-  const removed = before - memoryCache.length;
-  if (removed > 0) console.log(`[VectorEngine] Removed ${removed} chunks`);
-  return removed;
+  return removeWhere({ ids });
 }
 
-/**
- * Remove all chunks associated with a specific task ID, optionally scoped to a project.
- */
-export async function removeChunksByTaskId(
-  taskId: string | number,
-  projectId?: string
-): Promise<number> {
-  const cache = await ensureCacheLoaded();
-  const strTaskId = String(taskId);
-  const matchingIds = cache
-    .filter((c) => {
-      if (c.metadata.taskId == null) return false;
-      const matchesTask = String(c.metadata.taskId) === strTaskId;
-      if (!matchesTask) return false;
-      if (projectId && c.metadata.projectId && c.metadata.projectId !== projectId) {
-        return false;
-      }
-      return true;
-    })
-    .map((c) => c.id);
-  return removeChunksById(matchingIds);
+/** Remove all chunks associated with a specific task ID, optionally scoped to a project. */
+export async function removeChunksByTaskId(taskId: string | number, projectId?: string): Promise<number> {
+  return removeWhere({ taskId: String(taskId), ...(projectId ? { projectId } : {}) });
 }
 
-/**
- * Remove all chunks associated with a specific project ID.
- */
+/** Remove all chunks associated with a specific project ID. */
 export async function removeChunksByProjectId(projectId: string): Promise<number> {
   if (!projectId) return 0;
-  const cache = await ensureCacheLoaded();
-  const matchingIds = cache
-    .filter((c) => c.metadata.projectId != null && String(c.metadata.projectId) === String(projectId))
-    .map((c) => c.id);
-  return removeChunksById(matchingIds);
+  return removeWhere({ projectId });
 }
 
-/**
- * Clear all chunks belonging to a project (convenience alias).
- */
+/** Clear all chunks belonging to a project (convenience alias). */
 export async function clearProjectMemory(projectId: string): Promise<number> {
   return removeChunksByProjectId(projectId);
 }
 
-/**
- * Remove all chunks in vector memory across all namespaces and projects (full database reset).
- */
+/** Remove all chunks across all namespaces and projects (full reset). */
 export async function clearAllMemory(): Promise<number> {
-  const cache = await ensureCacheLoaded();
-  const allIds = cache.map((c) => c.id);
-  return removeChunksById(allIds);
+  return removeWhere({ all: true });
 }
 
-/**
- * Remove all chunks in a namespace.
- */
+/** Remove all chunks in a namespace. */
 export async function clearNamespace(namespace: MemoryNamespace): Promise<number> {
-  const cache = await ensureCacheLoaded();
-  const matchingIds = cache.filter((c) => c.namespace === namespace).map((c) => c.id);
-  return removeChunksById(matchingIds);
+  return removeWhere({ namespace });
 }
 
-/**
- * Get all chunks in a namespace (for display/inspection without search).
- */
+async function listChunks(params: { namespace?: MemoryNamespace; projectId?: string; includeHidden?: boolean }): Promise<MemoryChunk[]> {
+  try {
+    const json = await memoryRequest<{ chunks: MemoryChunkDTO[] }>(
+      `/api/memory/chunks${query({ namespace: params.namespace, projectId: params.projectId, includeHidden: params.includeHidden ? '1' : undefined })}`
+    );
+    let chunks = (json.chunks || []).map(fromDto);
+    // Belt and braces: never hand AI-only chunks to a caller that didn't ask for them.
+    if (!params.namespace && !params.includeHidden) chunks = chunks.filter((c) => !isHiddenNamespace(c.namespace));
+    return chunks;
+  } catch (err) {
+    warn('list chunks', err);
+    return [];
+  }
+}
+
+/** Get all chunks in a namespace (for display/inspection without search). */
 export async function getChunksByNamespace(namespace: MemoryNamespace, projectId?: string): Promise<MemoryChunk[]> {
-  const cache = await ensureCacheLoaded();
-  let filtered = cache.filter((c) => c.namespace === namespace);
-  if (projectId) {
-    filtered = filtered.filter((c) => c.metadata.projectId === projectId);
+  return listChunks({ namespace, projectId });
+}
+
+/** Get the chunk count, optionally filtered by namespace and project (hidden namespaces excluded unless asked). */
+export async function getChunkCount(
+  namespace?: MemoryNamespace,
+  projectId?: string,
+  options: { includeHidden?: boolean } = {}
+): Promise<number> {
+  try {
+    const json = await memoryRequest<{ count: number }>(
+      `/api/memory/count${query({ namespace, projectId, includeHidden: options.includeHidden ? '1' : undefined })}`
+    );
+    return Number(json.count) || 0;
+  } catch (err) {
+    warn('getChunkCount', err);
+    return 0;
   }
-  return filtered;
 }
 
-/**
- * Get total chunk count, optionally filtered by namespace and project.
- */
-export async function getChunkCount(namespace?: MemoryNamespace, projectId?: string): Promise<number> {
-  const cache = await ensureCacheLoaded();
-  let filtered = cache;
-  if (namespace) filtered = filtered.filter((c) => c.namespace === namespace);
-  if (projectId) filtered = filtered.filter((c) => c.metadata.projectId === projectId);
-  return filtered.length;
-}
-
-/**
- * Check if a chunk with a given ID already exists.
- */
+/** Check if a chunk with a given ID already exists. */
 export async function hasChunk(id: string): Promise<boolean> {
-  const cache = await ensureCacheLoaded();
-  return cache.some((c) => c.id === id);
-}
-
-/**
- * Get all chunks across all namespaces (for visual inspection and management),
- * optionally filtered by project ID.
- */
-export async function getAllChunks(projectId?: string): Promise<MemoryChunk[]> {
-  const cache = await ensureCacheLoaded();
-  let result = [...cache];
-  if (projectId) {
-    result = result.filter((c) => c.metadata.projectId === projectId);
+  try {
+    const json = await memoryRequest<{ exists: boolean }>(`/api/memory/has${query({ id })}`);
+    return Boolean(json.exists);
+  } catch (err) {
+    warn('hasChunk', err);
+    return false;
   }
-  // Sort newest first
-  return result.sort((a, b) => b.createdAt - a.createdAt);
 }
 
 /**
- * Update a chunk's text, namespace, or metadata.
- * If the text changed, a fresh 384-dim embedding is generated.
+ * Get all chunks (newest first), optionally filtered by project. AI-only namespaces are excluded
+ * unless `options.includeHidden` is true.
+ */
+export async function getAllChunks(projectId?: string, options: { includeHidden?: boolean } = {}): Promise<MemoryChunk[]> {
+  const chunks = await listChunks({ projectId, includeHidden: options.includeHidden });
+  return chunks.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/**
+ * Update a chunk's text, namespace, or metadata (metadata is merged). The bridge re-embeds when the
+ * text changed. Returns null when the chunk doesn't exist or the bridge is unavailable.
  */
 export async function updateChunk(
   id: string,
@@ -536,53 +362,21 @@ export async function updateChunk(
     metadata?: Partial<ChunkMetadata>;
   }
 ): Promise<MemoryChunk | null> {
-  const cache = await ensureCacheLoaded();
-  const index = cache.findIndex((c) => c.id === id);
-  if (index === -1) return null;
-
-  const existing = cache[index];
-  let newEmbedding = existing.embedding;
-
-  if (updates.text && updates.text.trim() !== existing.text.trim()) {
-    const freshEmb = await embed(updates.text.trim());
-    if (freshEmb) {
-      newEmbedding = freshEmb;
-    }
-  }
-
-  const updated: MemoryChunk = {
-    ...existing,
-    text: updates.text !== undefined ? updates.text.trim() : existing.text,
-    namespace: updates.namespace || existing.namespace,
-    metadata: {
-      ...existing.metadata,
-      ...(updates.metadata || {}),
-    },
-    embedding: newEmbedding,
-  };
-
-  // Persist to IndexedDB
   try {
-    const db = await openDb();
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    store.put(toStored(updated));
-    await new Promise<void>((resolve, reject) => {
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+    const json = await memoryRequest<{ chunk: MemoryChunkDTO | null }>('/api/memory/update', {
+      id,
+      ...(updates.text !== undefined ? { text: updates.text.trim() } : {}),
+      ...(updates.namespace ? { namespace: updates.namespace } : {}),
+      ...(updates.metadata ? { metadata: updates.metadata } : {}),
     });
+    return json.chunk ? fromDto(json.chunk) : null;
   } catch (err) {
-    console.warn('[VectorEngine] Failed to update chunk in IndexedDB:', err);
+    warn('updateChunk', err);
+    return null;
   }
-
-  cache[index] = updated;
-  console.log(`[VectorEngine] Updated chunk ${id} (${updated.namespace})`);
-  return updated;
 }
 
-/**
- * Add or overwrite a custom chunk in the vector store.
- */
+/** Add or overwrite a custom chunk. Returns the stored chunk, or null when nothing was stored. */
 export async function upsertCustomChunk(input: {
   id?: string;
   text: string;
@@ -594,39 +388,204 @@ export async function upsertCustomChunk(input: {
 
   const chunkId = input.id || `custom_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const namespace = input.namespace || 'learnings';
-  const meta: ChunkMetadata = {
+  const metadata: ChunkMetadata = {
     ...input.metadata,
     source: input.metadata?.source || 'user-custom',
   };
 
-  await addChunks([
-    {
-      id: chunkId,
-      namespace,
-      text,
-      metadata: meta,
-    },
-  ]);
+  const added = await addChunks([{ id: chunkId, namespace, text, metadata }]);
+  if (added === 0) return null;
 
-  const cache = await ensureCacheLoaded();
-  return cache.find((c) => c.id === chunkId) || null;
+  // An update without changes returns the stored chunk (with its createdAt and embedding preview).
+  const stored = await updateChunk(chunkId, {});
+  return stored ?? { id: chunkId, namespace, text, embedding: new Float32Array(0), embeddingDim: EMBEDDING_DIM, metadata, createdAt: Date.now() };
 }
 
-/**
- * Delete a single chunk by ID.
- */
+/** Delete a single chunk by ID. */
 export async function deleteChunk(id: string): Promise<boolean> {
-  const removed = await removeChunksById([id]);
-  return removed > 0;
+  return (await removeChunksById([id])) > 0;
+}
+
+// ─── One-time migration from the old in-browser store (IndexedDB) ───────────
+
+const LEGACY_DB_NAME = 'ergo-vector-memory';
+const LEGACY_STORE_NAME = 'chunks';
+export const MIGRATION_FLAG_KEY = 'ergo_memory_migrated_v1';
+export const MIGRATION_BATCH_SIZE = 200;
+/** After a failed attempt (e.g. bridge offline), memory calls go ahead unmigrated and retry after this long. */
+const MIGRATION_RETRY_MS = 60_000;
+
+/** A chunk as the old engine stored it in IndexedDB. */
+export interface LegacyStoredChunk {
+  id: string;
+  namespace: MemoryNamespace;
+  text: string;
+  embedding?: ArrayLike<number> | null;
+  metadata?: ChunkMetadata;
+  createdAt?: number;
+}
+
+export interface LegacyImportChunk {
+  id: string;
+  namespace: MemoryNamespace;
+  text: string;
+  metadata: ChunkMetadata;
+  createdAt: number;
+  embedding?: number[];
+}
+
+export interface MigrationDeps {
+  isDone(): boolean;
+  markDone(): void;
+  /** All legacy chunks; [] when there is no legacy database. */
+  readAll(): Promise<LegacyStoredChunk[]>;
+  /** POST one batch to /api/memory/import; resolves true on success. */
+  importBatch(chunks: LegacyImportChunk[]): Promise<boolean>;
+  deleteLegacyDb(): Promise<void>;
+  batchSize?: number;
+}
+
+export type MigrationOutcome = 'already-done' | 'nothing-to-migrate' | 'migrated' | 'failed';
+
+function toImportChunk(c: LegacyStoredChunk): LegacyImportChunk | null {
+  if (!c || typeof c.id !== 'string' || typeof c.text !== 'string') return null;
+  const emb = c.embedding && typeof c.embedding.length === 'number' && c.embedding.length === EMBEDDING_DIM
+    ? Array.from(c.embedding)
+    : undefined;
+  return {
+    id: c.id,
+    namespace: c.namespace || 'learnings',
+    text: c.text,
+    metadata: { ...(c.metadata || {}) },
+    createdAt: typeof c.createdAt === 'number' ? c.createdAt : Date.now(),
+    ...(emb ? { embedding: emb } : {}),
+  };
 }
 
 /**
- * Pre-warm the embedding model in the background.
- * Call this early (e.g. on app mount) so the model is ready when the first
- * task execution starts. Non-blocking; failures are silently logged.
+ * Move legacy chunks to the bridge in batches. The flag is set and the legacy database deleted only when
+ * every batch was accepted; otherwise the data stays for the next attempt (import upserts by id, so a
+ * retry after a partial import is harmless).
  */
-export function preWarmEmbeddings(): void {
-  getEmbeddingPipeline().catch((err) => {
-    console.warn('[VectorEngine] Pre-warm failed (will retry on first use):', err);
+export async function migrateLegacyChunks(deps: MigrationDeps): Promise<MigrationOutcome> {
+  if (deps.isDone()) return 'already-done';
+  let legacy: LegacyStoredChunk[];
+  try {
+    legacy = await deps.readAll();
+  } catch (err) {
+    warn('reading legacy IndexedDB memory', err);
+    return 'failed';
+  }
+  const chunks = legacy.map(toImportChunk).filter((c): c is LegacyImportChunk => c !== null);
+  if (chunks.length > 0) {
+    const size = Math.max(1, deps.batchSize ?? MIGRATION_BATCH_SIZE);
+    for (let i = 0; i < chunks.length; i += size) {
+      let ok = false;
+      try {
+        ok = await deps.importBatch(chunks.slice(i, i + size));
+      } catch (err) {
+        warn('importing legacy memory', err);
+      }
+      if (!ok) return 'failed';
+    }
+  }
+  deps.markDone();
+  try {
+    await deps.deleteLegacyDb();
+  } catch (err) {
+    warn('deleting legacy IndexedDB memory', err);
+  }
+  return chunks.length > 0 ? 'migrated' : 'nothing-to-migrate';
+}
+
+function readLegacyChunks(): Promise<LegacyStoredChunk[]> {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') return resolve([]);
+    // No version: opens whatever exists. If nothing exists, abort the creation instead of making an empty DB.
+    const request = indexedDB.open(LEGACY_DB_NAME);
+    let created = false;
+    request.onupgradeneeded = () => {
+      created = true;
+      request.transaction?.abort();
+    };
+    request.onerror = () => {
+      if (created) resolve([]);
+      else reject(request.error);
+    };
+    request.onsuccess = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(LEGACY_STORE_NAME)) {
+        db.close();
+        return resolve([]);
+      }
+      try {
+        const req = db.transaction(LEGACY_STORE_NAME, 'readonly').objectStore(LEGACY_STORE_NAME).getAll();
+        req.onsuccess = () => {
+          db.close();
+          resolve((req.result || []) as LegacyStoredChunk[]);
+        };
+        req.onerror = () => {
+          db.close();
+          reject(req.error);
+        };
+      } catch (err) {
+        db.close();
+        reject(err);
+      }
+    };
   });
+}
+
+function deleteLegacyDb(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof indexedDB === 'undefined') return resolve();
+    const req = indexedDB.deleteDatabase(LEGACY_DB_NAME);
+    req.onsuccess = () => resolve();
+    req.onerror = () => resolve();
+    // Another tab still holds it open: deletion completes once that tab closes it. Don't wait for that.
+    req.onblocked = () => resolve();
+  });
+}
+
+function readFlag(): boolean {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem(MIGRATION_FLAG_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeFlag(): void {
+  try {
+    localStorage.setItem(MIGRATION_FLAG_KEY, '1');
+  } catch {}
+}
+
+let migrationPromise: Promise<void> | null = null;
+let migrationRetryAt = 0;
+
+/**
+ * Runs the legacy migration once per page load (memory calls await it). After a failure, calls proceed
+ * without waiting and the migration is retried on a later call.
+ */
+function ensureMigrated(): Promise<void> {
+  if (migrationPromise) return migrationPromise;
+  if (Date.now() < migrationRetryAt) return Promise.resolve();
+  migrationPromise = migrateLegacyChunks({
+    isDone: readFlag,
+    markDone: writeFlag,
+    readAll: readLegacyChunks,
+    importBatch: async (chunks) => {
+      const json = await rawMemoryRequest<{ imported: number }>('/api/memory/import', { chunks });
+      return Boolean(json);
+    },
+    deleteLegacyDb,
+  }).then((outcome) => {
+    if (outcome === 'migrated') console.log('[VectorMemory] Moved browser vector memory to the Ergo bridge.');
+    if (outcome === 'failed') {
+      migrationPromise = null;
+      migrationRetryAt = Date.now() + MIGRATION_RETRY_MS;
+    }
+  });
+  return migrationPromise;
 }

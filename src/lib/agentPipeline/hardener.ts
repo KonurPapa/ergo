@@ -74,7 +74,9 @@ export async function runHardener(
       maxRounds: Math.min(6, Math.max(3, ctx.options.maxToolRoundsPerAgent)),
       maxTokens: 8000,
       responseFormat: 'json',
-      onToolCalls: executor
+      onToolCalls: executor,
+      // Once the manager is done, the user's messages for it reach QA (e.g. "also check X").
+      drainSteering: () => ctx.steering?.drainTexts('hardener') ?? []
     })
   );
   addUsage(usage, result.usage);

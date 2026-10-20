@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { type ExecutionStep, type TokenUsage, type AssembledBaselineContext } from '../types';
+import type { RelatedNoteCandidate, RelatedTaskCandidate } from '../lib/memory/types';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { formatUsage } from '../lib/agentPipeline/contracts';
 import { openFileInIdeOrSystem } from '../lib/mcpClient';
@@ -20,7 +21,11 @@ import {
   BookOpen,
   Database,
   Info,
-  FileText
+  FileText,
+  ChevronRight,
+  Link2,
+  Archive,
+  StickyNote
 } from 'lucide-react';
 
 /** Status/stage icon for an execution step (covers the agent-pipeline stages). */
@@ -522,6 +527,221 @@ export const BaselineContextPreview: React.FC<{
       </div>
 
       {open && bodyContent}
+    </div>
+  );
+};
+
+// ─── Related Tasks (BriefPane "Related Tasks" card body) ─────────────────────────
+
+function relatedStatusBadge(c: RelatedTaskCandidate): { label: string; tone: 'done' | 'active' | 'partial' | 'idle' | 'archive' } {
+  if (c.isDone || c.status === 'done') return { label: 'Done', tone: 'done' };
+  if (c.source === 'archive') return { label: 'Archived', tone: 'archive' };
+  switch (c.status) {
+    case 'in_progress':
+      return { label: 'In progress', tone: 'active' };
+    case 'partly_done':
+      return { label: 'Partly done', tone: 'partial' };
+    default:
+      return { label: 'Not started', tone: 'idle' };
+  }
+}
+
+/** The matched subtask, when the match wasn't on the title itself. */
+function matchedHint(c: RelatedTaskCandidate): string {
+  const m = (c.matchedOn || '').trim();
+  if (!m) return '';
+  const title = c.title.trim().toLowerCase();
+  const plain = m.toLowerCase().startsWith(`${title}:`) ? m.slice(c.title.trim().length + 1).trim() : m;
+  return plain.toLowerCase() === title ? '' : plain;
+}
+
+const RelatedTaskRow: React.FC<{
+  candidate: RelatedTaskCandidate;
+  variant: 'selected' | 'candidate';
+  canOpen: boolean;
+  onOpen?: (taskId: string) => void;
+}> = ({ candidate: c, variant, canOpen, onOpen }) => {
+  const badge = relatedStatusBadge(c);
+  const hint = matchedHint(c);
+  const titleNode = canOpen && onOpen ? (
+    <button
+      type="button"
+      className="related-task-title is-link"
+      title="Open this task"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen(c.taskId);
+      }}
+    >
+      {c.title}
+    </button>
+  ) : (
+    <span className="related-task-title">{c.title}</span>
+  );
+  return (
+    <div className={`related-task-row is-${variant}`}>
+      <div className="related-task-head">
+        {c.source === 'archive' ? <Archive size={12} className="related-task-icon" /> : <Link2 size={12} className="related-task-icon" />}
+        {titleNode}
+        <span className={`related-task-badge tone-${badge.tone}`}>{badge.label}</span>
+      </div>
+      {hint && (
+        <div className="related-task-meta" title={c.matchedOn}>
+          matched on “{hint}”
+        </div>
+      )}
+      {variant === 'selected' && c.completionSummary && <div className="related-task-summary">{c.completionSummary}</div>}
+    </div>
+  );
+};
+
+const RelatedNoteRow: React.FC<{ note: RelatedNoteCandidate }> = ({ note }) => (
+  <div className="related-task-row is-candidate">
+    <div className="related-task-head">
+      <StickyNote size={12} className="related-task-icon" />
+      <span className="related-task-title">{note.title || 'Workspace note'}</span>
+      <span className="related-task-badge tone-idle">Note</span>
+    </div>
+    {note.text && <div className="related-task-meta">{note.text.length > 160 ? `${note.text.slice(0, 159)}…` : note.text}</div>}
+  </div>
+);
+
+const CollapsibleList: React.FC<{ label: string; defaultOpen?: boolean; children: React.ReactNode }> = ({ label, defaultOpen = false, children }) => {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="related-collapsible">
+      <button
+        type="button"
+        className={`related-collapsible-toggle ${open ? 'is-open' : ''}`}
+        aria-expanded={open}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+      >
+        <ChevronRight size={12} className="related-collapsible-chevron" />
+        <span>{label}</span>
+      </button>
+      {open && <div className="related-task-list">{children}</div>}
+    </div>
+  );
+};
+
+/**
+ * Related Tasks card body. Stage 1 (local search) yields candidates; stage 2 (the Summary step) selects the ones
+ * that are useful context. Selected tasks are shown prominently; the rest stay collapsed. The memory hits /
+ * guideline excerpts of the in-app pipeline follow, collapsed.
+ */
+export const RelatedTasksPanel: React.FC<{
+  baselineContext?: AssembledBaselineContext;
+  /** The context step (related-task search) is running. */
+  isSearching?: boolean;
+  /** The Summary step that makes the selection is running. */
+  isSelecting?: boolean;
+  /** True when the task has a card the user can open. */
+  canOpenTask?: (taskId: string) => boolean;
+  onOpenTask?: (taskId: string) => void;
+}> = ({ baselineContext, isSearching = false, isSelecting = false, canOpenTask, onOpenTask }) => {
+  if (isSearching && !baselineContext) {
+    return (
+      <div className="ai-card-hint related-tasks-status">
+        <Loader2 size={12} className="spin-animate" />
+        <span>Finding related tasks…</span>
+      </div>
+    );
+  }
+  if (!baselineContext) {
+    return (
+      <div className="ai-card-hint">
+        When the task runs, a local search of this project finds candidate related tasks, and the Summary step keeps the
+        ones that are useful context for the agents.
+      </div>
+    );
+  }
+
+  const hasMemoryExtras = (baselineContext.memoryHits?.length || 0) > 0 || (baselineContext.guidelines?.length || 0) > 0;
+  const memoryExtras = hasMemoryExtras ? <BaselineContextPreview baselineContext={baselineContext} defaultOpen={false} /> : null;
+
+  // Context from before related-task search existed: memory hits / guidelines only.
+  if (!baselineContext.relatedCandidates) {
+    return <BaselineContextPreview baselineContext={baselineContext} defaultOpen={true} plain={true} />;
+  }
+
+  const candidates = baselineContext.relatedCandidates;
+  const notes = baselineContext.relatedNotes || [];
+  const selectedIds = baselineContext.selectedRelatedTaskIds;
+  const byId = new Map(candidates.map((c) => [String(c.taskId), c]));
+  const selected = (selectedIds || []).map((id) => byId.get(String(id))).filter((c): c is RelatedTaskCandidate => Boolean(c));
+  const selectedSet = new Set(selected.map((c) => String(c.taskId)));
+  const others = candidates.filter((c) => !selectedSet.has(String(c.taskId)));
+  const row = (c: RelatedTaskCandidate, variant: 'selected' | 'candidate') => (
+    <RelatedTaskRow
+      key={c.taskId}
+      candidate={c}
+      variant={variant}
+      canOpen={Boolean(canOpenTask?.(String(c.taskId)))}
+      onOpen={onOpenTask}
+    />
+  );
+  const noteRows = notes.map((n) => <RelatedNoteRow key={n.id} note={n} />);
+  const countLabel = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
+
+  let body: React.ReactNode;
+  if (candidates.length === 0 && notes.length === 0) {
+    body = <div className="ai-card-hint">No related tasks found in this project.</div>;
+  } else if (!selectedIds) {
+    // Stage 1 only: candidates, clearly marked as such.
+    body = (
+      <>
+        <div className="related-tasks-status">
+          {isSelecting ? <Loader2 size={12} className="spin-animate" /> : <Info size={12} />}
+          <span>
+            {isSelecting
+              ? `The Summary agent is choosing which of these ${countLabel(candidates.length, 'candidate')} are useful context…`
+              : `${countLabel(candidates.length, 'candidate')} from a local search — not reviewed, so none were passed to the agents.`}
+          </span>
+        </div>
+        <div className="related-task-list is-candidates">
+          {candidates.map((c) => row(c, 'candidate'))}
+          {noteRows}
+        </div>
+      </>
+    );
+  } else if (selected.length > 0) {
+    body = (
+      <>
+        <div className="related-task-list is-selected">{selected.map((c) => row(c, 'selected'))}</div>
+        {(others.length > 0 || notes.length > 0) && (
+          <CollapsibleList
+            label={`${countLabel(others.length, 'other candidate')} considered${notes.length > 0 ? ` · ${countLabel(notes.length, 'note')}` : ''}`}
+          >
+            {others.map((c) => row(c, 'candidate'))}
+            {noteRows}
+          </CollapsibleList>
+        )}
+      </>
+    );
+  } else {
+    body = (
+      <>
+        <div className="related-tasks-status is-none">
+          <CheckCircle2 size={12} />
+          <span>No related tasks needed for this one.</span>
+        </div>
+        <CollapsibleList
+          label={`${countLabel(candidates.length, 'candidate')} considered${notes.length > 0 ? ` · ${countLabel(notes.length, 'note')}` : ''}`}
+        >
+          {candidates.map((c) => row(c, 'candidate'))}
+          {noteRows}
+        </CollapsibleList>
+      </>
+    );
+  }
+
+  return (
+    <div className="related-tasks-panel">
+      {body}
+      {memoryExtras}
     </div>
   );
 };

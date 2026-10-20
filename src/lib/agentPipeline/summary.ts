@@ -6,7 +6,7 @@
  * Token efficiency: ingests Markdown (not pretty-printed JSON) and relies on the skill doc as the
  * single source of Gherkin examples instead of duplicating them in the system prompt.
  */
-import { type OverviewDocument, type TaskKind, type TokenUsage, type BibleSections } from '../../types';
+import { type OverviewDocument, type TaskKind, type TaskRating, type TokenUsage, type BibleSections } from '../../types';
 import { buildVerboseOverviewAndRequiredMcps } from '../ai';
 import { parseJsonLoose } from '../llmClient';
 import { type PipelineContext, addUsage, emptyUsage, isAbortError, throwIfAborted, buildToolLoopRequest } from './contracts';
@@ -14,7 +14,10 @@ import { buildBibleSections } from './bible';
 import { type BaselineContext } from './context';
 import { runToolLoop } from './providerLoop';
 import { loadPipelineSkill } from './skills';
-import { performSummaryTriageWithLaya, isLayaMcpConnected } from '../layaClient';
+import { isOverviewReusable, overviewDocumentFor } from '../overviewUtils';
+import { formatSelectedRelatedContext, resolveSavedRelatedIds, savedRelatedSelection, strictRelatedFallback } from '../memory/relatedTasks';
+import { normalizeTaskRating } from './taskRating';
+import { TASK_RATING_SCALES } from './autoRouter';
 
 export interface SummaryResult {
   overviewDoc: OverviewDocument;
@@ -22,6 +25,8 @@ export interface SummaryResult {
   taskKind: TaskKind;
   requiresHardener: boolean;
   hardenerReason?: string;
+  /** How demanding the task is (Auto model selection); undefined when the model didn't rate it. */
+  taskRating?: TaskRating;
   sections: BibleSections;
   usage: TokenUsage;
 }
@@ -54,7 +59,25 @@ const OUTPUT_CONTRACT =
   '"requiredMcps" (array of connected MCP server names/ids actually needed — 0 to 2 typical; provision shell/process-execution tools or domain MCPs like Godot whenever headless execution, scripts, tests, or CLI commands are involved), ' +
   '"taskKind" (one of coding | writing | research | ops | data | other — MUST be "coding" if the task contains verbs like write, script, scaffold, compile, or references languages/extensions like .py, .ts, .sh), ' +
   '"requiresHardener" (boolean: true for large coding/architectural tasks requiring independent QA proof; false for small/generic tasks or single-action MCP calls), ' +
-  '"hardenerReason" (short string explaining why Hardener QA is required or skipped).';
+  '"hardenerReason" (short string explaining why Hardener QA is required or skipped), ' +
+  '"relatedTaskIds" (array of ids from the "Candidate Related Tasks" list whose content is genuinely useful context for THIS task — a shared feature area, a dependency, prior work to build on, or a conflict to avoid; [] when none are or there is no list; 0 to 5 typical), ' +
+  `"taskRating" (object {"complexity": 1-5, "reasoning": 1-5} rating how demanding the task is — ${TASK_RATING_SCALES}).`;
+
+/**
+ * The related-task ids the Summary model returned, kept only when they name one of the candidates it was shown
+ * (as strings, deduped, in the model's order). Accepts an array or a comma-separated string; anything else → [].
+ */
+export function validateRelatedTaskIds(ids: unknown, candidates: ReadonlyArray<{ taskId: string | number }>): string[] {
+  const known = new Set(candidates.map((c) => String(c.taskId)));
+  const raw: unknown[] = Array.isArray(ids) ? ids : typeof ids === 'string' ? ids.split(/[,;\s]+/) : [];
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string' && typeof v !== 'number') continue;
+    const id = String(v).replace(/^[\s[\]("'`#]+|[\s[\])"'`.]+$/g, '').trim();
+    if (id && known.has(id) && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
 
 export function isExplicitCodeTask(text: string): boolean {
   const t = text.toLowerCase();
@@ -102,96 +125,71 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
   const { task, brief, connectedMcps } = ctx;
   const usage = emptyUsage();
 
-  // ── LAYA SYSTEM-1 FAST DECISION GATE ──────────────────────────────────────
-  // If the user has connected mcp-laya, offload taskKind, MCP pruning, and Hardener
-  // necessity decisions to local Laya at $0 token cost in ~30–75ms.
-  let layaTriage: Awaited<ReturnType<typeof performSummaryTriageWithLaya>> = null;
-  if (isLayaMcpConnected(connectedMcps)) {
-    try {
-      layaTriage = await performSummaryTriageWithLaya({
-        task,
-        baselineMarkdown: baseline.baselineMarkdown,
-        connectedMcps
-      });
-      if (layaTriage) {
-        console.log('%c[Ergo Agent Pipeline] ── Laya System 1 Triage ($0 Cost, Local) ──', 'color: #06b6d4; font-weight: bold;');
-        console.log('Laya decisions:', layaTriage);
-      }
-    } catch (e) {
-      console.warn('[Ergo Summary] Laya triage failed, falling back to full LLM generation:', e);
-    }
-  }
+  // ── REUSE ──────────────────────────────────────────────────────────────────
+  // The overview from an earlier run (or the user's own) is kept on the brief; reruns reuse it instead of paying
+  // for a new Summary call, unless the task's text changed since it was generated.
+  const reusedDoc = brief && isOverviewReusable(brief, task) ? overviewDocumentFor(brief) : null;
 
-  ctx.emit({
-    id: 'step-overview',
-    stage: 'overview',
-    agentRole: 'summary',
-    title: layaTriage?.usedLaya
-      ? 'Summary AI: Building Gherkin Brief (Laya Accelerated)'
-      : 'Summary AI: Building Gherkin Brief & Tool Plan',
-    detail: layaTriage?.usedLaya
-      ? `Task classified as [${layaTriage.taskKind}] by local Laya ($0). Synthesizing Given-When-Then acceptance scenarios and checklist goals…`
-      : 'Synthesizing the baseline context into Given-When-Then acceptance scenarios, goals, output destination and the filtered MCP list…',
-    status: 'running'
-  });
-
-  const serverLines = (layaTriage?.requiredMcps
-    ? connectedMcps.filter((m) => layaTriage!.requiredMcps.includes(m.id) || layaTriage!.requiredMcps.includes(m.name))
-    : connectedMcps.filter((m) => m.status === 'connected')
-  ).map((m) => `- ${m.name} (id: ${m.id}) — tools: ${m.tools.map((t) => t.name).join(', ')}`);
-
-  const layaGuidance = layaTriage
-    ? `\nPRE-CLASSIFIED DECISIONS (from local Laya System-1 engine):\n- taskKind: "${layaTriage.taskKind}"\n- requiredMcps: ${JSON.stringify(layaTriage.requiredMcps)}\n- requiresHardener: ${layaTriage.requiresHardener}\n- isStraightforward: ${layaTriage.isStraightforward}\nFocus your generation on concise Given-When-Then brief scenarios, goals, and output_as.`
-    : '';
-
-  const userMessage =
-    `${baseline.baselineMarkdown}\n\n## Connected MCP Servers (choose only what this task needs)\n${serverLines.length > 0 ? serverLines.join('\n') : '- (none connected)'}\n${layaGuidance}\n\n` +
-    'Produce the Overview & Execution Brief JSON now.';
+  // Task kind, MCP selection and the Hardener decision come from this step's own model call (or its heuristics).
+  // A small local model was evaluated for them (40 labelled tasks: task kind 48%, MCP selection ≤60% exact) and is
+  // not used here; it only decides the shape of CLI runs (src/lib/localModel/decisions.ts).
 
   let parsed: any = undefined;
-  try {
-    const skill = await loadPipelineSkill('summary-agent');
-    const result = await runToolLoop(
-      buildToolLoopRequest(ctx, 'summary', {
-        stableSystem: `${skill}\n\n${OUTPUT_CONTRACT}`,
-        sharedContext: '',
-        tools: [],
-        initialUserMessage: userMessage,
-        maxRounds: 1,
-        maxTokens: 6000,
-        responseFormat: 'json'
-      })
-    );
-    addUsage(usage, result.usage);
-    if (result.stopReason === 'error') {
-      console.warn('[Ergo Summary] model call failed, using fallback overview:', result.error);
+  if (reusedDoc) {
+    // Carry the saved classification through the same post-processing as a fresh result.
+    parsed = { taskKind: reusedDoc.taskKind, requiresHardener: reusedDoc.requiresHardener, hardenerReason: reusedDoc.hardenerReason };
+  } else {
+    ctx.emit({
+      id: 'step-overview',
+      stage: 'overview',
+      agentRole: 'summary',
+      title: 'Summary AI: Building Gherkin Brief & Tool Plan',
+      detail: 'Synthesizing the baseline context into Given-When-Then acceptance scenarios, goals, output destination and the filtered MCP list…',
+      status: 'running'
+    });
+
+    const serverLines = connectedMcps.filter((m) => m.status === 'connected').map((m) => `- ${m.name} (id: ${m.id}) — tools: ${m.tools.map((t) => t.name).join(', ')}`);
+
+    const relatedGuidance = baseline.relatedCandidates.length > 0
+      ? '\nRELATED TASKS: put in "relatedTaskIds" only the candidates that are genuinely useful context for this task. ' +
+        'When this task is sparse, use the selected tasks\' context (what they built, their subtasks) to fill gaps in goals and output_as — never copy their requirements into this task.\n'
+      : '';
+    const userMessage =
+      `${baseline.baselineMarkdown}\n\n## Connected MCP Servers (choose only what this task needs)\n${serverLines.length > 0 ? serverLines.join('\n') : '- (none connected)'}\n${relatedGuidance}\n\n` +
+      'Produce the Overview & Execution Brief JSON now.';
+
+    try {
+      const skill = await loadPipelineSkill('summary-agent');
+      const result = await runToolLoop(
+        buildToolLoopRequest(ctx, 'summary', {
+          stableSystem: `${skill}\n\n${OUTPUT_CONTRACT}`,
+          sharedContext: '',
+          tools: [],
+          initialUserMessage: userMessage,
+          maxRounds: 1,
+          maxTokens: 6000,
+          responseFormat: 'json'
+        })
+      );
+      addUsage(usage, result.usage);
+      if (result.stopReason === 'error') {
+        console.warn('[Ergo Summary] model call failed, using fallback overview:', result.error);
+      }
+      parsed = parseJsonLoose(result.text) || undefined;
+    } catch (e) {
+      if (isAbortError(e)) throw e;
+      console.warn('[Ergo Summary] failed, using fallback overview:', e);
     }
-    parsed = parseJsonLoose(result.text) || undefined;
-  } catch (e) {
-    if (isAbortError(e)) throw e;
-    console.warn('[Ergo Summary] failed, using fallback overview:', e);
   }
   throwIfAborted(ctx.signal);
 
-  // If Laya pre-classified decisions, inject them as trusted defaults into parsed
-  if (layaTriage) {
-    if (!parsed) parsed = {};
-    if (!parsed.taskKind) parsed.taskKind = layaTriage.taskKind;
-    if (!parsed.requiredMcps || parsed.requiredMcps.length === 0) parsed.requiredMcps = layaTriage.requiredMcps;
-    if (parsed.requiresHardener === undefined) {
-      parsed.requiresHardener = layaTriage.requiresHardener;
-      parsed.hardenerReason = layaTriage.hardenerReason;
-    }
-  }
-
-  const { overviewDoc, requiredMcps } = buildVerboseOverviewAndRequiredMcps(
-    task,
-    brief,
-    undefined,
-    connectedMcps,
-    parsed,
-    baseline.memoryHits
-  );
+  const { overviewDoc, requiredMcps } = reusedDoc
+    ? {
+        overviewDoc: reusedDoc,
+        // The saved tool selection, limited to servers still connected.
+        requiredMcps: (reusedDoc.requiredMcps || []).filter((id) => connectedMcps.some((m) => m.id === id || m.name === id)),
+      }
+    : buildVerboseOverviewAndRequiredMcps(task, brief, undefined, connectedMcps, parsed, baseline.memoryHits);
 
   // Completeness Guard: Ensure all explicit task subtasks are preserved in overviewDoc.goals
   if (task.subtasks.length > 0) {
@@ -216,9 +214,6 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
 
   const combinedText = `${task.category} ${task.title} ${task.subtasks.map((s) => s.text).join(' ')} ${overviewDoc.output_as} ${overviewDoc.brief || ''}`;
   let taskKind: TaskKind = normalizeTaskKind(parsed?.taskKind);
-  if (layaTriage?.usedLaya && layaTriage.taskKind) {
-    taskKind = normalizeTaskKind(layaTriage.taskKind);
-  }
   if (!taskKind || taskKind === 'other') {
     taskKind = inferTaskKind(combinedText);
   }
@@ -227,6 +222,10 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
     taskKind = 'coding';
   }
   overviewDoc.taskKind = taskKind;
+  // Task rating (Auto model selection): saved with the overview, so a reused overview keeps its rating.
+  const taskRating = reusedDoc ? reusedDoc.taskRating : normalizeTaskRating(parsed?.taskRating, 'overview', taskKind);
+  if (taskRating) overviewDoc.taskRating = taskRating;
+  else delete overviewDoc.taskRating;
 
   // Dynamic Tool Provisioning: if headless CLI, shell, script execution, or domain runners (e.g. Godot) are required,
   // ensure shell/process-execution tool and relevant domain MCP servers are provisioned alongside mcp-filesystem.
@@ -261,10 +260,7 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
   let requiresHardener: boolean;
   let hardenerReason: string | undefined;
 
-  if (layaTriage?.usedLaya) {
-    requiresHardener = layaTriage.requiresHardener;
-    hardenerReason = layaTriage.hardenerReason;
-  } else if (isStandaloneSingleDeliverable && isSmallScope) {
+  if (isStandaloneSingleDeliverable && isSmallScope) {
     // Single deliverable / standalone tasks (e.g. single HTML game, standalone script) MUST skip Hardener to conserve tokens
     requiresHardener = false;
     hardenerReason = 'Standalone single deliverable; skipping Hardener to conserve tokens per workflow rules.';
@@ -291,6 +287,28 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
   }
   overviewDoc.requiresHardener = requiresHardener;
   overviewDoc.hardenerReason = hardenerReason;
+  overviewDoc.requiredMcps = [...requiredMcps];
+
+  // ── Related tasks (stage 2) ────────────────────────────────────────────────
+  // Fresh: the ids the model picked from the candidates. Reuse: the selection saved with the overview (no call),
+  // limited to tasks that are still candidates. Undefined: a reused overview saved before selections existed.
+  const candidates = baseline.relatedCandidates || [];
+  let selectedRelatedTaskIds: string[] | undefined;
+  if (reusedDoc) {
+    selectedRelatedTaskIds = resolveSavedRelatedIds(reusedDoc.relatedTaskIds ? reusedDoc : brief?.overviewDocument, candidates);
+  } else if (baseline.relatedSearchOk) {
+    // The model's choice when it answered; if the call failed or skipped the field, the candidates that clearly
+    // stand out locally. (No search at all: undefined, not "none needed".)
+    selectedRelatedTaskIds =
+      parsed && parsed.relatedTaskIds !== undefined
+        ? validateRelatedTaskIds(parsed.relatedTaskIds, candidates)
+        : strictRelatedFallback(candidates);
+    Object.assign(overviewDoc, savedRelatedSelection(candidates, selectedRelatedTaskIds));
+  }
+  const relatedContext =
+    selectedRelatedTaskIds && selectedRelatedTaskIds.length > 0 && candidates.length > 0
+      ? formatSelectedRelatedContext(candidates, selectedRelatedTaskIds).trim()
+      : '';
 
   const sections = buildBibleSections({
     task,
@@ -303,6 +321,7 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
     allowedRoots: ctx.allowedRoots,
     guidelines: baseline.guidelines,
     memoryHits: baseline.memoryHits,
+    relatedContext,
     runId: ctx.runId
   });
 
@@ -311,16 +330,31 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
   console.log('%c[Ergo Agent Pipeline] ── Step 2: Summary → Overview & Execution Brief ──', 'color: #f59e0b; font-weight: bold; font-size: 13px;');
   console.log(JSON.stringify({ brief: overviewDoc.brief, goals: overviewDoc.goals, output_as: overviewDoc.output_as, requiredMcps, taskKind, requiresHardener, hardenerReason }, null, 2));
 
+  // The context step shows the selection next to its candidates.
+  if (selectedRelatedTaskIds && baseline.contextStep) {
+    const n = selectedRelatedTaskIds.length;
+    ctx.emit({
+      id: 'step-context',
+      stage: 'context',
+      title: baseline.contextStep.title,
+      detail: `${baseline.contextStep.detail} ${reusedDoc ? 'Reused the saved selection' : 'Summary selected'}: ${n} related task${n === 1 ? '' : 's'}.`,
+      time: baseline.contextStep.time,
+      status: 'success',
+      usage: emptyUsage(),
+      baselineContext: { ...baseline.contextStep.baselineContext, selectedRelatedTaskIds }
+    });
+  }
+
   ctx.emit({
     id: 'step-overview',
     stage: 'overview',
     agentRole: 'summary',
-    title: 'Summary AI: Overview & Tool Plan Ready',
-    detail: `Gherkin brief ready — kind: ${taskKind}${requiredMcps.length > 0 ? ` · MCPs: ${requiredMcps.join(', ')}` : ' · no external MCPs'} · hardener: ${requiresHardener ? 'required' : 'skipped'} · output: ${overviewDoc.output_as.slice(0, 90)}`,
+    title: reusedDoc ? 'Summary AI: Reused Saved Overview (no new call)' : 'Summary AI: Overview & Tool Plan Ready',
+    detail: `${reusedDoc ? 'Reused the overview saved from an earlier run — edit the task to regenerate it. ' : ''}Gherkin brief ready — kind: ${taskKind}${requiredMcps.length > 0 ? ` · MCPs: ${requiredMcps.join(', ')}` : ' · no external MCPs'} · hardener: ${requiresHardener ? 'required' : 'skipped'} · output: ${overviewDoc.output_as.slice(0, 90)}`,
     status: 'success',
     overviewDocument: overviewDoc,
     usage: { ...usage }
   });
 
-  return { overviewDoc, requiredMcps, taskKind, requiresHardener, hardenerReason, sections, usage };
+  return { overviewDoc, requiredMcps, taskKind, requiresHardener, hardenerReason, ...(taskRating ? { taskRating } : {}), sections, usage };
 }
