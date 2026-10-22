@@ -194,7 +194,7 @@ function usePlanUsage(cli: string | undefined, enabled: boolean): PlanUsage | nu
       fetch(bridgeClient.getApiUrl(`/api/cli/plan-usage?cli=${encodeURIComponent(cli)}`))
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => alive && setUsage(d && d.available ? d : null))
-        .catch(() => {});
+        .catch(() => { });
     load();
     const timer = setInterval(load, 60_000);
     return () => {
@@ -210,10 +210,12 @@ function planLine(plan: PlanUsage, label: string): string | null {
   if (!weekly) return null;
   const resets = weekly.resetsAt ? new Date(weekly.resetsAt) : null;
   if (resets && resets.getTime() < Date.now()) {
-    return `${label} plan: weekly limit reset ${resets.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} — updates on the CLI's next check`;
+    // return `${label} plan: weekly limit reset ${resets.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} — updates on the CLI's next check`;
+    return `Weekly limit reset ${resets.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} — updates on next AI call`;
   }
   const when = resets ? ` · resets ${resets.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : '';
-  return `${label} plan: ${Math.round(weekly.percent)}% of weekly limit used${when}`;
+  // return `${label} plan: ${Math.round(weekly.percent)}% of weekly limit used${when}`;
+  return `${Math.round(weekly.percent)}% of weekly limit used${when}`;
 }
 
 /**
@@ -447,7 +449,7 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
 
       {isSubscription && plan && planLine(plan, billing?.label || 'Claude') && (
         <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }} title={plan.fetchedAt ? `As of ${new Date(plan.fetchedAt).toLocaleString()}` : undefined}>
-          {planLine(plan, billing?.label || 'Claude')}
+          {planLine(plan, billing?.label || '')}
         </div>
       )}
 
@@ -463,69 +465,6 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
           color: 'var(--text-muted)'
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.45rem' }}>
-          {/* Input tokens */}
-          <span
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.72rem',
-              padding: '0.1rem 0.42rem',
-              borderRadius: '4px',
-              background: 'var(--btn-secondary-bg)',
-              border: '1px solid var(--border-subtle)',
-              whiteSpace: 'nowrap'
-            }}
-            title="Total input/prompt tokens sent across all LLM calls"
-          >
-            <span style={{ color: 'var(--text-dim)', marginRight: '0.25rem' }}>In:</span>
-            <strong style={{ color: 'var(--text-bright)' }}>{inputTokens.toLocaleString()}</strong>
-            {cachedInputTokens > 0 && (
-              <span style={{ color: 'var(--accent-emerald)', marginLeft: '0.25rem' }} title="Input tokens read from prompt cache">
-                ({cachedInputTokens.toLocaleString()} cached)
-              </span>
-            )}
-            {cacheWriteTokens > 0 && (
-              <span style={{ color: '#38bdf8', marginLeft: '0.25rem' }} title="Input tokens written to prompt cache">
-                ({cacheWriteTokens.toLocaleString()} written)
-              </span>
-            )}
-          </span>
-
-          {/* Output tokens */}
-          <span
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.72rem',
-              padding: '0.1rem 0.42rem',
-              borderRadius: '4px',
-              background: 'var(--btn-secondary-bg)',
-              border: '1px solid var(--border-subtle)',
-              whiteSpace: 'nowrap'
-            }}
-            title="Total output/generation tokens received across all LLM calls"
-          >
-            <span style={{ color: 'var(--text-dim)', marginRight: '0.25rem' }}>Out:</span>
-            <strong style={{ color: 'var(--accent-cyan)' }}>{outputTokens.toLocaleString()}</strong>
-          </span>
-
-          {/* Round-trip calls */}
-          <span
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.72rem',
-              padding: '0.1rem 0.42rem',
-              borderRadius: '4px',
-              background: 'var(--btn-secondary-bg)',
-              border: '1px solid var(--border-subtle)',
-              whiteSpace: 'nowrap'
-            }}
-            title="Total LLM round trips across Summary, Manager, Workers, QA, and Logger"
-          >
-            <span style={{ color: 'var(--text-dim)', marginRight: '0.25rem' }}>Calls:</span>
-            <strong style={{ color: 'var(--text-bright)' }}>{calls}</strong>
-          </span>
-        </div>
-
         {/* Breakdown Toggle Button (if active roles exist) */}
         {activeRoles.length > 0 && (
           <button
@@ -544,9 +483,9 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
               borderRadius: '4px',
               transition: 'all 0.12s ease'
             }}
-            title={showBreakdown ? 'Hide stage breakdown' : 'Show stage breakdown'}
+            title={showBreakdown ? 'Hide token breakdown' : 'Show token breakdown'}
           >
-            <span>{showBreakdown ? 'Hide Stages' : 'View Stages'}</span>
+            <span>{showBreakdown ? 'Hide Details' : 'Show Details'}</span>
             {showBreakdown ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
           </button>
         )}
@@ -564,6 +503,68 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
             borderTop: '1px solid rgba(255, 255, 255, 0.06)'
           }}
         >
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.45rem' }}>
+            {/* Input tokens */}
+            <span
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.72rem',
+                padding: '0.1rem 0.42rem',
+                borderRadius: '4px',
+                background: 'var(--btn-secondary-bg)',
+                border: '1px solid var(--border-subtle)',
+                whiteSpace: 'nowrap'
+              }}
+              title="Total input/prompt tokens sent across all LLM calls"
+            >
+              <span style={{ color: 'var(--text-dim)', marginRight: '0.25rem' }}>Input:</span>
+              {/* <strong style={{ color: 'var(--text-bright)' }}>{inputTokens.toLocaleString()}</strong> */}
+              {cacheWriteTokens > 0 && (
+                <span style={{ color: '#38bdf8', marginLeft: '0.25rem' }} title="Input tokens written to prompt cache">
+                  {cacheWriteTokens.toLocaleString()}
+                </span>
+              )}
+              {cachedInputTokens > 0 && (
+                <span style={{ color: 'var(--accent-emerald)', marginLeft: '0.5rem' }} title="Input tokens read from prompt cache">
+                  ({cachedInputTokens.toLocaleString()} cached)
+                </span>
+              )}
+            </span>
+
+            {/* Output tokens */}
+            <span
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.72rem',
+                padding: '0.1rem 0.42rem',
+                borderRadius: '4px',
+                background: 'var(--btn-secondary-bg)',
+                border: '1px solid var(--border-subtle)',
+                whiteSpace: 'nowrap'
+              }}
+              title="Total output/generation tokens received across all LLM calls"
+            >
+              <span style={{ color: 'var(--text-dim)', marginRight: '0.25rem' }}>Output:</span>
+              <strong style={{ color: 'var(--accent-cyan)' }}>{outputTokens.toLocaleString()}</strong>
+            </span>
+
+            {/* Round-trip calls */}
+            <span
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.72rem',
+                padding: '0.1rem 0.42rem',
+                borderRadius: '4px',
+                background: 'var(--btn-secondary-bg)',
+                border: '1px solid var(--border-subtle)',
+                whiteSpace: 'nowrap'
+              }}
+              title="Total LLM round trips across Summary, Manager, Workers, QA, and Logger"
+            >
+              <span style={{ color: 'var(--text-dim)', marginRight: '0.25rem' }}>Calls:</span>
+              <strong style={{ color: 'var(--text-bright)' }}>{calls}</strong>
+            </span>
+          </div>
           <span
             style={{
               fontSize: '0.64rem',

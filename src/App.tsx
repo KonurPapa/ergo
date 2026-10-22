@@ -42,6 +42,7 @@ import {
   parseAgentContextMarkdown,
   parseAgentContextWithArchive,
   serializeTodoMarkdown,
+  serializeTodoMarkdownPreserving,
   serializeAgentContextMarkdown,
   parseSwimLaneMarkdown,
   cleanAndUnescapeMarkdown
@@ -1347,7 +1348,7 @@ function App() {
         } catch { }
       }
 
-      const serialized = serializeTodoMarkdown(laneActive, laneHeader);
+      const serialized = serializeTodoMarkdownPreserving(laneActive, laneHeader, lane.markdown);
       return {
         ...lane,
         markdown: serialized,

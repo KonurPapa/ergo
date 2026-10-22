@@ -192,3 +192,4 @@ Agents resend their whole conversation at every step. Without caching, a long ru
 - **To choose models yourself:** set Models to Manual.
 - **To see why a model was picked:** open the run's "Models" step in the task notes.
 - **To inspect or reset what Ergo has learned:** Settings → Model data, or the file `config/model-calibration.json`.
+- **Which model runs the small background jobs** (autocomplete, run plan, overview, file scout…): see `SMALL_MODELS.md`.

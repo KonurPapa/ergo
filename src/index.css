@@ -1047,6 +1047,13 @@ body {
   line-height: 1;
 }
 
+/* At max-width 0 a two-character marker (`**`, `~~`) wraps one character per line, making the widget two
+   lines tall and pushing bold / struck-through text below its checkbox. Must outrank TipTap's injected
+   `.ProseMirror [contenteditable="false"] { white-space: normal }`. */
+.ProseMirror .md-hover-inline-grave[contenteditable="false"] {
+  white-space: nowrap;
+}
+
 .md-grave-type-code {
   color: var(--accent-cyan);
 }
@@ -1669,26 +1676,26 @@ body {
   align-items: center;
   justify-content: center;
   padding: 0;
-  border-radius: var(--radius-sm);
   background: transparent;
-  border: 1px solid transparent;
+  border: none;
   color: var(--text-muted);
   cursor: pointer;
-  opacity: 0.65;
-  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  /* Plain arrow like the header chevrons: hidden until the card is hovered, kept visible while collapsed. */
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease;
   user-select: none;
   z-index: 10;
 }
 
 .tiptap-editor-root .tiptap ol>li:hover>.card-collapse-btn,
 .tiptap-editor-root .tiptap ul:not(li ul)>li:hover>.card-collapse-btn,
+.tiptap-editor-root .tiptap .card-collapse-btn.is-collapsed {
+  opacity: 0.85;
+}
+
 .tiptap-editor-root .tiptap .card-collapse-btn:hover {
   opacity: 1;
-  background: rgba(6, 182, 212, 0.16);
-  border-color: rgba(6, 182, 212, 0.35);
   color: var(--accent-cyan);
-  box-shadow: 0 0 8px rgba(6, 182, 212, 0.25);
-  transform: scale(1.08);
 }
 
 .card-collapse-btn {
@@ -8170,7 +8177,6 @@ button.related-task-title.is-link:focus-visible {
 }
 
 [data-theme="light"] .card-collapse-btn:hover {
-  background: rgba(2, 132, 199, 0.1);
   color: var(--accent-cyan);
 }
 
@@ -8520,6 +8526,15 @@ button.related-task-title.is-link:focus-visible {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
+
+.selection-run-tooltip.is-chip { padding: 0.1rem; gap: 0; }
+.selection-tools-chip {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.5rem; height: 1.1rem; padding: 0;
+  background: transparent; border: none; border-radius: var(--radius-sm);
+  color: var(--text-muted); cursor: pointer;
+}
+.selection-tools-chip:hover, .selection-tools-chip:focus-visible { color: var(--accent-cyan); }
 
 .selection-tooltip-run-btn {
   display: inline-flex;
@@ -9494,19 +9509,49 @@ button.related-task-title.is-link:focus-visible {
 }
 
 /* ── Group header colors (human task list) ── */
-.tiptap .hdr-colored { color: var(--hdr-color); }
+.tiptap-editor-root .tiptap .hdr-colored { color: var(--hdr-color); }
 .tiptap .hdr-color-token { font-size: 0; }
-.hdr-menu-backdrop { position: fixed; inset: 0; z-index: 9998; }
-.hdr-color-menu {
-  position: fixed; z-index: 9999; padding: 0.5rem 0.6rem;
+/* Inline text color (`{color=id}text{/color}`), same palette as headers */
+.tiptap .text-colored,
+.tiptap li .text-colored { color: var(--text-color) !important; }
+
+/* Color palette inside the selection tooltip */
+.selection-color-wrapper { position: relative; display: inline-flex; }
+.selection-color-palette {
+  position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: 10;
+  display: grid; grid-template-columns: repeat(5, 1.35rem); gap: 0.35rem; padding: 0.5rem 0.55rem;
   background: var(--bg-elevated, #fff); color: var(--text-bright, #111);
   border: 1px solid rgba(128, 128, 128, 0.35); border-radius: 8px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
 }
-.hdr-color-menu-title { font-size: 0.7rem; opacity: 0.7; margin-bottom: 0.4rem; }
-.hdr-color-menu-swatches { display: grid; grid-template-columns: repeat(4, 1.35rem); gap: 0.35rem; }
 .hdr-color-swatch { width: 1.35rem; height: 1.35rem; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
 .hdr-color-swatch.is-active { border-color: var(--text-bright, #111); }
+.hdr-color-swatch.is-clear {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border-color: rgba(128, 128, 128, 0.45); color: var(--text-muted);
+}
+
+/* Header collapse chevron (shown on hover, or always while collapsed) */
+.tiptap-editor-root .tiptap h1,
+.tiptap-editor-root .tiptap h2,
+.tiptap-editor-root .tiptap h3,
+.tiptap-editor-root .tiptap h4,
+.tiptap-editor-root .tiptap h5,
+.tiptap-editor-root .tiptap h6 { position: relative; padding-left: 1.25rem; }
+.tiptap .hdr-collapse-btn {
+  position: absolute; left: 0.1rem; top: 50%; transform: translateY(-50%);
+  width: 1rem; height: 1rem; padding: 0; margin: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: none; border-radius: var(--radius-sm);
+  color: var(--text-muted); cursor: pointer; user-select: none;
+  opacity: 0; transition: opacity 0.15s ease, color 0.15s ease;
+}
+.tiptap :is(h1, h2, h3, h4, h5, h6):hover > .hdr-collapse-btn,
+.tiptap .hdr-collapse-btn.is-collapsed { opacity: 0.85; }
+.tiptap .hdr-collapse-btn:hover { opacity: 1; color: var(--accent-cyan); }
+.tiptap .hdr-collapse-btn .collapse-chevron { transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
+.tiptap .hdr-collapse-btn.is-collapsed .collapse-chevron { transform: rotate(-90deg); }
+.tiptap .hdr-section-hidden { display: none !important; }
 
 /* "How did this task do?" after an Auto run (RunSurveyCard) */
 .run-survey-card {

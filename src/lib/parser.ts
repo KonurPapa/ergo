@@ -1,5 +1,5 @@
 import { type TaskItem, type AgentContextItem, type TaskStatus, type SwimLaneDoc, type TokenUsage } from '../types';
-import { splitHeaderColor } from './headerColors';
+import { splitHeaderColor, stripTextColorTokens } from './headerColors';
 
 export const ARCHIVE_DELIMITER = '<!-- ARCHIVE -->';
 
@@ -90,7 +90,8 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
         id: `${currentTask.id}-${currentTask.subtasks.length + 1}`,
         text: subtext,
         isDone: isDone,
-        isHumanReview: subHuman
+        isHumanReview: subHuman,
+        sourceLine: i
       });
 
       if (isDone && currentTask.status === 'not_started') {
@@ -138,7 +139,8 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
         subtasks: [],
         isHumanReview,
         mcpRequired: extractMcpTags(cleanedTitle),
-        isArchived
+        isArchived,
+        sourceLine: i
       };
       items.push(currentTask);
       continue;
@@ -180,7 +182,8 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
         subtasks: [],
         isHumanReview,
         mcpRequired: extractMcpTags(cleanedTitle),
-        isArchived
+        isArchived,
+        sourceLine: i
       };
       items.push(currentTask);
       continue;
@@ -334,6 +337,69 @@ export function serializeTodoMarkdown(
 
   md += serializeTaskListMarkdown(active);
   return md.trim();
+}
+
+/**
+ * Serializes tasks back to a lane's TODO markdown without disturbing what the editor wrote.
+ *
+ * `serializeTodoMarkdown` rebuilds the file from parsed tasks, which flattens nested sub-subtasks,
+ * drops inline formatting (bold, links) and any prose between lists. When the tasks still match the
+ * original document, the original text is kept verbatim; when only done-state differs, just those
+ * lines are patched. Anything structural falls back to a full re-serialize.
+ */
+export function serializeTodoMarkdownPreserving(
+  items: TaskItem[],
+  headerComment: string | undefined,
+  originalMarkdown: string
+): string {
+  const fallback = () => serializeTodoMarkdown(items, headerComment);
+  if (!originalMarkdown.trim() || /^\s*<!--\s*ARCHIVE\s*-->/im.test(originalMarkdown)) return fallback();
+
+  const active = items.filter((i) => !i.isArchived);
+  const original = parseTodoMarkdown(originalMarkdown).items;
+  if (original.length !== active.length) return fallback();
+
+  const lines = originalMarkdown.split('\n');
+  const patches = new Map<number, boolean>(); // line index -> desired done state
+
+  for (let t = 0; t < original.length; t++) {
+    const before = original[t];
+    const after = active[t];
+    if (
+      before.title !== after.title ||
+      before.isUnordered !== after.isUnordered ||
+      before.category !== after.category ||
+      before.subtasks.length !== after.subtasks.length
+    ) {
+      return fallback();
+    }
+    if (before.isDone !== after.isDone && before.sourceLine !== undefined) {
+      patches.set(before.sourceLine, after.isDone);
+    }
+    for (let s = 0; s < before.subtasks.length; s++) {
+      const bs = before.subtasks[s];
+      const as = after.subtasks[s];
+      if (bs.text !== as.text) return fallback();
+      if (bs.isDone !== as.isDone && bs.sourceLine !== undefined) {
+        patches.set(bs.sourceLine, as.isDone);
+      }
+    }
+  }
+
+  for (const [lineIdx, done] of patches) {
+    const m = lines[lineIdx]?.match(/^(\s*(?:[-*+]|\d+\.)\s+)(.*?)(\s*)$/);
+    if (!m) return fallback();
+    const [, prefix, content, trailing] = m;
+    if (done) {
+      lines[lineIdx] = `${prefix}~~${content}~~${trailing}`;
+    } else {
+      const unwrapped = content.match(/^~~(.*)~~$/s);
+      if (!unwrapped) return fallback();
+      lines[lineIdx] = `${prefix}${unwrapped[1]}${trailing}`;
+    }
+  }
+
+  return lines.join('\n').trim();
 }
 
 /**
@@ -724,6 +790,8 @@ export function cleanAndUnescapeMarkdown(text: string): string {
 
   // Strip unescaped human review tags
   cleaned = cleaned.replace(/(?<!\\)\*\*human review(?<!\\)\*\*\s*-\s*/gi, '');
+
+  cleaned = stripTextColorTokens(cleaned);
 
   // Strip unescaped bold/italic tags and strikethrough
   cleaned = cleaned.replace(/(?<!\\)~~/g, '');

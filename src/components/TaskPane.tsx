@@ -19,6 +19,7 @@ import Typography from '@tiptap/extension-typography';
 import { Markdown } from 'tiptap-markdown';
 import { stripHeaderComments, parseSwimLaneMarkdown } from '../lib/parser';
 import { HEADER_COLORS, HEADER_COLOR_TOKEN_RE, randomHeaderColorId, resolveHeaderColor, splitHeaderColor } from '../lib/headerColors';
+import { TextColor } from '../lib/textColorMark';
 import { storageManager } from '../lib/storageManager';
 import { bridgeClient } from '../lib/bridgeClient';
 import { HumanAiAssistantModal } from './HumanAiAssistantModal';
@@ -67,7 +68,8 @@ import {
   X,
   Edit2,
   MoreHorizontal,
-  CornerDownRight
+  CornerDownRight,
+  Palette
 } from 'lucide-react';
 
 interface WithMarkdownStorage {
@@ -79,7 +81,41 @@ interface WithMarkdownStorage {
 }
 
 // Module-level persistent Set to remember collapsed cards across re-renders
-const collapsedCardsState = new Set<string>();
+// Collapsed task cards, remembered across reloads. Keyed by lane file + task title (not position), so
+// adding or reordering tasks doesn't move the collapsed state onto a different card.
+const COLLAPSED_CARDS_KEY = 'ergo_collapsed_cards';
+const collapsedCardsState: Set<string> = (() => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(COLLAPSED_CARDS_KEY) || '[]');
+    return new Set<string>(Array.isArray(saved) ? saved : []);
+  } catch {
+    return new Set<string>();
+  }
+})();
+function saveCollapsedCards() {
+  try {
+    localStorage.setItem(COLLAPSED_CARDS_KEY, JSON.stringify([...collapsedCardsState]));
+  } catch { /* storage unavailable: state just won't persist */ }
+}
+
+// Collapsed group headers, remembered across reloads: { [lane file]: ["<level>:<header name>", ...] }.
+const COLLAPSED_HEADERS_KEY = 'ergo_collapsed_headers';
+function loadCollapsedHeaders(laneKey: string): Set<string> {
+  try {
+    const all = JSON.parse(localStorage.getItem(COLLAPSED_HEADERS_KEY) || '{}');
+    return new Set(Array.isArray(all[laneKey]) ? all[laneKey] : []);
+  } catch {
+    return new Set();
+  }
+}
+function saveCollapsedHeaders(laneKey: string, keys: Set<string>) {
+  try {
+    const all = JSON.parse(localStorage.getItem(COLLAPSED_HEADERS_KEY) || '{}');
+    if (keys.size) all[laneKey] = [...keys];
+    else delete all[laneKey];
+    localStorage.setItem(COLLAPSED_HEADERS_KEY, JSON.stringify(all));
+  } catch { /* storage unavailable: state just won't persist */ }
+}
 
 // Helper: check if a node (paragraph) is marked as done via strikethrough
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -697,7 +733,8 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                   const isOrdered = doc.resolve(pos).parent.type.name === 'orderedList';
                   const digitCount = isOrdered ? String(orderedItemCounter).length : 1;
 
-                  const cardKey = `lane_${lane.id}_task_${orderedItemCounter}`;
+                  const cardTitle = (node.firstChild?.textContent || '').trim();
+                  const cardKey = `${lane.filePath || lane.id}::${cardTitle || `#${orderedItemCounter}`}`;
                   const isCollapsed = collapsedCardsState.has(cardKey);
 
                   const matchedTask = currentTasks[orderedItemCounter - 1];
@@ -855,7 +892,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                         btn.setAttribute('contenteditable', 'false');
                         btn.title = isCollapsed ? 'Expand subtasks' : 'Collapse subtasks';
                         btn.setAttribute('aria-label', isCollapsed ? 'Expand subtasks' : 'Collapse subtasks');
-                        btn.innerHTML = `<svg class="collapse-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+                        btn.innerHTML = `<svg class="collapse-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
 
                         btn.addEventListener('mousedown', (e) => {
                           e.preventDefault();
@@ -870,6 +907,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                           } else {
                             collapsedCardsState.add(cardKey);
                           }
+                          saveCollapsedCards();
                           const tr = view.state.tr.setMeta('taskCollapseToggle', true);
                           view.dispatch(tr);
                         });
@@ -1122,6 +1160,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                             ev.stopPropagation();
                             closeMenu();
                             collapsedCardsState.delete(cardKey);
+                            saveCollapsedCards();
 
                             if (onArchiveTaskRef.current) {
                               let liveTitle = '';
@@ -1813,7 +1852,12 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   });
 
   // Header color menu state (right-click on a group header in the editor)
-  const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number; pos: number; current: string } | null>(null);
+  const [colorPaletteOpen, setColorPaletteOpen] = useState(false);
+  // The selection tooltip starts as a small chip and only expands to the full toolbar on hover.
+  const [selectionToolsExpanded, setSelectionToolsExpanded] = useState(false);
+  const headerCollapseKey = lane.filePath || lane.id;
+  const collapsedHeadersRef = useRef<Set<string> | null>(null);
+  if (!collapsedHeadersRef.current) collapsedHeadersRef.current = loadCollapsedHeaders(headerCollapseKey);
 
   const setHeadingColor = useCallback((view: any, pos: number, colorId: string) => {
     const node = view.state.doc.nodeAt(pos);
@@ -1870,26 +1914,51 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                   if (m) decos.push(Decoration.inline(end - m[0].length, end, { class: 'hdr-color-token' }));
                 }
               });
-              return DecorationSet.create(state.doc, decos);
-            },
-            handleDOMEvents: {
-              contextmenu: (view, event) => {
-                const target = event.target as HTMLElement | null;
-                if (!target?.closest('h1,h2,h3,h4,h5,h6')) return false;
-                const hit = view.posAtCoords({ left: event.clientX, top: event.clientY });
-                if (!hit) return false;
-                const $pos = view.state.doc.resolve(hit.pos);
-                for (let d = $pos.depth; d > 0; d--) {
-                  const n = $pos.node(d);
-                  if (n.type.name === 'heading') {
-                    const { name, colorId } = splitHeaderColor(n.textContent);
-                    event.preventDefault();
-                    setHeaderMenu({ x: event.clientX, y: event.clientY, pos: $pos.before(d), current: resolveHeaderColor(name, colorId).id });
-                    return true;
+
+              // Header collapse: a collapsed header hides everything up to the next header of the same or higher level.
+              const collapsed = collapsedHeadersRef.current!;
+              let hideBelowLevel: number | null = null;
+              state.doc.forEach((node, pos) => {
+                if (node.type.name === 'heading') {
+                  const level = node.attrs.level as number;
+                  if (hideBelowLevel !== null && level <= hideBelowLevel) hideBelowLevel = null;
+                  if (hideBelowLevel === null) {
+                    const { name } = splitHeaderColor(node.textContent);
+                    if (!name.trim()) return;
+                    const key = `${level}:${name.trim()}`;
+                    const isCollapsed = collapsed.has(key);
+                    if (isCollapsed) {
+                      hideBelowLevel = level;
+                      decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'hdr-is-collapsed' }));
+                    }
+                    decos.push(Decoration.widget(pos + 1, (view) => {
+                      const btn = document.createElement('button');
+                      btn.type = 'button';
+                      btn.className = `hdr-collapse-btn ${isCollapsed ? 'is-collapsed' : ''}`;
+                      btn.setAttribute('contenteditable', 'false');
+                      btn.title = isCollapsed ? 'Expand section' : 'Collapse section';
+                      btn.setAttribute('aria-label', btn.title);
+                      btn.setAttribute('aria-expanded', String(!isCollapsed));
+                      btn.innerHTML = `<svg class="collapse-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+                      btn.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
+                      btn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (collapsed.has(key)) collapsed.delete(key);
+                        else collapsed.add(key);
+                        saveCollapsedHeaders(headerCollapseKey, collapsed);
+                        view.dispatch(view.state.tr.setMeta('headerCollapseToggle', true));
+                      });
+                      return btn;
+                    }, { side: -1, stopEvent: () => true, key: `${lane.id}|hdrchev|${key}|${isCollapsed}` }));
+                    return;
                   }
                 }
-                return false;
-              },
+                if (hideBelowLevel !== null) {
+                  decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'hdr-section-hidden' }));
+                }
+              });
+              return DecorationSet.create(state.doc, decos);
             },
           },
         }),
@@ -1916,6 +1985,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         },
       }),
       Typography,
+      TextColor,
       Image.configure({
         inline: false,
         allowBase64: true,
@@ -2196,6 +2266,48 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       setSelectionTooltip(null);
     }
   }, []);
+
+  // Position of the header the whole selection sits in, or null when it isn't inside a single header.
+  const selectionHeadingPos = (): number | null => {
+    if (!editor) return null;
+    const { $from, $to } = editor.state.selection;
+    for (let d = $from.depth; d > 0; d--) {
+      if ($from.node(d).type.name === 'heading') return $to.depth >= d && $to.node(d) === $from.node(d) ? $from.before(d) : null;
+    }
+    return null;
+  };
+
+  const currentSelectionColor = (): string | undefined => {
+    if (!editor) return undefined;
+    const headingPos = selectionHeadingPos();
+    if (headingPos != null) {
+      const node = editor.state.doc.nodeAt(headingPos);
+      if (!node) return undefined;
+      const { name, colorId } = splitHeaderColor(node.textContent);
+      return resolveHeaderColor(name, colorId).id;
+    }
+    return editor.getAttributes('textColor').color || undefined;
+  };
+
+  const applySelectionColor = (colorId: string | null) => {
+    if (!editor) return;
+    const headingPos = selectionHeadingPos();
+    if (headingPos != null) {
+      if (colorId) setHeadingColor(editor.view, headingPos, colorId);
+    } else if (colorId) {
+      editor.chain().focus().setMark('textColor', { color: colorId }).run();
+    } else {
+      editor.chain().focus().unsetMark('textColor').run();
+    }
+    setColorPaletteOpen(false);
+  };
+
+  useEffect(() => {
+    if (!selectionTooltip) {
+      setColorPaletteOpen(false);
+      setSelectionToolsExpanded(false);
+    }
+  }, [selectionTooltip]);
 
   const handleRunSelection = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -2531,31 +2643,6 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         }}
       >
         <EditorContent editor={editor} className="tiptap-editor-root" />
-        {headerMenu && (
-          <>
-            <div className="hdr-menu-backdrop" onClick={() => setHeaderMenu(null)} onContextMenu={(e) => { e.preventDefault(); setHeaderMenu(null); }} />
-            <div className="hdr-color-menu" style={{ left: headerMenu.x, top: headerMenu.y }} role="menu">
-              <div className="hdr-color-menu-title">Header color</div>
-              <div className="hdr-color-menu-swatches">
-                {HEADER_COLORS.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    role="menuitem"
-                    title={c.label}
-                    aria-label={c.label}
-                    className={`hdr-color-swatch ${headerMenu.current === c.id ? 'is-active' : ''}`}
-                    style={{ background: c.hex }}
-                    onClick={() => {
-                      if (editor) setHeadingColor(editor.view, headerMenu.pos, c.id);
-                      setHeaderMenu(null);
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
-          </>
-        )}
       </div>
 
       {/* ── Human AI Assistant Slide-up Bar / Drawer (rendered only within selected lane) ── */}
@@ -2663,7 +2750,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       {/* Freeform Selection "Run" & Style Controls Floating Tooltip */}
       {selectionTooltip && selectionTooltip.visible && typeof document !== 'undefined' && createPortal(
         <div
-          className="selection-run-tooltip"
+          className={`selection-run-tooltip ${selectionToolsExpanded ? '' : 'is-chip'}`}
           style={{
             top: `${selectionTooltip.y}px`,
             left: `${selectionTooltip.x}px`,
@@ -2672,7 +2759,24 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
             e.preventDefault();
             e.stopPropagation();
           }}
+          onMouseLeave={() => {
+            if (!colorPaletteOpen) setSelectionToolsExpanded(false);
+          }}
         >
+          {!selectionToolsExpanded ? (
+            <button
+              type="button"
+              className="selection-tools-chip"
+              title="Selection tools"
+              aria-label="Show selection tools"
+              aria-expanded="false"
+              onMouseEnter={() => setSelectionToolsExpanded(true)}
+              onFocus={() => setSelectionToolsExpanded(true)}
+              onClick={() => setSelectionToolsExpanded(true)}
+            >
+              <ChevronDown size={12} strokeWidth={2.5} />
+            </button>
+          ) : (<>
           {/* Add Task Action */}
           <button
             type="button"
@@ -2746,6 +2850,46 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
             <ImageIcon size={13} />
           </button>
 
+          {/* Color: a header's color when the selection is in a header, otherwise the selected text's */}
+          <div className="selection-color-wrapper">
+            <button
+              type="button"
+              className={`selection-tooltip-btn ${colorPaletteOpen || editor?.isActive('textColor') ? 'is-active' : ''}`}
+              onClick={() => setColorPaletteOpen((o) => !o)}
+              title={selectionHeadingPos() != null ? 'Header color' : 'Text color'}
+            >
+              <Palette size={13} />
+            </button>
+            {colorPaletteOpen && (
+              <div className="selection-color-palette" role="menu">
+                {HEADER_COLORS.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    role="menuitem"
+                    title={c.label}
+                    aria-label={c.label}
+                    className={`hdr-color-swatch ${currentSelectionColor() === c.id ? 'is-active' : ''}`}
+                    style={{ background: c.hex }}
+                    onClick={() => applySelectionColor(c.id)}
+                  />
+                ))}
+                {selectionHeadingPos() == null && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    title="Remove color"
+                    aria-label="Remove color"
+                    className="hdr-color-swatch is-clear"
+                    onClick={() => applySelectionColor(null)}
+                  >
+                    <X size={11} />
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Subtask (Bullet) */}
           <button
             type="button"
@@ -2755,6 +2899,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
           >
             <List size={13} />
           </button>
+          </>)}
         </div>,
         document.body
       )}

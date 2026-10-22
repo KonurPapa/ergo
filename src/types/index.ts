@@ -5,6 +5,7 @@ export interface Subtask {
   text: string;
   isDone: boolean;
   isHumanReview?: boolean;
+  sourceLine?: number; // 0-based line in the markdown it was parsed from
 }
 
 export interface TaskItem {
@@ -30,6 +31,7 @@ export interface TaskItem {
   swimLaneId?: string; // ID of the swim lane / document this task belongs to
   sourceFileName?: string; // e.g. "TODO.md", "BACKLOG.md"
   totalUsage?: TokenUsage; // Running or final token accounting for this task
+  sourceLine?: number; // 0-based line of this task in the markdown it was parsed from
 }
 
 export interface SwimLaneDoc {

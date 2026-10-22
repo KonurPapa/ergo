@@ -52,3 +52,8 @@ export function splitHeaderColor(text: string): { name: string; colorId?: string
   if (!m || !getHeaderColor(m[1])) return { name: text };
   return { name: text.slice(0, m.index).trimEnd(), colorId: m[1].toLowerCase() };
 }
+
+/** Removes inline `{color=id}…{/color}` text-color tokens (see textColorMark.ts), keeping the text. */
+export function stripTextColorTokens(text: string): string {
+  return text.replace(/\{color=[a-z]+\}(?=[\s\S]*\{\/color\})/gi, '').replace(/\{\/color\}/gi, '');
+}
