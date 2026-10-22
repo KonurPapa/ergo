@@ -1,0 +1,88 @@
+appId: network.appwrite.ergo.bridge
+productName: Ergo Bridge
+copyright: Copyright © 2026 KonurPapa
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - assets/**/*
+  - package.json
+  # transformers' Node build bundles what it needs from onnxruntime-web and runs on onnxruntime-node.
+  - "!**/node_modules/onnxruntime-web/**"
+  # node-pty: sources, build deps and debug symbols (53 MB of its 58 MB of prebuilds are .pdb files).
+  - "!**/node_modules/node-pty/{deps,third_party,src,scripts}/**"
+  - "!**/*.pdb"
+
+# Native code (and the helper executables node-pty spawns) can't run from inside the asar archive.
+asarUnpack:
+  - "**/node_modules/node-pty/**"
+  - "**/node_modules/onnxruntime-node/**"
+  - "**/node_modules/sharp/**"
+  - "**/node_modules/@img/**"
+
+extraResources:
+  - from: ../docs/skills
+    to: docs/skills
+
+# node-pty, onnxruntime-node and sharp are Node-API modules: the binaries npm installs already work in Electron.
+npmRebuild: false
+
+protocols:
+  - name: Ergo Bridge
+    schemes: [ergo-bridge]
+
+# Fixed artifact names keep https://github.com/KonurPapa/ergo/releases/latest/download/<name> stable for the web app.
+publish:
+  provider: github
+  owner: KonurPapa
+  repo: ergo
+  releaseType: release
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: Ergo-Bridge-Setup.${ext}
+  files:
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/{linux,darwin}/**"
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**"
+    - "!**/node_modules/node-pty/prebuilds/{darwin-*,win32-arm64}/**"
+
+nsis:
+  oneClick: true
+  perMachine: false
+  runAfterFinish: true
+  createDesktopShortcut: false
+
+mac:
+  target:
+    - target: dmg
+      arch: [arm64]
+    # Auto-update on macOS downloads the zip.
+    - target: zip
+      arch: [arm64]
+  category: public.app-category.developer-tools
+  artifactName: Ergo-Bridge.${ext}
+  extendInfo:
+    # Menu-bar app: no Dock icon.
+    LSUIElement: true
+  files:
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/{linux,win32}/**"
+    - "!**/node_modules/node-pty/prebuilds/{win32-*,darwin-x64}/**"
+
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+  category: Development
+  artifactName: Ergo-Bridge.${ext}
+  files:
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/{darwin,win32}/**"
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/linux/arm64/**"
+    # GPU execution providers (300+ MB); embeddings run on the CPU.
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/linux/x64/libonnxruntime_providers_{cuda,tensorrt}.so"
+    # Linux uses the node-pty binary npm compiles; the prebuilds are for macOS and Windows.
+    - "!**/node_modules/node-pty/prebuilds/**"

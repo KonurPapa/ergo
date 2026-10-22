@@ -16,7 +16,8 @@ import {
   useLocalModelInstall,
   type LocalModelMode
 } from './LocalModelSetup';
-import { bridgeClient, type BridgeStatus, DEFAULT_BRIDGE_URL } from '../lib/bridgeClient';
+import { bridgeClient, type BridgeStatus, BRIDGE_LAUNCH_URL, DEFAULT_BRIDGE_URL, getBridgeDownload } from '../lib/bridgeClient';
+import { BridgeDownloadButton } from './BridgeDownloadButton';
 import ergoIcon from '../assets/ergo_icon_2.png';
 import {
   Zap,
@@ -101,7 +102,7 @@ const PROVIDER_METAS: Record<ProviderChoice, ProviderMeta> = {
     cli: 'claude',
     cliName: 'Claude',
     packageName: '@anthropic-ai/claude-code',
-    installCommand: 'npm install -g @anthropic-ai/claude-code',
+    installCommand: 'curl -fsSL https://claude.ai/install.sh | bash',
     loginCommand: 'claude login',
     loginArgs: ['login'],
     signInLabel: 'Sign In with Anthropic',
@@ -343,6 +344,17 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   }, []);
 
   if (!isOpen) return null;
+
+  // Nothing answers on this computer: offer the Ergo Bridge installer, and a link that opens an installed one.
+  const bridgeDownload = getBridgeDownload();
+  const bridgeInstallActions = bridgeClient.isHostedWeb() && !bridgeStatus.isConnected && bridgeStatus.diagnosis === 'unreachable' && bridgeDownload ? (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', flexWrap: 'wrap' }}>
+      <BridgeDownloadButton />
+      <a href={BRIDGE_LAUNCH_URL} style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--accent-primary)' }}>
+        Already installed? Open it
+      </a>
+    </div>
+  ) : null;
 
   // Complete helper: advances to the Local AI model step (2) instead of exiting immediately
   const proceedToLocalModelStep = (key?: UserApiKey) => {
@@ -1092,6 +1104,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         <div style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: 1.45 }}>
                           {loginError || installError}
                         </div>
+                        {bridgeInstallActions && <div style={{ marginTop: '0.65rem' }}>{bridgeInstallActions}</div>}
                         {!bridgeStatus.isConnected && (
                           <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             <button
@@ -1725,6 +1738,27 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 </button>
               </div>
 
+              {bridgeInstallActions && (
+                <div
+                  style={{
+                    marginTop: '0.85rem',
+                    padding: '0.85rem 1rem',
+                    borderRadius: '10px',
+                    background: 'var(--bg-card, var(--card, #ffffff))',
+                    border: '1px solid var(--border-subtle, var(--border, #e2e8f0))'
+                  }}
+                >
+                  <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-bright)', marginBottom: '0.3rem' }}>
+                    Install Ergo Bridge on this computer
+                  </div>
+                  <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '0.65rem' }}>
+                    A small app that lets Ergo reach your files and run AI tools here. Install it once: it starts by itself
+                    whenever you turn on your computer, and this page connects to it automatically.
+                  </div>
+                  {bridgeInstallActions}
+                </div>
+              )}
+
               {/* Error Alert if any */}
               {bridgeConnectError && (
                 <div
@@ -1924,7 +1958,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         Manual Helper Launch Command
                       </div>
                       <div style={{ fontSize: '0.71rem', color: 'var(--text-dim)', marginBottom: '0.45rem' }}>
-                        The bridge runs from your local copy of Ergo. To start it, run this in a terminal:
+                        Developers working from a copy of the Ergo repository can run the bridge from it instead:
                       </div>
                       {(() => {
                         // The Ergo checkout the bridge last ran from (not the ~/.ergo data folder). Two lines rather

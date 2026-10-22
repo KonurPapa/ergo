@@ -68,18 +68,20 @@ Ergo keeps the human in the loop:
 
 ### Using the hosted web app with your local device
 
-The local server doubles as the device bridge: it lets AI agents run CLIs and read/write files on your machine. It only accepts requests from this machine (loopback), and only from Ergo's own page or from allowed origins. The hosted app at `https://ergo.appwrite.network` is allowed by default — no setup needed.
+The hosted app at `https://ergo.appwrite.network` reaches your computer through **Ergo Bridge**, a small background app that runs CLI agents and reads and writes files in `~/.ergo` for it. No website can install or start software by itself, so Ergo Bridge is installed once from the onboarding screen (it offers the right download for Windows, macOS or Linux). After that it starts at login, sits in the system tray, and the hosted app connects to it automatically. Installers are built from `desktop/`; see [desktop/README.md](desktop/README.md) for building and releasing them.
 
-To change the default (e.g. after moving to a new domain), edit `HOSTED_APP_ORIGINS` at the top of `vite.config.ts`. To allow additional origins without editing code, create `.env.local` in the project root:
+Developers can run the same bridge from a checkout instead: `npm run dev` (bridge + local web app) or `npm run bridge` (bridge only). The bridge code lives in `bridge/plugins.ts`.
+
+The bridge only accepts requests from this machine (loopback), and only from Ergo's own page or from allowed origins. The hosted app is allowed by default. To change the default (e.g. after moving to a new domain), edit `HOSTED_APP_ORIGINS` at the top of `bridge/plugins.ts`. To allow additional origins without editing code, create `.env.local` in the project root:
 
 ```bash
 # Exact https:// origins only — no wildcards, no trailing paths. Comma-separate multiple entries.
 ERGO_ALLOWED_ORIGINS=https://another-ergo-site.example.com
 ```
 
-Restart `npm run dev` after changing it. Requests from any other website are refused (and logged in the terminal).
+Restart the bridge after changing it. Requests from any other website are refused (and logged).
 
-If the hosted app says it can't reach your local bridge: make sure `npm run dev` is running in your Ergo folder (the hosted app scans ports 5173–5180 and 3000, since Vite moves to the next free port when 5173 is busy) and keep your local copy up to date (`git pull`).
+If the hosted app says it can't reach your local bridge, check that Ergo Bridge (or `npm run dev`) is running; the hosted app scans ports 5173–5180 and 3000.
 
 Chrome, Edge, Brave and Firefox also ask before a website may reach apps on your computer. When the browser asks to let the hosted site "access other apps and services on this device", click **Allow** — until you answer, the browser holds every request to the bridge. If you blocked it earlier, allow it again in the site's settings: **Apps on device** in Chrome, Edge and Brave (click the icon left of the address bar → Site settings), or **Access this device** in Firefox's address-bar permissions panel. Safari is not supported.
 

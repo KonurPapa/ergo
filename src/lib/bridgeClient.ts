@@ -52,11 +52,48 @@ const PROBE_TIMEOUT_MS = 2500;
 // services on this device") and hold each request until the user answers. A probe that may be waiting on that prompt
 // gets minutes rather than PROBE_TIMEOUT_MS, because aborting it early reads as "bridge not running".
 const PERMISSION_WAIT_MS = 120_000;
-// The bridge answers in milliseconds and a closed port fails as fast, so a request still pending after this is being
-// held by the prompt.
-const HELD_REQUEST_HINT_MS = 1200;
+// The bridge answers in milliseconds, but Windows takes a few seconds to refuse a closed localhost port (it retries
+// the connection after each refusal), so only a request still pending after this is being held by the prompt.
+const HELD_REQUEST_HINT_MS = 6000;
 // Chrome 145+ and Firefox call it 'loopback-network'; Chrome 142–144 only know the combined 'local-network-access'.
 const LOOPBACK_PERMISSION_NAMES = ['loopback-network', 'local-network-access'];
+// Ergo Bridge installers (desktop/electron-builder.yml); "latest/download" always serves the newest release.
+const BRIDGE_DOWNLOADS = 'https://github.com/KonurPapa/ergo/releases/latest/download';
+const BRIDGE_LATEST_RELEASE_API = 'https://api.github.com/repos/KonurPapa/ergo/releases/latest';
+/** Registered by Ergo Bridge when installed: opens it if it isn't running. */
+export const BRIDGE_LAUNCH_URL = 'ergo-bridge://start';
+
+/** The Ergo Bridge installer for this computer, or null where there is none (phones, tablets, ChromeOS). */
+export function getBridgeDownload(): { platform: string; url: string } | null {
+  if (typeof navigator === 'undefined') return null;
+  const ua = navigator.userAgent;
+  // iPads ask for desktop sites with a Mac user agent.
+  if (/Android|iPhone|iPad|iPod|CrOS/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return null;
+  if (/Windows/.test(ua)) return { platform: 'Windows', url: `${BRIDGE_DOWNLOADS}/Ergo-Bridge-Setup.exe` };
+  if (/Macintosh/.test(ua)) return { platform: 'macOS', url: `${BRIDGE_DOWNLOADS}/Ergo-Bridge.dmg` };
+  if (/Linux/.test(ua)) return { platform: 'Linux', url: `${BRIDGE_DOWNLOADS}/Ergo-Bridge.AppImage` };
+  return null;
+}
+
+let publishedAssets: Promise<Set<string> | null> | null = null;
+
+/**
+ * Whether the latest GitHub release has the installer at `url`. A published asset link downloads the file straight
+ * away (GitHub serves it as an attachment, so the page stays put); one that isn't published yet lands on GitHub's 404
+ * page. Resolves null when GitHub doesn't answer (offline, or its 60-requests-an-hour anonymous limit).
+ */
+export async function isBridgeDownloadPublished(url: string): Promise<boolean | null> {
+  publishedAssets ??= fetch(BRIDGE_LATEST_RELEASE_API)
+    .then(async (res) => {
+      if (res.status === 404) return new Set<string>();
+      if (!res.ok) return null;
+      const release = await res.json();
+      return new Set<string>((release.assets ?? []).map((asset: { name: string }) => asset.name));
+    })
+    .catch(() => null);
+  const assets = await publishedAssets;
+  return assets ? assets.has(url.slice(url.lastIndexOf('/') + 1)) : null;
+}
 
 /**
  * True when fetch() failed before getting any HTTP response (bridge offline, CORS rejection,
@@ -215,11 +252,10 @@ class BridgeClient {
           return `Safari (like every browser on iPhone and iPad) blocks websites from reaching apps on your computer, so ${site} can't reach your local Ergo bridge. ` +
             'Use Chrome, Edge or Firefox, or open Ergo directly at http://localhost:5173.';
         }
-        return `Unable to reach your local Ergo bridge (tried ${this.bridgeUrl} and nearby ports). ` +
-          'Start Ergo on this computer: open a terminal in your Ergo folder and run npm run dev.' +
-          (this.lastPermission === 'prompt'
-            ? ` If it's already running, reload this page and click Allow when your browser asks to let ${site} access apps on this device.`
-            : '');
+        // Browsers only ask for local access once something answers, so "nothing answered" means nothing is running.
+        return "Ergo Bridge isn't running on this computer, so this page can't reach your files or run AI tools here " +
+          `(nothing answered at ${this.bridgeUrl} or the nearby ports Ergo checks). Install Ergo Bridge, or open it if you ` +
+          `already have it: Ergo connects as soon as it's running, once you allow ${site} to access apps on this device.`;
     }
   }
 
@@ -335,8 +371,9 @@ class BridgeClient {
     const endpoint = relative ? '/api/storage/config' : `${baseUrl}/api/storage/config`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const mayBeHeld = timeoutMs === PERMISSION_WAIT_MS;
     try {
-      const res = await fetch(endpoint, { method: 'GET', signal: controller.signal });
+      const res = await this.trackHeld(fetch(endpoint, { method: 'GET', signal: controller.signal }), mayBeHeld);
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
         return { ok: true, url: baseUrl, data };
@@ -352,9 +389,13 @@ class BridgeClient {
       // A no-cors request resolves (opaque) whenever *something* answers, even if CORS would
       // block reading the reply. That tells "server up but refusing us" apart from "nothing there".
       try {
-        await fetch(endpoint, { method: 'GET', mode: 'no-cors', signal: controller.signal });
+        await this.trackHeld(fetch(endpoint, { method: 'GET', mode: 'no-cors', signal: controller.signal }), mayBeHeld);
         return { ok: false, url: baseUrl, reason: 'origin-refused', message: `A server at ${baseUrl} refused this site.` };
-      } catch {
+      } catch (fallbackErr: any) {
+        // Held by the prompt until our timer ran out: something is listening there.
+        if (fallbackErr?.name === 'AbortError') {
+          return { ok: false, url: baseUrl, reason: 'timeout', message: 'Connection timed out. Make sure Ergo is running locally on your device.' };
+        }
         return { ok: false, url: baseUrl, reason: 'unreachable', message: `Nothing answered at ${baseUrl}.` };
       }
     } finally {
@@ -363,19 +404,18 @@ class BridgeClient {
   }
 
   /**
-   * Probes candidates one at a time while the browser's local-access prompt is unanswered: Firefox holds only the
-   * newest request waiting on that prompt and fails the rest at once, so parallel probes would knock each other out.
-   * Stops at a hit, at a probe the user left waiting (the prompt is the problem, not the port), or once the prompt is
-   * answered (the caller then re-probes at full speed).
+   * Probes while the browser's local-access prompt is unanswered. Firefox holds only the newest request waiting on that
+   * prompt and fails the rest at once, so the likeliest URL goes alone first; the others then go together rather than
+   * in turn, because on Windows every closed port takes seconds to refuse. Stops early on a hit, on a probe the user
+   * left waiting (the prompt is the problem, not the port), or once the prompt is answered (the caller re-probes).
    */
-  private async probeOneByOne(urls: string[]) {
-    const results: Awaited<ReturnType<BridgeClient['probe']>>[] = [];
-    for (const url of urls) {
-      const result = await this.probe(url, false, PERMISSION_WAIT_MS);
-      results.push(result);
-      if (result.ok || ('reason' in result && result.reason === 'timeout') || (await this.getLoopbackPermission()) !== 'prompt') break;
+  private async probeWhilePrompting(urls: string[]) {
+    const [first, ...rest] = urls;
+    const head = await this.probe(first, false, PERMISSION_WAIT_MS);
+    if (!rest.length || head.ok || ('reason' in head && head.reason === 'timeout') || (await this.getLoopbackPermission()) !== 'prompt') {
+      return [head];
     }
-    return results;
+    return [head, ...(await Promise.all(rest.map((url) => this.probe(url, false, PERMISSION_WAIT_MS))))];
   }
 
   /**
@@ -422,10 +462,9 @@ class BridgeClient {
     const permission = await this.getLoopbackPermission();
     const mayBeHeld = hosted && permission !== 'granted' && permission !== 'denied';
     const probeAll = (timeoutMs: number) => Promise.all(candidateUrls.map((url) => this.probe(url, relative, timeoutMs)));
-    let results = await this.trackHeld(
-      permission === 'prompt' && hosted ? this.probeOneByOne(candidateUrls) : probeAll(mayBeHeld ? PERMISSION_WAIT_MS : PROBE_TIMEOUT_MS),
-      mayBeHeld
-    );
+    let results = permission === 'prompt' && hosted
+      ? await this.probeWhilePrompting(candidateUrls)
+      : await probeAll(mayBeHeld ? PERMISSION_WAIT_MS : PROBE_TIMEOUT_MS);
     this.lastPermission = await this.getLoopbackPermission();
     // Allowed mid-check: whatever failed before that was blocked or displaced by the prompt, so look again.
     if (permission !== 'granted' && this.lastPermission === 'granted' && !results.some((r) => r.ok)) {

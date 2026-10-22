@@ -1,7 +1,7 @@
 /**
  * Detects interactive prompts (approval menus, yes/no confirmations, account notices) on the RENDERED screen
  * of a CLI agent (see TerminalScreen in ./cliScreen.ts), and turns an answer into the keystrokes the CLI expects.
- * Shared by the bridge (vite.config.ts), which detects and auto-approves, and the browser views, which answer.
+ * Shared by the bridge (bridge/plugins.ts), which detects and auto-approves, and the browser views, which answer.
  *
  * Layouts handled (bottom of the screen):
  *  - Claude Code 2.1: solid rule, tool header ("Bash command"), tip/description, the command between ╌ dashed

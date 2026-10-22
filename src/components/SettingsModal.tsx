@@ -37,7 +37,8 @@ import {
 import { getChunkCount } from '../lib/memory';
 import { getCalibration, resetCalibration, subscribeCalibration } from '../lib/agentPipeline/calibrationStore';
 import { buildSummary, CALIBRATION_FILE_PATH, type CalibrationFile } from '../lib/agentPipeline/calibration';
-import { bridgeClient, type BridgeStatus } from '../lib/bridgeClient';
+import { bridgeClient, type BridgeStatus, BRIDGE_LAUNCH_URL, getBridgeDownload } from '../lib/bridgeClient';
+import { BridgeDownloadButton } from './BridgeDownloadButton';
 import { useBeta } from '../context/BetaContext';
 import { LocalModelSettingsSection, useLocalModelInstall, type LocalModelMode } from './LocalModelSetup';
 import { getModelCatalog, formatCatalogAge, snapshotDate, usesArtificialAnalysis } from '../lib/modelCatalog/catalog';
@@ -543,6 +544,55 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         {/* Modal Body */}
         <div className="modal-body" style={{ gap: '1.25rem', display: 'flex', flexDirection: 'column' }}>
+
+          {/* Ergo Bridge: the app that connects Ergo to this computer */}
+          {(() => {
+            const download = getBridgeDownload();
+            return (
+              <div
+                style={{
+                  background: 'rgba(255, 255, 255, 0.025)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: '8px',
+                  padding: '1.1rem'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <Laptop size={16} color="var(--accent-primary)" />
+                    <span style={{ fontSize: '0.92rem', fontWeight: 600 }}>Ergo Bridge</span>
+                  </div>
+                  <span
+                    className={`badge ${bridgeStatus.isConnected ? 'badge-done' : 'badge-warning'}`}
+                    style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', textTransform: 'uppercase' }}
+                  >
+                    {bridgeStatus.isConnected ? 'Connected' : 'Not connected'}
+                  </span>
+                </div>
+
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.9rem', lineHeight: '1.45' }}>
+                  {bridgeStatus.isConnected
+                    ? `Connected to this computer at ${bridgeStatus.url}. Ergo can reach your local files and run AI tools here.`
+                    : 'A small app that lets Ergo reach your files and run AI tools on this computer. Install it once: it starts by itself whenever you turn on your computer, and Ergo connects to it automatically.'}
+                </p>
+
+                {download ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', flexWrap: 'wrap' }}>
+                    <BridgeDownloadButton subtle={bridgeStatus.isConnected} />
+                    {!bridgeStatus.isConnected && (
+                      <a href={BRIDGE_LAUNCH_URL} style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--accent-primary)' }}>
+                        Already installed? Open it
+                      </a>
+                    )}
+                  </div>
+                ) : (
+                  <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', margin: 0 }}>
+                    Ergo Bridge runs on Windows, macOS and Linux computers. Open Ergo on one of those to connect it.
+                  </p>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Section 0: Appearance & Theme */}
           <div

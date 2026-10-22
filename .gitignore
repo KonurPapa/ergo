@@ -27,3 +27,6 @@ dist-ssr
 .ergo-config/
 config/
 
+
+# Ergo Bridge desktop app build output
+desktop/release/

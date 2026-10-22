@@ -73,6 +73,7 @@ import { RawMarkdownModal } from './components/RawMarkdownModal';
 import { CreateProjectModal } from './components/CreateProjectModal';
 import { AiCredentialsModal } from './components/AiCredentialsModal';
 import { SettingsModal } from './components/SettingsModal';
+import { BridgeDownloadButton } from './components/BridgeDownloadButton';
 import { FolderPickerModal } from './components/FolderPickerModal';
 import { OnboardingModal } from './components/OnboardingModal';
 import { ToastContainer, type ToastMessage } from './components/Toast';
@@ -107,7 +108,7 @@ import {
 } from './lib/taskScheduler';
 import { registerWorkspaceActionBridge } from './lib/workspaceMcp';
 import { syncSkillsToWorkspace } from './lib/skillsManager';
-import { bridgeClient, type BridgeStatus } from './lib/bridgeClient';
+import { bridgeClient, type BridgeStatus, getBridgeDownload } from './lib/bridgeClient';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 
 /** One-line description of what a pipeline permission prompt is asking for: the command, the path, or the summary. */
@@ -919,8 +920,10 @@ function App() {
         showToast({
           type: 'error',
           title: 'Connection Failed',
-          message: res.error || 'Could not reach local Ergo bridge. Ensure npm run dev is running locally.',
-          duration: 5000
+          message: `${res.error || 'Could not reach Ergo Bridge on this computer.'} Open Settings to download Ergo Bridge.`,
+          actionLabel: 'Open Settings',
+          onAction: () => setIsSettingsModalOpen(true),
+          duration: 10000
         });
       }
     } finally {
@@ -4452,11 +4455,16 @@ function App() {
                   ? bridgeClient.describeUnreachable('permission-prompt')
                   : bridgeStatus.diagnosis === 'permission-denied' || bridgeStatus.diagnosis === 'permission-prompt'
                     ? bridgeStatus.error
-                    : 'Reconnect to access your local ~/.ergo folders and run autonomous agents (Claude Code, Antigravity, etc.).'}
+                    : bridgeStatus.diagnosis === 'unreachable' && getBridgeDownload()
+                      ? 'Ergo Bridge isn\'t running on this computer. Install it (or open it) to use your local ~/.ergo folders and run autonomous agents (Claude Code, Antigravity, etc.).'
+                      : 'Reconnect to access your local ~/.ergo folders and run autonomous agents (Claude Code, Antigravity, etc.).'}
             </span>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            {bridgeStatus.diagnosis === 'unreachable' && getBridgeDownload() && (
+              <BridgeDownloadButton style={{ fontSize: '0.74rem', fontWeight: 700, padding: '0.35rem 0.75rem' }} />
+            )}
             <button
               type="button"
               onClick={handleManualReconnectBridge}

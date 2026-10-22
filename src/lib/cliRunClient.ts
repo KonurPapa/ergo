@@ -1,5 +1,5 @@
 /**
- * Client for the bridge's CLI-agent session API (vite.config.ts, ergo-pty plugin).
+ * Client for the bridge's CLI-agent session API (bridge/plugins.ts, ergo-pty plugin).
  *
  * App owns the lifecycle of every agent PTY (manager, workers, QA): it launches them over REST, and terminal
  * views only attach. The bridge watches each session's rendered screen and signal files and reports

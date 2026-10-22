@@ -205,7 +205,7 @@ function usePlanUsage(cli: string | undefined, enabled: boolean): PlanUsage | nu
   return usage;
 }
 
-function planLine(plan: PlanUsage, label: string): string | null {
+function planLine(plan: PlanUsage, /*label: string*/): string | null {
   const weekly = plan.weekly;
   if (!weekly) return null;
   const resets = weekly.resetsAt ? new Date(weekly.resetsAt) : null;
@@ -238,7 +238,7 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
   const plan = usePlanUsage(billing?.cli, isSubscription && billing?.cli === 'claude');
 
   const { totalTokens, totalUsage, byRole, hasUsage } = summary;
-  const { inputTokens, outputTokens, cachedInputTokens, cacheWriteTokens, calls } = totalUsage;
+  const { /*inputTokens,*/ outputTokens, cachedInputTokens, cacheWriteTokens, calls } = totalUsage;
   const tokenTitle = totalUsage.estimated
     ? "Estimated from text length — this CLI doesn't report exact token counts"
     : `New tokens: fresh input + cache writes + output. Each call also re-reads the agent's whole context from the prompt cache (${cachedInputTokens.toLocaleString()} tokens here, billed at ~10% of the input price), which is why "In" below is far larger.`;
@@ -353,31 +353,41 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
       {/* Top Header Row: Label, Status Pill, and Prominent Total Token Number */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <div
-            style={{
-              width: '22px',
-              height: '22px',
-              borderRadius: '5px',
-              background: isExecuting ? 'rgba(6, 182, 212, 0.15)' : 'var(--btn-secondary-bg)',
-              border: `1px solid ${isExecuting ? 'rgba(6, 182, 212, 0.35)' : 'var(--border-subtle)'}`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: isExecuting ? 'var(--accent-cyan)' : 'var(--text-muted)'
-            }}
-          >
-            <Zap size={12} color={isExecuting ? '#06b6d4' : 'var(--text-muted)'} />
-          </div>
-          <span
-            style={{
-              fontSize: '0.72rem',
-              fontWeight: 700,
-              letterSpacing: '0.05em',
-              textTransform: 'uppercase',
-              color: 'var(--text-muted)'
-            }}
-          >
-            {typeof totalUsage.costUsd === 'number' && !isSubscription ? 'Task Cost' : 'Task Usage'}
+          <span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.15rem' }}>
+              <div
+                style={{
+                  width: '22px',
+                  height: '22px',
+                  borderRadius: '5px',
+                  background: isExecuting ? 'rgba(6, 182, 212, 0.15)' : 'var(--btn-secondary-bg)',
+                  border: `1px solid ${isExecuting ? 'rgba(6, 182, 212, 0.35)' : 'var(--border-subtle)'}`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: isExecuting ? 'var(--accent-cyan)' : 'var(--text-muted)'
+                }}
+              >
+                <Zap size={12} color={isExecuting ? '#06b6d4' : 'var(--text-muted)'} />
+              </div>
+              <span
+                style={{
+                  fontSize: '0.72rem',
+                  fontWeight: 700,
+                  letterSpacing: '0.05em',
+                  textTransform: 'uppercase',
+                  color: 'var(--text-muted)'
+                }}
+              >
+                {typeof totalUsage.costUsd === 'number' && !isSubscription ? 'Task Cost' : 'Task Usage'}
+              </span>
+            </span>
+
+            {isSubscription && plan && planLine(plan, /*billing?.label || ''*/) && (
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }} title={plan.fetchedAt ? `As of ${new Date(plan.fetchedAt).toLocaleString()}` : undefined}>
+                {planLine(plan, /*billing?.label || ''*/)}
+              </div>
+            )}
           </span>
 
           {/* Running vs Done vs Standby status pill */}
@@ -446,12 +456,6 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
           );
         })()}
       </div>
-
-      {isSubscription && plan && planLine(plan, billing?.label || 'Claude') && (
-        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }} title={plan.fetchedAt ? `As of ${new Date(plan.fetchedAt).toLocaleString()}` : undefined}>
-          {planLine(plan, billing?.label || '')}
-        </div>
-      )}
 
       {/* Middle Metrics Strip: In / Out / Calls breakdown */}
       <div

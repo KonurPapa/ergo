@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "bridge": "esbuild bridge/run.ts --bundle --platform=node --format=esm --packages=external --outfile=node_modules/.tmp/ergo-bridge.mjs --log-level=warning && node node_modules/.tmp/ergo-bridge.mjs",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"
