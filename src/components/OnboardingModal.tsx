@@ -157,7 +157,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   tinyCloudModelLabel
 }) => {
   // Wizard Steps: 1 = AI Account Connection, 2 = Optional Local AI Model, 3 = Local Device Bridge
-  const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
+  const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4>(1);
 
   // Splash Animation state: show centered brand, then slide to top & fade in content
   const [isIntroAnimating, setIsIntroAnimating] = useState<boolean>(true);
@@ -190,7 +190,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   // being watched after the wizard moves on/closes, so finishing it still switches the mode to local.
   const cloudModelLabel = tinyCloudModelLabel?.trim() || 'a small cloud model';
   const localModel = useLocalModelInstall({
-    enabled: isOpen && currentStep === 2,
+    enabled: isOpen && currentStep === 3,
     onInstalled: () => onSetLocalModelMode?.('local')
   });
 
@@ -336,6 +336,15 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     if (activeTab === 'subscription' && currentMeta.cli) checkStatus(currentMeta.cli);
   }, [bridgeStatus.isConnected]);
 
+  // Step 1: look for the bridge every few seconds while the user installs and opens it (the app heartbeat is slower).
+  useEffect(() => {
+    if (!isOpen || currentStep !== 1 || bridgeStatus.isConnected || !bridgeClient.isHostedWeb()) return;
+    const timer = setInterval(() => {
+      bridgeClient.checkConnection().catch(() => {});
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [isOpen, currentStep, bridgeStatus.isConnected]);
+
   // Clean up polling
   useEffect(() => {
     return () => {
@@ -362,7 +371,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       setConnectedUserKey(key);
       onSaveUserKey(key);
     }
-    setCurrentStep(2);
+    setCurrentStep(3);
   };
 
   const getFullBridgeUrl = (portStr: string) => {
@@ -373,7 +382,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
   // Move from Step 2 to Step 3: Local Device Bridge
   const proceedToBridgeStep = () => {
-    setCurrentStep(3);
+    setCurrentStep(4);
     const targetUrl = getFullBridgeUrl(bridgePortInput);
     bridgeClient.setBridgeUrl(targetUrl);
     // Auto-check bridge connection on entering Step 3
@@ -762,7 +771,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 borderTop: '1px solid var(--border-subtle, var(--border, #e2e8f0))'
               }}
             >
-              {/* Step 1: Connect AI */}
+              {/* Step 1: Install Ergo Bridge */}
               <div
                 onClick={() => setCurrentStep(1)}
                 style={{
@@ -778,7 +787,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 }}
                 role="button"
                 tabIndex={0}
-                title="Go to Step 1: Connect AI"
+                title="Go to Step 1: Install Ergo Bridge"
               >
                 <div
                   style={{
@@ -796,12 +805,12 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 >
                   {currentStep > 1 ? <CheckCircle2 size={13} color="var(--accent-emerald)" /> : '1'}
                 </div>
-                <span>Connect AI</span>
+                <span>Install Bridge</span>
               </div>
 
               <div style={{ flex: 1, height: '1.5px', background: currentStep > 1 ? 'var(--accent-emerald)' : 'var(--border-subtle, var(--border, #e2e8f0))' }} />
 
-              {/* Step 2: Local AI model */}
+              {/* Step 2: Connect AI */}
               <div
                 onClick={() => setCurrentStep(2)}
                 style={{
@@ -817,30 +826,30 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 }}
                 role="button"
                 tabIndex={0}
-                title="Go to Step 2: Local AI model"
+                title="Go to Step 2: Connect AI"
               >
                 <div
                   style={{
                     width: 22,
                     height: 22,
                     borderRadius: '50%',
-                    background: currentStep === 2 ? 'var(--accent-cyan)' : currentStep > 2 ? 'rgba(16, 185, 129, 0.2)' : 'var(--bg-hover, rgba(0, 0, 0, 0.05))',
-                    border: `1.5px solid ${currentStep === 2 ? 'var(--accent-cyan)' : currentStep > 2 ? 'var(--accent-emerald)' : 'var(--border-strong, var(--border, #cbd5e1))'}`,
+                    background: currentStep === 2 ? 'var(--accent-primary)' : currentStep > 2 ? 'rgba(16, 185, 129, 0.2)' : 'var(--bg-hover, rgba(0, 0, 0, 0.05))',
+                    border: `1.5px solid ${currentStep === 2 ? 'var(--accent-primary)' : currentStep > 2 ? 'var(--accent-emerald)' : 'var(--border-strong, var(--border, #cbd5e1))'}`,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     fontSize: '0.72rem',
-                    color: currentStep === 2 ? '#ffffff' : currentStep > 2 ? 'var(--accent-emerald)' : 'var(--text-dim)'
+                    color: currentStep === 2 ? '#ffffff' : 'var(--text-dim)'
                   }}
                 >
                   {currentStep > 2 ? <CheckCircle2 size={13} color="var(--accent-emerald)" /> : '2'}
                 </div>
-                <span>Local AI Model</span>
+                <span>Connect AI</span>
               </div>
 
               <div style={{ flex: 1, height: '1.5px', background: currentStep > 2 ? 'var(--accent-emerald)' : 'var(--border-subtle, var(--border, #e2e8f0))' }} />
 
-              {/* Step 3: Connect Device Bridge */}
+              {/* Step 3: Local AI model */}
               <div
                 onClick={() => setCurrentStep(3)}
                 style={{
@@ -849,30 +858,69 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   gap: '0.45rem',
                   fontSize: '0.76rem',
                   fontWeight: currentStep === 3 ? 700 : 500,
-                  color: currentStep === 3 ? 'var(--text-bright)' : 'var(--text-dim)',
+                  color: currentStep === 3 ? 'var(--text-bright)' : currentStep > 3 ? 'var(--accent-emerald)' : 'var(--text-dim)',
                   cursor: 'pointer',
                   userSelect: 'none',
                   transition: 'opacity 0.15s ease'
                 }}
                 role="button"
                 tabIndex={0}
-                title="Go to Step 3: Connect Device"
+                title="Go to Step 3: Local AI model"
               >
                 <div
                   style={{
                     width: 22,
                     height: 22,
                     borderRadius: '50%',
-                    background: currentStep === 3 ? 'var(--accent-primary)' : 'var(--bg-hover, rgba(0, 0, 0, 0.05))',
-                    border: `1.5px solid ${currentStep === 3 ? 'var(--accent-primary)' : 'var(--border-strong, var(--border, #cbd5e1))'}`,
+                    background: currentStep === 3 ? 'var(--accent-cyan)' : currentStep > 3 ? 'rgba(16, 185, 129, 0.2)' : 'var(--bg-hover, rgba(0, 0, 0, 0.05))',
+                    border: `1.5px solid ${currentStep === 3 ? 'var(--accent-cyan)' : currentStep > 3 ? 'var(--accent-emerald)' : 'var(--border-strong, var(--border, #cbd5e1))'}`,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     fontSize: '0.72rem',
-                    color: currentStep === 3 ? '#ffffff' : 'var(--text-dim)'
+                    color: currentStep === 3 ? '#ffffff' : currentStep > 3 ? 'var(--accent-emerald)' : 'var(--text-dim)'
                   }}
                 >
-                  3
+                  {currentStep > 3 ? <CheckCircle2 size={13} color="var(--accent-emerald)" /> : '3'}
+                </div>
+                <span>Local AI Model</span>
+              </div>
+
+              <div style={{ flex: 1, height: '1.5px', background: currentStep > 3 ? 'var(--accent-emerald)' : 'var(--border-subtle, var(--border, #e2e8f0))' }} />
+
+              {/* Step 4: Connect Device Bridge */}
+              <div
+                onClick={() => setCurrentStep(4)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.45rem',
+                  fontSize: '0.76rem',
+                  fontWeight: currentStep === 4 ? 700 : 500,
+                  color: currentStep === 4 ? 'var(--text-bright)' : 'var(--text-dim)',
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  transition: 'opacity 0.15s ease'
+                }}
+                role="button"
+                tabIndex={0}
+                title="Go to Step 4: Connect Device"
+              >
+                <div
+                  style={{
+                    width: 22,
+                    height: 22,
+                    borderRadius: '50%',
+                    background: currentStep === 4 ? 'var(--accent-primary)' : 'var(--bg-hover, rgba(0, 0, 0, 0.05))',
+                    border: `1.5px solid ${currentStep === 4 ? 'var(--accent-primary)' : 'var(--border-strong, var(--border, #cbd5e1))'}`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '0.72rem',
+                    color: currentStep === 4 ? '#ffffff' : 'var(--text-dim)'
+                  }}
+                >
+                  4
                 </div>
                 <span>Connect Device</span>
               </div>
@@ -891,8 +939,95 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             transition: 'all 0.45s ease-out 0.15s'
           }}
         >
-          {/* STEP 1: Connect AI Account (Subscription or API Key) */}
+          {/* STEP 1: Install and start Ergo Bridge, which everything after this step runs through */}
           {currentStep === 1 && (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginBottom: '0.5rem' }}>
+                <div
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: '8px',
+                    background: 'rgba(99, 102, 241, 0.15)',
+                    border: '1px solid rgba(99, 102, 241, 0.3)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'var(--accent-primary)'
+                  }}
+                >
+                  <Laptop size={18} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0, color: 'var(--text-bright)' }}>
+                    Install Ergo Bridge
+                  </h3>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
+                    A small app that lets Ergo use your AI subscription, your files and your tools on this computer.
+                  </p>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  marginTop: '1.25rem',
+                  padding: '1rem 1.25rem',
+                  borderRadius: '12px',
+                  background: bridgeStatus.isConnected ? 'rgba(16, 185, 129, 0.1)' : 'var(--bg-card, var(--card, #ffffff))',
+                  border: bridgeStatus.isConnected ? '1.5px solid rgba(16, 185, 129, 0.35)' : '1px solid var(--border-subtle, var(--border, #e2e8f0))'
+                }}
+              >
+                {bridgeStatus.isConnected ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <CheckCircle2 size={22} color="var(--accent-emerald)" style={{ flexShrink: 0 }} />
+                    <div>
+                      <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-bright)' }}>Ergo Bridge is running</div>
+                      <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                        This computer is connected. Continue to connect your AI.
+                      </div>
+                    </div>
+                  </div>
+                ) : !getBridgeDownload() || !bridgeClient.isHostedWeb() ? (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                    {bridgeClient.isHostedWeb()
+                      ? 'Ergo Bridge runs on Windows, macOS and Linux computers. On this device you can still use Ergo with an API key: skip this step.'
+                      : 'Start the local Ergo server (npm run dev) to continue.'}
+                  </div>
+                ) : (
+                  <>
+                    <ol style={{ margin: '0 0 1rem 0', paddingLeft: '1.2rem', fontSize: '0.8rem', color: 'var(--text-main)', lineHeight: 1.7 }}>
+                      <li>Download Ergo Bridge and open the file to install it.</li>
+                      <li>Come back to this page. It finds Ergo Bridge by itself once it's running.</li>
+                      <li>When your browser asks to let this site access apps on this device, click <strong>Allow</strong>.</li>
+                    </ol>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', flexWrap: 'wrap' }}>
+                      <BridgeDownloadButton />
+                      <a href={BRIDGE_LAUNCH_URL} style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--accent-primary)' }}>
+                        Already installed? Open it
+                      </a>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginTop: '0.9rem', fontSize: '0.74rem', color: 'var(--text-dim)' }}>
+                      <Loader2 size={12} className="animate-spin" />
+                      <span>
+                        {bridgeStatus.awaitingPermission
+                          ? 'Found Ergo Bridge: click Allow in the browser prompt next to the address bar.'
+                          : 'Waiting for Ergo Bridge to start on this computer…'}
+                      </span>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {!bridgeStatus.isConnected && (bridgeStatus.diagnosis === 'permission-denied' || bridgeStatus.diagnosis === 'origin-refused') && bridgeStatus.error && (
+                <div style={{ marginTop: '0.85rem', padding: '0.75rem 1rem', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: 1.45 }}>
+                  {bridgeStatus.error}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* STEP 2: Connect AI Account (Subscription or API Key) */}
+          {currentStep === 2 && (
             <div>
               {/* Header explanation */}
               <p style={{ fontSize: '0.86rem', color: 'var(--text-main)', lineHeight: 1.5, margin: '0 0 1.25rem 0' }}>
@@ -1620,8 +1755,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             </div>
           )}
 
-          {/* STEP 2: Optional Local AI Model */}
-          {currentStep === 2 && (
+          {/* STEP 3: Optional Local AI Model */}
+          {currentStep === 3 && (
             <div style={{ animation: 'fadeIn 0.25s ease-out' }}>
               <LocalModelOnboardingStep
                 controller={localModel}
@@ -1633,8 +1768,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             </div>
           )}
 
-          {/* STEP 3: Connect Local Device Bridge */}
-          {currentStep === 3 && (
+          {/* STEP 4: Connect Local Device Bridge */}
+          {currentStep === 4 && (
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginBottom: '0.5rem' }}>
                 <div
@@ -1783,7 +1918,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     </div>
                     {bridgeStatus.isMixedContentBlocked && (
                       <div style={{ marginTop: '0.5rem', padding: '0.45rem 0.65rem', background: 'var(--bg-hover, rgba(0, 0, 0, 0.05))', borderRadius: '6px', border: '1px solid var(--border-subtle, var(--border, #e2e8f0))', color: 'var(--text-bright)', fontSize: '0.74rem' }}>
-                        💡 <strong>Why this happens:</strong> Mobile browsers and HTTPS websites restrict connecting to <code>localhost</code> over unencrypted HTTP. To use Ergo on this device, either use an <strong>API Key</strong> in Step 1, or open Ergo directly on your computer at <code>http://localhost:5173</code>.
+                        💡 <strong>Why this happens:</strong> Mobile browsers and HTTPS websites restrict connecting to <code>localhost</code> over unencrypted HTTP. To use Ergo on this device, either use an <strong>API Key</strong> in Step 2, or open Ergo directly on your computer at <code>http://localhost:5173</code>.
                       </div>
                     )}
                   </div>
@@ -2031,6 +2166,51 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         >
           {currentStep === 1 ? (
             <>
+              {bridgeStatus.isConnected ? <span /> : (
+              <button
+                type="button"
+                onClick={() => setCurrentStep(2)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-muted)',
+                  fontSize: '0.78rem',
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                  padding: '0.4rem 0'
+                }}
+              >
+                Skip for now (API keys only)
+              </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setCurrentStep(2)}
+                disabled={!bridgeStatus.isConnected}
+                style={{
+                  padding: '0.65rem 1.4rem',
+                  borderRadius: '10px',
+                  background: 'var(--accent-primary)',
+                  color: '#ffffff',
+                  fontSize: '0.85rem',
+                  fontWeight: 700,
+                  border: 'none',
+                  cursor: bridgeStatus.isConnected ? 'pointer' : 'not-allowed',
+                  opacity: bridgeStatus.isConnected ? 1 : 0.5,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.45rem',
+                  boxShadow: '0 4px 16px rgba(37, 99, 235, 0.35)',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                <span>Next: Connect AI</span>
+                <ArrowRight size={15} />
+              </button>
+            </>
+          ) : currentStep === 2 ? (
+            <>
               <div style={{ fontSize: '0.74rem', color: 'var(--text-dim)' }}>
                 Preferences are saved locally in <code>.ergo/config/</code>
               </div>
@@ -2055,7 +2235,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 <ChevronRight size={14} />
               </button>
             </>
-          ) : currentStep === 2 ? (
+          ) : currentStep === 3 ? (
             <>
               <div style={{ fontSize: '0.74rem', color: 'var(--text-dim)' }}>
                 You can change this anytime in Settings.
@@ -2085,7 +2265,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               </button>
             </>
           ) : (
-            /* Step 3: Finish Onboarding */
+            /* Step 4: Finish Onboarding */
             <>
               <button
                 type="button"

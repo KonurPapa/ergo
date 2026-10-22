@@ -498,7 +498,11 @@ class BridgeClient {
     }
 
     const failures = results.filter((r): r is Extract<typeof r, { ok: false }> => !r.ok);
-    const originRefused = failures.find((f) => f.reason === 'origin-refused');
+    // Other apps often sit on the fallback ports (3000 especially) and answer without CORS headers too, so only the
+    // bridge's own address can mean "an outdated Ergo refusing this site"; anything else is just not Ergo.
+    const originRefused = failures.find(
+      (f) => f.reason === 'origin-refused' && (f.url === preferred || f.url === DEFAULT_BRIDGE_URL || f.url === 'http://127.0.0.1:5173')
+    );
     const httpRefused = failures.find((f) => f.reason === 'refused');
     // A blocked permission fails every request instantly, exactly like a closed port, so ask the browser which it was.
     this.lastDiagnosis = this.lastPermission === 'denied'
