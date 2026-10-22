@@ -75,6 +75,20 @@ const BUNDLED_TOOL_SPECS: Record<string, BundledToolSpec> = {
     schema: obj({ path: str('Directory path to create.') }, ['path']),
     readOnly: false
   },
+  code_search: {
+    description:
+      'Find code in the project: semantic + keyword search over Ergo\'s index of the folder. Describe what you need in plain words and/or name identifiers. Returns the best-matching code with line numbers and surrounding lines, the enclosing function and each file\'s outline. Use it FIRST every time you need to locate code; fall back to search_files only if it cannot find what you need (e.g. you need every call site).',
+    schema: obj(
+      {
+        query: str('What you are looking for, in plain words and/or identifiers.'),
+        path: str('Project folder (or a subfolder of it) to search.'),
+        k: int('Optional number of code sections to return (default 5, max 8; more sections show less surrounding code each).'),
+        files: { type: 'array', items: { type: 'string' }, description: 'Optional: only search these files (paths relative to the project folder).' }
+      },
+      ['query', 'path']
+    ),
+    readOnly: true
+  },
   search_files: {
     description:
       'Locate files under a directory by filename substring (query) and/or grep their contents with a case-insensitive regex (contentPattern → path, line, text). Use this to find code instead of reading whole files. Skips .git, node_modules, dist.',
@@ -187,6 +201,23 @@ export const ASK_HUMAN_TOOL: ToolDefinition = {
  * ONLY those relevant tools are exposed to the AI (plus safe baseline read tools and ask_human).
  * If a server was requested by name or ID, all its tools are included.
  */
+/** Definitions of some bundled filesystem-harness tools (read-only ones), for small loops like the file scout. */
+export function bundledToolDefinitions(names: string[]): ToolDefinition[] {
+  return names
+    .filter((n) => BUNDLED_TOOL_SPECS[n])
+    .map((name) => ({
+      name,
+      description: BUNDLED_TOOL_SPECS[name].description,
+      inputSchema: BUNDLED_TOOL_SPECS[name].schema,
+      serverId: 'mcp-filesystem',
+      serverName: 'Filesystem',
+      readOnly: BUNDLED_TOOL_SPECS[name].readOnly,
+      autoApprove: true,
+      endpoint: undefined,
+      authHeader: undefined
+    }));
+}
+
 export function buildToolDefinitions(connectedMcps: MCPServer[], requiredMcps: string[]): ToolDefinition[] {
   const defs: ToolDefinition[] = [ASK_HUMAN_TOOL];
   const seen = new Set<string>([ASK_HUMAN_TOOL.name]);
@@ -270,6 +301,23 @@ export function buildToolDefinitions(connectedMcps: MCPServer[], requiredMcps: s
         authHeader: server.authHeader
       });
     }
+  }
+
+  // code_search ships with the filesystem harness; saved server lists from before it existed don't name it.
+  const fsServer = connectedMcps.find((m) => m.id === 'mcp-filesystem' && m.status === 'connected');
+  if (fsServer && seen.has('read_file') && !seen.has('code_search')) {
+    const spec = BUNDLED_TOOL_SPECS.code_search;
+    defs.push({
+      name: 'code_search',
+      description: spec.description,
+      inputSchema: spec.schema,
+      serverId: fsServer.id,
+      serverName: fsServer.name,
+      readOnly: true,
+      autoApprove: true,
+      endpoint: fsServer.endpoint,
+      authHeader: fsServer.authHeader
+    });
   }
 
   defs.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));

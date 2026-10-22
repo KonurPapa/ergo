@@ -28,9 +28,62 @@ import {
 } from './contracts';
 import { bridgeClient } from '../bridgeClient';
 import { toAnthropicTools, toGeminiTools, toOpenAiTools } from './toolSchemas';
+import {
+  applySummary,
+  clearOldToolResults,
+  compactionThreshold,
+  contextWindowFor,
+  renderForSummary,
+  SUMMARY_INSTRUCTIONS,
+  SUMMARY_SYSTEM,
+  tailStart,
+  type ConversationShape
+} from './compaction';
 import { peekModelCatalog } from '../modelCatalog/catalog';
 import { PRICE_SNAPSHOT } from '../modelCatalog/priceSnapshot';
 import { priceUsage, resolveAliasModelId } from '../modelCatalog/pricing';
+
+/** Prompt size at which this loop compacts its conversation (null: never). */
+function compactionTokensFor(req: ToolLoopRequest): number | null {
+  const models = (peekModelCatalog() ?? PRICE_SNAPSHOT).models;
+  return compactionThreshold({ provider: req.provider, model: req.model, setting: req.compaction, models });
+}
+
+/**
+ * Compacts a loop's conversation in place: the same model summarizes all but the newest tool exchanges (one extra call,
+ * no tools); if that fails, old tool output is cleared instead. Returns true when the conversation changed.
+ */
+async function compactConversation(req: ToolLoopRequest, messages: any[], shape: ConversationShape, usage: TokenUsage): Promise<boolean> {
+  const tail = tailStart(messages, shape);
+  if (tail < 0) return clearOldToolResults(messages) > 0;
+  try {
+    const res = await runToolLoop({
+      ...req,
+      tools: [],
+      maxRounds: 1,
+      maxTokens: 4000,
+      responseFormat: 'text',
+      compaction: { mode: 'off' },
+      sharedContext: '',
+      stableSystem: SUMMARY_SYSTEM,
+      volatileSystem: undefined,
+      initialUserMessage: `${renderForSummary(messages.slice(0, tail))}\n\n---\n${SUMMARY_INSTRUCTIONS}`,
+      onToolCalls: undefined,
+      onFirstResponse: undefined,
+      drainSteering: undefined
+    });
+    addUsage(usage, res.usage);
+    if (res.stopReason !== 'error' && res.text.trim()) {
+      applySummary(messages, shape, res.text, tail);
+      return true;
+    }
+    console.warn('[Ergo Provider] Compaction summary failed; clearing old tool output instead.', res.error);
+  } catch (err) {
+    if (req.signal?.aborted) throw err;
+    console.warn('[Ergo Provider] Compaction summary failed; clearing old tool output instead.', err);
+  }
+  return clearOldToolResults(messages) > 0;
+}
 
 /** Adds the call's API-price cost to a usage delta (live catalog when loaded, else the bundled snapshot). */
 function priceDelta(delta: TokenUsage, model: string | undefined): void {
@@ -413,9 +466,16 @@ async function runAnthropic(req: ToolLoopRequest, tools: ToolDefinition[], usage
   let lastToolResultMessage: any | null = null;
   let activeModel = req.model || 'claude-opus-5-5';
   let effortDisabled = false;
+  const compactAt = compactionTokensFor(req);
+  let lastPromptTokens = 0;
+  let lastCompactRound = -1;
 
   for (let round = 1; round <= req.maxRounds; round++) {
     throwIfAborted(req.signal);
+    // Not on back-to-back rounds: a compaction that couldn't shrink the prompt enough shouldn't repeat every round.
+    if (compactAt && lastPromptTokens >= compactAt && round > lastCompactRound + 1) {
+      if (await compactConversation(req, messages, 'anthropic', usage)) lastCompactRound = round;
+    }
     // Round boundary: the user's mid-run messages join the end of the conversation.
     appendAnthropicSteering(messages, takeSteering(req));
     const body: any = {
@@ -469,6 +529,7 @@ async function runAnthropic(req: ToolLoopRequest, tools: ToolDefinition[], usage
     priceDelta(delta, activeModel);
     addUsage(usage, delta);
     req.onUsage?.(delta);
+    lastPromptTokens = delta.inputTokens;
     if (!firstResponseFired) {
       firstResponseFired = true;
       req.onFirstResponse?.();
@@ -548,9 +609,15 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
   let noToolSupport = false;
   let activeModel = req.model || (isOllama ? 'llama3.2' : 'gpt-5.4');
   let effortDisabled = false;
+  const compactAt = compactionTokensFor(req);
+  let lastPromptTokens = 0;
+  let lastCompactRound = -1;
 
   for (let round = 1; round <= req.maxRounds; round++) {
     throwIfAborted(req.signal);
+    if (compactAt && lastPromptTokens >= compactAt && round > lastCompactRound + 1) {
+      if (await compactConversation(req, messages, 'openai', usage)) lastCompactRound = round;
+    }
     // Round boundary: the user's mid-run messages join the end of the conversation.
     const steering = takeSteering(req);
     if (steering.length > 0) messages.push({ role: 'user', content: steering.join('\n\n') });
@@ -559,7 +626,7 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
     if (isOllama) {
       body.stream = false;
       body.options = {
-        num_ctx: 16384,
+        num_ctx: contextWindowFor({ provider: 'ollama', model: activeModel, setting: req.compaction, models: [] }),
         num_predict: req.maxTokens || 4096,
         temperature: 0.2
       };
@@ -616,6 +683,7 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
     priceDelta(delta, isOllama ? undefined : activeModel);
     addUsage(usage, delta);
     req.onUsage?.(delta);
+    lastPromptTokens = delta.inputTokens;
     if (!firstResponseFired) {
       firstResponseFired = true;
       req.onFirstResponse?.();
@@ -702,9 +770,15 @@ async function runGemini(req: ToolLoopRequest, tools: ToolDefinition[], usage: T
   let toolCallCount = 0;
   let firstResponseFired = false;
   let effortDisabled = false;
+  const compactAt = compactionTokensFor(req);
+  let lastPromptTokens = 0;
+  let lastCompactRound = -1;
 
   for (let round = 1; round <= req.maxRounds; round++) {
     throwIfAborted(req.signal);
+    if (compactAt && lastPromptTokens >= compactAt && round > lastCompactRound + 1) {
+      if (await compactConversation(req, contents, 'gemini', usage)) lastCompactRound = round;
+    }
     // Round boundary: the user's mid-run messages join the end of the conversation.
     const steering = takeSteering(req);
     if (steering.length > 0) {
@@ -751,6 +825,7 @@ async function runGemini(req: ToolLoopRequest, tools: ToolDefinition[], usage: T
     priceDelta(delta, activeModel);
     addUsage(usage, delta);
     req.onUsage?.(delta);
+    lastPromptTokens = delta.inputTokens;
     if (!firstResponseFired) {
       firstResponseFired = true;
       req.onFirstResponse?.();

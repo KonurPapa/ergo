@@ -322,6 +322,19 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     }
   }, [isOpen, activeTab, selectedProvider]);
 
+  // Errors from a connect attempt made while the bridge was unreachable go stale once it answers (e.g. after the
+  // user allows local access in the browser prompt): clear them and refresh the CLI status.
+  const wasBridgeConnected = useRef(bridgeStatus.isConnected);
+  useEffect(() => {
+    const was = wasBridgeConnected.current;
+    wasBridgeConnected.current = bridgeStatus.isConnected;
+    if (was || !bridgeStatus.isConnected || !isOpen) return;
+    setInstallError(null);
+    setLoginError(null);
+    setBridgeConnectError(null);
+    if (activeTab === 'subscription' && currentMeta.cli) checkStatus(currentMeta.cli);
+  }, [bridgeStatus.isConnected]);
+
   // Clean up polling
   useEffect(() => {
     return () => {
@@ -1035,6 +1048,27 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     </div>
                   </div>
 
+                  {bridgeStatus.awaitingPermission && (
+                    <div
+                      style={{
+                        marginBottom: '1.25rem',
+                        padding: '0.85rem 1rem',
+                        borderRadius: '10px',
+                        background: 'rgba(234, 179, 8, 0.1)',
+                        border: '1px solid rgba(234, 179, 8, 0.35)',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '0.75rem',
+                        fontSize: '0.78rem',
+                        color: 'var(--text-main)',
+                        lineHeight: 1.45
+                      }}
+                    >
+                      <AlertCircle size={18} color="#eab308" style={{ marginTop: '2px', flexShrink: 0 }} />
+                      <div>{bridgeClient.describeUnreachable('permission-prompt')}</div>
+                    </div>
+                  )}
+
                   {/* Prominent Error Banner */}
                   {(loginError || installError) && (
                     <div
@@ -1058,7 +1092,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         <div style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: 1.45 }}>
                           {loginError || installError}
                         </div>
-                        {((loginError || installError || '').includes('Browser security') || (loginError || installError || '').includes('hosted web address') || (loginError || installError || '').includes('Cannot reach your local device') || (loginError || installError || '').includes('Unable to reach your local Ergo bridge') || (loginError || installError || '').includes('refuses requests from')) && (
+                        {!bridgeStatus.isConnected && (
                           <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             <button
                               type="button"
@@ -1070,9 +1104,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                               style={{
                                 padding: '0.35rem 0.75rem',
                                 borderRadius: '6px',
-                                background: 'rgba(255, 255, 255, 0.12)',
-                                border: '1px solid rgba(255, 255, 255, 0.2)',
-                                color: '#ffffff',
+                                background: 'var(--btn-secondary-bg, var(--bg-card, #ffffff))',
+                                border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
+                                color: 'var(--text-bright)',
                                 fontSize: '0.74rem',
                                 fontWeight: 600,
                                 cursor: 'pointer',
@@ -1650,12 +1684,18 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   </div>
                   <div>
                     <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-bright)' }}>
-                      {bridgeStatus.isConnected ? 'Device Connected & Ready' : 'Bridge Not Detected Yet'}
+                      {bridgeStatus.isConnected
+                        ? 'Device Connected & Ready'
+                        : bridgeStatus.awaitingPermission
+                          ? 'Waiting for Browser Permission'
+                          : 'Bridge Not Detected Yet'}
                     </div>
                     <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '2px' }}>
                       {bridgeStatus.isConnected
                         ? `Connection active at ${bridgeStatus.url}`
-                        : 'Click below to establish connection with your local workspace.'}
+                        : bridgeStatus.awaitingPermission
+                          ? bridgeClient.describeUnreachable('permission-prompt')
+                          : 'Click below to establish connection with your local workspace.'}
                     </div>
                   </div>
                 </div>
@@ -1884,11 +1924,13 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         Manual Helper Launch Command
                       </div>
                       <div style={{ fontSize: '0.71rem', color: 'var(--text-dim)', marginBottom: '0.45rem' }}>
-                        If the bridge isn't running automatically, run this in a terminal to start it:
+                        The bridge runs from your local copy of Ergo. To start it, run this in a terminal:
                       </div>
                       {(() => {
-                        const localFolder = bridgeStatus.storageDir || (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'Ergo' : '<folder where Ergo is stored>');
-                        const launchCmd = `cd ${localFolder.includes(' ') ? `"${localFolder}"` : localFolder} && npm run dev`;
+                        // The Ergo checkout the bridge last ran from (not the ~/.ergo data folder). Two lines rather
+                        // than `&&`, which Windows PowerShell 5.1 rejects.
+                        const appFolder = bridgeStatus.appDir || '<your Ergo folder>';
+                        const launchCmd = `cd ${appFolder.includes(' ') ? `"${appFolder}"` : appFolder}\nnpm run dev`;
                         return (
                           <div
                             style={{
@@ -1906,7 +1948,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                               gap: '0.5rem'
                             }}
                           >
-                            <span style={{ whiteSpace: 'nowrap' }}>{launchCmd}</span>
+                            <span style={{ whiteSpace: 'pre' }}>{launchCmd}</span>
                             <button
                               type="button"
                               onClick={() => {

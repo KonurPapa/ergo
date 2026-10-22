@@ -145,6 +145,15 @@ function loadPipeline(modelsDir: string, log: (msg: string, err?: unknown) => vo
   return pipelinePromise;
 }
 
+/**
+ * Embeds with the memory model outside any store (the code index). Needs the models dir once, for the first load;
+ * every caller shares the one model and queue.
+ */
+export function embedWithMemoryModel(texts: string[], priority: EmbedPriority, modelsDir: string): Promise<Float32Array[]> {
+  if (!embedModelsDir) embedModelsDir = modelsDir;
+  return embedTexts(texts, priority);
+}
+
 export function isMemoryModelLoaded(): boolean {
   return pipelineLoaded;
 }
@@ -157,6 +166,8 @@ interface EmbedJob {
 
 const embedQueue: EmbedJob[] = [];
 const priorityQueue: EmbedJob[] = [];
+/** Bulk work nobody is waiting on (code indexing): runs only when the other two queues are empty. */
+const backgroundQueue: EmbedJob[] = [];
 let embedWorkerRunning = false;
 let embedModelsDir = '';
 let embedLog: (msg: string, err?: unknown) => void = () => {};
@@ -165,8 +176,8 @@ async function runEmbedWorker() {
   if (embedWorkerRunning) return;
   embedWorkerRunning = true;
   try {
-    while (priorityQueue.length > 0 || embedQueue.length > 0) {
-      const job = (priorityQueue.length > 0 ? priorityQueue.shift() : embedQueue.shift())!;
+    while (priorityQueue.length > 0 || embedQueue.length > 0 || backgroundQueue.length > 0) {
+      const job = (priorityQueue.shift() ?? embedQueue.shift() ?? backgroundQueue.shift())!;
       try {
         const pipe = await loadPipeline(embedModelsDir, embedLog);
         const out = await pipe(job.texts, { pooling: 'mean', normalize: true });
@@ -183,8 +194,12 @@ async function runEmbedWorker() {
   }
 }
 
+/** Which queue an embedding waits in: search queries first, then memory ingestion, then background indexing. */
+export type EmbedPriority = 'query' | 'normal' | 'background';
+
 /** Embeds texts through the one serialized queue (`priority`: search queries jump ahead of bulk ingestion). */
-async function embedTexts(texts: string[], priority = false): Promise<Float32Array[]> {
+async function embedTexts(texts: string[], priority: boolean | EmbedPriority = false): Promise<Float32Array[]> {
+  const queue = priority === true || priority === 'query' ? priorityQueue : priority === 'background' ? backgroundQueue : embedQueue;
   if (texts.length === 0) return [];
   const inputs = texts.map((t) => {
     const s = String(t ?? '').trim();
@@ -195,7 +210,7 @@ async function embedTexts(texts: string[], priority = false): Promise<Float32Arr
     const batch = inputs.slice(i, i + EMBED_BATCH);
     jobs.push(
       new Promise<Float32Array[]>((resolve, reject) => {
-        (priority ? priorityQueue : embedQueue).push({ texts: batch, resolve, reject });
+        queue.push({ texts: batch, resolve, reject });
       })
     );
   }

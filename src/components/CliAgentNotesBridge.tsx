@@ -1,24 +1,19 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Terminal,
   Sparkles,
   ShieldAlert,
   ShieldCheck,
   Send,
-  RotateCcw,
-  Square,
   Copy,
   Check,
   ChevronDown,
   ChevronUp,
   Brain,
-  ExternalLink,
   MessageSquare,
   Command,
   Loader2,
   HelpCircle,
   AlertTriangle,
-  Users,
 } from 'lucide-react';
 import { bridgeClient } from '../lib/bridgeClient';
 import { sendAgentInput } from '../lib/cliRunClient';
@@ -26,7 +21,6 @@ import { TerminalScreen, ScreenTranscript } from '../lib/cliScreen';
 import { keystrokesForOption, promptSummary, isBypassAcceptanceDialog } from '../lib/cliPromptParser';
 import type {
   AgentSessionRole,
-  AgentSessionStatus,
   CliDetectedPrompt,
   CliPromptOption,
   PermissionLevel,
@@ -51,17 +45,9 @@ export interface CliAgentNotesBridgeProps {
   /** The prompt the agent was launched with (filtered out of the activity feed when the CLI echoes it). */
   launchPrompt?: string;
   pieceId?: string;
-  cmd: string;
-  isActive?: boolean;
-  status?: AgentSessionStatus;
   permissionLevel?: PermissionLevel;
   /** The prompt App already knows about (SpawnedSession.pendingPrompt), shown until the bridge reports otherwise. */
   initialPrompt?: CliDetectedPrompt | null;
-  onSwitchToSteps?: () => void;
-  /** Stop this agent. */
-  onKill?: () => void;
-  /** Restart the task run (offered on the manager only). */
-  onRestart?: () => void;
   /**
    * The task prompt box (App routes it: mid-run to this agent — held while a permission prompt is open — and after the
    * run finished as a follow-up that continues it). Without it, the box types straight into this terminal.
@@ -270,19 +256,12 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
   label,
   launchPrompt,
   pieceId,
-  cmd,
-  isActive = true,
-  status,
   permissionLevel,
   initialPrompt = null,
-  onSwitchToSteps,
-  onKill,
-  onRestart,
   onSendMessage,
   runActive = true,
 }) => {
   const [detectedPrompt, setDetectedPrompt] = useState<CliDetectedPrompt | null>(initialPrompt);
-  const [currentActivity, setCurrentActivity] = useState<string>(`Connecting to ${label}…`);
   const [activityFeed, setActivityFeed] = useState<ActivityFeedItem[]>([]);
   const [localEntries, setLocalEntries] = useState<ActivityFeedItem[]>([]);
   const [steerInput, setSteerInput] = useState('');
@@ -290,7 +269,6 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
   const [isCopiedCommand, setIsCopiedCommand] = useState(false);
   const [submitting, setSubmitting] = useState<{ signature: string; key: string } | null>(null);
   const [isFeedCollapsed, setIsFeedCollapsed] = useState(false);
-  const [exitCode, setExitCode] = useState<number | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
   const feedScrollRef = useRef<HTMLDivElement>(null);
@@ -357,14 +335,13 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
     let transcript = new ScreenTranscript();
     let observeTimer: ReturnType<typeof setTimeout> | null = null;
     let lastFeedSig = '';
-    let lastActivity = '';
 
     const observeScreen = () => {
       transcript.observe(screen.isAltScreen() ? screen.visibleRows() : screen.tailRows(screen.rows * 2));
     };
 
     const publishFeed = () => {
-      const { feed, currentActivity: latest } = extractActivityEntries(
+      const { feed } = extractActivityEntries(
         transcript.tail(400),
         labelRef.current,
         screen.visibleRows(),
@@ -389,10 +366,6 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
       if (sig !== lastFeedSig) {
         lastFeedSig = sig;
         setActivityFeed(stamped);
-      }
-      if (latest !== lastActivity) {
-        lastActivity = latest;
-        setCurrentActivity(latest);
       }
     };
 
@@ -448,12 +421,7 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
         // because this view attached before the relaunch's spawn landed. The bridge follows with the live
         // session's own prompt/exit, if any. An ended replay ('ended') is followed by its 'exit' instead.
         if (!msg.ended) {
-          setExitCode(null);
           setDetectedPrompt(null);
-          if (msg.restarted) {
-            lastActivity = '';
-            setCurrentActivity(`${labelRef.current} is starting…`);
-          }
         }
       } else if (msg.type === 'resized') {
         // The Steps terminal refit the agent's PTY; keep our copy of the screen the same size.
@@ -490,13 +458,9 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
         const summary = typeof msg.summary === 'string' && msg.summary.trim() ? msg.summary.trim() : 'approval prompt';
         addLocalEntry('approval', `Auto-approved: ${summary}`);
       } else if (msg.type === 'exit') {
-        const code = typeof msg.code === 'number' ? msg.code : -1;
-        setExitCode(code);
         setDetectedPrompt(null);
         observeScreen();
         publishFeed();
-        lastActivity = `Process exited with code ${code}`;
-        setCurrentActivity(lastActivity);
       } else if (msg.type === 'error') {
         const message = typeof msg.message === 'string' ? msg.message : 'Terminal bridge error';
         setConnectionError(message);
@@ -591,77 +555,6 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
   // not clear it, or the live session is not yet on Full access) — the user has to answer it.
   const autoApproveSkipped =
     Boolean(detectedPrompt) && detectedPrompt!.kind === 'approval' && permissionLevel === 'bypass' && !isBypassDialog;
-  const hasExited = exitCode !== null && (status === undefined || status === 'running' || status === 'starting');
-
-  const statusBadge = (() => {
-    if (detectedPrompt && detectedPrompt.kind !== 'notice') {
-      return (
-        <span className="status-badge is-waiting">
-          <span className="pulse-dot-amber" />
-          <span>{detectedPrompt.kind === 'approval' ? 'Needs approval' : 'Needs your answer'}</span>
-        </span>
-      );
-    }
-    if (hasExited) {
-      return (
-        <span className="status-badge is-idle">
-          <span className="dot-gray" />
-          <span>Exited</span>
-        </span>
-      );
-    }
-    switch (status) {
-      case 'starting':
-      case 'running':
-      case 'awaiting_approval':
-        return (
-          <span className="status-badge is-running">
-            <span className="pulse-dot-emerald" />
-            <span>{status === 'starting' ? 'Starting' : 'Working'}</span>
-          </span>
-        );
-      case 'waiting':
-        return (
-          <span className="status-badge is-waiting-agents">
-            <span className="dot-violet" />
-            <span>{role === 'manager' ? 'Waiting on agents' : 'Waiting'}</span>
-          </span>
-        );
-      case 'done':
-        return (
-          <span className="status-badge is-done">
-            <Check size={10} />
-            <span>Done</span>
-          </span>
-        );
-      case 'failed':
-        return (
-          <span className="status-badge is-failed">
-            <span className="dot-rose" />
-            <span>Failed</span>
-          </span>
-        );
-      case 'cancelled':
-        return (
-          <span className="status-badge is-idle">
-            <span className="dot-gray" />
-            <span>Stopped</span>
-          </span>
-        );
-      default:
-        return isActive ? (
-          <span className="status-badge is-running">
-            <span className="pulse-dot-emerald" />
-            <span>Working</span>
-          </span>
-        ) : (
-          <span className="status-badge is-idle">
-            <span className="dot-gray" />
-            <span>Idle</span>
-          </span>
-        );
-    }
-  })();
 
   const promptTitle = detectedPrompt
     ? detectedPrompt.toolLabel ||
@@ -675,60 +568,6 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
 
   return (
     <div className={`cli-notes-bridge role-${role}`}>
-      {/* ── Top Bar: which agent this is, its status & controls ── */}
-      <div className="cli-notes-bridge-header">
-        <div className="bridge-header-left">
-          <div className={`bridge-ai-avatar role-${role}`}>
-            {role === 'qa' ? (
-              <ShieldCheck size={14} className="avatar-icon" />
-            ) : role === 'worker' ? (
-              <Users size={14} className="avatar-icon" />
-            ) : (
-              <Brain size={14} className="avatar-icon" />
-            )}
-          </div>
-          <div className="bridge-title-group">
-            <div className="bridge-main-title">
-              <AgentRoleBadge role={role} pieceId={pieceId} label={label} size="md" />
-              <span className="bridge-cmd-tag">{cmd}</span>
-            </div>
-            <div className="bridge-status-line">
-              {statusBadge}
-              <span className="bridge-current-thought" title={currentActivity}>
-                {currentActivity}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="bridge-header-right">
-          {onSwitchToSteps && (
-            <button
-              type="button"
-              className="bridge-terminal-switch-btn"
-              onClick={onSwitchToSteps}
-              title={`Open the Steps tab to use ${label}'s raw embedded terminal`}
-            >
-              <Terminal size={11} />
-              <span>Raw Terminal</span>
-              <ExternalLink size={10} style={{ opacity: 0.6 }} />
-            </button>
-          )}
-
-          {onRestart && (
-            <button type="button" className="bridge-ctrl-btn" onClick={onRestart} title="Restart the whole task run">
-              <RotateCcw size={11} />
-            </button>
-          )}
-
-          {isActive && exitCode === null && onKill && (
-            <button type="button" className="bridge-ctrl-btn is-danger" onClick={onKill} title={`Stop ${label}`}>
-              <Square size={11} />
-            </button>
-          )}
-        </div>
-      </div>
-
       {connectionError && (
         <div className="bridge-connection-error">
           <AlertTriangle size={12} />
@@ -851,12 +690,6 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
                 <summary>Show what the agent is asking</summary>
                 <pre>{detectedPrompt.rawSnippet}</pre>
               </details>
-            )}
-            {onSwitchToSteps && (
-              <button type="button" className="prompt-raw-terminal-link" onClick={onSwitchToSteps}>
-                <Terminal size={11} />
-                <span>Raw Terminal</span>
-              </button>
             )}
           </div>
         </div>

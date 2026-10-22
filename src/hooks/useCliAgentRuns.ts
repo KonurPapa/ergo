@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type {
+  AIProviderConfig,
   AgentContextItem,
   AgentPipelineOptions,
   AgentRole,
@@ -51,6 +52,7 @@ import {
   buildContinuationPrompt,
   buildFollowUpMessage,
   buildManagerCliPrompt,
+  buildTaskContentText,
   buildQaCliPrompt,
   buildQaFailMessage,
   buildWorkerCliPrompt,
@@ -63,6 +65,8 @@ import {
 } from '../lib/cliAgents';
 import { isBypassAcceptanceDialog, keystrokesForOption, pickApproveOption, promptSummary } from '../lib/cliPromptParser';
 import { runSessionRetrospective, searchMemory, type SearchResult } from '../lib/memory';
+import { refreshCodeIndex } from '../lib/mcpClient';
+import { runFileScout } from '../lib/codeIndex/runFileScout';
 import { buildRunOutcomeRecord } from '../lib/agentPipeline/escalation';
 import { familyForTarget } from '../lib/modelCatalog/availability';
 import { recordSteeringMessage } from '../lib/agentPipeline/steeringLog';
@@ -81,6 +85,8 @@ export interface CliLaunchConfig {
   /** API keys forwarded to the process (never persisted or stored in session state). */
   env: Record<string, string>;
   hasApiKey: boolean;
+  /** The profile's small model (smallModelCallConfig), for the file scout. Holds keys: never persisted. */
+  smallModel?: AIProviderConfig | null;
   cwd: string;
   /** Model + effort per agent role, in the CLI's own vocabulary. */
   roles: Record<AgentSessionRole, RunStageModel>;
@@ -484,6 +490,12 @@ interface PersistedRunState {
   briefSnapshot?: AgentContextItem;
   /** Selected related tasks' context (from launch), for the manager and every worker the run starts later. */
   relatedContext?: string;
+  /** The run's folder has a ready code index (checked at launch): prompts tell agents to use code_search first. */
+  codeSearch?: boolean;
+  /** That folder (the agents' cwd at launch). */
+  codeSearchPath?: string;
+  /** Files the file scout found at launch (repository-relative), shown to the manager. */
+  likelyFiles?: string[];
   startedAt: string;
   cliName: string;
   managerSessionId: string;
@@ -836,6 +848,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     memoryToolsAvailable: true,
     ...(memoryHits && memoryHits.length > 0 ? { memoryHits } : {}),
     ...(run.relatedContext ? { relatedContext: run.relatedContext } : {}),
+    ...(run.codeSearch ? { codeSearchAvailable: true, ...(run.codeSearchPath ? { codeSearchPath: run.codeSearchPath } : {}) } : {}),
+    ...(run.likelyFiles?.length ? { likelyFiles: run.likelyFiles } : {}),
   });
 
   /** The run's project isn't open: App's tasks/briefs belong to another project (which may reuse this task id). */
@@ -3001,7 +3015,44 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       d.setExecutingTaskId(task.id);
       d.syncAndSaveProject(nextTasks, nextBriefs, true);
 
-      const memoryHits = await prefetchPromptMemory(projectId, taskMemoryQuery(task));
+      // Alongside the memory prefetch: bring the code index up to date, then let the small model scout the files.
+      const scoutStepId = `step-scout-${taskKey}-${runId}`;
+      const scoutAndIndex = (async () => {
+        const indexed = await refreshCodeIndex(launch.cwd);
+        if (!indexed || !launch.smallModel) return { indexed, scout: null };
+        updateSteps(run, (steps) => {
+          const at = steps.findIndex((st) => st.id === managerStepId);
+          const step: ExecutionStep = {
+            id: scoutStepId,
+            taskId: task.id,
+            time: nowTime(),
+            stage: 'execution',
+            agentRole: 'autocomplete',
+            title: `File scout (${launch.smallModel?.model || 'small model'})`,
+            detail: 'Finding the files this task needs, so the manager can start there.',
+            status: 'running',
+          };
+          return at === -1 ? [...steps, step] : [...steps.slice(0, at), step, ...steps.slice(at)];
+        });
+        const scout = await runFileScout({ config: launch.smallModel, taskText: buildTaskContentText(task, resetBrief), cwd: launch.cwd });
+        if (scout?.usage) usageBySpawnRef.current.set(`${run.runId}-scout`, scout.usage);
+        patchStep(run, scoutStepId, (st) => ({
+          ...st,
+          status: scout ? 'success' : 'warning',
+          detail: scout
+            ? `Found ${scout.files.length} likely file${scout.files.length === 1 ? '' : 's'} in ${(scout.durationMs / 1000).toFixed(0)} s:\n${scout.files.map((f) => `- ${f}`).join('\n')}`
+            : 'No file list (the scout failed or ran out of time); the manager searches the whole repository.',
+          ...(scout?.usage ? { usage: scout.usage } : {}),
+        }));
+        return { indexed, scout };
+      })();
+      const [memoryHits, { indexed: codeIndexed, scout }] = await Promise.all([
+        prefetchPromptMemory(projectId, taskMemoryQuery(task)),
+        scoutAndIndex,
+      ]);
+      run.codeSearch = codeIndexed;
+      run.codeSearchPath = launch.cwd;
+      if (scout) run.likelyFiles = scout.files;
       // Stopped or relaunched while the memory search ran: that path owns the task now.
       if (run.finalized || runsRef.current.get(runKeyOf(projectId, taskKey)) !== run) return false;
       const prompt = buildManagerCliPrompt(task, resetBrief, runCtx(run, memoryHits));

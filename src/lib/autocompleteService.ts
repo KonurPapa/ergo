@@ -126,6 +126,22 @@ async function localSuggestion(ctx: AutocompleteContext, signal?: AbortSignal): 
  * With the local model selected (Settings → Local AI model) it answers first; when it is unavailable or has no
  * suggestion, the tiny cloud model of the active AI profile is asked instead.
  */
+/**
+ * Provider config for the active profile's small model — the one autocomplete and other little jobs (e.g. the file
+ * scout at the start of a task run) use: the tiny model of the profile's family, unless an autocomplete model is
+ * pinned (role override / profile). Null when no AI profile is connected.
+ */
+export function smallModelCallConfig(aiConfig?: AIProviderConfig | null): AIProviderConfig | null {
+  const roleOverride = aiConfig?.roleConfigs?.autocomplete;
+  // Profiles saved before the current model generation stored the old default as if it were a choice: treat it as
+  // "no override" so they get the tiny model like everyone else.
+  const pinned = [roleOverride?.model, aiConfig?.autocompleteModel].find((m) => m && !RETIRED_AUTOCOMPLETE_DEFAULTS.has(m));
+  return tinyCloudCallConfig(aiConfig, {
+    provider: pinned ? roleOverride?.provider : undefined,
+    model: pinned,
+  });
+}
+
 export async function getAutocompleteSuggestion(
   ctx: AutocompleteContext,
   aiConfig?: AIProviderConfig,
@@ -141,15 +157,8 @@ export async function getAutocompleteSuggestion(
     if (local || signal?.aborted) return local;
   }
 
-  // Cloud: the tiny model of the active profile, unless an autocomplete model is pinned (role override / profile).
-  const roleOverride = aiConfig?.roleConfigs?.autocomplete;
-  // Profiles saved before the current model generation stored the old default as if it were a choice: treat it as
-  // "no override" so they get the tiny model like everyone else.
-  const pinned = [roleOverride?.model, aiConfig?.autocompleteModel].find((m) => m && !RETIRED_AUTOCOMPLETE_DEFAULTS.has(m));
-  const lightweightConfig = tinyCloudCallConfig(aiConfig, {
-    provider: pinned ? roleOverride?.provider : undefined,
-    model: pinned,
-  });
+  // Cloud: the profile's small model (smallModelCallConfig).
+  const lightweightConfig = smallModelCallConfig(aiConfig);
   // If AI is not configured or not connected, skip
   if (!lightweightConfig) {
     return null;

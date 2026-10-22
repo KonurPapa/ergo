@@ -79,7 +79,9 @@ ERGO_ALLOWED_ORIGINS=https://another-ergo-site.example.com
 
 Restart `npm run dev` after changing it. Requests from any other website are refused (and logged in the terminal).
 
-If the hosted app says it can't reach your local bridge: make sure `npm run dev` is running (the hosted app scans ports 5173–5180 and 3000, since Vite moves to the next free port when 5173 is busy), keep your local copy up to date (`git pull`), and allow the browser's "local network access" prompt for the hosted site (Brave: turn Shields off for it; Safari is not supported).
+If the hosted app says it can't reach your local bridge: make sure `npm run dev` is running in your Ergo folder (the hosted app scans ports 5173–5180 and 3000, since Vite moves to the next free port when 5173 is busy) and keep your local copy up to date (`git pull`).
+
+Chrome, Edge, Brave and Firefox also ask before a website may reach apps on your computer. When the browser asks to let the hosted site "access other apps and services on this device", click **Allow** — until you answer, the browser holds every request to the bridge. If you blocked it earlier, allow it again in the site's settings: **Apps on device** in Chrome, Edge and Brave (click the icon left of the address bar → Site settings), or **Access this device** in Firefox's address-bar permissions panel. Safari is not supported.
 
 ---
 

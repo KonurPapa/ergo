@@ -164,6 +164,11 @@ function extractGherkin(text: string | undefined): string | null {
   return body ? body : null;
 }
 
+/** The task's own content (title, category, objectives, checklist, criteria) as plain text, e.g. for the file scout. */
+export function buildTaskContentText(task: TaskItem, brief?: AgentContextItem): string {
+  return buildTaskContentSections(task, brief).join('\n\n');
+}
+
 /**
  * Builds a clear, structured prompt for a CLI coding agent from a task and optional brief.
  * Single-agent prompt without Ergo's run protocol; task runs use buildManagerCliPrompt.
@@ -209,6 +214,14 @@ export interface CliRunPromptContext {
    * the manager and the workers as a RELATED TASKS section.
    */
   relatedContext?: string;
+  /**
+   * The agent's folder has a ready code index: the prompts tell it to find code with the code_search tool first (on
+   * the ergo-memory MCP server). `codeSearchPath`: the folder, for CLIs whose server can't tell the agent's cwd.
+   */
+  codeSearchAvailable?: boolean;
+  codeSearchPath?: string;
+  /** Files the file scout found for this task (repository-relative): the manager starts its searches there. */
+  likelyFiles?: string[];
 }
 
 export interface CliWorkerPiece {
@@ -268,6 +281,43 @@ function buildMemorySections(ctx: CliRunPromptContext, reportFile: string): stri
   return sections;
 }
 
+/**
+ * FINDING CODE section: code_search first for every lookup, grep only as the fallback, and enough surrounding code read
+ * before changing anything. `edits`: the agent changes code (QA only verifies). Empty without a code index.
+ */
+function buildCodeSearchSection(ctx: Pick<CliRunPromptContext, 'codeSearchAvailable' | 'codeSearchPath'>, edits: boolean): string[] {
+  if (!ctx.codeSearchAvailable) return [];
+  const pathNote = ctx.codeSearchPath ? ` If it asks for a folder, pass path "${ctx.codeSearchPath}".` : '';
+  return [
+    `FINDING CODE — code_search FIRST, every time:\n` +
+    `- Whenever you need to locate code — at the start and at every later point (definitions, callers, related state, styles, tests) — call code_search first. ` +
+    `Describe what you need in plain words and/or name identifiers; it returns the best-matching code with line numbers, surrounding lines and each file's outline.${pathNote}\n` +
+    `- Exact names count: code_search matches identifiers by keyword, so look a function, component, type or CSS class up with code_search before grepping the repository for it. (grep inside a file you have already found, to jump to a line, is fine.)\n` +
+    `- If the results don't show what you need, search again with different words or the identifiers you have seen.\n` +
+    `- Fall back to grep / find / ls across the repository only when code_search can't find what you need after that — for example when you need every call site of something, which a ranked search can't guarantee.\n` +
+    (edits
+      ? `READ ENOUGH CONTEXT BEFORE YOU CHANGE CODE:\n` +
+        `- Search results are entry points, not the whole picture. Before editing, read the complete function or component you will change, where its inputs come from and where its result is used (search for its callers), and the state, types and styles it depends on.\n` +
+        `- Settle on a fix only once you understand that flow end to end, and fix the root cause rather than working around it.`
+      : `READ ENOUGH CONTEXT BEFORE YOU JUDGE:\n` +
+        `- Search results are entry points. Read each changed function or component in full, plus its callers and the state it depends on, before deciding whether it is correct.`),
+  ];
+}
+
+/**
+ * LIKELY FILES section: the scout's file list, paths only. (Its reasons are left out on purpose: passed along, they
+ * decided how managers read an ambiguous task.) Empty without a list or a code index.
+ */
+function buildLikelyFilesSection(ctx: Pick<CliRunPromptContext, 'codeSearchAvailable' | 'likelyFiles'>): string[] {
+  if (!ctx.codeSearchAvailable || !ctx.likelyFiles?.length) return [];
+  return [
+    `LIKELY FILES (a quick scout found these files relevant to the task; it did not decide what to change):\n` +
+    ctx.likelyFiles.map((f) => `- ${f}`).join('\n') +
+    `\nStart with these: pass them as "files" to code_search to search only within them. If something you need isn't in them, ` +
+    `search the whole repository (code_search without "files").`,
+  ];
+}
+
 /** RELATED TASKS section (empty when the run has no selected related tasks). */
 function buildRelatedSection(ctx: Pick<CliRunPromptContext, 'relatedContext'>): string[] {
   const text = (ctx.relatedContext || '').trim();
@@ -317,10 +367,14 @@ export function buildManagerCliPrompt(task: TaskItem, brief: AgentContextItem | 
   );
 
   sections.push(...buildMemorySections(ctx, completionFile));
+  sections.push(...buildLikelyFilesSection(ctx));
+  sections.push(...buildCodeSearchSection(ctx, true));
 
   sections.push(
     `HOW TO WORK:\n` +
-    `1. Inspect the repository first (structure, conventions, existing code, how tests/build/lint are run) before changing anything.\n` +
+    (ctx.codeSearchAvailable
+      ? `1. Find the relevant code with code_search (see FINDING CODE) and read enough around it to understand the flow; check the project's conventions and how tests/build/lint are run before changing anything.\n`
+      : `1. Inspect the repository first (structure, conventions, existing code, how tests/build/lint are run) before changing anything.\n`) +
     `2. Implement every change the task needs so that all objectives${hasGherkin ? ', acceptance criteria (Gherkin scenarios)' : ''} and checklist items are satisfied. Follow the project's existing style.\n` +
     `3. Verify your work: run the relevant tests, build, type-check and/or lint commands that exist in this project and fix what fails. If nothing can be run, verify by re-reading the changed code against the requirements.\n` +
     `4. Write the completion record (see FINAL STEP). That is the last thing you do.\n` +
@@ -398,6 +452,7 @@ export function buildWorkerCliPrompt(
   );
 
   sections.push(...buildMemorySections(ctx, reportFile));
+  sections.push(...buildCodeSearchSection(ctx, true));
 
   sections.push(`YOUR PIECE: ${piece.id} — ${piece.title}\n\n${piece.instructions.trim()}`);
 
@@ -457,6 +512,7 @@ export function buildQaCliPrompt(
   );
 
   sections.push(...buildMemorySections(ctx, qaFile));
+  sections.push(...buildCodeSearchSection(ctx, false));
 
   sections.push(...buildTaskContentSections(task, brief, 'TASK UNDER REVIEW'));
 

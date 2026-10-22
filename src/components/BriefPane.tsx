@@ -312,52 +312,15 @@ const NO_AGENT_SESSIONS: SpawnedSession[] = [];
 /** React key for an agent's views: a relaunch reuses the ptySessionId, so the launch id forces a fresh attach. */
 const agentViewKey = (s: SpawnedSession) => `${s.ptySessionId}|${s.spawnId || s.runId || s.session.spawnedAt}`;
 
-const CardStatusChip: React.FC<{ status: CardStatus }> = ({ status }) => {
-  if (status === 'working') {
-    return (
-      <span className="card-status-chip is-working">
-        <Loader2 size={11} className="spin-animate" />
-        <span>Working...</span>
-      </span>
-    );
-  }
-  if (status === 'queued') {
-    return (
-      <span
-        className="card-status-chip is-queued"
-        style={{
-          background: 'rgba(234, 179, 8, 0.12)',
-          color: 'var(--warning, #eab308)',
-          border: '1px solid rgba(234, 179, 8, 0.3)',
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: '0.3rem',
-          padding: '0.12rem 0.45rem',
-          borderRadius: '4px',
-          fontSize: '0.68rem',
-          fontWeight: 600
-        }}
-      >
-        <Clock size={11} />
-        <span>Queued</span>
-      </span>
-    );
-  }
-  if (status === 'done') {
-    return (
-      <span className="card-status-chip is-done">
-        <CheckCircle2 size={11} />
-        <span>Done</span>
-      </span>
-    );
-  }
-  return (
-    <span className="card-status-chip is-not-started">
-      <span className="status-dot-grey" />
-      <span>Not started</span>
-    </span>
-  );
-};
+type TaskStageKey = 'related' | 'overview' | 'actions' | 'completion';
+
+/** The task card's stage tabs, in run order. */
+const TASK_STAGES: ReadonlyArray<{ key: TaskStageKey; label: string; Icon: React.ComponentType<{ size?: number; color?: string }>; color: string }> = [
+  { key: 'related', label: 'Related', Icon: Database, color: '#eab308' },
+  { key: 'overview', label: 'Overview', Icon: ClipboardList, color: '#3b82f6' },
+  { key: 'actions', label: 'Actions', Icon: Wrench, color: '#a855f7' },
+  { key: 'completion', label: 'Completion', Icon: Flag, color: '#14b8a6' },
+];
 
 /** What a pipeline tool call wants to do: the exact command, the file + diff, or the tool's arguments. */
 const PermissionRequestDetails: React.FC<{ prompt: McpToolPermissionPrompt }> = ({ prompt }) => {
@@ -376,7 +339,7 @@ const PermissionRequestDetails: React.FC<{ prompt: McpToolPermissionPrompt }> = 
       args.old_string !== undefined);
 
   const copy = (text: string) => {
-    navigator.clipboard?.writeText(text).catch(() => {});
+    navigator.clipboard?.writeText(text).catch(() => { });
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -504,7 +467,6 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   const hasPendingAlert = !!(pendingPermission || pendingOllamaFallback || agentsWithPrompt.length > 0);
 
   const overviewRef = useRef<HTMLTextAreaElement>(null);
-  const buildVerificationRef = useRef<HTMLTextAreaElement>(null);
   const completionRef = useRef<HTMLTextAreaElement>(null);
   const [activeFocusedRef, setActiveFocusedRef] = useState<React.RefObject<HTMLTextAreaElement | null> | null>(null);
 
@@ -623,37 +585,18 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     }
   }, [isSelected]);
 
-  // Default collapsed states for inner short cards:
-  // vectorMemory: collapsed by default
-  // steps: collapsed by default
-  const [collapsedCards, setCollapsedCards] = useState<{
-    overview: boolean;
-    vectorMemory: boolean;
-    steps: boolean;
-    completion: boolean;
-  }>({
-    overview: false,
-    vectorMemory: true,
-    steps: true,
-    completion: false,
-  });
+  // The stage tab shown below the token card (follows the run; see the stage tabs block below).
+  const [activeStage, setActiveStage] = useState<TaskStageKey>('overview');
 
-  const toggleCard = (card: 'overview' | 'vectorMemory' | 'steps' | 'completion') => {
-    setCollapsedCards((prev) => ({
-      ...prev,
-      [card]: !prev[card],
-    }));
-  };
-
-  // Automatically expand steps only if an interactive clarification prompt is waiting
+  // Open Actions (Steps view) when an interactive clarification prompt is waiting
   useEffect(() => {
     if (pendingHumanInput) {
-      setCollapsedCards((prev) => ({ ...prev, steps: false }));
+      setActiveStage('actions');
       setViewModeSection2('steps');
     }
   }, [pendingHumanInput]);
 
-  // Expand Actions once for every new request that needs the user: a pipeline permission prompt, an Ollama
+  // Open Actions once for every new request that needs the user: a pipeline permission prompt, an Ollama
   // fallback, or a prompt on any CLI agent's screen (keyed by prompt signature, so repaints don't re-expand it).
   const alertKeys = [
     pendingPermission ? `perm:${pendingPermission.id}` : '',
@@ -670,7 +613,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
         isNew = true;
       }
     }
-    if (isNew) setCollapsedCards((prev) => (prev.steps ? { ...prev, steps: false } : prev));
+    if (isNew) setActiveStage('actions');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [alertKeysSig]);
 
@@ -692,56 +635,18 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     }
   }, [task.id, brief]);
 
-  // Reset edit and card states when switching tasks
-  const hasAgentSessions = agentSessions.length > 0;
-  const prevTaskIdRef = useRef(task.id);
+  // Leave edit mode when switching tasks or when the task's status changes
   useEffect(() => {
-    const isNewTask = prevTaskIdRef.current !== task.id;
-    prevTaskIdRef.current = task.id;
-
     setIsEditing(false);
-
-    if (isNewTask) {
-      if (hasAgentSessions) {
-        setCollapsedCards({
-          overview: false,
-          vectorMemory: true,
-          steps: false,
-          completion: false,
-        });
-      } else {
-        setCollapsedCards({
-          overview: false,
-          vectorMemory: true,
-          steps: true,
-          completion: false,
-        });
-      }
-    } else {
-      // If task status changed on the same task, ensure Actions card stays visible while agents work
-      if (agentsWorking) {
-        setCollapsedCards((prev) => (prev.steps ? { ...prev, steps: false } : prev));
-      }
-    }
-    // Booleans only: session objects change on every agent status update and must not re-expand the card.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [task.id, task.status, task.isDone, hasAgentSessions, agentsWorking]);
+  }, [task.id, task.status, task.isDone]);
 
   const prevWorkingRef = useRef(isWorking);
   useEffect(() => {
     const wasWorking = prevWorkingRef.current;
     prevWorkingRef.current = isWorking;
 
-    if (wasWorking && !isWorking) {
-      // Build phase finished -> keep completion log visible
-      setCollapsedCards((prev) => ({
-        ...prev,
-        completion: false,
-      }));
-    } else if (!wasWorking && isWorking) {
-      // Started working -> expand task card
-      setIsTaskCollapsed(false);
-    }
+    // Started working -> expand task card
+    if (!wasWorking && isWorking) setIsTaskCollapsed(false);
   }, [isWorking]);
 
   const isContextRunning =
@@ -809,16 +714,6 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     };
   }, [contextStep]);
 
-  // Expand Related Tasks once per run when the Summary step selected related tasks (a later collapse sticks).
-  const autoOpenedRelatedForRef = useRef<string | null>(null);
-  // (The in-app pipeline reuses one step id across runs; the search timestamp tells runs apart.)
-  const contextStepId = contextStep ? `${contextStep.id}|${contextStep.baselineContext?.timestamp || ''}` : undefined;
-  useEffect(() => {
-    if (!contextStepId || relatedSelectedCount === 0 || autoOpenedRelatedForRef.current === contextStepId) return;
-    autoOpenedRelatedForRef.current = contextStepId;
-    setCollapsedCards((prev) => (prev.vectorMemory ? { ...prev, vectorMemory: false } : prev));
-  }, [contextStepId, relatedSelectedCount]);
-
   const isStepsWorking =
     agentsWorking ||
     (isExecuting &&
@@ -880,6 +775,30 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     }
     return 'not_started';
   }, [isCompletionWorking, task.isDone, task.status, completionText, executionSteps]);
+
+  // ── Stage tabs: Related Tasks → Overview → Actions → Completion ──
+  // A tab unlocks once the run reaches its stage (Overview is always open: it can be written before a run, and holds the
+  // "no overview yet" hint). The shown tab follows the run: the first stage working, else the furthest one done. A tab
+  // the user picks stays until the run moves to another stage.
+  const stageStatus: Record<TaskStageKey, CardStatus> = {
+    related: relatedTasksStatus,
+    overview: overviewStatus,
+    actions: stepsActionsStatus,
+    completion: completionStatus,
+  };
+  const stageReached = (key: TaskStageKey): boolean =>
+    key === 'overview' ||
+    stageStatus[key] !== 'not_started' ||
+    (key === 'actions' && (agentSessions.length > 0 || hasPendingAlert || Boolean(pendingHumanInput))) ||
+    (key === 'completion' && isEditing);
+  const currentStage: TaskStageKey =
+    TASK_STAGES.find((s) => stageStatus[s.key] === 'working')?.key ??
+    [...TASK_STAGES].reverse().find((s) => stageStatus[s.key] === 'done')?.key ??
+    'overview';
+  React.useLayoutEffect(() => {
+    setActiveStage(currentStage);
+  }, [currentStage, task.id]);
+  const shownStage: TaskStageKey = stageReached(activeStage) ? activeStage : currentStage;
 
   // Determine what to display in Section 2 (Build & Verification / Steps & Actions)
   const showExecutionSteps = viewModeSection2 === 'steps' && !isEditing;
@@ -1093,8 +1012,8 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   }, [isWorking, isStoppedPartway, isTaskDone, executionSteps, terminalSession, brief?.completion, brief?.validation]);
 
   // ── Which agent the Notes view shows ──
-  // "Follow live" (default) tracks the agent that matters right now (pickLiveAgent), switching after a short
-  // debounce and always announcing the switch; picking a tab pins that agent and turns following off.
+  // By default the view follows the agent that matters right now (pickLiveAgent), switching after a short debounce
+  // and always announcing the switch; picking another agent's tab pins it until the live agent's tab is picked.
   const [followLive, setFollowLive] = useState(true);
   const [pinnedAgentId, setPinnedAgentId] = useState<string | null>(null);
   const [followedAgentId, setFollowedAgentId] = useState<string | null>(null);
@@ -1157,20 +1076,15 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     return agentSessions.find((s) => s.ptySessionId === followedAgentId) ?? livePick?.session ?? null;
   })();
 
+  // Picking an agent's tab pins it; picking the agent that is live right now goes back to following.
   const pinAgent = (ptySessionId: string) => {
-    setPinnedAgentId(ptySessionId);
-    setFollowLive(false);
     setSwitchBanner(null);
-  };
-
-  const toggleFollowLive = (next: boolean) => {
-    setSwitchBanner(null);
-    if (next) {
+    if (ptySessionId === livePickId) {
       setPinnedAgentId(null);
       setFollowedAgentId(livePickId);
       setFollowLive(true);
     } else {
-      setPinnedAgentId(shownAgent?.ptySessionId ?? null);
+      setPinnedAgentId(ptySessionId);
       setFollowLive(false);
     }
   };
@@ -1434,17 +1348,16 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
               {/* Main Task Action Button: Working... / Queued / Resume Task / Rerun Task / Run Task */}
               <button
                 type="button"
-                className={`execute-task-btn ${
-                  isWorking
+                className={`execute-task-btn ${isWorking
                     ? 'is-working'
                     : isQueued
-                    ? 'is-queued'
-                    : isStoppedPartway
-                    ? 'is-resume'
-                    : hasRunBefore
-                    ? 'is-rerun'
-                    : ''
-                }`}
+                      ? 'is-queued'
+                      : isStoppedPartway
+                        ? 'is-resume'
+                        : hasRunBefore
+                          ? 'is-rerun'
+                          : ''
+                  }`}
                 onClick={() => {
                   setIsTaskCollapsed(false);
                   onExecuteTask(task);
@@ -1453,12 +1366,12 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   isWorking
                     ? 'Agent is working on this task...'
                     : isQueued
-                    ? 'Task is currently queued for execution'
-                    : isStoppedPartway
-                    ? 'Resume this task where it was left off'
-                    : hasRunBefore
-                    ? 'Rerun this task'
-                    : 'Start the AI on this task'
+                      ? 'Task is currently queued for execution'
+                      : isStoppedPartway
+                        ? 'Resume this task where it was left off'
+                        : hasRunBefore
+                          ? 'Rerun this task'
+                          : 'Start the AI on this task'
                 }
                 disabled={isWorking || isQueued}
               >
@@ -1575,7 +1488,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                     setIsEditing(true);
                     setViewModeSection2('notes');
                     setIsTaskCollapsed(false);
-                    setCollapsedCards((prev) => ({ ...prev, overview: false }));
+                    setActiveStage('overview');
                   }}
                 >
                   <Edit3 size={13} />
@@ -1812,42 +1725,50 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
             <RunSurveyCard record={brief?.lastRunOutcome} hidden={runActive} />
 
             {/* ═══════════════════════════════════════════════════════════
-                CARD 2: RELATED TASKS (above the Overview: the Summary step uses them to write it)
+                STAGES: one tab per stage, unlocked as the run reaches it
                ═══════════════════════════════════════════════════════════ */}
-            <div className={`ai-sub-card card-related-tasks ${collapsedCards.vectorMemory ? 'is-collapsed' : ''}`}>
-              <div
-                className="ai-sub-card-header"
-                onClick={() => toggleCard('vectorMemory')}
-              >
-                <div className="header-left">
-                  <button
-                    type="button"
-                    className={`card-collapse-btn ${collapsedCards.vectorMemory ? 'is-collapsed' : ''}`}
-                    title={collapsedCards.vectorMemory ? 'Expand Related Tasks' : 'Collapse Related Tasks'}
-                    aria-label={collapsedCards.vectorMemory ? 'Expand Related Tasks' : 'Collapse Related Tasks'}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleCard('vectorMemory');
-                    }}
-                  >
-                    <ChevronDown size={12} className="collapse-chevron" />
-                  </button>
-                  <span className="section-title-text">
-                    <Database size={14} color="#eab308" />
-                    <span>Related Tasks</span>
-                  </span>
-                  {relatedSummaryTag && !isRelatedWorking && (
-                    <span className="section-subtitle-tag">{relatedSummaryTag}</span>
-                  )}
-                </div>
-
-                <div className="header-right" onClick={(e) => e.stopPropagation()}>
-                  <CardStatusChip status={relatedTasksStatus} />
-                </div>
+            <div className={`stage-tabs-card stage-${shownStage} ${shownStage === 'actions' && hasPendingAlert ? 'has-pending-alert' : ''}`}>
+              <div className="stage-tabs" role="tablist" aria-label="Task stages">
+                {TASK_STAGES.map(({ key, label, Icon, color }) => {
+                  const status = stageStatus[key];
+                  const reached = stageReached(key);
+                  const attention = key === 'actions' && hasPendingAlert;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      role="tab"
+                      aria-selected={shownStage === key}
+                      disabled={!reached}
+                      className={`stage-tab status-${status} ${shownStage === key ? 'is-active' : ''} ${attention ? 'needs-attention' : ''}`}
+                      onClick={() => setActiveStage(key)}
+                      title={
+                        !reached
+                          ? `${label} opens when the run gets here`
+                          : attention
+                            ? `${label}: an agent is waiting for you`
+                            : key === 'related' && relatedSummaryTag
+                              ? `${label}: ${relatedSummaryTag}`
+                              : `${label}${status === 'working' ? ' · working' : status === 'done' ? ' · done' : ''}`
+                      }
+                    >
+                      <Icon size={12} color={reached ? color : undefined} />
+                      <span>{label}</span>
+                      {key === 'related' && relatedSelectedCount > 0 && <span className="stage-tab-count">{relatedSelectedCount}</span>}
+                      {attention ? (
+                        <AlertTriangle size={10} className="stage-tab-alert" />
+                      ) : status === 'working' ? (
+                        <Loader2 size={10} className="spin-animate stage-tab-working" />
+                      ) : status === 'done' ? (
+                        <Check size={10} className="stage-tab-done" />
+                      ) : null}
+                    </button>
+                  );
+                })}
               </div>
 
-              {!collapsedCards.vectorMemory && (
-                <div className="ai-sub-card-body">
+              {shownStage === 'related' && (
+                <div className="ai-sub-card-body stage-panel" role="tabpanel">
                   <RelatedTasksPanel
                     baselineContext={contextStep?.baselineContext}
                     isSearching={isRelatedWorking}
@@ -1857,69 +1778,18 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   />
                 </div>
               )}
-            </div>
 
-            {/* ═══════════════════════════════════════════════════════════
-                CARD 3: OVERVIEW (populated from Summary agent)
-               ═══════════════════════════════════════════════════════════ */}
-            <div className={`ai-sub-card card-overview ${collapsedCards.overview ? 'is-collapsed' : ''}`}>
-              <div
-                className="ai-sub-card-header"
-                onClick={() => toggleCard('overview')}
-              >
-                <div className="header-left">
-                  <button
-                    type="button"
-                    className={`card-collapse-btn ${collapsedCards.overview ? 'is-collapsed' : ''}`}
-                    title={collapsedCards.overview ? 'Expand Overview' : 'Collapse Overview'}
-                    aria-label={collapsedCards.overview ? 'Expand Overview' : 'Collapse Overview'}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleCard('overview');
-                    }}
-                  >
-                    <ChevronDown size={12} className="collapse-chevron" />
-                  </button>
-                  <span className="section-title-text">
-                    <ClipboardList size={14} color="#3b82f6" />
-                    <span>Overview</span>
-                  </span>
-                  {/* {isRealOverview && !isGatheringContext && (
-                    <span className="section-subtitle-tag">
-                      Goals & Execution Plan
-                    </span>
-                  )} */}
-                  {isGatheringContext && !isOverviewSynthesizing && (
-                    <span className="section-subtitle-tag">
-                      Analyzing...
-                    </span>
-                  )}
+              {shownStage === 'overview' && (
+                <div className="ai-sub-card-body stage-panel" role="tabpanel">
                   {isOverviewOutdated && !isOverviewSynthesizing && (
-                    <span
-                      className="section-subtitle-tag"
-                      title="The task changed after this overview was generated. The next run generates a new one."
-                    >
-                      Task changed — regenerates on next run
-                    </span>
+                    <div className="stage-panel-note">The task changed after this overview was written. The next run writes a new one.</div>
                   )}
                   {isOverviewSynthesizing && isRealOverview && (
-                    <span className="section-subtitle-tag overview-refreshing-tag">
+                    <div className="stage-panel-note">
                       <Loader2 size={10} className="spin-animate" />
                       <span>Refreshing…</span>
-                    </span>
+                    </div>
                   )}
-                </div>
-
-                <div
-                  className="header-right"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <CardStatusChip status={overviewStatus} />
-                </div>
-              </div>
-
-              {!collapsedCards.overview && (
-                <div className="ai-sub-card-body">
                   {isEditing ? (
                     <textarea
                       ref={overviewRef}
@@ -1977,561 +1847,416 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   )}
                 </div>
               )}
-            </div>
 
-            {/* ═══════════════════════════════════════════════════════════
-                CARD 4: ACTIONS (collapsed by default)
-               ═══════════════════════════════════════════════════════════ */}
-            <div className={`ai-sub-card card-steps-actions ${collapsedCards.steps ? 'is-collapsed' : ''} ${hasPendingAlert ? 'has-pending-alert' : ''}`}>
-                  <div
-                    className="ai-sub-card-header"
-                    onClick={() => toggleCard('steps')}
-                  >
-                    <div className="header-left">
-                      <button
-                        type="button"
-                        className={`card-collapse-btn ${collapsedCards.steps ? 'is-collapsed' : ''}`}
-                        title={collapsedCards.steps ? 'Expand Actions' : 'Collapse Actions'}
-                        aria-label={collapsedCards.steps ? 'Expand Actions' : 'Collapse Actions'}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleCard('steps');
-                        }}
-                      >
-                        <ChevronDown size={12} className="collapse-chevron" />
-                      </button>
-                      <span className="section-title-text">
-                        <Wrench size={14} color="#a855f7" />
-                        <span>Actions</span>
-                      </span>
-                      {hasPendingAlert && (
-                        <span className="actions-attention-badge" title="Attention required: Agent action waiting for user confirmation">
-                          <AlertTriangle size={11} />
-                          <span>Action Required</span>
-                        </span>
+              {shownStage === 'actions' && (
+                <div className="ai-sub-card-body stage-panel" role="tabpanel" style={{ padding: 0 }}>
+                  {/* High-priority pending action prompts (Permission or Ollama Offline) */}
+                  {(pendingPermission || pendingOllamaFallback || offscreenPromptAgents.length > 0) && (
+                    <div style={{ padding: '0.65rem 0.65rem 0.25rem 0.65rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      {pendingPermission && onPermissionChoice && (
+                        <div className="pipeline-permission-card">
+                          <div className="pipeline-permission-header">
+                            <div className="pipeline-permission-title">
+                              <ShieldAlert size={16} />
+                              <span>Approve {pendingPermission.toolName}?</span>
+                            </div>
+                            <span className="pipeline-permission-pill">Awaiting Approval</span>
+                          </div>
+                          <p className="pipeline-permission-subtitle">
+                            The agent wants to use <strong>{pendingPermission.serverName} / {pendingPermission.toolName}</strong>:
+                          </p>
+                          <PermissionRequestDetails prompt={pendingPermission} />
+                          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap', marginTop: '0.65rem' }}>
+                            <button
+                              className="btn btn-secondary"
+                              style={{ padding: '0.3rem 0.75rem', fontSize: '0.76rem', fontWeight: 600 }}
+                              onClick={() => onPermissionChoice(false)}
+                            >
+                              Skip / Reject
+                            </button>
+                            {pendingPermission.rememberLabel && (
+                              <button
+                                className="btn btn-secondary"
+                                style={{ padding: '0.3rem 0.75rem', fontSize: '0.76rem', fontWeight: 600 }}
+                                onClick={() => onPermissionChoice('always')}
+                                title={`Approve this and ${pendingPermission.rememberLabel} for the rest of this task`}
+                              >
+                                Allow {pendingPermission.rememberLabel} for this task
+                              </button>
+                            )}
+                            <button
+                              className="btn btn-emerald"
+                              style={{ padding: '0.3rem 0.85rem', fontSize: '0.76rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                              onClick={() => onPermissionChoice(true)}
+                            >
+                              <ShieldCheck size={14} />
+                              <span>Approve</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* CLI agents blocked on a prompt the user can't see in the current view */}
+                      {offscreenPromptAgents.map((agent) => (
+                        <div key={`prompt-${agent.ptySessionId}`} className="agent-prompt-alert-row">
+                          <ShieldAlert size={14} className="agent-prompt-alert-icon" />
+                          <AgentRoleBadge role={agent.role} pieceId={agent.pieceId} label={agent.label} />
+                          <span className="agent-prompt-alert-text" title={agent.pendingPrompt!.rawSnippet}>
+                            {agent.pendingPrompt!.kind === 'approval'
+                              ? 'needs approval'
+                              : agent.pendingPrompt!.kind === 'question'
+                                ? 'is asking'
+                                : 'reports'}
+                            : <code>{promptSummary(agent.pendingPrompt!)}</code>
+                          </span>
+                          <button
+                            type="button"
+                            className="agent-prompt-alert-btn"
+                            onClick={() => {
+                              setViewModeSection2('notes');
+                              pinAgent(agent.ptySessionId);
+                            }}
+                            title={`Show ${agent.label} in the Notes view to answer`}
+                          >
+                            Review
+                          </button>
+                        </div>
+                      ))}
+
+                      {pendingOllamaFallback && onOllamaFallbackChoice && (
+                        <div
+                          style={{
+                            background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.14) 0%, rgba(20, 22, 28, 0.95) 100%)',
+                            border: '1.5px solid rgba(239, 68, 68, 0.55)',
+                            borderRadius: 'var(--radius-md)',
+                            padding: '0.85rem 1rem',
+                            boxShadow: '0 4px 20px rgba(239, 68, 68, 0.18), 0 0 0 1px rgba(239, 68, 68, 0.1)',
+                            animation: 'fadeIn 0.2s ease',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.45rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#f43f5e', fontWeight: 700, fontSize: '0.84rem' }}>
+                              <ShieldAlert size={16} />
+                              <span>Local Ollama Connection Failed</span>
+                            </div>
+                            <span style={{ fontSize: '0.68rem', fontWeight: 600, color: 'var(--accent-rose)', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
+                              Offline
+                            </span>
+                          </div>
+                          <p style={{ fontSize: '0.8rem', color: 'var(--text-main)', marginBottom: '0.5rem', lineHeight: 1.45 }}>
+                            Ergo was unable to reach your local Ollama instance at <strong style={{ color: 'var(--accent-cyan)' }}>{pendingOllamaFallback.prompt.url}</strong> after {pendingOllamaFallback.prompt.consecutiveFailures} consecutive attempts. You don't seem to be connected locally.
+                          </p>
+                          <div style={{ background: 'rgba(0, 0, 0, 0.4)', padding: '0.55rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(255, 255, 255, 0.08)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.65rem' }}>
+                            {pendingOllamaFallback.prompt.errorMessage || 'NetworkError: Failed to connect to local Ollama daemon'}
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                            <button
+                              className="btn btn-secondary"
+                              style={{ padding: '0.3rem 0.75rem', fontSize: '0.76rem', fontWeight: 600, borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--accent-rose)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                              onClick={() => onOllamaFallbackChoice('terminate')}
+                            >
+                              <Square size={12} />
+                              <span>Terminate Task</span>
+                            </button>
+                            <button
+                              className="btn btn-emerald"
+                              style={{ padding: '0.3rem 0.85rem', fontSize: '0.76rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                              onClick={() => onOllamaFallbackChoice('switch_cloud')}
+                            >
+                              <Cloud size={14} />
+                              <span>Switch to Cloud Profile</span>
+                            </button>
+                          </div>
+                        </div>
                       )}
                     </div>
+                  )}
 
-                    <div
-                      className="header-right"
-                      style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      {/* Which agent is working right now */}
-                      {nowRunningAgent ? (
-                        <span
-                          className={`agent-now-running-chip status-${nowRunningAgent.status}`}
-                          title={`${nowRunningAgent.label} · ${nowRunningAgent.cmd} · ${agentStatusLabel(nowRunningAgent.status)}`}
-                        >
-                          <span className="agent-now-running-prefix">
-                            {nowRunningAgent.status === 'awaiting_approval'
-                              ? 'Needs approval:'
-                              : nowRunningAgent.status === 'waiting'
-                              ? 'Waiting:'
-                              : 'Now running:'}
+                  {/* Internal View Switcher Bar */}
+                  <div className="actions-view-switcher-bar">
+                    <span className="actions-switcher-label">
+                      {showExecutionSteps
+                        ? executionSteps.length > 0
+                          ? `${executionSteps.length} action${executionSteps.length === 1 ? '' : 's'}`
+                          : 'Execution Steps'
+                        : shownAgent
+                          ? `Notes · ${shownAgent.label}`
+                          : 'Notes'}
+                    </span>
+                    {showExecutionSteps && (
+                      <span className="actions-now-running">
+                        {nowRunningAgent ? (
+                          <span
+                            className={`agent-now-running-chip status-${nowRunningAgent.status}`}
+                            title={`${nowRunningAgent.label} · ${nowRunningAgent.cmd} · ${agentStatusLabel(nowRunningAgent.status)}`}
+                          >
+                            <span className="agent-now-running-prefix">
+                              {nowRunningAgent.status === 'awaiting_approval'
+                                ? 'Needs approval:'
+                                : nowRunningAgent.status === 'waiting'
+                                  ? 'Waiting:'
+                                  : 'Now running:'}
+                            </span>
+                            <AgentRoleBadge role={nowRunningAgent.role} pieceId={nowRunningAgent.pieceId} label={nowRunningAgent.label} />
                           </span>
-                          <AgentRoleBadge role={nowRunningAgent.role} pieceId={nowRunningAgent.pieceId} label={nowRunningAgent.label} />
-                        </span>
-                      ) : runningPipelineStep?.agentRole ? (
-                        <span className="agent-now-running-chip status-running" title={runningPipelineStep.title}>
-                          <span className="agent-now-running-prefix">Now running:</span>
-                          <AgentRoleBadge role={runningPipelineStep.agentRole} pieceId={runningPipelineStep.pieceId} />
-                        </span>
-                      ) : null}
-
-                      {/* Run controls (every agent of the task's run) */}
-                      {terminalSession && (
-                        <>
-                          {onRestartSession && (
-                            <button
-                              type="button"
-                              className="btn btn-secondary"
-                              style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem' }}
-                              onClick={() => {
-                                setCollapsedCards((prev) => ({ ...prev, steps: false }));
-                                onRestartSession(task);
-                              }}
-                              title="Restart the task run (relaunches the Manager)"
-                            >
-                              <RotateCcw size={10} />
-                            </button>
-                          )}
-
-                          {(agentsWorking || agentSessions.some((s) => s.session.isActive)) && onKillSession && (
-                            <button
-                              type="button"
-                              className="btn btn-secondary"
-                              style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem', color: 'var(--accent-rose)' }}
-                              onClick={() => onKillSession(task.id)}
-                              title="Stop every agent of this run"
-                            >
-                              <Square size={10} />
-                            </button>
-                          )}
-                        </>
-                      )}
-
-                      {/* Single Status Chip */}
-                      <CardStatusChip status={stepsActionsStatus} />
+                        ) : runningPipelineStep?.agentRole ? (
+                          <span className="agent-now-running-chip status-running" title={runningPipelineStep.title}>
+                            <span className="agent-now-running-prefix">Now running:</span>
+                            <AgentRoleBadge role={runningPipelineStep.agentRole} pieceId={runningPipelineStep.pieceId} />
+                          </span>
+                        ) : null}
+                      </span>
+                    )}
+                    <div className="steps-notes-chip">
+                      <button
+                        type="button"
+                        className={`steps-notes-segment ${!showExecutionSteps ? 'active' : ''}`}
+                        onClick={() => setViewModeSection2('notes')}
+                        title="Switch to Notes view"
+                      >
+                        <FileText size={10} />
+                        <span>Notes</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`steps-notes-segment ${showExecutionSteps ? 'active' : ''}`}
+                        onClick={() => setViewModeSection2('steps')}
+                        title="Switch to Steps view"
+                      >
+                        <Sparkles size={10} />
+                        <span>Steps</span>
+                      </button>
                     </div>
                   </div>
 
-                  {!collapsedCards.steps && (
-                    <div className="ai-sub-card-body" style={{ padding: 0 }}>
-                      {/* High-priority pending action prompts (Permission or Ollama Offline) */}
-                      {(pendingPermission || pendingOllamaFallback || offscreenPromptAgents.length > 0) && (
-                        <div style={{ padding: '0.65rem 0.65rem 0.25rem 0.65rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                          {pendingPermission && onPermissionChoice && (
-                            <div className="pipeline-permission-card">
-                              <div className="pipeline-permission-header">
-                                <div className="pipeline-permission-title">
-                                  <ShieldAlert size={16} />
-                                  <span>Approve {pendingPermission.toolName}?</span>
-                                </div>
-                                <span className="pipeline-permission-pill">Awaiting Approval</span>
-                              </div>
-                              <p className="pipeline-permission-subtitle">
-                                The agent wants to use <strong>{pendingPermission.serverName} / {pendingPermission.toolName}</strong>:
-                              </p>
-                              <PermissionRequestDetails prompt={pendingPermission} />
-                              <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap', marginTop: '0.65rem' }}>
-                                <button
-                                  className="btn btn-secondary"
-                                  style={{ padding: '0.3rem 0.75rem', fontSize: '0.76rem', fontWeight: 600 }}
-                                  onClick={() => onPermissionChoice(false)}
-                                >
-                                  Skip / Reject
-                                </button>
-                                {pendingPermission.rememberLabel && (
-                                  <button
-                                    className="btn btn-secondary"
-                                    style={{ padding: '0.3rem 0.75rem', fontSize: '0.76rem', fontWeight: 600 }}
-                                    onClick={() => onPermissionChoice('always')}
-                                    title={`Approve this and ${pendingPermission.rememberLabel} for the rest of this task`}
-                                  >
-                                    Allow {pendingPermission.rememberLabel} for this task
-                                  </button>
-                                )}
-                                <button
-                                  className="btn btn-emerald"
-                                  style={{ padding: '0.3rem 0.85rem', fontSize: '0.76rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                                  onClick={() => onPermissionChoice(true)}
-                                >
-                                  <ShieldCheck size={14} />
-                                  <span>Approve</span>
-                                </button>
-                              </div>
-                            </div>
-                          )}
+                  {showExecutionSteps ? (
+                    /* Sub-view 1: In-place Execution Steps & Workflow */
+                    <div className="execution-steps-wrapper" style={{ padding: '0.65rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                      {/* Interactive Mid-Build Human Clarification Card if active */}
+                      {pendingHumanInput && onHumanInputChoice && (
+                        <HumanInputCard
+                          prompt={pendingHumanInput.prompt}
+                          onSubmit={onHumanInputChoice}
+                        />
+                      )}
 
-                          {/* CLI agents blocked on a prompt the user can't see in the current view */}
-                          {offscreenPromptAgents.map((agent) => (
-                            <div key={`prompt-${agent.ptySessionId}`} className="agent-prompt-alert-row">
-                              <ShieldAlert size={14} className="agent-prompt-alert-icon" />
-                              <AgentRoleBadge role={agent.role} pieceId={agent.pieceId} label={agent.label} />
-                              <span className="agent-prompt-alert-text" title={agent.pendingPrompt!.rawSnippet}>
-                                {agent.pendingPrompt!.kind === 'approval'
-                                  ? 'needs approval'
-                                  : agent.pendingPrompt!.kind === 'question'
-                                  ? 'is asking'
-                                  : 'reports'}
-                                : <code>{promptSummary(agent.pendingPrompt!)}</code>
-                              </span>
+                      {/* Agent terminals no step claims (e.g. restored sessions, or steps not recorded yet) */}
+                      {unclaimedAgents.length > 0 && (
+                        <div className="agent-terminals-list">
+                          <div className="agent-terminals-list-title">
+                            <Terminal size={12} />
+                            <span>Agent terminals</span>
+                          </div>
+                          {unclaimedAgents.map((agent) => renderAgentTerminal(agent))}
+                        </div>
+                      )}
+
+                      {/* Acceptance Brief (Gherkin Scenarios) - Collapsed by default */}
+                      {gherkinBrief && (
+                        <div className={`ai-step-gherkin-card ${isGherkinOpen ? 'is-open' : 'is-collapsed'}`}>
+                          <div
+                            className="ai-step-gherkin-header"
+                            onClick={() => setIsGherkinOpen((v) => !v)}
+                            title={isGherkinOpen ? 'Collapse Acceptance Brief' : 'Expand Acceptance Brief'}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                               <button
                                 type="button"
-                                className="agent-prompt-alert-btn"
-                                onClick={() => {
-                                  setViewModeSection2('notes');
-                                  pinAgent(agent.ptySessionId);
+                                className={`card-collapse-btn ${!isGherkinOpen ? 'is-collapsed' : ''}`}
+                                aria-label={isGherkinOpen ? 'Collapse Acceptance Brief' : 'Expand Acceptance Brief'}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setIsGherkinOpen((v) => !v);
                                 }}
-                                title={`Show ${agent.label} in the Notes view to answer`}
                               >
-                                Review
+                                <ChevronDown size={11} className="collapse-chevron" />
                               </button>
+                              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <span>🥒</span>
+                                <span>Acceptance Brief (Gherkin Scenarios)</span>
+                              </span>
                             </div>
-                          ))}
-
-                          {pendingOllamaFallback && onOllamaFallbackChoice && (
-                            <div
-                              style={{
-                                background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.14) 0%, rgba(20, 22, 28, 0.95) 100%)',
-                                border: '1.5px solid rgba(239, 68, 68, 0.55)',
-                                borderRadius: 'var(--radius-md)',
-                                padding: '0.85rem 1rem',
-                                boxShadow: '0 4px 20px rgba(239, 68, 68, 0.18), 0 0 0 1px rgba(239, 68, 68, 0.1)',
-                                animation: 'fadeIn 0.2s ease',
-                              }}
-                            >
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.45rem' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#f43f5e', fontWeight: 700, fontSize: '0.84rem' }}>
-                                  <ShieldAlert size={16} />
-                                  <span>Local Ollama Connection Failed</span>
-                                </div>
-                                <span style={{ fontSize: '0.68rem', fontWeight: 600, color: 'var(--accent-rose)', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
-                                  Offline
-                                </span>
-                              </div>
-                              <p style={{ fontSize: '0.8rem', color: 'var(--text-main)', marginBottom: '0.5rem', lineHeight: 1.45 }}>
-                                Ergo was unable to reach your local Ollama instance at <strong style={{ color: 'var(--accent-cyan)' }}>{pendingOllamaFallback.prompt.url}</strong> after {pendingOllamaFallback.prompt.consecutiveFailures} consecutive attempts. You don't seem to be connected locally.
-                              </p>
-                              <div style={{ background: 'rgba(0, 0, 0, 0.4)', padding: '0.55rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(255, 255, 255, 0.08)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.65rem' }}>
-                                {pendingOllamaFallback.prompt.errorMessage || 'NetworkError: Failed to connect to local Ollama daemon'}
-                              </div>
-                              <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                                <button
-                                  className="btn btn-secondary"
-                                  style={{ padding: '0.3rem 0.75rem', fontSize: '0.76rem', fontWeight: 600, borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--accent-rose)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                                  onClick={() => onOllamaFallbackChoice('terminate')}
-                                >
-                                  <Square size={12} />
-                                  <span>Terminate Task</span>
-                                </button>
-                                <button
-                                  className="btn btn-emerald"
-                                  style={{ padding: '0.3rem 0.85rem', fontSize: '0.76rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                                  onClick={() => onOllamaFallbackChoice('switch_cloud')}
-                                >
-                                  <Cloud size={14} />
-                                  <span>Switch to Cloud Profile</span>
-                                </button>
-                              </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <span className="card-item-tag-completed" style={{ fontSize: '0.65rem' }}>
+                                Gherkin Spec
+                              </span>
                             </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Internal View Switcher Bar */}
-                      <div className="actions-view-switcher-bar">
-                        <span className="actions-switcher-label">
-                          {showExecutionSteps
-                            ? executionSteps.length > 0
-                              ? `${executionSteps.length} action${executionSteps.length === 1 ? '' : 's'}`
-                              : 'Execution Steps'
-                            : shownAgent
-                            ? `Notes · ${shownAgent.label}`
-                            : 'Notes'}
-                        </span>
-                        <div className="steps-notes-chip">
-                          <button
-                            type="button"
-                            className={`steps-notes-segment ${!showExecutionSteps ? 'active' : ''}`}
-                            onClick={() => setViewModeSection2('notes')}
-                            title="Switch to Notes view"
-                          >
-                            <FileText size={10} />
-                            <span>Notes</span>
-                          </button>
-                          <button
-                            type="button"
-                            className={`steps-notes-segment ${showExecutionSteps ? 'active' : ''}`}
-                            onClick={() => setViewModeSection2('steps')}
-                            title="Switch to Steps view"
-                          >
-                            <Sparkles size={10} />
-                            <span>Steps</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {showExecutionSteps ? (
-                        /* Sub-view 1: In-place Execution Steps & Workflow */
-                        <div className="execution-steps-wrapper" style={{ padding: '0.65rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                          {/* Interactive Mid-Build Human Clarification Card if active */}
-                          {pendingHumanInput && onHumanInputChoice && (
-                            <HumanInputCard
-                              prompt={pendingHumanInput.prompt}
-                              onSubmit={onHumanInputChoice}
-                            />
-                          )}
-
-                          {/* Agent terminals no step claims (e.g. restored sessions, or steps not recorded yet) */}
-                          {unclaimedAgents.length > 0 && (
-                            <div className="agent-terminals-list">
-                              <div className="agent-terminals-list-title">
-                                <Terminal size={12} />
-                                <span>Agent terminals</span>
-                              </div>
-                              {unclaimedAgents.map((agent) => renderAgentTerminal(agent))}
-                            </div>
-                          )}
-
-                          {/* Acceptance Brief (Gherkin Scenarios) - Collapsed by default */}
-                          {gherkinBrief && (
-                            <div className={`ai-step-gherkin-card ${isGherkinOpen ? 'is-open' : 'is-collapsed'}`}>
-                              <div
-                                className="ai-step-gherkin-header"
-                                onClick={() => setIsGherkinOpen((v) => !v)}
-                                title={isGherkinOpen ? 'Collapse Acceptance Brief' : 'Expand Acceptance Brief'}
-                              >
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                                  <button
-                                    type="button"
-                                    className={`card-collapse-btn ${!isGherkinOpen ? 'is-collapsed' : ''}`}
-                                    aria-label={isGherkinOpen ? 'Collapse Acceptance Brief' : 'Expand Acceptance Brief'}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setIsGherkinOpen((v) => !v);
-                                    }}
-                                  >
-                                    <ChevronDown size={11} className="collapse-chevron" />
-                                  </button>
-                                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                                    <span>🥒</span>
-                                    <span>Acceptance Brief (Gherkin Scenarios)</span>
-                                  </span>
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                                  <span className="card-item-tag-completed" style={{ fontSize: '0.65rem' }}>
-                                    Gherkin Spec
-                                  </span>
-                                </div>
-                              </div>
-
-                              {isGherkinOpen && (
-                                <div className="ai-step-gherkin-body">
-                                  <pre className="gherkin-brief-pre">
-                                    {gherkinBrief}
-                                  </pre>
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* Execution Steps */}
-                          <div className="execution-steps">
-                            {executionSteps.length === 0 ? (
-                              <div className="ai-card-hint" style={{ margin: '0.4rem 0' }}>
-                                No execution steps recorded yet. Agent actions and tool logs will appear here when the task runs.
-                              </div>
-                            ) : (
-                              executionSteps.map((step) => (
-                                <div key={step.id} className={`step-card ${step.status} stage-${step.stage}`} style={step.stage === 'mcp_call' && step.pieceId ? { marginLeft: '0.65rem' } : undefined}>
-                                  <div className="step-header">
-                                    <div className="step-title">
-                                      <StepStatusIcon step={step} size={13} />
-                                      {step.agentRole ? (
-                                        <AgentRoleBadge role={step.agentRole} pieceId={step.pieceId} />
-                                      ) : (
-                                        <PieceChip pieceId={step.stage === 'mcp_call' ? step.pieceId : undefined} />
-                                      )}
-                                      <span style={{ fontSize: '0.8rem', color: step.status === 'cancelled' ? 'var(--text-muted)' : undefined }}>{step.title}</span>
-                                    </div>
-                                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                                      <StepUsageBadge usage={step.usage} />
-                                      <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-                                        {step.time}
-                                      </span>
-                                    </span>
-                                  </div>
-
-                                  <div className="step-detail"><MarkdownRenderer content={step.detail} /></div>
-                                  <BiblePreview markdown={step.bibleMarkdown} filePath={step.bibleMarkdown ? step.bibleFilePath : undefined} />
-
-                                  {/* This agent's live terminal, embedded in its own step */}
-                                  {stepTerminals.has(step.id) && (
-                                    <div style={{ marginTop: '0.65rem' }}>{renderAgentTerminal(stepTerminals.get(step.id)!)}</div>
-                                  )}
-
-                                  {step.humanInputPrompt && step.status === 'running' && onHumanInputChoice && !pendingHumanInput && (
-                                    <div style={{ marginTop: '0.4rem' }}>
-                                      <HumanInputCard
-                                        prompt={step.humanInputPrompt}
-                                        onSubmit={onHumanInputChoice}
-                                      />
-                                    </div>
-                                  )}
-
-                                  {step.widgetType && renderMcpAppWidget(step.widgetType, step.widgetData)}
-                                </div>
-                              ))
-                            )}
                           </div>
 
-                          {sendTaskMessage && hasEverRun && (
-                            <div style={{ padding: '0.4rem 0.1rem 0.2rem' }}>
-                              <TaskPromptBox
-                                running={runActive}
-                                onSend={sendTaskMessage}
-                                workerTargets={agentSessions.length === 0 ? pipelineWorkerTargets : []}
-                                hint={agentSessions.length > 0 && runActive ? 'Goes to the manager (pick an agent in the Notes view to message it directly).' : undefined}
-                              />
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        /* Sub-view 2: Notes View (the run's agents, one at a time, clearly labelled + Notes editor) */
-                        <div className="notes-view-container" style={{ display: 'flex', flexDirection: 'column' }}>
-                          {agentSessions.length > 0 && (
-                            <div className="agent-notes-panel">
-                              <AgentSessionTabs
-                                sessions={agentSessions}
-                                selectedId={shownAgent?.ptySessionId ?? null}
-                                onSelect={pinAgent}
-                                followLive={followLive}
-                                onToggleFollow={toggleFollowLive}
-                              />
-
-                              {managerWaitingOn && (
-                                <div className="agent-waiting-row">
-                                  <Clock size={11} />
-                                  <span>{managerWaitingOn.text}</span>
-                                  {managerWaitingOn.agents.map((agent) => (
-                                    <button
-                                      key={agent.ptySessionId}
-                                      type="button"
-                                      className="agent-waiting-chip"
-                                      onClick={() => pinAgent(agent.ptySessionId)}
-                                      title={`Show ${agent.label}`}
-                                    >
-                                      <AgentRoleBadge role={agent.role} pieceId={agent.pieceId} label={agent.label} />
-                                      <AgentStatusDot status={agent.status} />
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-
-                              {switchBanner && shownAgent && switchBanner.toId === shownAgent.ptySessionId && (
-                                <div className="agent-switch-banner" role="status">
-                                  <span className="agent-switch-banner-text">
-                                    Now showing <AgentRoleBadge role={shownAgent.role} pieceId={shownAgent.pieceId} label={switchBanner.toLabel} /> — {switchBanner.reason}
-                                  </span>
-                                  {agentSessions.some((s) => s.ptySessionId === switchBanner.fromId) && (
-                                    <button
-                                      type="button"
-                                      className="agent-switch-back-btn"
-                                      onClick={() => pinAgent(switchBanner.fromId)}
-                                      title={`Go back to ${switchBanner.fromLabel} and stop following automatically`}
-                                    >
-                                      <CornerUpLeft size={11} />
-                                      <span>Back to {switchBanner.fromLabel}</span>
-                                    </button>
-                                  )}
-                                  <button
-                                    type="button"
-                                    className="agent-switch-dismiss-btn"
-                                    onClick={() => setSwitchBanner(null)}
-                                    aria-label="Dismiss"
-                                    title="Dismiss"
-                                  >
-                                    <X size={11} />
-                                  </button>
-                                </div>
-                              )}
-
-                              {shownAgent && (
-                                <CliAgentNotesBridge
-                                  key={agentViewKey(shownAgent)}
-                                  sessionId={shownAgent.ptySessionId}
-                                  role={shownAgent.role}
-                                  label={shownAgent.label}
-                                  pieceId={shownAgent.pieceId}
-                                  cmd={shownAgent.cmd}
-                                  launchPrompt={shownAgent.args[shownAgent.args.length - 1]}
-                                  isActive={shownAgent.session.isActive}
-                                  status={shownAgent.status}
-                                  permissionLevel={shownAgent.permissionLevel ?? permissionLevel}
-                                  initialPrompt={shownAgent.pendingPrompt ?? null}
-                                  onSwitchToSteps={() => setViewModeSection2('steps')}
-                                  onKill={
-                                    onKillAgentSession
-                                      ? () => onKillAgentSession(shownAgent.ptySessionId)
-                                      : shownAgent.role === 'manager' && onKillSession
-                                      ? () => onKillSession(task.id)
-                                      : undefined
-                                  }
-                                  onRestart={shownAgent.role === 'manager' && onRestartSession ? () => onRestartSession(task) : undefined}
-                                  onSendMessage={
-                                    sendTaskMessage
-                                      ? (text, opts) => sendTaskMessage(text, { ...opts, ptySessionId: shownAgent.ptySessionId })
-                                      : undefined
-                                  }
-                                  runActive={runActive}
-                                />
-                              )}
-                            </div>
-                          )}
-
-                          {!shownAgent && sendTaskMessage && hasEverRun && (
-                            <div style={{ padding: '0.55rem 0.75rem 0' }}>
-                              <TaskPromptBox running={runActive} onSend={sendTaskMessage} workerTargets={pipelineWorkerTargets} />
-                            </div>
-                          )}
-
-                          {isEditing ? (
-                            <div style={{ padding: '0.55rem 0.75rem' }}>
-                              <textarea
-                                ref={buildVerificationRef}
-                                className="obsidian-card-textarea"
-                                placeholder="Record mid-task progress, steps taken on the journey, architectural choices, and why..."
-                                value={buildVerificationText}
-                                onChange={(e) => handleFieldChange('buildAndVerification', e.target.value)}
-                                onKeyDown={(e) => handleMarkdownAutoWrap(e, (val) => handleFieldChange('buildAndVerification', val))}
-                                onFocus={() => setActiveFocusedRef(buildVerificationRef)}
-                                rows={4}
-                              />
-                            </div>
-                          ) : (
-                            <div className="brief-body" style={{ padding: '0.55rem 0.75rem' }}>
-                              {buildVerificationText ? (
-                                <div className="brief-markdown-render">
-                                  <MarkdownRenderer content={buildVerificationText} />
-                                </div>
-                              ) : (
-                                <div className="ai-card-hint">
-                                  {terminalSession
-                                    ? 'Task notes and journey documentation will appear here.'
-                                    : 'Mid-task build & verification steps will appear here as the agent works.'}
-                                </div>
-                              )}
+                          {isGherkinOpen && (
+                            <div className="ai-step-gherkin-body">
+                              <pre className="gherkin-brief-pre">
+                                {gherkinBrief}
+                              </pre>
                             </div>
                           )}
                         </div>
                       )}
+
+                      {/* Execution Steps */}
+                      <div className="execution-steps">
+                        {executionSteps.length === 0 ? (
+                          <div className="ai-card-hint" style={{ margin: '0.4rem 0' }}>
+                            No execution steps recorded yet. Agent actions and tool logs will appear here when the task runs.
+                          </div>
+                        ) : (
+                          executionSteps.map((step) => (
+                            <div key={step.id} className={`step-card ${step.status} stage-${step.stage}`} style={step.stage === 'mcp_call' && step.pieceId ? { marginLeft: '0.65rem' } : undefined}>
+                              <div className="step-header">
+                                <div className="step-title">
+                                  <StepStatusIcon step={step} size={13} />
+                                  {step.agentRole ? (
+                                    <AgentRoleBadge role={step.agentRole} pieceId={step.pieceId} />
+                                  ) : (
+                                    <PieceChip pieceId={step.stage === 'mcp_call' ? step.pieceId : undefined} />
+                                  )}
+                                  <span style={{ fontSize: '0.8rem', color: step.status === 'cancelled' ? 'var(--text-muted)' : undefined }}>{step.title}</span>
+                                </div>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                  <StepUsageBadge usage={step.usage} />
+                                  <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
+                                    {step.time}
+                                  </span>
+                                </span>
+                              </div>
+
+                              <div className="step-detail"><MarkdownRenderer content={step.detail} /></div>
+                              <BiblePreview markdown={step.bibleMarkdown} filePath={step.bibleMarkdown ? step.bibleFilePath : undefined} />
+
+                              {/* This agent's live terminal, embedded in its own step */}
+                              {stepTerminals.has(step.id) && (
+                                <div style={{ marginTop: '0.65rem' }}>{renderAgentTerminal(stepTerminals.get(step.id)!)}</div>
+                              )}
+
+                              {step.humanInputPrompt && step.status === 'running' && onHumanInputChoice && !pendingHumanInput && (
+                                <div style={{ marginTop: '0.4rem' }}>
+                                  <HumanInputCard
+                                    prompt={step.humanInputPrompt}
+                                    onSubmit={onHumanInputChoice}
+                                  />
+                                </div>
+                              )}
+
+                              {step.widgetType && renderMcpAppWidget(step.widgetType, step.widgetData)}
+                            </div>
+                          ))
+                        )}
+                      </div>
+
+                      {sendTaskMessage && hasEverRun && (
+                        <div style={{ padding: '0.4rem 0.1rem 0.2rem' }}>
+                          <TaskPromptBox
+                            running={runActive}
+                            onSend={sendTaskMessage}
+                            workerTargets={agentSessions.length === 0 ? pipelineWorkerTargets : []}
+                            hint={agentSessions.length > 0 && runActive ? 'Goes to the manager (pick an agent in the Notes view to message it directly).' : undefined}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    /* Sub-view 2: Notes View (the run's agents, one at a time, clearly labelled + Notes editor) */
+                    <div className="notes-view-container" style={{ display: 'flex', flexDirection: 'column' }}>
+                      {agentSessions.length > 0 && (
+                        <div className="agent-notes-panel">
+                          <AgentSessionTabs
+                            sessions={agentSessions}
+                            selectedId={shownAgent?.ptySessionId ?? null}
+                            onSelect={pinAgent}
+                          />
+
+                          {managerWaitingOn && (
+                            <div className="agent-waiting-row">
+                              <Clock size={11} />
+                              <span>{managerWaitingOn.text}</span>
+                              {managerWaitingOn.agents.map((agent) => (
+                                <button
+                                  key={agent.ptySessionId}
+                                  type="button"
+                                  className="agent-waiting-chip"
+                                  onClick={() => pinAgent(agent.ptySessionId)}
+                                  title={`Show ${agent.label}`}
+                                >
+                                  <AgentRoleBadge role={agent.role} pieceId={agent.pieceId} label={agent.label} />
+                                  <AgentStatusDot status={agent.status} />
+                                </button>
+                              ))}
+                            </div>
+                          )}
+
+                          {switchBanner && shownAgent && switchBanner.toId === shownAgent.ptySessionId && (
+                            <div className="agent-switch-banner" role="status">
+                              <span className="agent-switch-banner-text">
+                                Now showing <AgentRoleBadge role={shownAgent.role} pieceId={shownAgent.pieceId} label={switchBanner.toLabel} /> — {switchBanner.reason}
+                              </span>
+                              {agentSessions.some((s) => s.ptySessionId === switchBanner.fromId) && (
+                                <button
+                                  type="button"
+                                  className="agent-switch-back-btn"
+                                  onClick={() => pinAgent(switchBanner.fromId)}
+                                  title={`Go back to ${switchBanner.fromLabel} and stop following automatically`}
+                                >
+                                  <CornerUpLeft size={11} />
+                                  <span>Back to {switchBanner.fromLabel}</span>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="agent-switch-dismiss-btn"
+                                onClick={() => setSwitchBanner(null)}
+                                aria-label="Dismiss"
+                                title="Dismiss"
+                              >
+                                <X size={11} />
+                              </button>
+                            </div>
+                          )}
+
+                          {shownAgent && (
+                            <CliAgentNotesBridge
+                              key={agentViewKey(shownAgent)}
+                              sessionId={shownAgent.ptySessionId}
+                              role={shownAgent.role}
+                              label={shownAgent.label}
+                              pieceId={shownAgent.pieceId}
+                              launchPrompt={shownAgent.args[shownAgent.args.length - 1]}
+                              permissionLevel={shownAgent.permissionLevel ?? permissionLevel}
+                              initialPrompt={shownAgent.pendingPrompt ?? null}
+                              onSendMessage={
+                                sendTaskMessage
+                                  ? (text, opts) => sendTaskMessage(text, { ...opts, ptySessionId: shownAgent.ptySessionId })
+                                  : undefined
+                              }
+                              runActive={runActive}
+                            />
+                          )}
+                        </div>
+                      )}
+
+                      {!shownAgent && sendTaskMessage && hasEverRun && (
+                        <div style={{ padding: '0.55rem 0.75rem 0' }}>
+                          <TaskPromptBox running={runActive} onSend={sendTaskMessage} workerTargets={pipelineWorkerTargets} />
+                        </div>
+                      )}
+
+                      {agentSessions.length === 0 && !(sendTaskMessage && hasEverRun) && (
+                        <div className="ai-card-hint" style={{ padding: '0.55rem 0.75rem' }}>
+                          The task's agents appear here while it runs.
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
 
-            {/* ═══════════════════════════════════════════════════════════
-                CARD 5: COMPLETION LOG
-               ═══════════════════════════════════════════════════════════ */}
-            <div className={`ai-sub-card card-completion ${collapsedCards.completion ? 'is-collapsed' : ''}`}>
-              <div
-                className="ai-sub-card-header"
-                onClick={() => toggleCard('completion')}
-              >
-                <div className="header-left">
-                  <button
-                    type="button"
-                    className={`card-collapse-btn ${collapsedCards.completion ? 'is-collapsed' : ''}`}
-                    title={collapsedCards.completion ? 'Expand Completion Log' : 'Collapse Completion Log'}
-                    aria-label={collapsedCards.completion ? 'Expand Completion Log' : 'Collapse Completion Log'}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleCard('completion');
-                    }}
-                  >
-                    <ChevronDown size={12} className="collapse-chevron" />
-                  </button>
-                  <span className="section-title-text">
-                    <Flag size={14} color="#14b8a6" />
-                    <span>Completion</span>
-                  </span>
+              {shownStage === 'completion' && (
+                <div className="ai-sub-card-body stage-panel" role="tabpanel">
                   {isCompletionWorking && completionText.trim().length > 0 && (
-                    <span className="section-subtitle-tag overview-refreshing-tag">
+                    <div className="stage-panel-note">
                       <Loader2 size={10} className="spin-animate" />
                       <span>Updating…</span>
-                    </span>
+                    </div>
                   )}
-                  {/* <span className="section-subtitle-tag">What Got Done</span> */}
-                </div>
-
-                <div className="header-right" onClick={(e) => e.stopPropagation()}>
-                  <CardStatusChip status={completionStatus} />
-                </div>
-              </div>
-
-              {!collapsedCards.completion && (
-                <div className="ai-sub-card-body">
                   {isEditing ? (
                     <textarea
                       ref={completionRef}

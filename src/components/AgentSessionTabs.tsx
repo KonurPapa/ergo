@@ -1,5 +1,5 @@
 import React from 'react';
-import { Brain, Users, ShieldCheck, Sparkles, Eraser, ScrollText, Wand2, Radio } from 'lucide-react';
+import { Brain, Users, ShieldCheck, Sparkles, Eraser, ScrollText, Wand2 } from 'lucide-react';
 import type { AgentRole, AgentSessionRole, AgentSessionStatus, SpawnedSession } from '../types';
 
 /**
@@ -93,7 +93,7 @@ export interface LiveAgentPick {
 }
 
 /**
- * Which agent the Notes view should follow while "Follow live" is on:
+ * Which agent the Notes view follows until the user picks another agent's tab:
  * an agent awaiting approval → (manager waiting) the first running worker, else running QA → the running manager →
  * any running agent → the still-open manager → the agent that finished most recently.
  */
@@ -171,12 +171,10 @@ export interface AgentSessionTabsProps {
   sessions: SpawnedSession[];
   selectedId: string | null;
   onSelect: (ptySessionId: string) => void;
-  followLive: boolean;
-  onToggleFollow: (next: boolean) => void;
 }
 
-/** Tab strip of a task run's agents (manager → workers → QA) with a "Follow live" toggle. */
-export const AgentSessionTabs: React.FC<AgentSessionTabsProps> = ({ sessions, selectedId, onSelect, followLive, onToggleFollow }) => {
+/** Tab strip of a task run's agents (manager → workers → QA). */
+export const AgentSessionTabs: React.FC<AgentSessionTabsProps> = ({ sessions, selectedId, onSelect }) => {
   const ordered = sortAgentSessions(sessions);
   if (ordered.length === 0) return null;
   return (
@@ -193,7 +191,7 @@ export const AgentSessionTabs: React.FC<AgentSessionTabsProps> = ({ sessions, se
               aria-selected={isSelected}
               className={`agent-session-tab role-${normalizeRole(s.role)} ${isSelected ? 'is-selected' : ''} ${needsApproval ? 'needs-approval' : ''}`}
               onClick={() => onSelect(s.ptySessionId)}
-              title={`${s.label} · ${s.cmd} · ${agentStatusLabel(s.status)}${followLive && !isSelected ? ' — click to pin this agent (turns Follow live off)' : ''}`}
+              title={`${s.label} · ${s.cmd} · ${agentStatusLabel(s.status)}`}
             >
               <AgentRoleBadge role={s.role} pieceId={s.pieceId} label={s.label} />
               <AgentStatusDot status={s.status} />
@@ -202,20 +200,6 @@ export const AgentSessionTabs: React.FC<AgentSessionTabsProps> = ({ sessions, se
           );
         })}
       </div>
-      <button
-        type="button"
-        className={`agent-follow-toggle ${followLive ? 'is-on' : ''}`}
-        onClick={() => onToggleFollow(!followLive)}
-        aria-pressed={followLive}
-        title={
-          followLive
-            ? 'Following the active agent automatically — click to stay on the selected agent'
-            : 'Pinned to the selected agent — click to follow whichever agent is active'
-        }
-      >
-        <Radio size={11} />
-        <span>Follow live</span>
-      </button>
     </div>
   );
 };

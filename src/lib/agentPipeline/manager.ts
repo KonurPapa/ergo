@@ -45,10 +45,15 @@ export interface ManagerRunResult {
 const PIECE_KINDS: PuzzlePieceKind[] = ['given', 'when', 'then', 'edge'];
 const MAX_PIECES = 12;
 
+/** How every API agent finds code (byte-stable; shared by the manager, worker and direct prompts). */
+const CODE_SEARCH_RULE = `- FINDING CODE: call code_search FIRST every time you need to locate code (path = the project folder), at the start and at every later point, exact names included (it matches identifiers by keyword); if its results miss, search again with other words or identifiers. Use search_files only when code_search can't find what you need (e.g. every call site of something). If code_search reports the folder isn't indexed, use search_files.
+- READ ENOUGH CONTEXT: search results are entry points, not the whole picture. Before changing code, read the complete function or component you will change, its callers and the state, types and styles it depends on, and fix the root cause rather than working around it.`;
+
 /** Fixed rules appended to the manager skill — byte-stable, nothing run-specific. */
 const MANAGER_RULES = `EXECUTION RULES (harness-enforced)
 - The bible above is your single source of truth. Its Allowed Boundaries are the only writable locations; the Ergo application codebase is never a target.
-- You may inspect the workspace with read-only tools (list_directory, read_file with offset/limit, search_files, get_file_info, git_status, git_diff) and, during verification, execute run_command. You never write files yourself; workers do.
+- You may inspect the workspace with read-only tools (code_search, list_directory, read_file with offset/limit, search_files, get_file_info, git_status, git_diff) and, during verification, execute run_command. You never write files yourself; workers do.
+${CODE_SEARCH_RULE}
 - Respond to decomposition and verification requests with ONLY the JSON object described in your skill — no prose, no fences.
 - Every piece's instructions must be self-contained: the worker sees only the bible and that piece.
 - Call ask_human only when blocked by a genuine decision no file can answer.`;
@@ -59,7 +64,8 @@ const WORKER_RULES = `EXECUTION RULES (harness-enforced)
 - Writes outside your piece's file list, or to files locked by another piece, are rejected with an error that tells you why. Do not retry them; report the needed change in your summary.
 - Only paths inside the bible's Allowed Boundaries are writable.
 - Tools requiring approval (write_file, edit_file, run_command, git_commit) may pause for the user; a rejection is final for that call.
-- Tool results are truncated when large; use read_file offset/limit and search_files contentPattern to narrow.
+- Tool results are truncated when large; use read_file offset/limit and code_search to narrow.
+${CODE_SEARCH_RULE}
 - End with the condensed summary and the exact final line "STATUS: DONE" or "STATUS: FAILED — <reason>".`;
 
 /** Byte-stable prompt for Direct (Solo) Mode — clean, builder-focused, no decomposition JSON contracts. */
@@ -88,7 +94,8 @@ CRITICAL HARNESS RULES:
 - MANDATORY TOOL USE: When creating or modifying code deliverables, you MUST invoke the write_file tool on the Filesystem MCP. Outputting code blocks in chat or markdown does NOT count as task completion. Deliverable files MUST physically exist on disk.
 - You MUST call write_file to save your deliverable to disk. Do NOT merely describe the code in your response; write the complete file via write_file.
 - Only paths inside the bible's Allowed Boundaries are writable.
-- Write ONLY the requested deliverable. Do not create redundant duplicate files or edit workspace markdown documents.`;
+- Write ONLY the requested deliverable. Do not create redundant duplicate files or edit workspace markdown documents.
+${CODE_SEARCH_RULE}`;
 
 export function isStraightforwardTask(bible: BibleStore): boolean {
   const { metadata, subtasks, outputAs } = bible.sections;
@@ -417,6 +424,7 @@ export async function runManager(
     cliAgentId: managerTarget.cliAgentId,
     cliCustomCommand: managerTarget.cliCustomCommand,
     effort: managerTarget.effort,
+    compaction: managerTarget.compaction,
     fallbackModel: managerTarget.fallbackModel,
     permissionLevel: ctx.getPermissionLevel(),
     getPermissionLevel: ctx.getPermissionLevel,
@@ -436,6 +444,7 @@ export async function runManager(
     cliAgentId: workerTarget.cliAgentId,
     cliCustomCommand: workerTarget.cliCustomCommand,
     effort: workerTarget.effort,
+    compaction: workerTarget.compaction,
     fallbackModel: workerTarget.fallbackModel,
     permissionLevel: ctx.getPermissionLevel(),
     getPermissionLevel: ctx.getPermissionLevel,

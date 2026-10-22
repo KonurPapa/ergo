@@ -148,6 +148,50 @@ export async function addAllowedRoot(rootPath: string, name?: string): Promise<M
   return next;
 }
 
+/** Progress of the bridge's code index for one Allowed Folder (see src/lib/codeIndex/codeIndex.ts). */
+export interface CodeIndexStatus {
+  root: string;
+  state: 'scanning' | 'indexing' | 'ready' | 'error' | 'too-large';
+  files: number;
+  sections: number;
+  embedded: number;
+  pendingFiles: number;
+  updatedAt?: number;
+  error?: string;
+}
+
+/** Code index status of every indexed folder; null when the bridge can't be reached. */
+export async function getCodeIndexStatus(): Promise<CodeIndexStatus[] | null> {
+  try {
+    const res = await apiFetch('/api/code-index/status');
+    if (!res.ok) return null;
+    const data = await res.json();
+    return Array.isArray(data?.indexes) ? data.indexes : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Task start: has the bridge bring the code index for `folder` up to date (it re-reads only files that changed while
+ * nothing was watching; bounded wait). True when the folder has a usable index.
+ */
+export async function refreshCodeIndex(folder: string): Promise<boolean> {
+  if (!folder) return false;
+  try {
+    const res = await apiFetch('/api/code-index/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: folder }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return false;
+    return Boolean((await res.json())?.indexed);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Remove an allowed root folder boundary
  */
@@ -514,7 +558,7 @@ export function guessRelevantToolsWithDetails(
     // 1. Filesystem reading & editing
     if (
       (combined.includes('file') || combined.includes('read') || combined.includes('view') || combined.includes('inspect') || combined.includes('find') || combined.includes('search')) &&
-      (tName === 'read_file' || tName === 'search_files' || tName === 'get_file_info' || tName === 'list_directory')
+      (tName === 'code_search' || tName === 'read_file' || tName === 'search_files' || tName === 'get_file_info' || tName === 'list_directory')
     ) {
       selected.add(tool.id);
       reasons[tool.id] = 'Relevant for inspecting files and directory structure mentioned in the task.';

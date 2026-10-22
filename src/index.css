@@ -3077,95 +3077,6 @@ body {
   line-height: 1.45;
 }
 
-/* ── Color-Coded AI Workflow Section Cards ─────────────────────────────── */
-
-/* 1. Overview: Blue */
-.ai-sub-card.card-overview {
-  background: rgba(59, 130, 246, 0.04);
-  border-color: rgba(59, 130, 246, 0.18);
-}
-
-.ai-sub-card.card-overview:hover {
-  border-color: rgba(59, 130, 246, 0.32);
-}
-
-.ai-sub-card.card-overview .ai-sub-card-header {
-  background: rgba(59, 130, 246, 0.07);
-  border-bottom-color: rgba(59, 130, 246, 0.14);
-}
-
-.ai-sub-card.card-overview .ai-sub-card-header:hover {
-  background: rgba(59, 130, 246, 0.11);
-}
-
-/* 2. Related Tasks: Yellow */
-.ai-sub-card.card-related-tasks {
-  background: rgba(234, 179, 8, 0.04);
-  border-color: rgba(234, 179, 8, 0.18);
-}
-
-.ai-sub-card.card-related-tasks:hover {
-  border-color: rgba(234, 179, 8, 0.32);
-}
-
-.ai-sub-card.card-related-tasks .ai-sub-card-header {
-  background: rgba(234, 179, 8, 0.07);
-  border-bottom-color: rgba(234, 179, 8, 0.14);
-}
-
-.ai-sub-card.card-related-tasks .ai-sub-card-header:hover {
-  background: rgba(234, 179, 8, 0.11);
-}
-
-/* 3. Steps & Actions: Purple */
-.ai-sub-card.card-steps-actions {
-  background: rgba(168, 85, 247, 0.04);
-  border-color: rgba(168, 85, 247, 0.18);
-}
-
-.ai-sub-card.card-steps-actions:hover {
-  border-color: rgba(168, 85, 247, 0.32);
-}
-
-.ai-sub-card.card-steps-actions .ai-sub-card-header {
-  background: rgba(168, 85, 247, 0.07);
-  border-bottom-color: rgba(168, 85, 247, 0.14);
-}
-
-.ai-sub-card.card-steps-actions .ai-sub-card-header:hover {
-  background: rgba(168, 85, 247, 0.11);
-}
-
-.ai-sub-card.card-steps-actions.has-pending-alert {
-  border-color: rgba(239, 68, 68, 0.55);
-  box-shadow: 0 0 16px rgba(239, 68, 68, 0.2);
-  background: rgba(239, 68, 68, 0.04);
-}
-
-.ai-sub-card.card-steps-actions.has-pending-alert .ai-sub-card-header {
-  background: rgba(239, 68, 68, 0.09);
-  border-bottom-color: rgba(239, 68, 68, 0.2);
-}
-
-/* 4. Completion: Cyan/Green */
-.ai-sub-card.card-completion {
-  background: rgba(20, 184, 166, 0.04);
-  border-color: rgba(20, 184, 166, 0.18);
-}
-
-.ai-sub-card.card-completion:hover {
-  border-color: rgba(20, 184, 166, 0.32);
-}
-
-.ai-sub-card.card-completion .ai-sub-card-header {
-  background: rgba(20, 184, 166, 0.07);
-  border-bottom-color: rgba(20, 184, 166, 0.14);
-}
-
-.ai-sub-card.card-completion .ai-sub-card-header:hover {
-  background: rgba(20, 184, 166, 0.11);
-}
-
 [data-theme="light"] .ai-task-card {
   background: #ffffff;
   border: 1px solid #e2e8f0;
@@ -3218,43 +3129,6 @@ body {
   background: #f8fafc;
   border: 1px dashed #cbd5e1;
   color: var(--text-muted);
-}
-
-/* Light Theme Color-Coded Workflow Section Cards */
-[data-theme="light"] .ai-sub-card.card-overview {
-  background: rgba(59, 130, 246, 0.045);
-  border-color: rgba(59, 130, 246, 0.22);
-}
-
-[data-theme="light"] .ai-sub-card.card-overview:hover {
-  border-color: rgba(59, 130, 246, 0.38);
-}
-
-[data-theme="light"] .ai-sub-card.card-overview .ai-sub-card-header {
-  background: rgba(59, 130, 246, 0.08);
-  border-bottom-color: rgba(59, 130, 246, 0.16);
-}
-
-[data-theme="light"] .ai-sub-card.card-overview .ai-sub-card-header:hover {
-  background: rgba(59, 130, 246, 0.13);
-}
-
-[data-theme="light"] .ai-sub-card.card-related-tasks {
-  background: rgba(234, 179, 8, 0.05);
-  border-color: rgba(234, 179, 8, 0.25);
-}
-
-[data-theme="light"] .ai-sub-card.card-related-tasks:hover {
-  border-color: rgba(234, 179, 8, 0.4);
-}
-
-[data-theme="light"] .ai-sub-card.card-related-tasks .ai-sub-card-header {
-  background: rgba(234, 179, 8, 0.09);
-  border-bottom-color: rgba(234, 179, 8, 0.18);
-}
-
-[data-theme="light"] .ai-sub-card.card-related-tasks .ai-sub-card-header:hover {
-  background: rgba(234, 179, 8, 0.14);
 }
 
 /* ── Related Tasks card body (RelatedTasksPanel) ───────────────────────── */
@@ -3487,42 +3361,6 @@ button.related-task-title.is-link:focus-visible {
   color: #64748b;
   background: #f1f5f9;
   border-color: #cbd5e1;
-}
-
-[data-theme="light"] .ai-sub-card.card-steps-actions {
-  background: rgba(168, 85, 247, 0.045);
-  border-color: rgba(168, 85, 247, 0.22);
-}
-
-[data-theme="light"] .ai-sub-card.card-steps-actions:hover {
-  border-color: rgba(168, 85, 247, 0.38);
-}
-
-[data-theme="light"] .ai-sub-card.card-steps-actions .ai-sub-card-header {
-  background: rgba(168, 85, 247, 0.08);
-  border-bottom-color: rgba(168, 85, 247, 0.16);
-}
-
-[data-theme="light"] .ai-sub-card.card-steps-actions .ai-sub-card-header:hover {
-  background: rgba(168, 85, 247, 0.13);
-}
-
-[data-theme="light"] .ai-sub-card.card-completion {
-  background: rgba(20, 184, 166, 0.045);
-  border-color: rgba(20, 184, 166, 0.22);
-}
-
-[data-theme="light"] .ai-sub-card.card-completion:hover {
-  border-color: rgba(20, 184, 166, 0.38);
-}
-
-[data-theme="light"] .ai-sub-card.card-completion .ai-sub-card-header {
-  background: rgba(20, 184, 166, 0.08);
-  border-bottom-color: rgba(20, 184, 166, 0.16);
-}
-
-[data-theme="light"] .ai-sub-card.card-completion .ai-sub-card-header:hover {
-  background: rgba(20, 184, 166, 0.13);
 }
 
 /* Gherkin brief & goals boxes inside Overview */
@@ -3777,6 +3615,12 @@ button.related-task-title.is-link:focus-visible {
   font-size: 0.82rem;
   color: var(--accent-cyan);
   border: 1px solid rgba(6, 182, 212, 0.15);
+}
+
+[data-theme="light"] .brief-body code {
+  background: #eef2f7;
+  color: #0e7490;
+  border-color: #d5dde8;
 }
 
 .brief-markdown-render {
@@ -4097,39 +3941,6 @@ button.related-task-title.is-link:focus-visible {
   border-radius: 9999px;
 }
 
-/* ── Execution Workflow Card Status Chip ───────────────────────────────── */
-.card-status-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.32rem;
-  padding: 0.12rem 0.5rem;
-  border-radius: 9999px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  line-height: 1.2;
-  white-space: nowrap;
-  user-select: none;
-  transition: all 0.15s ease;
-}
-
-.card-status-chip.is-not-started {
-  color: var(--text-muted, rgba(255, 255, 255, 0.55));
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-}
-
-.card-status-chip.is-working {
-  color: #f59e0b;
-  background: rgba(245, 158, 11, 0.12);
-  border: 1px solid rgba(245, 158, 11, 0.35);
-}
-
-.card-status-chip.is-done {
-  color: #10b981;
-  background: rgba(16, 185, 129, 0.12);
-  border: 1px solid rgba(16, 185, 129, 0.3);
-}
-
 .status-dot-grey {
   width: 6px;
   height: 6px;
@@ -4138,26 +3949,8 @@ button.related-task-title.is-link:focus-visible {
   display: inline-block;
 }
 
-[data-theme="light"] .card-status-chip.is-not-started {
-  color: #64748b;
-  background: #f1f5f9;
-  border-color: #cbd5e1;
-}
-
 [data-theme="light"] .status-dot-grey {
   background: #94a3b8;
-}
-
-[data-theme="light"] .card-status-chip.is-working {
-  color: #b45309;
-  background: #fef3c7;
-  border-color: #fcd34d;
-}
-
-[data-theme="light"] .card-status-chip.is-done {
-  color: #059669;
-  background: #d1fae5;
-  border-color: #6ee7b7;
 }
 
 /* ── Actions Card Internal View Switcher Bar ──────────────────────────── */
@@ -4298,190 +4091,6 @@ button.related-task-title.is-link:focus-visible {
   background: #ffffff;
   border-color: #e2e8f0;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
-}
-
-.cli-notes-bridge-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-[data-theme="light"] .cli-notes-bridge-header {
-  border-bottom-color: #f1f5f9;
-}
-
-.bridge-header-left {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  min-width: 0;
-  flex: 1;
-}
-
-.bridge-ai-avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, rgba(6, 182, 212, 0.2) 0%, rgba(139, 92, 246, 0.2) 100%);
-  border: 1px solid rgba(6, 182, 212, 0.35);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--accent-cyan);
-  flex-shrink: 0;
-}
-
-.bridge-title-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  min-width: 0;
-}
-
-.bridge-main-title {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.82rem;
-  font-weight: 700;
-  color: var(--text-bright);
-}
-
-.bridge-cmd-tag {
-  font-family: var(--font-mono, monospace);
-  font-size: 0.68rem;
-  color: var(--accent-cyan);
-  background: rgba(6, 182, 212, 0.1);
-  border: 1px solid rgba(6, 182, 212, 0.25);
-  padding: 0.05rem 0.35rem;
-  border-radius: 4px;
-}
-
-.bridge-status-line {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  font-size: 0.72rem;
-  min-width: 0;
-}
-
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.08rem 0.4rem;
-  border-radius: 9999px;
-  font-weight: 600;
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-}
-
-.status-badge.is-running {
-  background: rgba(16, 185, 129, 0.12);
-  color: var(--accent-emerald, #10b981);
-  border: 1px solid rgba(16, 185, 129, 0.3);
-}
-
-.status-badge.is-waiting {
-  background: rgba(245, 158, 11, 0.15);
-  color: #fbbf24;
-  border: 1px solid rgba(245, 158, 11, 0.4);
-}
-
-.status-badge.is-idle {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-muted);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.pulse-dot-amber {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #f59e0b;
-  box-shadow: 0 0 6px #f59e0b;
-  animation: pulseDot 1.5s infinite;
-}
-
-.pulse-dot-emerald {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #10b981;
-  box-shadow: 0 0 6px #10b981;
-  animation: pulseDot 1.5s infinite;
-}
-
-.dot-gray {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-muted);
-}
-
-.bridge-current-thought {
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 380px;
-}
-
-.bridge-header-right {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-
-.bridge-terminal-switch-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.2rem 0.55rem;
-  border-radius: 6px;
-  background: rgba(168, 85, 247, 0.12);
-  border: 1px solid rgba(168, 85, 247, 0.3);
-  color: #c084fc;
-  font-size: 0.72rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.bridge-terminal-switch-btn:hover {
-  background: rgba(168, 85, 247, 0.22);
-  color: #e9d5ff;
-  border-color: rgba(168, 85, 247, 0.45);
-}
-
-.bridge-ctrl-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 5px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.bridge-ctrl-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text-bright);
-}
-
-.bridge-ctrl-btn.is-danger:hover {
-  background: rgba(239, 68, 68, 0.2);
-  color: var(--accent-rose);
-  border-color: rgba(239, 68, 68, 0.4);
 }
 
 /* ── Interactive Approval GUI Card in Notes ── */
@@ -4870,8 +4479,7 @@ button.related-task-title.is-link:focus-visible {
 /* ── Agent identity: role colours (manager / workers / QA / pipeline roles) ── */
 .agent-role-badge.role-manager,
 .agent-session-tab.role-manager,
-.cli-notes-bridge.role-manager,
-.bridge-ai-avatar.role-manager {
+.cli-notes-bridge.role-manager {
   --role-fg: #22d3ee;
   --role-bg: rgba(6, 182, 212, 0.14);
   --role-border: rgba(6, 182, 212, 0.42);
@@ -4879,8 +4487,7 @@ button.related-task-title.is-link:focus-visible {
 
 .agent-role-badge.role-worker,
 .agent-session-tab.role-worker,
-.cli-notes-bridge.role-worker,
-.bridge-ai-avatar.role-worker {
+.cli-notes-bridge.role-worker {
   --role-fg: #c4b5fd;
   --role-bg: rgba(139, 92, 246, 0.16);
   --role-border: rgba(139, 92, 246, 0.45);
@@ -4888,8 +4495,7 @@ button.related-task-title.is-link:focus-visible {
 
 .agent-role-badge.role-qa,
 .agent-session-tab.role-qa,
-.cli-notes-bridge.role-qa,
-.bridge-ai-avatar.role-qa {
+.cli-notes-bridge.role-qa {
   --role-fg: #fbbf24;
   --role-bg: rgba(245, 158, 11, 0.15);
   --role-border: rgba(245, 158, 11, 0.45);
@@ -4921,8 +4527,7 @@ button.related-task-title.is-link:focus-visible {
 
 [data-theme="light"] .agent-role-badge.role-manager,
 [data-theme="light"] .agent-session-tab.role-manager,
-[data-theme="light"] .cli-notes-bridge.role-manager,
-[data-theme="light"] .bridge-ai-avatar.role-manager {
+[data-theme="light"] .cli-notes-bridge.role-manager {
   --role-fg: #0e7490;
   --role-bg: #ecfeff;
   --role-border: #67e8f9;
@@ -4930,8 +4535,7 @@ button.related-task-title.is-link:focus-visible {
 
 [data-theme="light"] .agent-role-badge.role-worker,
 [data-theme="light"] .agent-session-tab.role-worker,
-[data-theme="light"] .cli-notes-bridge.role-worker,
-[data-theme="light"] .bridge-ai-avatar.role-worker {
+[data-theme="light"] .cli-notes-bridge.role-worker {
   --role-fg: #6d28d9;
   --role-bg: #f5f3ff;
   --role-border: #c4b5fd;
@@ -4939,8 +4543,7 @@ button.related-task-title.is-link:focus-visible {
 
 [data-theme="light"] .agent-role-badge.role-qa,
 [data-theme="light"] .agent-session-tab.role-qa,
-[data-theme="light"] .cli-notes-bridge.role-qa,
-[data-theme="light"] .bridge-ai-avatar.role-qa {
+[data-theme="light"] .cli-notes-bridge.role-qa {
   --role-fg: #b45309;
   --role-bg: #fffbeb;
   --role-border: #fcd34d;
@@ -5152,44 +4755,6 @@ button.related-task-title.is-link:focus-visible {
 
 [data-theme="light"] .agent-session-tab-status.status-awaiting_approval {
   color: #b45309;
-}
-
-.agent-follow-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.18rem 0.5rem;
-  border-radius: 9999px;
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: var(--text-dim);
-  font-size: 0.66rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  flex-shrink: 0;
-}
-
-.agent-follow-toggle:hover {
-  color: var(--text-bright);
-  border-color: rgba(255, 255, 255, 0.25);
-}
-
-.agent-follow-toggle.is-on {
-  background: rgba(16, 185, 129, 0.12);
-  border-color: rgba(16, 185, 129, 0.4);
-  color: #34d399;
-}
-
-[data-theme="light"] .agent-follow-toggle {
-  border-color: #cbd5e1;
-  color: #64748b;
-}
-
-[data-theme="light"] .agent-follow-toggle.is-on {
-  background: #ecfdf5;
-  border-color: #6ee7b7;
-  color: #047857;
 }
 
 .agent-waiting-row {
@@ -5667,70 +5232,6 @@ button.related-task-title.is-link:focus-visible {
   border-left: 3px solid var(--role-fg);
 }
 
-.bridge-ai-avatar.role-manager,
-.bridge-ai-avatar.role-worker,
-.bridge-ai-avatar.role-qa {
-  background: var(--role-bg);
-  border-color: var(--role-border);
-  color: var(--role-fg);
-}
-
-.status-badge.is-waiting-agents {
-  background: rgba(139, 92, 246, 0.14);
-  color: #c4b5fd;
-  border: 1px solid rgba(139, 92, 246, 0.4);
-}
-
-.status-badge.is-done {
-  background: rgba(16, 185, 129, 0.12);
-  color: #34d399;
-  border: 1px solid rgba(16, 185, 129, 0.3);
-}
-
-.status-badge.is-failed {
-  background: rgba(239, 68, 68, 0.12);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.35);
-}
-
-.dot-violet {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #a78bfa;
-}
-
-.dot-rose {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #f43f5e;
-}
-
-[data-theme="light"] .status-badge.is-waiting {
-  background: #fffbeb;
-  color: #b45309;
-  border-color: #fcd34d;
-}
-
-[data-theme="light"] .status-badge.is-waiting-agents {
-  background: #f5f3ff;
-  color: #6d28d9;
-  border-color: #c4b5fd;
-}
-
-[data-theme="light"] .status-badge.is-done {
-  background: #ecfdf5;
-  color: #047857;
-  border-color: #6ee7b7;
-}
-
-[data-theme="light"] .status-badge.is-failed {
-  background: #fff1f2;
-  color: #be123c;
-  border-color: #fda4af;
-}
-
 .bridge-connection-error {
   display: flex;
   align-items: center;
@@ -5824,28 +5325,6 @@ button.related-task-title.is-link:focus-visible {
   background: #f8fafc;
   border-color: #e2e8f0;
   color: #334155;
-}
-
-.prompt-raw-terminal-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.1rem 0.4rem;
-  border-radius: 4px;
-  background: transparent;
-  border: none;
-  color: #c084fc;
-  font-size: 0.7rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.prompt-raw-terminal-link:hover {
-  background: rgba(168, 85, 247, 0.12);
-}
-
-[data-theme="light"] .prompt-raw-terminal-link {
-  color: #7e22ce;
 }
 
 [data-theme="light"] .prompt-header-title {
@@ -10131,4 +9610,122 @@ button.related-task-title.is-link:focus-visible {
 
 .toggle-switch-btn.menu-switch.is-active .toggle-switch-thumb {
   transform: translateX(12px);
+}
+
+/* ── Task stage tabs (Related Tasks → Overview → Actions → Completion), tinted by the shown stage ── */
+.stage-tabs-card {
+  --stage-rgb: 59, 130, 246;
+}
+
+.stage-tabs-card.stage-related { --stage-rgb: 234, 179, 8; }
+.stage-tabs-card.stage-overview { --stage-rgb: 59, 130, 246; }
+.stage-tabs-card.stage-actions { --stage-rgb: 168, 85, 247; }
+.stage-tabs-card.stage-completion { --stage-rgb: 20, 184, 166; }
+
+.stage-tabs-card.has-pending-alert {
+  --stage-rgb: 239, 68, 68;
+}
+
+.stage-tabs-card.has-pending-alert .stage-tabs {
+  border-bottom-color: rgba(239, 68, 68, 0.55);
+}
+
+.stage-tabs {
+  display: flex;
+  gap: 0.15rem;
+  padding: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 1px solid rgba(var(--stage-rgb), 0.25);
+  transition: border-color 0.15s ease;
+}
+
+.stage-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.stage-tabs-card .stage-panel {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.stage-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 0.6rem;
+  margin-bottom: -1px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.stage-tab:hover:not(:disabled) {
+  color: var(--text-bright);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.stage-tab.is-active {
+  color: var(--text-bright);
+  border-bottom-color: rgb(var(--stage-rgb));
+}
+
+.stage-tab:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.stage-tab-count {
+  min-width: 15px;
+  padding: 0 0.25rem;
+  border-radius: 9999px;
+  background: rgba(234, 179, 8, 0.18);
+  color: #eab308;
+  font-size: 0.64rem;
+  line-height: 15px;
+  text-align: center;
+}
+
+.stage-tab-working {
+  color: var(--accent-cyan);
+}
+
+.stage-tab-done {
+  color: var(--accent-emerald);
+}
+
+.stage-tab-alert {
+  color: var(--accent-rose);
+}
+
+.stage-panel-note {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.45rem;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+
+.actions-now-running {
+  display: inline-flex;
+  min-width: 0;
+  margin-left: auto;
+  margin-right: 0.4rem;
+}
+
+[data-theme="light"] .stage-tab:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.04);
+}
+
+[data-theme="light"] .stage-tab.is-active {
+  color: #0f172a;
 }

@@ -62,6 +62,7 @@ import { getEffectiveCliAgent } from './lib/cliAgents';
 import { isOverviewReusable, overviewDocumentFor, stampOverview } from './lib/overviewUtils';
 import { FILE_MUTATING_TOOL_NAMES } from './lib/agentPipeline/toolSchemas';
 import { reevaluatePendingPermission } from './lib/agentPipeline/toolExecutor';
+import { smallModelCallConfig } from './lib/autocompleteService';
 import { useCliAgentRuns, makeCliRunId, isWorkingAgentSession, type CliLaunchConfig, type CliAgentRunsApi } from './hooks/useCliAgentRuns';
 import { Navbar } from './components/Navbar';
 import { TaskPane } from './components/TaskPane';
@@ -542,6 +543,7 @@ function App() {
         cliAgentId: activeKey.cliAgentId,
         cliCustomCommand: activeKey.cliCustomCommand,
         cliExecutionMode: activeKey.cliExecutionMode,
+        contextCompaction: activeKey.contextCompaction,
         apiKey: activeKey.apiKey,
         baseUrl: activeKey.baseUrl,
         isConnected: true
@@ -583,6 +585,7 @@ function App() {
         cliCustomCommand: activeKey.cliCustomCommand,
         cliExtraArgs: activeKey.cliExtraArgs,
         cliExecutionMode: activeKey.cliExecutionMode,
+        contextCompaction: activeKey.contextCompaction,
         apiKey: activeKey.apiKey,
         baseUrl: activeKey.baseUrl,
         isConnected: true
@@ -1515,6 +1518,7 @@ function App() {
         extraArgs: effectiveCli.extraArgs || '',
         env,
         hasApiKey: hasApiKeyForCli,
+        smallModel: smallModelCallConfig(aiConfig),
         cwd: resolveProjectCwd(),
         roles,
         startEscalation,
@@ -1571,6 +1575,7 @@ function App() {
       extraArgs: effectiveCli.extraArgs || '',
       env,
       hasApiKey: hasApiKeyForCli,
+      smallModel: smallModelCallConfig(aiConfig),
       cwd: resolveProjectCwd(),
       roles,
       ...(retryRoles.length ? { retryRoles } : {}),
@@ -4442,7 +4447,11 @@ function App() {
               <strong>Local Device Bridge Disconnected.</strong>{' '}
               {bridgeStatus.isMixedContentBlocked
                 ? 'Hosted HTTPS web apps cannot call local HTTP devices. Run Ergo locally at http://localhost:5173 or connect via API Key in Settings.'
-                : 'Reconnect to access your local ~/.ergo folders and run autonomous agents (Claude Code, Antigravity, etc.).'}
+                : bridgeStatus.awaitingPermission
+                  ? bridgeClient.describeUnreachable('permission-prompt')
+                  : bridgeStatus.diagnosis === 'permission-denied' || bridgeStatus.diagnosis === 'permission-prompt'
+                    ? bridgeStatus.error
+                    : 'Reconnect to access your local ~/.ergo folders and run autonomous agents (Claude Code, Antigravity, etc.).'}
             </span>
           </div>
 

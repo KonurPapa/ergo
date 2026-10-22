@@ -20,7 +20,9 @@ import {
   promptSummary,
 } from './src/lib/cliPromptParser.ts';
 import type { CliDetectedPrompt } from './src/types/index.ts';
-import { createMemoryStore, MEMORY_NAMESPACES, AGENT_NOTE_KINDS, WORKSPACE_MAX_ITEMS, type MemoryStore, type MemoryStoreIo } from './src/lib/memory/memoryStore.ts';
+import { createMemoryStore, embedWithMemoryModel, MEMORY_NAMESPACES, AGENT_NOTE_KINDS, WORKSPACE_MAX_ITEMS, type MemoryStore, type MemoryStoreIo } from './src/lib/memory/memoryStore.ts';
+import { CodeIndexManager } from './src/lib/codeIndex/codeIndex.ts';
+import { parseScoutFiles, scoutSystemPrompt, scoutUserPrompt, SCOUT_MAX_TURNS, SCOUT_TIMEOUT_MS } from './src/lib/codeIndex/fileScout.ts';
 import type {
   AgentNoteKind,
   ChunkMetadata,
@@ -542,7 +544,7 @@ interface BridgeUsage {
 let bridgePriceModels: CatalogModel[] = PRICE_SNAPSHOT.models;
 
 /** API-price cost of `usage` on `model` (aliases like "sonnet" resolve to the newest model), or undefined. */
-function bridgeUsageCost(model: string | undefined | null, usage: BridgeUsage): number | undefined {
+function bridgeUsageCost(model: string | undefined | null, usage: BridgeUsage & { cacheWrite1hTokens?: number }): number | undefined {
   if (!model) return undefined;
   return priceUsage(bridgePriceModels, resolveAliasModelId(bridgePriceModels, model), usage);
 }
@@ -1132,6 +1134,9 @@ function isSafeCommandName(cmd: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(cmd);
 }
 
+/** `which` for runShellCommand: cmd.exe has none, and its `where` prints every match, one per line. */
+const FIND_ON_PATH = process.platform === 'win32' ? 'where' : 'which';
+
 // Set of active SSE clients listening for file changes
 const sseClients = new Set<ServerResponse>();
 // Recent server-side writes with timestamp to suppress self-notifications in the originating client
@@ -1267,7 +1272,9 @@ function ergoFileSystemPlugin(): Plugin {
           defaultPath: '~/.ergo',
           activePath: activeStoragePath,
           resolvedPath: storageDir,
-          homeDir: os.homedir()
+          homeDir: os.homedir(),
+          // The Ergo checkout `npm run dev` runs from, so the hosted app can show how to start the bridge again.
+          appDir: process.cwd()
         });
       }
 
@@ -1814,6 +1821,7 @@ function ergoFileSystemPlugin(): Plugin {
           await fs.mkdir(configDir, { recursive: true });
           const rootsFile = path.join(configDir, 'roots.json');
           await fs.writeFile(rootsFile, JSON.stringify(roots, null, 2), 'utf-8');
+          void syncCodeIndexRoots(); // a newly added folder starts indexing right away; a removed one is dropped
           return sendJson(res, 200, { success: true, roots });
         } catch (err: any) {
           return sendJson(res, 500, { error: err.message });
@@ -2217,6 +2225,7 @@ function ergoFileSystemPlugin(): Plugin {
               { id: 'fs_edit_file', name: 'edit_file', description: 'Replace an exact text span in an existing file (diff-style edit; cheaper than rewriting the whole file)', autoApprove: false, serverId: 'mcp-filesystem' },
               { id: 'fs_list_directory', name: 'list_directory', description: 'List files and subdirectories inside an allowed path', autoApprove: true, serverId: 'mcp-filesystem' },
               { id: 'fs_create_directory', name: 'create_directory', description: 'Create a new directory recursively', autoApprove: true, serverId: 'mcp-filesystem' },
+              { id: 'fs_code_search', name: 'code_search', description: 'Semantic + keyword search over the indexed project code (use first to locate code)', autoApprove: true, serverId: 'mcp-filesystem' },
               { id: 'fs_search_files', name: 'search_files', description: 'Search files by filename substring and/or grep file contents with a regex (contentPattern)', autoApprove: true, serverId: 'mcp-filesystem' },
               { id: 'fs_get_file_info', name: 'get_file_info', description: 'Retrieve file metadata (size, modified date, permissions)', autoApprove: true, serverId: 'mcp-filesystem' },
               { id: 'fs_run_command', name: 'run_command', description: 'Run a shell command (tests, lint, build, scripts) inside an allowed folder; returns exit code, stdout and stderr', autoApprove: false, serverId: 'mcp-filesystem' }
@@ -2541,8 +2550,15 @@ function ergoFileSystemPlugin(): Plugin {
           }
 
           // 1. Filesystem + Shell MCP Harness (root-sandboxed)
-          const FS_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'list_directory', 'create_directory', 'search_files', 'get_file_info', 'run_command']);
+          const FS_TOOLS = new Set(['code_search', 'read_file', 'write_file', 'edit_file', 'list_directory', 'create_directory', 'search_files', 'get_file_info', 'run_command']);
           if (serverId === 'mcp-filesystem' || FS_TOOLS.has(toolName)) {
+            if (toolName === 'code_search') {
+              const query = typeof args?.query === 'string' ? args.query.trim().slice(0, 2_000) : '';
+              if (!query) return sendJson(res, 400, { error: 'code_search requires "query".' });
+              const out = await codeSearch(query, { path: typeof args.path === 'string' ? args.path : undefined, k: Number(args.k) || undefined, files: args.files });
+              if (out.isError) return sendJson(res, 400, { error: out.text });
+              return sendJson(res, 200, { success: true, data: { content: out.text } }); // plain text for the agent, not JSON
+            }
             // ── run_command: shell inside an allowed root ──
             if (toolName === 'run_command') {
               const command = typeof args.command === 'string' ? args.command.trim() : '';
@@ -3056,7 +3072,7 @@ function ergoFileSystemPlugin(): Plugin {
 
           const results = [];
           for (const preset of cliPresets) {
-            let whichRes = await runShellCommand(`which ${preset.command}`, storageDir, 3000);
+            let whichRes = await runShellCommand(`${FIND_ON_PATH} ${preset.command}`, storageDir, 3000);
             if (whichRes.exitCode !== 0 && preset.command === 'agy') {
               const localAgy = path.join(os.homedir(), '.local', 'bin', 'agy');
               if (fsSync.existsSync(localAgy)) {
@@ -3064,7 +3080,7 @@ function ergoFileSystemPlugin(): Plugin {
               }
             }
             const isInstalled = whichRes.exitCode === 0 && Boolean(whichRes.stdout.trim());
-            const detectedPath = isInstalled ? whichRes.stdout.trim() : null;
+            const detectedPath = isInstalled ? whichRes.stdout.trim().split(/\r?\n/)[0] : null;
             let version: string | null = null;
             if (isInstalled) {
               const verCmd = preset.command === 'agy' && detectedPath ? `${detectedPath} --version` : `${preset.command} --version`;
@@ -3086,9 +3102,9 @@ function ergoFileSystemPlugin(): Plugin {
             return sendJson(res, 400, { error: 'Invalid custom command name' });
           }
           if (customCmd) {
-            const whichRes = await runShellCommand(`which ${customCmd}`, storageDir, 3000);
+            const whichRes = await runShellCommand(`${FIND_ON_PATH} ${customCmd}`, storageDir, 3000);
             const isInstalled = whichRes.exitCode === 0 && Boolean(whichRes.stdout.trim());
-            const detectedPath = isInstalled ? whichRes.stdout.trim() : null;
+            const detectedPath = isInstalled ? whichRes.stdout.trim().split(/\r?\n/)[0] : null;
             let version: string | null = null;
             if (isInstalled) {
               const verRes = await runShellCommand(`${customCmd} --version`, storageDir, 3000);
@@ -3217,7 +3233,7 @@ function ergoFileSystemPlugin(): Plugin {
           let resolvedCmd = (cli === 'antigravity' || cli === 'gemini') ? 'agy' : cli;
 
           // 1. Check if CLI binary is in PATH (with fallback for agy in ~/.local/bin)
-          let whichRes = await runShellCommand(`which ${resolvedCmd}`, storageDir, 3000);
+          let whichRes = await runShellCommand(`${FIND_ON_PATH} ${resolvedCmd}`, storageDir, 3000);
           if (whichRes.exitCode !== 0 && (cli === 'antigravity' || cli === 'agy' || cli === 'gemini')) {
             const localAgy = path.join(os.homedir(), '.local', 'bin', 'agy');
             if (fsSync.existsSync(localAgy)) {
@@ -3430,7 +3446,7 @@ function ergoFileSystemPlugin(): Plugin {
             }
           }
 
-          let whichRes = await runShellCommand(`which ${resolvedCmd}`, storageDir, 3000);
+          let whichRes = await runShellCommand(`${FIND_ON_PATH} ${resolvedCmd}`, storageDir, 3000);
           if (whichRes.exitCode !== 0 && (cli === 'antigravity' || cli === 'agy' || cli === 'gemini')) {
             const localAgy = path.join(os.homedir(), '.local', 'bin', 'agy');
             if (fsSync.existsSync(localAgy)) {
@@ -3472,7 +3488,10 @@ function ergoFileSystemPlugin(): Plugin {
                 BROWSER: 'none',
                 NO_BROWSER: '1'
               },
-              stdio: ['pipe', 'pipe', 'pipe']
+              stdio: ['pipe', 'pipe', 'pipe'],
+              // npm installs CLIs on Windows as .cmd shims, which only a shell can launch. The name passed
+              // isSafeCommandName and the args are constants, so nothing here is shell-interpreted input.
+              shell: process.platform === 'win32' && isSafeCommandName(resolvedCmd)
             });
           } catch (err: any) {
             return sendJson(res, 200, {
@@ -3874,7 +3893,7 @@ async function readClaudeSessionUsage(sessionId: string, cwd: string): Promise<B
   for (const { usage, model } of byMessage.values()) {
     const delta = normalizeUsageObject(usage);
     if (delta) {
-      const cost = bridgeUsageCost(model, delta);
+      const cost = bridgeUsageCost(model, { ...delta, cacheWrite1hTokens: Number(usage?.cache_creation?.ephemeral_1h_input_tokens) || 0 });
       if (typeof cost === 'number') delta.costUsd = cost;
     }
     addBridgeUsage(total, delta);
@@ -5558,7 +5577,12 @@ function ergoPtyPlugin(): Plugin {
       // Defer WSS creation until the underlying http.Server is available
       server.httpServer?.once('listening', async () => {
         const { WebSocketServer } = await import('ws');
-        const pty = await loadNodePty();
+        // Vite installs no unhandledRejection handler, so a native module that fails to load here would take the whole
+        // bridge down with it. Terminals report the failure instead.
+        const pty = await loadNodePty().catch((err) => {
+          console.error('[Ergo PTY] Could not load node-pty, so embedded terminals are unavailable:', err);
+          return null;
+        });
 
         const wss = new WebSocketServer({ noServer: true });
 
@@ -5729,6 +5753,7 @@ function ergoPtyPlugin(): Plugin {
               }
 
               try {
+                if (!pty) throw new Error('Embedded terminals are unavailable: node-pty failed to load (see the terminal running npm run dev).');
                 const session = spawnPtySession(pty, {
                   sessionKey,
                   taskId: msg.taskId || sessionKey,
@@ -5811,7 +5836,7 @@ function ergoPtyPlugin(): Plugin {
 
 const MEMORY_MCP_PATH = '/api/mcp/ergo-memory';
 const MEMORY_MCP_NAME = 'ergo-memory';
-const MEMORY_TOOL_NAMES = ['memory_search', 'memory_get', 'memory_save'] as const;
+const MEMORY_TOOL_NAMES = ['code_search', 'memory_search', 'memory_get', 'memory_save'] as const;
 const MEMORY_DOC_MAX_CHARS = 200_000;
 const MEMORY_GET_MAX_CHARS = 6_000;
 const MEMORY_SNIPPET_CHARS = 280;
@@ -5925,6 +5950,74 @@ function registerBridgeExitHook(name: string, hook: () => void) {
 /** Flushes pending memory writes on exit / SIGINT / SIGHUP. */
 function installMemoryExitFlush() {
   registerBridgeExitHook('memory', () => memoryStoreInstance?.flushSync());
+  registerBridgeExitHook('code-index', () => codeIndexManager?.saveAll());
+}
+
+// ── Code index (src/lib/codeIndex/codeIndex.ts) ──
+// Every Allowed Folder (except Ergo's own storage folder) is indexed in the background as soon as it is added, then
+// kept current by a file watcher. Agents search it with the code_search tool (ergo-memory MCP server for CLI agents,
+// /api/mcp/tools/call for API agents). REST: GET /api/code-index/status · POST /api/code-index/refresh {path}.
+
+let codeIndexManager: CodeIndexManager | null = null;
+let codeIndexDir = '';
+
+/** The manager under `<storage root>/.ergo/code-index` (vectors only; it shares the memory model's queue). */
+function getCodeIndexManager(): CodeIndexManager {
+  const root = getActiveStorageDir();
+  const base = path.basename(root) === '.ergo' ? root : path.join(root, '.ergo');
+  const dir = path.join(base, 'code-index');
+  if (!codeIndexManager || codeIndexDir !== dir) {
+    codeIndexManager?.disposeAll();
+    codeIndexDir = dir;
+    const modelsDir = path.join(base, 'models');
+    codeIndexManager = new CodeIndexManager(
+      dir,
+      (texts, priority) => embedWithMemoryModel(texts, priority, modelsDir),
+      (msg, err) => (err ? console.warn(`[Ergo Code Index] ${msg}:`, err) : console.log(`[Ergo Code Index] ${msg}`))
+    );
+  }
+  return codeIndexManager;
+}
+
+/** Indexes exactly the current Allowed Folders, minus Ergo's storage folder and whole-disk / home roots. */
+async function syncCodeIndexRoots(): Promise<void> {
+  try {
+    const storage = path.resolve(getActiveStorageDir());
+    const roots = (await loadAllowedRoots(storage)).filter((r) => r !== storage && r !== os.homedir() && r !== path.parse(r).root);
+    getCodeIndexManager().sync(roots);
+  } catch (err) {
+    console.warn('[Ergo Code Index] Could not sync the indexed folders:', err);
+  }
+}
+
+/**
+ * code_search for agents. `path`: folder or subfolder to search (absolute, or relative to `cwd`); default the agent's
+ * working directory. Only indexed Allowed Folders can be searched.
+ */
+async function codeSearch(query: string, opts: { path?: string; cwd?: string; k?: number; files?: unknown }): Promise<{ text: string; isError?: boolean }> {
+  const mgr = getCodeIndexManager();
+  let target = opts.path?.trim() || '';
+  if (target.startsWith('~')) target = path.join(os.homedir(), target.slice(1));
+  if (target && !path.isAbsolute(target)) target = opts.cwd ? path.resolve(opts.cwd, target) : '';
+  if (!target) target = opts.cwd || '';
+  if (!target) {
+    const roots = mgr.roots();
+    if (roots.length !== 1) return { text: `Pass "path": the project folder to search. Indexed folders: ${roots.join(', ') || 'none'}.`, isError: true };
+    target = roots[0];
+  }
+  const idx = mgr.forPath(target);
+  if (!idx) {
+    return {
+      text: `No code index covers ${target} (indexed: ${mgr.roots().join(', ') || 'none'}; folders are indexed when added under Connections → Allowed Folders). Use grep / find for this folder.`,
+      isError: true,
+    };
+  }
+  const under = path.relative(idx.root, target);
+  // `files`: repository-relative (or absolute) paths to search within, e.g. the file scout's list.
+  const files = Array.isArray(opts.files)
+    ? opts.files.filter((f): f is string => typeof f === 'string' && f.trim() !== '').map((f) => (path.isAbsolute(f) ? path.relative(idx.root, f) : f.trim())).filter((f) => !f.startsWith('..'))
+    : [];
+  return { text: await idx.search(query, { k: opts.k, ...(under && !under.startsWith('..') ? { under } : {}), ...(files.length ? { files } : {}) }) };
 }
 
 const isMemoryNamespace = (v: unknown): v is MemoryNamespace => typeof v === 'string' && (MEMORY_NAMESPACES as readonly string[]).includes(v);
@@ -6363,6 +6456,8 @@ interface MemoryCallContext {
   taskId?: string;
   runId?: string;
   sessionId?: string;
+  /** The caller's folder, for code_search when there is no agent session to read it from (the file scout). */
+  cwd?: string;
 }
 
 /** Project + task of a run, from the agent sessions (live first, then ended), else from memory it already holds. */
@@ -6397,6 +6492,24 @@ function memoryHitLabel(c: MemoryChunkDTO): string {
 }
 
 const MEMORY_MCP_TOOLS = [
+  {
+    name: 'code_search',
+    description:
+      'Find code in this project: semantic + keyword search over Ergo\'s index of the folder. Describe what you need in plain words ' +
+      'and/or name identifiers. Returns the best-matching code with line numbers and surrounding lines, the enclosing function, and each ' +
+      'file\'s outline. Use it FIRST every time you need to locate code; fall back to grep / find / ls only if it cannot find what you need.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+        path: { type: 'string', description: 'Folder or subfolder to search (default: your working directory).' },
+        k: { type: 'integer', minimum: 1, maximum: 8, description: 'Code sections to return (default 5; more sections show less surrounding code each).' },
+        files: { type: 'array', items: { type: 'string' }, description: 'Only search these files (paths relative to the repository), e.g. the likely files you were given.' },
+      },
+      required: ['query'],
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
   {
     name: 'memory_search',
     description: 'Search Ergo memory (run reports, plans, notes, past tasks, learnings). Compact hits; use memory_get for full text.',
@@ -6443,6 +6556,13 @@ function slugify(s: string): string {
 async function callMemoryTool(name: string, args: any, base: MemoryCallContext): Promise<{ text: string; isError?: boolean }> {
   const store = getMemoryStore();
   args = args && typeof args === 'object' ? args : {};
+
+  if (name === 'code_search') {
+    const query = typeof args.query === 'string' ? args.query.trim().slice(0, 2_000) : '';
+    if (!query) return { text: 'query is required.', isError: true };
+    const session = base.sessionId ? activePtySessions.get(base.sessionId) || endedPtySessions.get(base.sessionId) : undefined;
+    return codeSearch(query, { path: typeof args.path === 'string' ? args.path : undefined, cwd: session?.cwd || base.cwd, k: Number(args.k) || undefined, files: args.files });
+  }
 
   if (name === 'memory_search') {
     const query = typeof args.query === 'string' ? args.query.trim().slice(0, 2_000) : '';
@@ -6564,14 +6684,81 @@ function ergoMemoryPlugin(): Plugin {
           bridgeLocalOrigin = addr.address === '::1' ? `http://[::1]:${addr.port}` : `http://127.0.0.1:${addr.port}`;
         }
       });
-      server.httpServer?.once('close', () => memoryStoreInstance?.flushSync());
+      server.httpServer?.once('close', () => {
+        memoryStoreInstance?.flushSync();
+        codeIndexManager?.saveAll();
+      });
+      // Index the Allowed Folders in the background (a no-op for folders whose index is already current).
+      setTimeout(() => void syncCodeIndexRoots(), 3_000).unref?.();
 
       server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
         const url = req.url?.split('?')[0];
-        if (!url || !(url.startsWith('/api/memory/') || url === MEMORY_MCP_PATH)) return next();
+        if (!url || !(url.startsWith('/api/memory/') || url === MEMORY_MCP_PATH || url.startsWith('/api/code-index/'))) return next();
         if (!guardBridgeRequest(req, res)) return;
         const fullUrl = new URL(req.url || '', 'http://localhost');
         const q = fullUrl.searchParams;
+
+        if (url === '/api/code-index/status' && req.method === 'GET') {
+          return sendJson(res, 200, { success: true, indexes: getCodeIndexManager().statuses() });
+        }
+        if (url === '/api/code-index/scout' && req.method === 'POST') {
+          // The file scout on a subscription CLI (src/lib/codeIndex/fileScout.ts): one headless Claude Code process on the
+          // profile's small model, with code_search + read-only tools and no settings / CLAUDE.md / default prompt.
+          let body: any = {};
+          try {
+            body = await parseJsonBody(req);
+          } catch {}
+          const cwd = typeof body.cwd === 'string' ? body.cwd.trim() : '';
+          const taskText = typeof body.task === 'string' ? body.task : '';
+          const cli = typeof body.cli === 'string' && body.cli.trim() ? body.cli.trim() : 'claude';
+          if (!cwd || !path.isAbsolute(cwd) || !taskText.trim()) return sendJson(res, 400, { success: false, error: 'cwd (absolute) and task are required.' });
+          if (!/claude/.test(path.basename(cli).toLowerCase())) return sendJson(res, 200, { success: false, error: 'The CLI scout runs on Claude Code only.' });
+          const idx = getCodeIndexManager().forPath(cwd);
+          if (!idx) return sendJson(res, 200, { success: false, error: 'This folder has no code index.' });
+          const mcpConfig = JSON.stringify({ mcpServers: { [MEMORY_MCP_NAME]: { type: 'http', url: memoryMcpUrl({ cwd }) } } });
+          const result = await runCliProcess({
+            cli,
+            cwd,
+            prompt: scoutUserPrompt(taskText),
+            model: typeof body.model === 'string' ? body.model : undefined,
+            timeoutMs: SCOUT_TIMEOUT_MS,
+            customArgs: [
+              '--system-prompt', scoutSystemPrompt('code_search, Read, Grep, Glob'),
+              '--setting-sources', '',
+              '--strict-mcp-config',
+              `--mcp-config=${mcpConfig}`,
+              '--tools=Read,Grep,Glob',
+              `--allowedTools=mcp__${MEMORY_MCP_NAME}__code_search,Read,Grep,Glob`,
+              '--permission-mode', 'dontAsk',
+              '--disable-slash-commands',
+              '--no-session-persistence',
+              '--max-turns', String(SCOUT_MAX_TURNS),
+            ],
+          });
+          const files = parseScoutFiles(result.output || '', cwd);
+          return sendJson(res, 200, {
+            success: files.length > 0,
+            files,
+            usage: result.usage ?? null,
+            durationMs: result.durationMs,
+            ...(files.length ? {} : { error: result.timedOut ? 'The scout timed out.' : (result.stderr || 'The scout returned no files.').slice(0, 300) }),
+          });
+        }
+
+        if (url === '/api/code-index/refresh' && req.method === 'POST') {
+          // Task start: catch up on changes made while the watcher wasn't looking (stat comparison, bounded wait).
+          let body: any = {};
+          try {
+            body = await parseJsonBody(req);
+          } catch {}
+          let target = typeof body.path === 'string' ? body.path.trim() : '';
+          if (target.startsWith('~')) target = path.join(os.homedir(), target.slice(1));
+          const idx = target && path.isAbsolute(target) ? getCodeIndexManager().forPath(target) : null;
+          if (!idx) return sendJson(res, 200, { success: true, indexed: false });
+          await Promise.race([idx.rescan(), new Promise((r) => setTimeout(r, 8_000))]);
+          const status = idx.status();
+          return sendJson(res, 200, { success: true, indexed: status.state !== 'too-large' && status.state !== 'error', status });
+        }
 
         if (url === MEMORY_MCP_PATH) {
           if (req.method !== 'POST') {
@@ -6590,6 +6777,7 @@ function ergoMemoryPlugin(): Plugin {
             taskId: optString(q.get('task')),
             runId: optString(q.get('run'), 80),
             sessionId: optString(q.get('session')),
+            cwd: optString(q.get('cwd'), 4_000),
           };
           if (Array.isArray(body)) {
             if (body.length === 0) return sendJson(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } });

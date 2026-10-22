@@ -10,8 +10,26 @@ import {
 import { emptyUsage, addUsage } from '../lib/agentPipeline/contracts';
 import { Zap, ChevronDown, ChevronRight } from 'lucide-react';
 
+/**
+ * Tokens a run actually put into the conversation: fresh input, cache writes and output. `inputTokens` also counts every
+ * prompt-cache READ, and an agent re-reads its whole context on each call, so summed over a run that figure is the
+ * context size times the number of calls (a 16-call, 68k-token run adds up to ~930k) and says little about the work done.
+ */
+export function newTokensOf(u: TokenUsage): number {
+  return Math.max(0, u.inputTokens - (u.cachedInputTokens || 0)) + u.outputTokens;
+}
+
+/** "1.0M", "412k", "980". */
+function compactTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 10_000) return `${Math.round(n / 1000)}k`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
+}
+
 export interface TaskTokenSummary {
   totalUsage: TokenUsage;
+  /** New tokens (see newTokensOf), not counting prompt-cache re-reads. */
   totalTokens: number;
   byRole: Record<AgentRole, { usage: TokenUsage; total: number }>;
   hasUsage: boolean;
@@ -119,17 +137,11 @@ export function extractTaskTokenSummary(
     }
   }
 
-  const byRole: Record<AgentRole, { usage: TokenUsage; total: number }> = {
-    summary: { usage: roleMap.summary, total: roleMap.summary.inputTokens + roleMap.summary.outputTokens },
-    manager: { usage: roleMap.manager, total: roleMap.manager.inputTokens + roleMap.manager.outputTokens },
-    worker: { usage: roleMap.worker, total: roleMap.worker.inputTokens + roleMap.worker.outputTokens },
-    cleaner: { usage: roleMap.cleaner, total: roleMap.cleaner.inputTokens + roleMap.cleaner.outputTokens },
-    hardener: { usage: roleMap.hardener, total: roleMap.hardener.inputTokens + roleMap.hardener.outputTokens },
-    logger: { usage: roleMap.logger, total: roleMap.logger.inputTokens + roleMap.logger.outputTokens },
-    autocomplete: { usage: roleMap.autocomplete, total: roleMap.autocomplete.inputTokens + roleMap.autocomplete.outputTokens }
-  };
+  const byRole = Object.fromEntries(
+    (Object.keys(roleMap) as AgentRole[]).map((role) => [role, { usage: roleMap[role], total: newTokensOf(roleMap[role]) }])
+  ) as Record<AgentRole, { usage: TokenUsage; total: number }>;
 
-  const totalTokens = totalUsage.inputTokens + totalUsage.outputTokens;
+  const totalTokens = newTokensOf(totalUsage);
   return {
     totalUsage,
     totalTokens,
@@ -225,6 +237,9 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
 
   const { totalTokens, totalUsage, byRole, hasUsage } = summary;
   const { inputTokens, outputTokens, cachedInputTokens, cacheWriteTokens, calls } = totalUsage;
+  const tokenTitle = totalUsage.estimated
+    ? "Estimated from text length — this CLI doesn't report exact token counts"
+    : `New tokens: fresh input + cache writes + output. Each call also re-reads the agent's whole context from the prompt cache (${cachedInputTokens.toLocaleString()} tokens here, billed at ~10% of the input price), which is why "In" below is far larger.`;
 
   // Identify roles that actually consumed tokens
   const activeRoles = (Object.entries(byRole) as [AgentRole, { usage: TokenUsage; total: number }][]).filter(
@@ -238,7 +253,7 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
     cleaner: { label: 'Cleaner', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.08)', border: 'rgba(251, 113, 133, 0.2)' },
     hardener: { label: 'QA Hardener', color: '#c084fc', bg: 'rgba(192, 132, 252, 0.08)', border: 'rgba(192, 132, 252, 0.2)' },
     logger: { label: 'Logger', color: '#94a3b8', bg: 'rgba(148, 163, 184, 0.08)', border: 'rgba(148, 163, 184, 0.2)' },
-    autocomplete: { label: 'Autocomplete', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.08)', border: 'rgba(56, 189, 248, 0.2)' }
+    autocomplete: { label: 'Small model', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.08)', border: 'rgba(56, 189, 248, 0.2)' }
   };
 
   // If task is not started and has no usage yet, display blank card with hint
@@ -360,7 +375,7 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
               color: 'var(--text-muted)'
             }}
           >
-            {typeof totalUsage.costUsd === 'number' ? 'Task Cost' : 'Task Token Usage'}
+            {typeof totalUsage.costUsd === 'number' && !isSubscription ? 'Task Cost' : 'Task Usage'}
           </span>
 
           {/* Running vs Done vs Standby status pill */}
@@ -386,60 +401,48 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
           )}
         </div>
 
-        {/* Cost first (what it means for the user), tokens underneath */}
-        {typeof totalUsage.costUsd === 'number' ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.15 }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}>
-              <span
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '1.15rem',
-                  fontWeight: 700,
-                  color: 'var(--text-bright)',
-                  letterSpacing: '-0.02em',
-                  textShadow: isExecuting ? '0 0 12px rgba(6, 182, 212, 0.3)' : 'none'
-                }}
-                title={
-                  isSubscription
-                    ? 'What these calls would cost at API prices. Your subscription covers them; they count toward its usage limits.'
-                    : 'Cost at your provider\'s API prices, prompt-cache discounts included.'
-                }
-              >
-                {totalUsage.costPartial || totalUsage.estimated ? '≈ ' : ''}{formatUsd(totalUsage.costUsd)}
-              </span>
-              {isSubscription && (
-                <span style={{ fontSize: '0.68rem', fontWeight: 500, color: 'var(--text-muted)' }}>API value</span>
-              )}
+        {/* Primary figure: what the user cares about. API key → cost; subscription → tokens (plan usage), cost as "API value". */}
+        {(() => {
+          const costText = typeof totalUsage.costUsd === 'number'
+            ? `${totalUsage.costPartial || totalUsage.estimated ? '≈ ' : ''}${formatUsd(totalUsage.costUsd)}`
+            : null;
+          const tokenText = `${totalUsage.estimated ? '≈ ' : ''}${totalTokens.toLocaleString()}`;
+          const bigStyle: React.CSSProperties = {
+            fontFamily: 'var(--font-mono)',
+            fontSize: '1.15rem',
+            fontWeight: 700,
+            color: 'var(--text-bright)',
+            letterSpacing: '-0.02em',
+            textShadow: isExecuting ? '0 0 12px rgba(6, 182, 212, 0.3)' : 'none'
+          };
+          const smallStyle: React.CSSProperties = { fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' };
+          if (isSubscription || !costText) {
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.15 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}>
+                  <span style={bigStyle} title={tokenTitle}>{tokenText}</span>
+                  <span style={{ fontSize: '0.72rem', fontWeight: 500, color: 'var(--text-muted)' }} title={tokenTitle}>
+                    {totalUsage.estimated ? 'tokens (est.)' : 'tokens'}
+                  </span>
+                </div>
+                {costText && (
+                  <span
+                    style={smallStyle}
+                    title="What these calls would cost at API prices. Your subscription covers them; they count toward its usage limits."
+                  >
+                    {costText} API value
+                  </span>
+                )}
+              </div>
+            );
+          }
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.15 }}>
+              <span style={bigStyle} title="Cost at your provider's API prices, prompt-cache discounts included.">{costText}</span>
+              <span style={smallStyle} title={tokenTitle}>{tokenText} tokens</span>
             </div>
-            <span
-              style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}
-              title={totalUsage.estimated ? "Estimated from text length — this CLI doesn't report exact token counts" : undefined}
-            >
-              {totalUsage.estimated ? '≈ ' : ''}{totalTokens.toLocaleString()} tokens
-            </span>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}>
-            <span
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: '1.15rem',
-                fontWeight: 700,
-                color: 'var(--text-bright)',
-                letterSpacing: '-0.02em',
-                textShadow: isExecuting ? '0 0 12px rgba(6, 182, 212, 0.3)' : 'none'
-              }}
-            >
-              {totalUsage.estimated ? '≈ ' : ''}{totalTokens.toLocaleString()}
-            </span>
-            <span
-              style={{ fontSize: '0.72rem', fontWeight: 500, color: 'var(--text-muted)' }}
-              title={totalUsage.estimated ? "Estimated from text length — this CLI doesn't report exact token counts" : undefined}
-            >
-              {totalUsage.estimated ? 'tokens (est.)' : 'tokens'}
-            </span>
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       {isSubscription && plan && planLine(plan, billing?.label || 'Claude') && (
@@ -578,7 +581,7 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
             return (
               <span
                 key={role}
-                title={`${cfg.label}: ${data.total.toLocaleString()} tokens (${data.usage.calls} call${data.usage.calls === 1 ? '' : 's'}${data.usage.cachedInputTokens > 0 ? `, ${data.usage.cachedInputTokens.toLocaleString()} cached` : ''}${data.usage.cacheWriteTokens > 0 ? `, ${data.usage.cacheWriteTokens.toLocaleString()} written` : ''})`}
+                title={`${cfg.label}: ${data.total.toLocaleString()} new tokens (${data.usage.calls} call${data.usage.calls === 1 ? '' : 's'}${data.usage.cachedInputTokens > 0 ? `, ${data.usage.cachedInputTokens.toLocaleString()} cached` : ''}${data.usage.cacheWriteTokens > 0 ? `, ${data.usage.cacheWriteTokens.toLocaleString()} written` : ''})`}
                 style={{
                   fontSize: '0.66rem',
                   fontFamily: 'var(--font-mono)',
@@ -590,7 +593,9 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
                   whiteSpace: 'nowrap'
                 }}
               >
-                {cfg.label}: {data.total.toLocaleString()}
+                {cfg.label}: {isSubscription || typeof data.usage.costUsd !== 'number'
+                  ? compactTokens(data.total)
+                  : `${data.usage.costPartial ? '≈ ' : ''}${formatUsd(data.usage.costUsd)} · ${compactTokens(data.total)}`}
               </span>
             );
           })}

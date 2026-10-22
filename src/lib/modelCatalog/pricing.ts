@@ -13,6 +13,8 @@ export interface PricedUsage {
   outputTokens: number;
   cachedInputTokens: number;
   cacheWriteTokens: number;
+  /** Part of `cacheWriteTokens` written with Anthropic's 1-hour TTL, billed at 2× the input price (5-minute writes: 1.25×). */
+  cacheWrite1hTokens?: number;
 }
 
 /** Strips date suffixes and provider prefixes so "claude-sonnet-5-5-20260101" or "anthropic/claude-sonnet-5.5" match. */
@@ -49,11 +51,13 @@ export function usageCostUsd(usage: PricedUsage, price: Pick<CatalogModel, 'inpu
   const cached = Math.max(0, usage.cachedInputTokens || 0);
   const written = Math.max(0, usage.cacheWriteTokens || 0);
   const plain = Math.max(0, (usage.inputTokens || 0) - cached - written);
+  const written1h = Math.min(written, Math.max(0, usage.cacheWrite1hTokens || 0));
   const perToken = (perM: number | undefined, fallback: number) => (perM ?? fallback) / 1e6;
   return (
     plain * perToken(price.inputPerM, 0) +
     cached * perToken(price.cacheReadPerM, price.inputPerM) +
-    written * perToken(price.cacheWritePerM, price.inputPerM) +
+    (written - written1h) * perToken(price.cacheWritePerM, price.inputPerM) +
+    written1h * perToken(price.inputPerM, 0) * 2 +
     Math.max(0, usage.outputTokens || 0) * perToken(price.outputPerM, 0)
   );
 }

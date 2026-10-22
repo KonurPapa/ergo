@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { type AIProviderId, type AgentRole, type UserApiKey, type CliDetectedAgent, type AuthMode } from '../types';
+import { type AIProviderId, type AgentRole, type UserApiKey, type CliDetectedAgent, type AuthMode, type ContextCompactionSetting } from '../types';
+import { compactionThreshold, contextWindowFor, DEFAULT_OLLAMA_CONTEXT } from '../lib/agentPipeline/compaction';
+import { PRICE_SNAPSHOT } from '../lib/modelCatalog/priceSnapshot';
 import {
   SUPPORTED_AI_PROVIDERS,
   AGENT_ROLES,
@@ -111,6 +113,10 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
   const [showApiKey, setShowApiKey] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
+  // Context compaction (Advanced): tokens are typed as text so a half-typed number isn't rewritten under the cursor.
+  const [compactMode, setCompactMode] = useState<ContextCompactionSetting['mode']>('auto');
+  const [compactTokensText, setCompactTokensText] = useState('');
+  const [windowTokensText, setWindowTokensText] = useState('');
   const [keyPendingDelete, setKeyPendingDelete] = useState<UserApiKey | null>(null);
 
   // Per-Agent Role Configurations
@@ -229,6 +235,9 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     setCliExtraArgs(defaultPreset?.defaultArgs || '');
     setIsCliCustomized(false);
     setCliExecutionMode('interactive');
+    setCompactMode('auto');
+    setCompactTokensText('');
+    setWindowTokensText('');
   };
 
   const loadKeyForEditing = async (k: UserApiKey) => {
@@ -256,6 +265,9 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     setCustomCliCommand(k.cliCustomCommand || matchedPreset?.command || '');
     setCliExtraArgs(k.cliExtraArgs !== undefined ? k.cliExtraArgs : (matchedPreset?.defaultArgs || ''));
     setCliExecutionMode(k.cliExecutionMode || 'interactive');
+    setCompactMode(k.contextCompaction?.mode || 'auto');
+    setCompactTokensText(k.contextCompaction?.tokens ? String(k.contextCompaction.tokens) : '');
+    setWindowTokensText(k.contextCompaction?.windowTokens ? String(k.contextCompaction.windowTokens) : '');
     setIsCliCustomized(Boolean(
       (k.cliPresetId && k.cliPresetId !== defaultPresetId) ||
       (k.cliAgentId && k.cliAgentId !== defaultPresetId) ||
@@ -599,6 +611,35 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     setIsTesting(false);
   };
 
+  /** The compaction setting typed into the form; undefined (= automatic, no overrides) when nothing was changed. */
+  const compactionFromForm = (): ContextCompactionSetting | undefined => {
+    const toTokens = (text: string) => {
+      const n = Math.round(Number(text.replace(/[,_\s]/g, '')));
+      return Number.isFinite(n) && n > 0 ? n : undefined;
+    };
+    const tokens = toTokens(compactTokensText);
+    const windowTokens = toTokens(windowTokensText);
+    const mode = compactMode === 'manual' && !tokens ? 'auto' : compactMode;
+    if (mode === 'auto' && !windowTokens) return undefined;
+    return { mode, ...(mode === 'manual' && tokens ? { tokens } : {}), ...(windowTokens ? { windowTokens } : {}) };
+  };
+
+  /** What the current form values mean for this profile, one line. */
+  const compactionPreview = (): string => {
+    if (authMode === 'cli_subscription' && providerId !== 'ollama') {
+      return 'This profile runs a CLI agent (Claude Code, Codex, Gemini CLI), which compacts with its own built-in, model-tuned settings. This setting applies to API-key and Ollama agents.';
+    }
+    const setting = compactionFromForm();
+    if (setting?.mode === 'off') {
+      return 'Off: agents keep their whole conversation. Past the window the provider rejects the call — Ollama silently drops the start of the prompt.';
+    }
+    const input = { provider: providerId, model: roleConfigs.manager?.model || undefined, setting, models: PRICE_SNAPSHOT.models };
+    const k = (n: number) => `${Math.round(n / 1000)}k`;
+    const window = contextWindowFor(input);
+    const at = compactionThreshold(input) ?? window;
+    return `Summarizes older context at ${k(at)} tokens (window ${k(window)}${setting?.mode === 'manual' ? '' : ', 80%'}). The newest 4 tool exchanges stay word for word.`;
+  };
+
   const handleSave = () => {
     const finalName = keyName.trim() || `${providerMeta.name} ${authMode === 'cli_subscription' ? 'Subscription' : 'API'} Profile`;
 
@@ -632,6 +673,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
       cliCustomCommand: customCliCommand.trim() || undefined,
       cliExtraArgs: cliExtraArgs.trim() || undefined,
       cliExecutionMode: cliExecutionMode,
+      contextCompaction: compactionFromForm(),
       summaryModel: finalRoleConfigs.summary?.model,
       generalModel: finalRoleConfigs.manager?.model,
       workerModel: finalRoleConfigs.worker?.model,
@@ -1706,6 +1748,87 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                     gap: '1.25rem'
                   }}
                 >
+                  {/* Context compaction */}
+                  <div
+                    style={{
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border-subtle)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '1rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.7rem'
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#fff' }}>Context Compaction</div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.15rem', lineHeight: 1.45 }}>
+                        When an agent's conversation nears the model's context window, the same model summarizes the older part so the run can
+                        continue. Matters most for Ollama, whose windows are small. CLI agents (Claude Code, Codex, Gemini CLI) use their own compaction.
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                      {([
+                        ['auto', 'Automatic (near the window)'],
+                        ['manual', 'Custom size'],
+                        ['off', 'Off']
+                      ] as const).map(([mode, label]) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => setCompactMode(mode)}
+                          style={{
+                            padding: '0.3rem 0.7rem',
+                            fontSize: '0.74rem',
+                            borderRadius: 'var(--radius-sm)',
+                            cursor: 'pointer',
+                            border: `1.5px solid ${compactMode === mode ? 'var(--accent-cyan)' : 'rgba(255, 255, 255, 0.08)'}`,
+                            background: compactMode === mode ? 'rgba(6, 182, 212, 0.12)' : 'transparent',
+                            color: compactMode === mode ? 'var(--accent-cyan)' : 'var(--text-muted)',
+                            fontWeight: compactMode === mode ? 700 : 500
+                          }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    {compactMode === 'manual' && (
+                      <div>
+                        <label style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>
+                          Compact when the conversation reaches (tokens):
+                        </label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          className="input-text"
+                          value={compactTokensText}
+                          onChange={(e) => setCompactTokensText(e.target.value)}
+                          placeholder="e.g. 60000"
+                          style={{ width: '12rem', fontSize: '0.82rem', fontFamily: 'monospace' }}
+                        />
+                      </div>
+                    )}
+                    {compactMode !== 'off' && (
+                      <div>
+                        <label style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>
+                          {providerId === 'ollama' ? 'Model context window (tokens, also sent to Ollama as num_ctx):' : 'Model context window (tokens, only if Ergo doesn\'t know your model):'}
+                        </label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          className="input-text"
+                          value={windowTokensText}
+                          onChange={(e) => setWindowTokensText(e.target.value)}
+                          placeholder={providerId === 'ollama' ? String(DEFAULT_OLLAMA_CONTEXT) : 'auto'}
+                          style={{ width: '12rem', fontSize: '0.82rem', fontFamily: 'monospace' }}
+                        />
+                      </div>
+                    )}
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', lineHeight: 1.5 }}>
+                      {compactionPreview()}
+                    </div>
+                  </div>
+
                   {/* CLI Terminal Coding Agent Configuration */}
                   <div
                     style={{

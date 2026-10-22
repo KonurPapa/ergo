@@ -185,6 +185,7 @@ export const INITIAL_MCP_SERVERS: MCPServer[] = [
       { id: 'fs_edit_file', name: 'edit_file', description: 'Replace an exact text span in an existing file (diff-style edit; cheaper than rewriting the whole file)', autoApprove: false, serverId: 'mcp-filesystem' },
       { id: 'fs_list_directory', name: 'list_directory', description: 'List files and subdirectories inside an allowed path', autoApprove: true, serverId: 'mcp-filesystem' },
       { id: 'fs_create_directory', name: 'create_directory', description: 'Create a new directory recursively', autoApprove: true, serverId: 'mcp-filesystem' },
+      { id: 'fs_code_search', name: 'code_search', description: 'Semantic + keyword search over the indexed project code (use first to locate code)', autoApprove: true, serverId: 'mcp-filesystem' },
       { id: 'fs_search_files', name: 'search_files', description: 'Search files by filename substring and/or grep file contents with a regex (contentPattern)', autoApprove: true, serverId: 'mcp-filesystem' },
       { id: 'fs_get_file_info', name: 'get_file_info', description: 'Retrieve file metadata (size, modified date, permissions)', autoApprove: true, serverId: 'mcp-filesystem' },
       { id: 'fs_run_command', name: 'run_command', description: 'Run a shell command (tests, lint, build, scripts) inside an allowed folder; returns exit code, stdout and stderr', autoApprove: false, serverId: 'mcp-filesystem' }

@@ -7,6 +7,8 @@ import {
 
 import {
   getAllowedRoots,
+  getCodeIndexStatus,
+  type CodeIndexStatus,
   addAllowedRoot,
   removeAllowedRoot,
   discoverRemoteMcpTools,
@@ -237,6 +239,56 @@ const MCP_EXTERNAL_SETUP_GUIDES: Record<string, McpSetupGuide> = {
   }
 };
 
+/** Allowed-folder path (may start with ~) vs the bridge's absolute path. */
+function samePath(abs: string, configured: string): boolean {
+  const norm = (p: string) => p.replace(/\/+$/, '');
+  const a = norm(abs);
+  const c = norm(configured.trim());
+  return c.startsWith('~') ? a.endsWith(c.slice(1)) : a === c;
+}
+
+function ago(ts?: number): string {
+  if (!ts) return '';
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86_400) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86_400)} d ago`;
+}
+
+/** One folder's code index state: progress bar while indexing, a short summary once ready. */
+const CodeIndexLine: React.FC<{ status?: CodeIndexStatus }> = ({ status }) => {
+  const row: React.CSSProperties = { fontSize: '0.72rem', marginTop: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--text-muted)' };
+  if (!status) return <div style={row}>Code index: starting…</div>;
+  if (status.state === 'too-large' || status.state === 'error') {
+    return <div style={{ ...row, color: 'var(--accent-amber)' }} title={status.error}>Code index unavailable: {status.error || 'scan failed'}</div>;
+  }
+  if (status.state === 'scanning') return <div style={row}><span className="live-pulse-dot" style={{ width: 6, height: 6 }} /> Code index: scanning files…</div>;
+  if (status.state === 'indexing') {
+    const pct = status.sections ? Math.floor((status.embedded / status.sections) * 100) : 0;
+    return (
+      <div style={{ marginTop: '0.4rem', width: 'min(360px, 100%)' }} title="Agents can already search this folder by keywords; semantic search covers each part as soon as it is embedded.">
+        <div style={{ ...row, marginTop: 0, justifyContent: 'space-between' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <span className="live-pulse-dot" style={{ width: 6, height: 6 }} />
+            Indexing code{status.pendingFiles > 0 && status.embedded === status.sections ? ` · ${status.pendingFiles} changed file${status.pendingFiles === 1 ? '' : 's'}` : ''}
+          </span>
+          <span style={{ fontFamily: 'var(--font-mono)' }}>{status.embedded.toLocaleString()} / {status.sections.toLocaleString()} sections · {pct}%</span>
+        </div>
+        <div style={{ height: 4, borderRadius: 2, background: 'rgba(255, 255, 255, 0.08)', marginTop: '0.3rem', overflow: 'hidden' }}>
+          <div style={{ width: `${pct}%`, height: '100%', background: 'var(--accent-cyan)', transition: 'width 0.6s ease' }} />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div style={row}>
+      <span style={{ color: 'var(--accent-emerald)' }}>●</span>
+      Code index ready · {status.files.toLocaleString()} files · {status.sections.toLocaleString()} sections{status.updatedAt ? ` · updated ${ago(status.updatedAt)}` : ''}
+    </div>
+  );
+};
+
 export const McpHubModal: React.FC<McpHubModalProps> = ({
   isOpen,
   onClose,
@@ -369,6 +421,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
 
   const [connectingServerId, setConnectingServerId] = useState<string | null>(null);
   const [roots, setRoots] = useState<McpRootBoundary[]>([]);
+  const [codeIndex, setCodeIndex] = useState<CodeIndexStatus[]>([]);
   const [newRootPath, setNewRootPath] = useState('');
   const [newRootName, setNewRootName] = useState('');
 
@@ -440,6 +493,20 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
         .catch(() => { });
     }
   }, [isOpen]);
+
+  // Code index progress for the Allowed Folders tab: polled while it is open (fast while anything is indexing).
+  const anyIndexing = codeIndex.some((c) => c.state === 'scanning' || c.state === 'indexing');
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'roots') return;
+    let alive = true;
+    const load = () => getCodeIndexStatus().then((list) => alive && list && setCodeIndex(list));
+    load();
+    const timer = setInterval(load, anyIndexing ? 1_500 : 10_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [isOpen, activeTab, anyIndexing, roots]);
 
   if (!isOpen) return null;
 
@@ -1738,6 +1805,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                           <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', marginTop: '0.1rem' }}>
                             {root.path}
                           </div>
+                          {!root.isDefault && <CodeIndexLine status={codeIndex.find((c) => samePath(c.root, root.path))} />}
                         </div>
                       </div>
 

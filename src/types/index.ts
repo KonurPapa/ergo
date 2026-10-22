@@ -268,6 +268,18 @@ export interface AgentModelConfig {
   effort?: EffortLevel;
 }
 
+/**
+ * When Ergo's API / Ollama agent loops compact their conversation (CLI agents use their own compaction).
+ * auto: at 80% of the model's context window · manual: at `tokens` · off: never.
+ */
+export interface ContextCompactionSetting {
+  mode: 'auto' | 'manual' | 'off';
+  /** manual: compact once the conversation reaches this many tokens. */
+  tokens?: number;
+  /** The model's context window when Ergo can't look it up (custom / local models). Ollama also runs with it as num_ctx. */
+  windowTokens?: number;
+}
+
 export interface AIProviderConfig {
   provider: AIProviderId;
   model: string;
@@ -278,6 +290,7 @@ export interface AIProviderConfig {
   cliExtraArgs?: string;
   cliSubscriptionTier?: string;
   cliExecutionMode?: 'headless' | 'interactive';
+  contextCompaction?: ContextCompactionSetting;
   summaryModel?: string;
   generalModel?: string;
   /** Optional cheaper/faster model used for fan-out worker sub-agents (defaults to generalModel). */
@@ -335,6 +348,7 @@ export interface UserApiKey {
   cliExtraArgs?: string;
   cliSubscriptionTier?: string;
   cliExecutionMode?: 'headless' | 'interactive';
+  contextCompaction?: ContextCompactionSetting;
   baseUrl?: string;
   model?: string;
   summaryModel?: string;

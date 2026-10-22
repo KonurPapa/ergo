@@ -21,20 +21,42 @@ export interface BridgeStatus {
   url: string;
   storageDir?: string;
   homeDir?: string;
+  /** Folder the bridge runs from (where `npm run dev` starts it), remembered from the last connection. */
+  appDir?: string;
   error?: string | null;
+  diagnosis?: BridgeDiagnosis;
+  /** A request to the bridge is being held by the browser until the user answers its "apps on this device" prompt. */
+  awaitingPermission?: boolean;
   isMixedContentBlocked?: boolean;
   lastCheckedAt?: string;
   lastHeartbeat?: string;
 }
 
-export type BridgeDiagnosis = 'ok' | 'unreachable' | 'origin-refused';
+/**
+ * Why the bridge can't be used. 'permission-prompt': the browser held our requests while its local-access prompt
+ * went unanswered. 'permission-denied': the user blocked this site from reaching apps on this device.
+ */
+export type BridgeDiagnosis = 'ok' | 'unreachable' | 'origin-refused' | 'permission-prompt' | 'permission-denied';
+
+/** The browser's permission for this page to reach localhost; 'unsupported' where there is none to ask for. */
+export type LoopbackPermission = PermissionState | 'unsupported';
 
 const STORAGE_KEY_BRIDGE_URL = 'ergo_local_bridge_url';
 const STORAGE_KEY_AUTO_CONNECT = 'ergo_bridge_auto_connect';
+const STORAGE_KEY_APP_DIR = 'ergo_bridge_app_dir';
 export const DEFAULT_BRIDGE_URL = 'http://localhost:5173';
 // Vite silently moves to the next free port when 5173 is taken, so the bridge is often on 5174, 5175, ...
 const FALLBACK_BRIDGE_PORTS = [5173, 5174, 5175, 5176, 5177, 5178, 5179, 5180, 3000];
 const PROBE_TIMEOUT_MS = 2500;
+// Chrome (142+) and Firefox (149+) make a public site ask before it may reach localhost ("access other apps and
+// services on this device") and hold each request until the user answers. A probe that may be waiting on that prompt
+// gets minutes rather than PROBE_TIMEOUT_MS, because aborting it early reads as "bridge not running".
+const PERMISSION_WAIT_MS = 120_000;
+// The bridge answers in milliseconds and a closed port fails as fast, so a request still pending after this is being
+// held by the prompt.
+const HELD_REQUEST_HINT_MS = 1200;
+// Chrome 145+ and Firefox call it 'loopback-network'; Chrome 142–144 only know the combined 'local-network-access'.
+const LOOPBACK_PERMISSION_NAMES = ['loopback-network', 'local-network-access'];
 
 /**
  * True when fetch() failed before getting any HTTP response (bridge offline, CORS rejection,
@@ -46,15 +68,35 @@ export function isNetworkError(err: any): boolean {
   return msg.includes('failed to fetch') || msg.includes('networkerror') || msg.includes('load failed') || msg.includes('network request failed');
 }
 
+/** Safari and every iOS browser (all WebKit) refuse https pages any request to http://localhost. */
+function isWebKitOnlyBrowser(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent;
+  return /iPhone|iPad|iPod/.test(ua) || (/Safari\//.test(ua) && !/Chrome|Chromium|Edg|OPR|Firefox/.test(ua));
+}
+
+/** How to lift a blocked localhost permission, in the browser's own words (Chrome, Edge and Brave share theirs). */
+function unblockInstructions(): string {
+  if (typeof navigator !== 'undefined' && /Firefox\//.test(navigator.userAgent)) {
+    return 'click the permissions icon at the left of the address bar, remove the block on "Access this device", then reload this page and choose Allow when Firefox asks.';
+  }
+  return 'click the icon at the left of the address bar, open Site settings, set "Apps on device" (older versions: "Local network access") to Allow, then reload this page.';
+}
+
 class BridgeClient {
   private bridgeUrl: string = DEFAULT_BRIDGE_URL;
   private isConnected: boolean = false;
   private isChecking: boolean = false;
   private storageDir: string = '~/.ergo';
   private homeDir: string = '';
+  private appDir: string = '';
   private lastError: string | null = null;
   private isMixedContentBlocked: boolean = false;
   private lastDiagnosis: BridgeDiagnosis = 'unreachable';
+  private lastPermission: LoopbackPermission = 'unsupported';
+  private permissionStatus: Promise<PermissionStatus | null> | null = null;
+  /** Requests the browser is holding for its local-access prompt (see trackHeld). */
+  private heldRequests = new Set<symbol>();
   private checkInFlight: Promise<{ success: boolean; error?: string; isMixedContentBlocked?: boolean }> | null = null;
   private lastCheckedAt: string = '';
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
@@ -69,6 +111,9 @@ class BridgeClient {
         // Default to http://localhost:5173 for hosted web apps
         this.bridgeUrl = this.isHostedWeb() ? DEFAULT_BRIDGE_URL : window.location.origin;
       }
+      try {
+        this.appDir = localStorage.getItem(STORAGE_KEY_APP_DIR) || '';
+      } catch {}
     }
   }
 
@@ -150,14 +195,91 @@ class BridgeClient {
       return 'Unable to reach the local Ergo server. Make sure `npm run dev` is still running.';
     }
     const origin = window.location.origin;
-    if (diagnosis === 'origin-refused') {
-      return `A local server answered on this device, but it refuses requests from ${origin}. ` +
-        `Update your local Ergo copy (git pull), restart it (npm run dev), then try again. ` +
-        `If you host Ergo on another domain, add ${origin} to ERGO_ALLOWED_ORIGINS in .env.local.`;
+    const site = window.location.host;
+    switch (diagnosis) {
+      case 'origin-refused':
+        return `A local server answered on this device, but it refuses requests from ${origin}. ` +
+          `Update your local Ergo copy (git pull), restart it (npm run dev), then try again. ` +
+          `If you host Ergo on another domain, add ${origin} to ERGO_ALLOWED_ORIGINS in .env.local.`;
+      case 'permission-denied':
+        return `Your browser is blocking ${site} from accessing apps on this device, so it can't reach your local Ergo bridge. ` +
+          `To allow it, ${unblockInstructions()}`;
+      case 'permission-prompt':
+        return `Your browser is asking whether ${site} may "access other apps and services on this device". ` +
+          `Click Allow in that prompt next to the address bar: that is how this page reaches the Ergo bridge running on your computer.`;
+      case 'ok':
+        return 'Your local Ergo bridge is running, but this request to it failed before an answer came back. ' +
+          'Check the terminal running npm run dev for errors, then try again.';
+      default:
+        if (isWebKitOnlyBrowser()) {
+          return `Safari (like every browser on iPhone and iPad) blocks websites from reaching apps on your computer, so ${site} can't reach your local Ergo bridge. ` +
+            'Use Chrome, Edge or Firefox, or open Ergo directly at http://localhost:5173.';
+        }
+        return `Unable to reach your local Ergo bridge (tried ${this.bridgeUrl} and nearby ports). ` +
+          'Start Ergo on this computer: open a terminal in your Ergo folder and run npm run dev.' +
+          (this.lastPermission === 'prompt'
+            ? ` If it's already running, reload this page and click Allow when your browser asks to let ${site} access apps on this device.`
+            : '');
     }
-    return `Unable to reach your local Ergo bridge (tried ${this.bridgeUrl} and nearby ports). ` +
-      `Make sure Ergo is running on this device (npm run dev) and that your browser allows ${origin} to connect to localhost — ` +
-      `accept the "access other devices / local network" prompt in Chrome or Edge, or turn off Brave Shields for this site. Safari does not support this.`;
+  }
+
+  /**
+   * The browser's permission for this page to reach apps on this device (Local Network Access), looked up once.
+   * Answering the prompt re-checks the bridge right away instead of at the next heartbeat.
+   */
+  private getPermissionStatus(): Promise<PermissionStatus | null> {
+    if (!this.permissionStatus) {
+      this.permissionStatus = (async () => {
+        if (typeof navigator === 'undefined' || !navigator.permissions?.query) return null;
+        for (const name of LOOPBACK_PERMISSION_NAMES) {
+          try {
+            const status = await navigator.permissions.query({ name } as unknown as PermissionDescriptor);
+            status.addEventListener('change', () => {
+              // The prompt was answered: held requests are released (or failed), so drop the hint and re-check now.
+              this.heldRequests.clear();
+              this.notify();
+              if (status.state === 'granted') {
+                // Access granted some other way (site settings, another tab) leaves the prompt's held requests stuck,
+                // so don't wait on the check in flight.
+                this.checkInFlight = null;
+                this.checkConnection().catch(() => {});
+              }
+            });
+            return status;
+          } catch {
+            // Not a permission name this browser knows.
+          }
+        }
+        return null;
+      })();
+    }
+    return this.permissionStatus;
+  }
+
+  /** 'unsupported' off hosted web and in browsers without Local Network Access. */
+  public async getLoopbackPermission(): Promise<LoopbackPermission> {
+    if (!this.isHostedWeb()) return 'unsupported';
+    const status = await this.getPermissionStatus();
+    return status ? status.state : 'unsupported';
+  }
+
+  /**
+   * Awaits a bridge request the browser may hold until the user answers its local-access prompt, flagging
+   * `awaitingPermission` once it has been pending long enough that the prompt must be what it's waiting on.
+   */
+  private async trackHeld<T>(request: Promise<T>, mayBeHeld: boolean): Promise<T> {
+    if (!mayBeHeld) return request;
+    const token = Symbol('held-request');
+    const timer = setTimeout(() => {
+      this.heldRequests.add(token);
+      this.notify();
+    }, HELD_REQUEST_HINT_MS);
+    try {
+      return await request;
+    } finally {
+      clearTimeout(timer);
+      if (this.heldRequests.delete(token)) this.notify();
+    }
   }
 
   /**
@@ -171,7 +293,10 @@ class BridgeClient {
       url: this.bridgeUrl,
       storageDir: this.storageDir,
       homeDir: this.homeDir,
+      appDir: this.appDir || undefined,
       error: this.lastError,
+      diagnosis: this.lastDiagnosis,
+      awaitingPermission: this.heldRequests.size > 0,
       isMixedContentBlocked: this.isMixedContentBlocked,
       lastCheckedAt: this.lastCheckedAt,
       lastHeartbeat: this.lastCheckedAt
@@ -201,15 +326,15 @@ class BridgeClient {
   /**
    * Probe one candidate URL. Resolves with the bridge info if it's a reachable Ergo bridge,
    * otherwise with why not: 'refused' (an HTTP error came back), 'origin-refused' (something is
-   * listening but the browser blocked the response, i.e. CORS), or 'unreachable'.
+   * listening but the browser blocked the response, i.e. CORS), 'timeout' or 'unreachable'.
    */
-  private async probe(baseUrl: string, relative: boolean): Promise<
+  private async probe(baseUrl: string, relative: boolean, timeoutMs: number): Promise<
     | { ok: true; url: string; data: any }
-    | { ok: false; url: string; reason: 'refused' | 'origin-refused' | 'unreachable'; message: string }
+    | { ok: false; url: string; reason: 'refused' | 'origin-refused' | 'unreachable' | 'timeout'; message: string }
   > {
     const endpoint = relative ? '/api/storage/config' : `${baseUrl}/api/storage/config`;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(endpoint, { method: 'GET', signal: controller.signal });
       if (res.ok) {
@@ -219,7 +344,7 @@ class BridgeClient {
       return { ok: false, url: baseUrl, reason: 'refused', message: `Device bridge at ${baseUrl} returned HTTP ${res.status}` };
     } catch (err: any) {
       if (err?.name === 'AbortError') {
-        return { ok: false, url: baseUrl, reason: 'unreachable', message: 'Connection timed out. Make sure Ergo is running locally on your device.' };
+        return { ok: false, url: baseUrl, reason: 'timeout', message: 'Connection timed out. Make sure Ergo is running locally on your device.' };
       }
       if (!isNetworkError(err)) {
         return { ok: false, url: baseUrl, reason: 'unreachable', message: err?.message || 'Unable to reach local bridge' };
@@ -238,13 +363,31 @@ class BridgeClient {
   }
 
   /**
+   * Probes candidates one at a time while the browser's local-access prompt is unanswered: Firefox holds only the
+   * newest request waiting on that prompt and fails the rest at once, so parallel probes would knock each other out.
+   * Stops at a hit, at a probe the user left waiting (the prompt is the problem, not the port), or once the prompt is
+   * answered (the caller then re-probes at full speed).
+   */
+  private async probeOneByOne(urls: string[]) {
+    const results: Awaited<ReturnType<BridgeClient['probe']>>[] = [];
+    for (const url of urls) {
+      const result = await this.probe(url, false, PERMISSION_WAIT_MS);
+      results.push(result);
+      if (result.ok || ('reason' in result && result.reason === 'timeout') || (await this.getLoopbackPermission()) !== 'prompt') break;
+    }
+    return results;
+  }
+
+  /**
    * Check connection to the local bridge. On hosted web every plausible local port is probed in
    * parallel, because Vite moves to 5174+ when 5173 is busy. Pass `exclusive` to test only `targetUrl`.
    */
   public async checkConnection(targetUrl?: string, options: { exclusive?: boolean } = {}): Promise<{ success: boolean; error?: string; isMixedContentBlocked?: boolean }> {
-    if (this.checkInFlight && !targetUrl) return this.checkInFlight;
+    // Same candidates as an untargeted check, so share it: two checks at once would also fight over the browser's prompt.
+    const shared = !targetUrl || (!options.exclusive && targetUrl.replace(/\/+$/, '') === this.bridgeUrl);
+    if (this.checkInFlight && shared) return this.checkInFlight;
     const run = this.runCheckConnection(targetUrl, options);
-    if (!targetUrl) {
+    if (shared) {
       this.checkInFlight = run;
       run.finally(() => {
         if (this.checkInFlight === run) this.checkInFlight = null;
@@ -274,9 +417,20 @@ class BridgeClient {
       ]));
     }
 
-    const results = await Promise.all(
-      candidateUrls.map((url) => this.probe(url, !hosted && !targetUrl))
+    // Only a decided permission guarantees a quick answer; otherwise a running bridge may sit behind the prompt.
+    const relative = !hosted && !targetUrl;
+    const permission = await this.getLoopbackPermission();
+    const mayBeHeld = hosted && permission !== 'granted' && permission !== 'denied';
+    const probeAll = (timeoutMs: number) => Promise.all(candidateUrls.map((url) => this.probe(url, relative, timeoutMs)));
+    let results = await this.trackHeld(
+      permission === 'prompt' && hosted ? this.probeOneByOne(candidateUrls) : probeAll(mayBeHeld ? PERMISSION_WAIT_MS : PROBE_TIMEOUT_MS),
+      mayBeHeld
     );
+    this.lastPermission = await this.getLoopbackPermission();
+    // Allowed mid-check: whatever failed before that was blocked or displaced by the prompt, so look again.
+    if (permission !== 'granted' && this.lastPermission === 'granted' && !results.some((r) => r.ok)) {
+      results = await probeAll(PROBE_TIMEOUT_MS);
+    }
 
     // Prefer the user's configured URL, then the lowest port that answered.
     const hit = results.find((r) => r.ok);
@@ -290,6 +444,12 @@ class BridgeClient {
       this.lastCheckedAt = new Date().toISOString();
       if (data.resolvedPath) this.storageDir = data.resolvedPath;
       if (data.homeDir) this.homeDir = data.homeDir;
+      if (typeof data.appDir === 'string' && data.appDir) {
+        this.appDir = data.appDir;
+        try {
+          localStorage.setItem(STORAGE_KEY_APP_DIR, data.appDir);
+        } catch {}
+      }
       this.setBridgeUrl(hit.url);
       try {
         localStorage.setItem(STORAGE_KEY_AUTO_CONNECT, 'true');
@@ -301,21 +461,25 @@ class BridgeClient {
     const failures = results.filter((r): r is Extract<typeof r, { ok: false }> => !r.ok);
     const originRefused = failures.find((f) => f.reason === 'origin-refused');
     const httpRefused = failures.find((f) => f.reason === 'refused');
-    this.lastDiagnosis = originRefused ? 'origin-refused' : 'unreachable';
+    // A blocked permission fails every request instantly, exactly like a closed port, so ask the browser which it was.
+    this.lastDiagnosis = this.lastPermission === 'denied'
+      ? 'permission-denied'
+      : originRefused
+        ? 'origin-refused'
+        : this.lastPermission === 'prompt' && failures.some((f) => f.reason === 'timeout')
+          ? 'permission-prompt'
+          : 'unreachable';
 
     this.isConnected = false;
     this.isChecking = false;
-    this.isMixedContentBlocked = hosted && this.isSecureContext() && !originRefused;
+    this.isMixedContentBlocked = hosted && this.isSecureContext() && this.lastDiagnosis === 'unreachable' && isWebKitOnlyBrowser();
 
-    if (httpRefused && !originRefused) {
+    if (httpRefused && this.lastDiagnosis === 'unreachable') {
       this.lastError = httpRefused.message;
     } else if (!hosted) {
       this.lastError = failures[0]?.message || 'Unable to reach local bridge';
     } else {
       this.lastError = this.describeUnreachable(this.lastDiagnosis);
-      if (this.isMixedContentBlocked && !this.lastError.includes('Safari')) {
-        this.lastError += ' If you use Safari, open Ergo locally at http://localhost:5173 instead.';
-      }
     }
 
     this.lastCheckedAt = new Date().toISOString();
@@ -332,14 +496,17 @@ class BridgeClient {
    * (e.g. the bridge moved to another port since the URL was saved), then retries.
    */
   public async fetch(endpoint: string, init?: RequestInit): Promise<Response> {
+    const permission = await this.getLoopbackPermission();
     try {
-      return await fetch(this.getApiUrl(endpoint), init);
+      return await this.trackHeld(fetch(this.getApiUrl(endpoint), init), permission === 'prompt');
     } catch (err: any) {
       if (!this.isHostedWeb() || !isNetworkError(err)) throw err;
       const before = this.bridgeUrl;
       const res = await this.checkConnection();
       if (!res.success) throw err;
-      if (this.bridgeUrl === before) throw err;
+      // Retry only when the first attempt can't have reached the bridge: it was on another port, or the browser blocked
+      // it before the user allowed local access. A request that did reach the bridge (e.g. a POST) must not run twice.
+      if (this.bridgeUrl === before && permission !== 'prompt' && permission !== 'denied') throw err;
       return fetch(this.getApiUrl(endpoint), init);
     }
   }

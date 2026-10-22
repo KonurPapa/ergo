@@ -20,6 +20,7 @@ import {
   type AgentRole,
   type AgentContextItem,
   type AuthMode,
+  type ContextCompactionSetting,
   type EffortLevel,
   type ExecutionStep,
   type HumanInputPrompt,
@@ -162,6 +163,8 @@ export interface ToolLoopRequest {
   cliCustomCommand?: string;
   /** Reasoning effort mapped onto the provider's own control (Anthropic output_config.effort, OpenAI reasoning_effort, Gemini thinkingConfig, CLI --effort). */
   effort?: EffortLevel;
+  /** Context-compaction setting of the profile (absent: automatic, near the window). */
+  compaction?: ContextCompactionSetting;
   /** Model to retry with if the provider rejects `model` (e.g. a routed model the account can't access). */
   fallbackModel?: string;
   /** Permission level, forwarded to headless CLI agents so their built-in tools follow the same policy. */
@@ -275,6 +278,8 @@ export interface ResolvedRoleTarget {
   cliAgentId?: string;
   cliCustomCommand?: string;
   effort?: EffortLevel;
+  /** The profile's context-compaction setting (absent: automatic, near the window). */
+  compaction?: ContextCompactionSetting;
   /** The model this role would use without effort routing — the retry target if a routed model is rejected. */
   fallbackModel?: string;
 }
@@ -330,6 +335,7 @@ export function resolveRoleTarget(config: AIProviderConfig, role: AgentRole): Re
     cliAgentId,
     cliCustomCommand,
     effort: roleOverride?.effort,
+    compaction: config.contextCompaction,
     fallbackModel: unroutedModel && unroutedModel !== model ? unroutedModel : undefined
   };
 }
@@ -417,6 +423,7 @@ export function buildToolLoopRequest(
     cliAgentId: params.cliAgentId ?? target.cliAgentId,
     cliCustomCommand: params.cliCustomCommand ?? target.cliCustomCommand,
     effort: params.effort ?? target.effort,
+    compaction: params.compaction ?? target.compaction,
     fallbackModel: params.fallbackModel ?? target.fallbackModel,
     permissionLevel: params.permissionLevel ?? ctx.getPermissionLevel(),
     getPermissionLevel: params.getPermissionLevel ?? (params.permissionLevel ? undefined : ctx.getPermissionLevel),
