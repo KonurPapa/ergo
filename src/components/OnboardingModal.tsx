@@ -36,7 +36,6 @@ import {
   RefreshCw,
   RotateCcw,
   Laptop,
-  Monitor,
   Check,
   Copy,
   MoreHorizontal
@@ -157,7 +156,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   tinyCloudModelLabel
 }) => {
   // Wizard Steps: 1 = AI Account Connection, 2 = Optional Local AI Model, 3 = Local Device Bridge
-  const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4>(1);
+  const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
 
   // Splash Animation state: show centered brand, then slide to top & fade in content
   const [isIntroAnimating, setIsIntroAnimating] = useState<boolean>(true);
@@ -380,25 +379,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     return `http://localhost:${cleanPort}`;
   };
 
-  // Move from Step 2 to Step 3: Local Device Bridge
-  const proceedToBridgeStep = () => {
-    setCurrentStep(4);
-    const targetUrl = getFullBridgeUrl(bridgePortInput);
-    bridgeClient.setBridgeUrl(targetUrl);
-    // Auto-check bridge connection on entering Step 3
-    setIsTestingBridge(true);
-    setBridgeConnectError(null);
-    bridgeClient.checkConnection(targetUrl)
-      .then((res) => {
-        if (!res.success) {
-          setBridgeConnectError(res.error || 'Bridge not detected yet.');
-        }
-      })
-      .finally(() => {
-        setIsTestingBridge(false);
-      });
-  };
-
   const handleTestBridgeConnection = async (overridePort?: string) => {
     const portToUse = overridePort !== undefined ? overridePort : bridgePortInput;
     const targetUrl = getFullBridgeUrl(portToUse);
@@ -588,21 +568,21 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     }
   };
 
-  // Step 2 → cloud: "Skip — use <tiny cloud model> instead" (nothing is downloaded).
+  // Step 3 → cloud: "Skip — use <tiny cloud model> instead" (nothing is downloaded), which also finishes onboarding.
   const handleUseCloudModel = () => {
     onSetLocalModelMode?.('cloud');
-    proceedToBridgeStep();
+    handleFinishOnboarding();
   };
 
-  // Step 2 footer "Next": moving on without installing counts as skipping, unless the user already chose.
+  // Step 3 footer "Enter Workspace": finishing without installing counts as skipping, unless the user already chose.
   const handleLocalModelNext = () => {
     const st = localModel.status;
     const installingOrInstalled = st?.state === 'installing' || isLocalModelInstalled(st);
     if (!installingOrInstalled && localModelMode === 'unset') onSetLocalModelMode?.('cloud');
-    proceedToBridgeStep();
+    handleFinishOnboarding();
   };
 
-  // Finish Onboarding from Step 3
+  // Finish onboarding (last step: Local AI Model)
   const handleFinishOnboarding = () => {
     // A download started in step 2 is still running: the user chose local, and the fallback covers
     // the gap until it's ready (also survives a page reload, which would drop the completion watcher).
@@ -886,44 +866,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 <span>Local AI Model</span>
               </div>
 
-              <div style={{ flex: 1, height: '1.5px', background: currentStep > 3 ? 'var(--accent-emerald)' : 'var(--border-subtle, var(--border, #e2e8f0))' }} />
-
-              {/* Step 4: Connect Device Bridge */}
-              <div
-                onClick={() => setCurrentStep(4)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.45rem',
-                  fontSize: '0.76rem',
-                  fontWeight: currentStep === 4 ? 700 : 500,
-                  color: currentStep === 4 ? 'var(--text-bright)' : 'var(--text-dim)',
-                  cursor: 'pointer',
-                  userSelect: 'none',
-                  transition: 'opacity 0.15s ease'
-                }}
-                role="button"
-                tabIndex={0}
-                title="Go to Step 4: Connect Device"
-              >
-                <div
-                  style={{
-                    width: 22,
-                    height: 22,
-                    borderRadius: '50%',
-                    background: currentStep === 4 ? 'var(--accent-primary)' : 'var(--bg-hover, rgba(0, 0, 0, 0.05))',
-                    border: `1.5px solid ${currentStep === 4 ? 'var(--accent-primary)' : 'var(--border-strong, var(--border, #cbd5e1))'}`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '0.72rem',
-                    color: currentStep === 4 ? '#ffffff' : 'var(--text-dim)'
-                  }}
-                >
-                  4
-                </div>
-                <span>Connect Device</span>
-              </div>
             </div>
           )}
         </div>
@@ -983,7 +925,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     <div>
                       <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-bright)' }}>Ergo Bridge is running</div>
                       <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        This computer is connected. Continue to connect your AI.
+                        Connected at {bridgeStatus.url}. Your work is saved in <code>{bridgeStatus.storageDir}</code>.
                       </div>
                     </div>
                   </div>
@@ -1013,16 +955,243 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           ? 'Found Ergo Bridge: click Allow in the browser prompt next to the address bar.'
                           : 'Waiting for Ergo Bridge to start on this computer…'}
                       </span>
+                      <button
+                        type="button"
+                        onClick={() => handleTestBridgeConnection()}
+                        disabled={isTestingBridge}
+                        style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent-primary)', fontSize: '0.74rem', fontWeight: 600, cursor: isTestingBridge ? 'wait' : 'pointer' }}
+                      >
+                        {isTestingBridge ? 'Checking…' : 'Check again'}
+                      </button>
                     </div>
                   </>
                 )}
               </div>
 
-              {!bridgeStatus.isConnected && (bridgeStatus.diagnosis === 'permission-denied' || bridgeStatus.diagnosis === 'origin-refused') && bridgeStatus.error && (
+              {/* Error Alert if any */}
+              {bridgeConnectError && (
+                <div
+                  style={{
+                    marginTop: '0.85rem',
+                    padding: '0.75rem 1rem',
+                    borderRadius: '8px',
+                    background: 'rgba(239, 68, 68, 0.1)',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    color: '#f87171',
+                    fontSize: '0.78rem',
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '0.5rem'
+                  }}
+                >
+                  <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '2px' }} />
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Connection Notice</div>
+                    <div style={{ marginTop: '2px', color: 'var(--text-main)', lineHeight: 1.45 }}>
+                      {bridgeConnectError}
+                    </div>
+                    {bridgeStatus.isMixedContentBlocked && (
+                      <div style={{ marginTop: '0.5rem', padding: '0.45rem 0.65rem', background: 'var(--bg-hover, rgba(0, 0, 0, 0.05))', borderRadius: '6px', border: '1px solid var(--border-subtle, var(--border, #e2e8f0))', color: 'var(--text-bright)', fontSize: '0.74rem' }}>
+                        💡 <strong>Why this happens:</strong> Mobile browsers and HTTPS websites restrict connecting to <code>localhost</code> over unencrypted HTTP. To use Ergo on this device, either use an <strong>API Key</strong> in Step 2, or open Ergo directly on your computer at <code>http://localhost:5173</code>.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {!bridgeConnectError && !bridgeStatus.isConnected && (bridgeStatus.diagnosis === 'permission-denied' || bridgeStatus.diagnosis === 'origin-refused') && bridgeStatus.error && (
                 <div style={{ marginTop: '0.85rem', padding: '0.75rem 1rem', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: 1.45 }}>
                   {bridgeStatus.error}
                 </div>
               )}
+
+              {/* Collapsible Advanced Settings Dropdown */}
+              <div
+                style={{
+                  marginTop: '0.85rem',
+                  borderRadius: '10px',
+                  background: 'var(--bg-card, var(--card, #ffffff))',
+                  border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
+                  overflow: 'hidden',
+                  transition: 'all 0.2s ease',
+                  boxShadow: 'var(--shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.04))'
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedBridge((prev) => !prev)}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem 1rem',
+                    background: 'transparent',
+                    border: 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    cursor: 'pointer',
+                    color: 'var(--text-muted)',
+                    fontSize: '0.78rem',
+                    fontWeight: 600,
+                    transition: 'color 0.15s ease'
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-bright)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted)')}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <Settings2 size={14} color="#8b5cf6" />
+                    <span>Advanced Settings</span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: 400 }}>
+                      (Port configuration & helper commands)
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center' }}>
+                    {showAdvancedBridge ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  </div>
+                </button>
+
+                {showAdvancedBridge && (
+                  <div
+                    style={{
+                      padding: '0.85rem 1rem 1rem 1rem',
+                      borderTop: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.9rem'
+                    }}
+                  >
+                    {/* Port Customization */}
+                    <div>
+                      <div style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-bright)', marginBottom: '0.35rem' }}>
+                        Local Bridge Port
+                      </div>
+                      <div style={{ fontSize: '0.71rem', color: 'var(--text-dim)', marginBottom: '0.45rem' }}>
+                        Change the port number if your local Ergo bridge is running on a custom port.
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            background: 'var(--bg-hover, rgba(0, 0, 0, 0.04))',
+                            border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
+                            borderRadius: '6px',
+                            padding: '0 0.5rem',
+                            flex: 1
+                          }}
+                        >
+                          <span style={{ fontSize: '0.76rem', color: 'var(--text-dim)', fontFamily: 'monospace', userSelect: 'none' }}>
+                            http://localhost:
+                          </span>
+                          <input
+                            type="text"
+                            value={bridgePortInput}
+                            onChange={(e) => {
+                              const cleaned = e.target.value.replace(/\D/g, '').slice(0, 5);
+                              setBridgePortInput(cleaned);
+                              const fullUrl = getFullBridgeUrl(cleaned);
+                              bridgeClient.setBridgeUrl(fullUrl);
+                            }}
+                            placeholder="5173"
+                            style={{
+                              width: '70px',
+                              fontSize: '0.78rem',
+                              fontFamily: 'monospace',
+                              fontWeight: 700,
+                              padding: '0.4rem 0.35rem',
+                              background: 'transparent',
+                              border: 'none',
+                              color: 'var(--accent-primary)',
+                              outline: 'none'
+                            }}
+                          />
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleTestBridgeConnection(bridgePortInput)}
+                          disabled={isTestingBridge}
+                          style={{
+                            padding: '0.42rem 0.85rem',
+                            borderRadius: '6px',
+                            background: 'var(--btn-secondary-bg, var(--bg-card, #ffffff))',
+                            border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
+                            color: 'var(--text-bright)',
+                            fontSize: '0.74rem',
+                            fontWeight: 600,
+                            cursor: isTestingBridge ? 'wait' : 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.35rem',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          <RefreshCw size={11} className={isTestingBridge ? 'animate-spin' : ''} />
+                          <span>Apply Port</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Terminal Launch Command */}
+                    <div>
+                      <div style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-bright)', marginBottom: '0.35rem' }}>
+                        Manual Helper Launch Command
+                      </div>
+                      <div style={{ fontSize: '0.71rem', color: 'var(--text-dim)', marginBottom: '0.45rem' }}>
+                        Developers working from a copy of the Ergo repository can run the bridge from it instead:
+                      </div>
+                      {(() => {
+                        // The Ergo checkout the bridge last ran from (not the ~/.ergo data folder). Two lines rather
+                        // than `&&`, which Windows PowerShell 5.1 rejects.
+                        const appFolder = bridgeStatus.appDir || '<your Ergo folder>';
+                        const launchCmd = `cd ${appFolder.includes(' ') ? `"${appFolder}"` : appFolder}\nnpm run dev`;
+                        return (
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              background: 'var(--code-bg, #0f172a)',
+                              padding: '0.45rem 0.75rem',
+                              borderRadius: '6px',
+                              border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
+                              fontFamily: 'monospace',
+                              fontSize: '0.75rem',
+                              color: 'var(--accent-emerald)',
+                              overflowX: 'auto',
+                              gap: '0.5rem'
+                            }}
+                          >
+                            <span style={{ whiteSpace: 'pre' }}>{launchCmd}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(launchCmd);
+                                setCopiedBridgeCmd(true);
+                                setTimeout(() => setCopiedBridgeCmd(false), 2000);
+                              }}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: 'var(--text-muted)',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.25rem',
+                                fontSize: '0.72rem',
+                                flexShrink: 0
+                              }}
+                              title="Copy command"
+                            >
+                              {copiedBridgeCmd ? <Check size={12} color="var(--accent-emerald)" /> : <Copy size={12} />}
+                              <span>{copiedBridgeCmd ? 'Copied' : 'Copy'}</span>
+                            </button>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -1768,388 +1937,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             </div>
           )}
 
-          {/* STEP 4: Connect Local Device Bridge */}
-          {currentStep === 4 && (
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginBottom: '0.5rem' }}>
-                <div
-                  style={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: '8px',
-                    background: 'rgba(99, 102, 241, 0.15)',
-                    border: '1px solid rgba(99, 102, 241, 0.3)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: 'var(--accent-primary)'
-                  }}
-                >
-                  <Laptop size={18} />
-                </div>
-                <div>
-                  <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0, color: 'var(--text-bright)' }}>
-                    Connect to Your Computer
-                  </h3>
-                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                    Grant permission to read your projects and run local coding agents autonomously.
-                  </p>
-                </div>
-              </div>
-
-              {/* Status Banner */}
-              <div
-                style={{
-                  marginTop: '1.25rem',
-                  padding: '1rem 1.25rem',
-                  borderRadius: '12px',
-                  background: bridgeStatus.isConnected
-                    ? 'rgba(16, 185, 129, 0.1)'
-                    : 'rgba(234, 179, 8, 0.08)',
-                  border: bridgeStatus.isConnected
-                    ? '1.5px solid rgba(16, 185, 129, 0.35)'
-                    : '1.5px solid rgba(234, 179, 8, 0.25)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: '1rem'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                  <div
-                    style={{
-                      width: 36,
-                      height: 36,
-                      borderRadius: '50%',
-                      background: bridgeStatus.isConnected ? 'rgba(16, 185, 129, 0.2)' : 'rgba(234, 179, 8, 0.15)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: bridgeStatus.isConnected ? 'var(--accent-emerald)' : '#eab308'
-                    }}
-                  >
-                    {bridgeStatus.isConnected ? <Check size={20} /> : <Monitor size={20} />}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-bright)' }}>
-                      {bridgeStatus.isConnected
-                        ? 'Device Connected & Ready'
-                        : bridgeStatus.awaitingPermission
-                          ? 'Waiting for Browser Permission'
-                          : 'Bridge Not Detected Yet'}
-                    </div>
-                    <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                      {bridgeStatus.isConnected
-                        ? `Connection active at ${bridgeStatus.url}`
-                        : bridgeStatus.awaitingPermission
-                          ? bridgeClient.describeUnreachable('permission-prompt')
-                          : 'Click below to establish connection with your local workspace.'}
-                    </div>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => handleTestBridgeConnection()}
-                  disabled={isTestingBridge}
-                  style={{
-                    padding: '0.55rem 1rem',
-                    borderRadius: '8px',
-                    background: bridgeStatus.isConnected ? 'var(--bg-hover, rgba(0, 0, 0, 0.05))' : 'var(--accent-primary)',
-                    color: bridgeStatus.isConnected ? 'var(--text-main)' : '#ffffff',
-                    border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                    fontSize: '0.78rem',
-                    fontWeight: 600,
-                    cursor: isTestingBridge ? 'wait' : 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.4rem',
-                    whiteSpace: 'nowrap',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  <RefreshCw size={13} className={isTestingBridge ? 'animate-spin' : ''} />
-                  <span>{isTestingBridge ? 'Checking...' : bridgeStatus.isConnected ? 'Re-check' : 'Connect Now'}</span>
-                </button>
-              </div>
-
-              {bridgeInstallActions && (
-                <div
-                  style={{
-                    marginTop: '0.85rem',
-                    padding: '0.85rem 1rem',
-                    borderRadius: '10px',
-                    background: 'var(--bg-card, var(--card, #ffffff))',
-                    border: '1px solid var(--border-subtle, var(--border, #e2e8f0))'
-                  }}
-                >
-                  <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-bright)', marginBottom: '0.3rem' }}>
-                    Install Ergo Bridge on this computer
-                  </div>
-                  <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '0.65rem' }}>
-                    A small app that lets Ergo reach your files and run AI tools here. Install it once: it starts by itself
-                    whenever you turn on your computer, and this page connects to it automatically.
-                  </div>
-                  {bridgeInstallActions}
-                </div>
-              )}
-
-              {/* Error Alert if any */}
-              {bridgeConnectError && (
-                <div
-                  style={{
-                    marginTop: '0.85rem',
-                    padding: '0.75rem 1rem',
-                    borderRadius: '8px',
-                    background: 'rgba(239, 68, 68, 0.1)',
-                    border: '1px solid rgba(239, 68, 68, 0.3)',
-                    color: '#f87171',
-                    fontSize: '0.78rem',
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: '0.5rem'
-                  }}
-                >
-                  <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '2px' }} />
-                  <div>
-                    <div style={{ fontWeight: 600 }}>Connection Notice</div>
-                    <div style={{ marginTop: '2px', color: 'var(--text-main)', lineHeight: 1.45 }}>
-                      {bridgeConnectError}
-                    </div>
-                    {bridgeStatus.isMixedContentBlocked && (
-                      <div style={{ marginTop: '0.5rem', padding: '0.45rem 0.65rem', background: 'var(--bg-hover, rgba(0, 0, 0, 0.05))', borderRadius: '6px', border: '1px solid var(--border-subtle, var(--border, #e2e8f0))', color: 'var(--text-bright)', fontSize: '0.74rem' }}>
-                        💡 <strong>Why this happens:</strong> Mobile browsers and HTTPS websites restrict connecting to <code>localhost</code> over unencrypted HTTP. To use Ergo on this device, either use an <strong>API Key</strong> in Step 2, or open Ergo directly on your computer at <code>http://localhost:5173</code>.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Easy Instructions for Non-Technical Users */}
-              <div
-                style={{
-                  marginTop: '1.25rem',
-                  padding: '1rem 1.15rem',
-                  borderRadius: '10px',
-                  background: 'var(--bg-card, var(--card, #ffffff))',
-                  border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                  boxShadow: 'var(--shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.04))'
-                }}
-              >
-                <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-bright)', marginBottom: '0.5rem' }}>
-                  How does the local connection work?
-                </div>
-                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.5, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
-                    <div style={{ color: 'var(--accent-primary)', fontWeight: 700 }}>1.</div>
-                    <div>
-                      <strong>Your work stays on your device.</strong> Ergo automatically stores data locally in your personal <code>~/.ergo</code> workspace folder, created fresh on your computer.
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
-                    <div style={{ color: 'var(--accent-primary)', fontWeight: 700 }}>2.</div>
-                    <div>
-                      <strong>Run AI tools natively.</strong> Autonomous agents like Claude Code and Codex run in real embedded terminals, so they behave like local tools.
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
-                    <div style={{ color: 'var(--accent-primary)', fontWeight: 700 }}>3.</div>
-                    <div>
-                      <strong>Automatic reconnects.</strong> When you revisit or refresh this web page, Ergo will quietly reconnect to your local daemon.
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Collapsible Advanced Settings Dropdown */}
-              <div
-                style={{
-                  marginTop: '0.85rem',
-                  borderRadius: '10px',
-                  background: 'var(--bg-card, var(--card, #ffffff))',
-                  border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                  overflow: 'hidden',
-                  transition: 'all 0.2s ease',
-                  boxShadow: 'var(--shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.04))'
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setShowAdvancedBridge((prev) => !prev)}
-                  style={{
-                    width: '100%',
-                    padding: '0.75rem 1rem',
-                    background: 'transparent',
-                    border: 'none',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    cursor: 'pointer',
-                    color: 'var(--text-muted)',
-                    fontSize: '0.78rem',
-                    fontWeight: 600,
-                    transition: 'color 0.15s ease'
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-bright)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted)')}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <Settings2 size={14} color="#8b5cf6" />
-                    <span>Advanced Settings</span>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: 400 }}>
-                      (Port configuration & helper commands)
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center' }}>
-                    {showAdvancedBridge ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  </div>
-                </button>
-
-                {showAdvancedBridge && (
-                  <div
-                    style={{
-                      padding: '0.85rem 1rem 1rem 1rem',
-                      borderTop: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.9rem'
-                    }}
-                  >
-                    {/* Port Customization */}
-                    <div>
-                      <div style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-bright)', marginBottom: '0.35rem' }}>
-                        Local Bridge Port
-                      </div>
-                      <div style={{ fontSize: '0.71rem', color: 'var(--text-dim)', marginBottom: '0.45rem' }}>
-                        Change the port number if your local Ergo bridge is running on a custom port.
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            background: 'var(--bg-hover, rgba(0, 0, 0, 0.04))',
-                            border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                            borderRadius: '6px',
-                            padding: '0 0.5rem',
-                            flex: 1
-                          }}
-                        >
-                          <span style={{ fontSize: '0.76rem', color: 'var(--text-dim)', fontFamily: 'monospace', userSelect: 'none' }}>
-                            http://localhost:
-                          </span>
-                          <input
-                            type="text"
-                            value={bridgePortInput}
-                            onChange={(e) => {
-                              const cleaned = e.target.value.replace(/\D/g, '').slice(0, 5);
-                              setBridgePortInput(cleaned);
-                              const fullUrl = getFullBridgeUrl(cleaned);
-                              bridgeClient.setBridgeUrl(fullUrl);
-                            }}
-                            placeholder="5173"
-                            style={{
-                              width: '70px',
-                              fontSize: '0.78rem',
-                              fontFamily: 'monospace',
-                              fontWeight: 700,
-                              padding: '0.4rem 0.35rem',
-                              background: 'transparent',
-                              border: 'none',
-                              color: 'var(--accent-primary)',
-                              outline: 'none'
-                            }}
-                          />
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => handleTestBridgeConnection(bridgePortInput)}
-                          disabled={isTestingBridge}
-                          style={{
-                            padding: '0.42rem 0.85rem',
-                            borderRadius: '6px',
-                            background: 'var(--btn-secondary-bg, var(--bg-card, #ffffff))',
-                            border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                            color: 'var(--text-bright)',
-                            fontSize: '0.74rem',
-                            fontWeight: 600,
-                            cursor: isTestingBridge ? 'wait' : 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.35rem',
-                            whiteSpace: 'nowrap'
-                          }}
-                        >
-                          <RefreshCw size={11} className={isTestingBridge ? 'animate-spin' : ''} />
-                          <span>Apply Port</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Terminal Launch Command */}
-                    <div>
-                      <div style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-bright)', marginBottom: '0.35rem' }}>
-                        Manual Helper Launch Command
-                      </div>
-                      <div style={{ fontSize: '0.71rem', color: 'var(--text-dim)', marginBottom: '0.45rem' }}>
-                        Developers working from a copy of the Ergo repository can run the bridge from it instead:
-                      </div>
-                      {(() => {
-                        // The Ergo checkout the bridge last ran from (not the ~/.ergo data folder). Two lines rather
-                        // than `&&`, which Windows PowerShell 5.1 rejects.
-                        const appFolder = bridgeStatus.appDir || '<your Ergo folder>';
-                        const launchCmd = `cd ${appFolder.includes(' ') ? `"${appFolder}"` : appFolder}\nnpm run dev`;
-                        return (
-                          <div
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              background: 'var(--code-bg, #0f172a)',
-                              padding: '0.45rem 0.75rem',
-                              borderRadius: '6px',
-                              border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                              fontFamily: 'monospace',
-                              fontSize: '0.75rem',
-                              color: 'var(--accent-emerald)',
-                              overflowX: 'auto',
-                              gap: '0.5rem'
-                            }}
-                          >
-                            <span style={{ whiteSpace: 'pre' }}>{launchCmd}</span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                navigator.clipboard.writeText(launchCmd);
-                                setCopiedBridgeCmd(true);
-                                setTimeout(() => setCopiedBridgeCmd(false), 2000);
-                              }}
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                color: 'var(--text-muted)',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.25rem',
-                                fontSize: '0.72rem',
-                                flexShrink: 0
-                              }}
-                              title="Copy command"
-                            >
-                              {copiedBridgeCmd ? <Check size={12} color="var(--accent-emerald)" /> : <Copy size={12} />}
-                              <span>{copiedBridgeCmd ? 'Copied' : 'Copy'}</span>
-                            </button>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Modal Footer with Actions and Skip option */}
@@ -2235,7 +2022,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 <ChevronRight size={14} />
               </button>
             </>
-          ) : currentStep === 3 ? (
+          ) : (
             <>
               <div style={{ fontSize: '0.74rem', color: 'var(--text-dim)' }}>
                 You can change this anytime in Settings.
@@ -2257,50 +2044,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   alignItems: 'center',
                   gap: '0.45rem',
                   boxShadow: '0 4px 16px rgba(37, 99, 235, 0.35)',
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                <span>Next: Connect Device</span>
-                <ArrowRight size={15} />
-              </button>
-            </>
-          ) : (
-            /* Step 4: Finish Onboarding */
-            <>
-              <button
-                type="button"
-                onClick={handleFinishOnboarding}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: 'var(--text-muted)',
-                  fontSize: '0.8rem',
-                  cursor: 'pointer',
-                  textDecoration: 'underline',
-                  padding: '0.4rem 0'
-                }}
-              >
-                Continue without Connection
-              </button>
-
-              <button
-                type="button"
-                onClick={handleFinishOnboarding}
-                style={{
-                  padding: '0.65rem 1.4rem',
-                  borderRadius: '10px',
-                  background: bridgeStatus.isConnected ? 'var(--accent-emerald)' : 'var(--accent-primary)',
-                  color: '#ffffff',
-                  fontSize: '0.85rem',
-                  fontWeight: 700,
-                  border: 'none',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.45rem',
-                  boxShadow: bridgeStatus.isConnected
-                    ? '0 4px 16px rgba(16, 185, 129, 0.35)'
-                    : '0 4px 16px rgba(37, 99, 235, 0.35)',
                   transition: 'all 0.2s ease'
                 }}
               >
