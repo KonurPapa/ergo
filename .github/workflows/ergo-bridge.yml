@@ -1,6 +1,6 @@
-# Builds the Ergo Bridge installers on each OS and publishes them to the GitHub release v<desktop/package.json version>.
-# The web app links to releases/latest/download/<installer>, so a published release is live immediately.
-# To release: bump "version" in desktop/package.json, commit, then run this workflow from the Actions tab.
+# Builds the Ergo Bridge installers on each OS and publishes them as the GitHub release v<desktop/package.json version>.
+# The web app links to releases/latest/download/<installer>, so the release is live for users as soon as this finishes.
+# To release: bump "version" in desktop/package.json, commit, push, then run this workflow from the Actions tab.
 name: Ergo Bridge release
 
 on:
@@ -17,23 +17,71 @@ jobs:
         include:
           - os: windows-latest
             platform: --win
-          - os: macos-latest
-            platform: --mac
+            files: |
+              desktop/release/Ergo-Bridge-Setup.exe
+              desktop/release/Ergo-Bridge-Setup.exe.blockmap
+              desktop/release/latest.yml
           - os: ubuntu-latest
             platform: --linux
+            files: |
+              desktop/release/Ergo-Bridge.AppImage
+              desktop/release/latest-linux.yml
+          - os: macos-latest
+            platform: --mac
+            files: |
+              desktop/release/Ergo-Bridge.dmg
+              desktop/release/Ergo-Bridge.zip
+              desktop/release/*.blockmap
+              desktop/release/latest-mac.yml
     runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        working-directory: desktop
+    # Unsigned macOS builds are best-effort; they must not hold back the Windows and Linux release.
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: desktop/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+      # The bridge sources live outside desktop/ and resolve their type imports from the root node_modules.
       - run: npm ci
+      - run: npm ci
+        working-directory: desktop
       - run: npm run typecheck
-      - run: npm run dist -- ${{ matrix.platform }} --publish always
+        working-directory: desktop
+      - run: npm run dist -- ${{ matrix.platform }} --publish never
+        working-directory: desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="v$(node -p "require('./desktop/package.json').version")"
+          # Windows and Linux are required; the onboarding links to these exact names.
+          for f in Ergo-Bridge-Setup.exe latest.yml Ergo-Bridge.AppImage latest-linux.yml; do
+            test -f "artifacts/$f" || { echo "::error::Missing $f"; exit 1; }
+          done
+          ls -la artifacts
+          if gh release view "$version" >/dev/null 2>&1; then
+            gh release upload "$version" artifacts/* --clobber
+          else
+            gh release create "$version" artifacts/* --target "$GITHUB_SHA" --title "Ergo Bridge $version" --latest \
+              --notes "Download Ergo Bridge for your computer. Windows: Ergo-Bridge-Setup.exe · Linux: Ergo-Bridge.AppImage · macOS (Apple Silicon, unsigned): Ergo-Bridge.dmg"
+          fi

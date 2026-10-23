@@ -16,12 +16,9 @@ files:
   - "!**/node_modules/node-pty/{deps,third_party,src,scripts}/**"
   - "!**/*.pdb"
 
-# Native code (and the helper executables node-pty spawns) can't run from inside the asar archive.
-asarUnpack:
-  - "**/node_modules/node-pty/**"
-  - "**/node_modules/onnxruntime-node/**"
-  - "**/node_modules/sharp/**"
-  - "**/node_modules/@img/**"
+# No asar archive: native modules and the helpers they start (node-pty's ConPTY worker on Windows, the
+# onnxruntime libraries) need real paths, and node-pty only rewrites archive paths for VS Code's own layout.
+asar: false
 
 extraResources:
   - from: ../docs/skills
