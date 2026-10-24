@@ -11,8 +11,13 @@
  * The bridge's protocol. Bump it whenever the web app starts relying on something new in the bridge (an endpoint, a
  * response field), and raise MIN_BRIDGE_PROTOCOL to match once that bridge is released.
  *  2 — version handshake + self-update (/api/bridge/update), skill copies report `edited`.
+ *  3 — a run's manager may write question.md (a `question` signal): the web app shows it as a question card.
+ *      Optional: with an older bridge the web app tells managers to ask the old way.
  */
-export const BRIDGE_PROTOCOL = 2;
+export const BRIDGE_PROTOCOL = 3;
+
+/** First protocol whose bridge reports a manager's question.md as a `question` signal. */
+export const QUESTION_SIGNAL_PROTOCOL = 3;
 
 /** The oldest bridge this web app works with; an older one is updated (automatically where it can be). */
 export const MIN_BRIDGE_PROTOCOL = 2;

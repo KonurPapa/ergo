@@ -3775,7 +3775,7 @@ interface PtyUsageMeta {
 }
 
 type BridgeAgentRole = 'manager' | 'worker' | 'qa';
-type AgentSignalKind = 'delegate' | 'worker-done' | 'complete' | 'qa-verdict';
+type AgentSignalKind = 'delegate' | 'worker-done' | 'complete' | 'qa-verdict' | 'question';
 
 interface AgentSignalRecord {
   signal: AgentSignalKind;
@@ -4501,6 +4501,8 @@ function signalFilesFor(session: PtySessionState): Array<{ name: string; signal:
     return [
       { name: 'delegate.json', signal: 'delegate' },
       { name: 'completion.md', signal: 'complete' },
+      // A question for the user mid-run (the manager ends its turn after writing it).
+      { name: 'question.md', signal: 'question' },
     ];
   }
   if (session.role === 'worker') {
@@ -6289,6 +6291,7 @@ const SIGNAL_MEMORY_KIND: Record<AgentSignalKind, AgentNoteKind> = {
   complete: 'completion',
   'worker-done': 'worker',
   'qa-verdict': 'qa',
+  question: 'note',
 };
 
 function sessionMemoryMeta(session: PtySessionState): ChunkMetadata {
@@ -6323,7 +6326,8 @@ function renderDelegatePlan(json: string): string {
  * after the event never reads the previous round's version from memory.
  */
 async function ingestRunSignal(session: PtySessionState, name: string, signal: AgentSignalKind, text: string): Promise<void> {
-  if (!session.runId) return;
+  // A question is for the user, not knowledge for later agents.
+  if (!session.runId || signal === 'question') return;
   const title =
     signal === 'delegate' ? 'Delegation plan'
     : signal === 'complete' ? 'Completion record'

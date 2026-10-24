@@ -13,6 +13,7 @@
 import { type MCPServer } from '../../types';
 import { type JsonSchema, type ToolDefinition } from './contracts';
 import { WORKSPACE_MCP_SERVER } from '../workspaceMcp';
+import { ASK_HUMAN_DESCRIPTION } from '../humanFacingOutput';
 
 const str = (description: string): JsonSchema => ({ type: 'string', description });
 const int = (description: string): JsonSchema => ({ type: 'integer', description });
@@ -178,13 +179,12 @@ export function extractTargetPath(name: string, args: Record<string, any>): stri
 
 export const ASK_HUMAN_TOOL: ToolDefinition = {
   name: 'ask_human',
-  description:
-    'Prompt the human user for necessary information, clarification, or choices mid-task. Use this when you are blocked by missing credentials, ambiguous requirements, or architectural decisions. Ask one precise question; offer options when possible.',
+  description: ASK_HUMAN_DESCRIPTION,
   inputSchema: obj(
     {
-      question: str('The question or prompt to present to the user.'),
-      options: { type: 'array', items: { type: 'string' }, description: 'Optional multiple-choice options.' },
-      context: str('Optional context explaining why this information is required.'),
+      question: str('The decision needed, as one short question.'),
+      options: { type: 'array', items: { type: 'string' }, description: '2–4 choices, recommended first with " (recommended)"; each "<choice> — <one-line trade-off>".' },
+      context: str('One line: "Done so far: …. Blocked on: …. Default if unanswered: …."'),
       allowFreeform: bool('Whether the user may type a custom response (default true).')
     },
     ['question']

@@ -93,21 +93,16 @@ interface HumanInputCardProps {
 }
 
 const HumanInputCard: React.FC<HumanInputCardProps> = ({ prompt, onSubmit }) => {
+  const options = prompt.options && prompt.options.length > 0 ? prompt.options : [];
+  // Options always end with "Other": the user can answer in their own words instead of a suggested choice.
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
+  const [isOther, setIsOther] = useState(options.length === 0);
   const [customText, setCustomText] = useState('');
+  const answer = isOther ? customText.trim() : selectedOption || '';
 
   const handleSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    const cleanCustom = customText.trim();
-    const finalAnswer = cleanCustom
-      ? selectedOption
-        ? `${selectedOption} — ${cleanCustom}`
-        : cleanCustom
-      : selectedOption || 'Confirmed';
-
-    if (finalAnswer) {
-      onSubmit(finalAnswer);
-    }
+    if (answer) onSubmit(answer);
   };
 
   return (
@@ -128,18 +123,21 @@ const HumanInputCard: React.FC<HumanInputCardProps> = ({ prompt, onSubmit }) => 
         </div>
       )}
 
-      {prompt.options && prompt.options.length > 0 && (
+      {options.length > 0 && (
         <div className="ai-human-input-options">
           <div className="ai-human-input-options-label">Select an option:</div>
           <div className="ai-human-input-options-list">
-            {prompt.options.map((opt, idx) => {
-              const isSelected = selectedOption === opt;
+            {options.map((opt, idx) => {
+              const isSelected = !isOther && selectedOption === opt;
               return (
                 <button
                   key={idx}
                   type="button"
                   className={`ai-input-option-btn ${isSelected ? 'is-selected' : ''}`}
-                  onClick={() => setSelectedOption(isSelected ? null : opt)}
+                  onClick={() => {
+                    setIsOther(false);
+                    setSelectedOption(isSelected ? null : opt);
+                  }}
                 >
                   <span className="option-number">{idx + 1}</span>
                   <span className="option-text">{opt}</span>
@@ -147,22 +145,31 @@ const HumanInputCard: React.FC<HumanInputCardProps> = ({ prompt, onSubmit }) => 
                 </button>
               );
             })}
+            <button
+              type="button"
+              className={`ai-input-option-btn ${isOther ? 'is-selected' : ''}`}
+              onClick={() => {
+                setSelectedOption(null);
+                setIsOther(!isOther);
+              }}
+            >
+              <span className="option-number">{options.length + 1}</span>
+              <span className="option-text">Other — type your own answer</span>
+              {isOther && <CheckCircle2 size={13} className="option-check-icon" />}
+            </button>
           </div>
         </div>
       )}
 
-      {(prompt.allowFreeform !== false || !prompt.options || prompt.options.length === 0) && (
-        <form onSubmit={handleSubmit} className="ai-human-input-form">
+      <form onSubmit={handleSubmit} className="ai-human-input-form">
+        {isOther && (
           <textarea
             className="ai-human-input-textarea"
-            placeholder={
-              prompt.options && prompt.options.length > 0
-                ? 'Or type specific clarification / custom response...'
-                : 'Type your answer / clarification here...'
-            }
+            placeholder="Type your answer…"
             value={customText}
             onChange={(e) => setCustomText(e.target.value)}
             rows={2}
+            autoFocus={options.length > 0}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
@@ -170,35 +177,19 @@ const HumanInputCard: React.FC<HumanInputCardProps> = ({ prompt, onSubmit }) => 
               }
             }}
           />
-          <div className="ai-human-input-actions">
+        )}
+        <div className="ai-human-input-actions">
+          {isOther && (
             <span className="ai-human-input-hint">
               Press <strong>Ctrl+Enter</strong> or click Submit
             </span>
-            <button
-              type="submit"
-              className="btn btn-primary ai-human-input-submit-btn"
-              disabled={!selectedOption && !customText.trim()}
-            >
-              <Send size={13} />
-              <span>Submit Response</span>
-            </button>
-          </div>
-        </form>
-      )}
-
-      {prompt.allowFreeform === false && prompt.options && prompt.options.length > 0 && (
-        <div className="ai-human-input-actions" style={{ marginTop: '0.75rem' }}>
-          <button
-            type="button"
-            className="btn btn-primary ai-human-input-submit-btn"
-            disabled={!selectedOption}
-            onClick={() => handleSubmit()}
-          >
+          )}
+          <button type="submit" className="btn btn-primary ai-human-input-submit-btn" disabled={!answer}>
             <Send size={13} />
-            <span>Confirm Selection</span>
+            <span>Submit Response</span>
           </button>
         </div>
-      )}
+      </form>
     </div>
   );
 };
@@ -218,7 +209,7 @@ interface BriefPaneProps {
   onSelectTask?: (taskId: string | number) => void;
   onSaveBrief: (updatedBrief: AgentContextItem) => void;
   onLiveBriefChange?: (updatedBrief: AgentContextItem) => void;
-  onExecuteTask: (task: TaskItem) => void;
+  onExecuteTask: (task: TaskItem, opts?: { startOver?: boolean }) => void;
   onUpdateBriefWithAi?: (task: TaskItem) => void;
   onSyncOverviewWithTask?: (task: TaskItem) => Promise<string | void>;
   onUnarchiveTask?: (taskId: string | number) => void;
@@ -286,7 +277,7 @@ interface AiTaskCardProps {
   onSelect: () => void;
   onSaveBrief: (updatedBrief: AgentContextItem) => void;
   onLiveBriefChange?: (updatedBrief: AgentContextItem) => void;
-  onExecuteTask: (task: TaskItem) => void;
+  onExecuteTask: (task: TaskItem, opts?: { startOver?: boolean }) => void;
   onUpdateBriefWithAi?: (task: TaskItem) => void;
   onSyncOverviewWithTask?: (task: TaskItem) => Promise<string | void>;
   onPermissionChoice?: (approved: PermissionDecision) => void;
@@ -978,14 +969,14 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   const isStoppedPartway = React.useMemo(() => {
     if (isWorking) return false;
     if (isTaskDone) return false;
-    // Explicitly cancelled step or terminated
-    if (executionSteps.some((s) => s.status === 'cancelled' || s.id === 'step-terminated')) return true;
+    const hasCompletedSuccessfully = executionSteps.some((s) => (s.stage === 'built_record' || s.stage === 'done') && s.status === 'success');
+    // Explicitly cancelled step or terminated (a run resumed after a stop and then finished keeps its cancelled steps)
+    if (!hasCompletedSuccessfully && executionSteps.some((s) => s.status === 'cancelled' || s.id === 'step-terminated')) return true;
     // The run's manager was stopped or failed
     if (terminalSession && (terminalSession.status === 'cancelled' || terminalSession.status === 'failed')) return true;
     // Terminal session killed with non-zero exit code
     if (terminalSession?.session && !terminalSession.session.isActive && terminalSession.session.exitCode !== 0 && terminalSession.session.exitCode !== undefined && terminalSession.status !== 'done') return true;
     // Task or brief status marked partly_done and not yet fully completed
-    const hasCompletedSuccessfully = executionSteps.some((s) => (s.stage === 'built_record' || s.stage === 'done') && s.status === 'success');
     if ((task.status === 'partly_done' || brief?.status === 'partly_done') && !hasCompletedSuccessfully) return true;
     // Has partial execution steps without having finished successfully
     if (executionSteps.length > 0 && !hasCompletedSuccessfully) return true;
@@ -1447,6 +1438,20 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                     >
                       <Play size={13} style={{ color: 'var(--accent-amber, #f59e0b)' }} />
                       <span>Resume Task</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="swimlane-dropdown-item"
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        setIsTaskCollapsed(false);
+                        onExecuteTask(task, { startOver: true });
+                      }}
+                      title="Discard the stopped run and run the task again from the start"
+                    >
+                      <RotateCcw size={13} style={{ color: 'var(--accent-cyan)' }} />
+                      <span>Start Over</span>
                     </button>
 
                     <div className="swimlane-dropdown-divider" />

@@ -1,6 +1,7 @@
 import type { AIProviderId, CliAgentPreset, CliAgentConfig, UserApiKey, TaskItem, AgentContextItem, EffortLevel, PermissionLevel } from '../types';
 import { hasUsableOverview } from './overviewUtils';
 import { isTaskBrief } from './agentPipeline/taskBrief';
+import { COMPLETION_RECORD_FORMAT, COMPLETION_RECORD_RULES, QUESTION_RULES } from './humanFacingOutput';
 
 export const CLI_AGENT_PRESETS: CliAgentPreset[] = [
   {
@@ -227,6 +228,11 @@ export interface CliRunPromptContext {
   codeSearchPath?: string;
   /** Files the file scout found for this task (repository-relative): the manager starts its searches there. */
   likelyFiles?: string[];
+  /**
+   * The bridge reports a manager's question.md (protocol ≥ 3): managers ask through that file, which Ergo shows as a
+   * question card. Otherwise they use their CLI's own question tool or a plain reply.
+   */
+  questionFile?: boolean;
 }
 
 export interface CliWorkerPiece {
@@ -348,14 +354,84 @@ function oneLine(text: string, max = 200): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
-const COMPLETION_FORMAT =
-  `**Summary:** <one or two plain sentences: what now works>\n\n` +
-  `**Changed:**\n` +
-  `- \`path/to/file.ext\` — a few words\n` +
-  `- (at most 5 bullets; group related files, e.g. "\`src/components/*\` — 4 files, menu wiring")\n\n` +
-  `**Verified:** <one line: what you ran or checked, and the result — or "Not verified: <why>">\n\n` +
-  `**Needs your review:**\n` +
-  `- [ ] <a concrete thing the user should check by hand> (at most 3; or write "None")`;
+const COMPLETION_FORMAT = COMPLETION_RECORD_FORMAT;
+
+/** question.md headings, in order (parseQuestionFile reads them). */
+const QUESTION_FILE_FORMAT =
+  `QUESTION: <the decision you need, as one short question>\n` +
+  `DONE SO FAR: <what works now>\n` +
+  `BLOCKED ON: <the one thing>\n` +
+  `OPTIONS:\n` +
+  `1. <choice> (recommended) — <one-line trade-off>\n` +
+  `2. <choice> — <one-line trade-off>\n` +
+  `DEFAULT: <what you will do if there is no answer>`;
+
+/** How a CLI manager asks the user (QUESTION_RULES) and through which channel Ergo can show it. */
+function buildCliQuestionSection(ctx: Pick<CliRunPromptContext, 'runDirRel' | 'questionFile'>): string {
+  if (!ctx.questionFile) {
+    return (
+      `${QUESTION_RULES}\n` +
+      `- How: if your CLI has its own question tool (Claude Code: AskUserQuestion), use it — Ergo shows it to the user. Otherwise write the question as your whole reply and end your turn. The answer is typed into this terminal.`
+    );
+  }
+  const questionFile = runFile(ctx, 'question.md');
+  return (
+    `${QUESTION_RULES}\n` +
+    `- How: use your normal file-write tool to write "${questionFile}" (overwrite it for a later question) in exactly this format, then END YOUR TURN and wait — do not use a built-in question tool, and do not keep working on the blocked part:\n` +
+    `${QUESTION_FILE_FORMAT}\n` +
+    `- Ergo shows it to the user and types the answer into this terminal as a message starting with "Ergo: the user answered". Then continue the task.`
+  );
+}
+
+/** A manager's question.md as Ergo shows it: the question, its options, and one context line. */
+export function parseQuestionFile(content: string): { question: string; options: string[]; context: string } {
+  const lines = String(content || '').replace(/\r/g, '').split('\n');
+  const field = (name: string) => {
+    const re = new RegExp(`^\\s*(?:[-*]\\s*)?\\**${name}\\**\\s*:\\**\\s*(.*)$`, 'i');
+    for (const l of lines) {
+      const m = l.match(re);
+      if (m) return m[1].replace(/\*\*/g, '').trim();
+    }
+    return '';
+  };
+  const options: string[] = [];
+  const optStart = lines.findIndex((l) => /^\s*(?:[-*]\s*)?\**options\**\s*:/i.test(l));
+  if (optStart !== -1) {
+    for (let i = optStart + 1; i < lines.length; i++) {
+      const l = lines[i].trim();
+      if (!l) continue;
+      if (/^(?:[-*]\s*)?\**(?:default|question|done so far|blocked on)\**\s*:/i.test(l)) break; // the next heading (DEFAULT: …)
+      const opt = l.replace(/^(?:\d+[.)]|[-*•])\s*/, '').trim();
+      if (opt) options.push(clipLine(opt, 200));
+      if (options.length === 4) break;
+    }
+  }
+  const question = field('question');
+  const done = field('done so far');
+  const blocked = field('blocked on');
+  const fallback = field('default');
+  const end = (t: string) => (/[.!?]$/.test(t) ? t : `${t}.`);
+  const context = [done && `Done so far: ${end(done)}`, blocked && `Blocked on: ${end(blocked)}`, fallback && `Default if unanswered: ${end(fallback)}`]
+    .filter(Boolean)
+    .join(' ');
+  if (!question) {
+    // Not in the expected shape: shown as written.
+    return { question: clipLine(lines.map((l) => l.trim()).filter(Boolean).join(' '), 600), options: [], context: '' };
+  }
+  return { question: clipLine(question, 300), options, context: clipLine(context, 400) };
+}
+
+function clipLine(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/** One-line message Ergo types into the manager with the user's answer to its question.md. */
+export function buildQuestionAnswerMessage(question: string, answer: string): string {
+  return oneLine(
+    `Ergo: the user answered your question ("${oneLine(question, 300)}"): ${oneLine(answer, MAX_FOLLOW_UP_CHARS)} — continue the task with this answer.`,
+    MAX_FOLLOW_UP_CHARS + 500
+  );
+}
 
 /**
  * Prompt for the manager agent of a CLI task run: the task itself plus Ergo's run protocol
@@ -392,8 +468,10 @@ export function buildManagerCliPrompt(task: TaskItem, brief: AgentContextItem | 
       : `2. Implement every change the task needs so that all objectives and checklist items are satisfied. Follow the project's existing style.\n`) +
     `3. Verify your work: run the relevant tests, build, type-check and/or lint commands that exist in this project and fix what fails. If nothing can be run, verify by re-reading the changed code against the requirements.\n` +
     `4. Write the completion record (see FINAL STEP). That is the last thing you do.\n` +
-    `Do not ask the user for confirmation of the plan — proceed autonomously. Only stop to ask if the task is genuinely impossible to do without information you cannot find.`
+    `Do not ask the user for confirmation of the plan — proceed autonomously.`
   );
+
+  sections.push(buildCliQuestionSection(ctx));
 
   if (canDelegate) {
     sections.push(
@@ -438,9 +516,8 @@ export function buildManagerCliPrompt(task: TaskItem, brief: AgentContextItem | 
     `Write it in one go, only once the work is really finished (Ergo treats the moment this file appears as "the manager is done"). ` +
     `It is a short note for a human to scan in a few seconds and confirm the work — NOT a log. Use exactly these bold headings, in this order:\n\n` +
     `${COMPLETION_FORMAT}\n\n` +
-    `Keep the whole file under 120 words. No code, no command output, no step-by-step narrative, no explanations of your process. ` +
-    `Be accurate: list only files you actually changed and checks you actually ran, with their real results. ` +
-    `If something is unfinished or failed, say so in one line under Needs your review. ` +
+    `${COMPLETION_RECORD_RULES} ` +
+    `If something is unfinished or failed, say so in the Done line and put what is left under Needs your review. ` +
     `If your current permission mode does not let you write files (e.g. plan / read-only mode), put the same short record in your final reply instead. ` +
     `After writing the file, reply with one short sentence and end your turn.`
   );
@@ -665,6 +742,68 @@ export function buildFollowUpMessage(userMessage: string, ctx: Pick<CliRunPrompt
   );
 }
 
+/** What a stopped run's manager was waiting on when it was stopped (Ergo restarts it on resume). */
+export type ResumeWaitingOn = 'workers' | 'qa' | undefined;
+
+function resumeWaitNote(waitingOn: ResumeWaitingOn, ctx: Pick<CliRunPromptContext, 'runDirRel'>): string {
+  if (waitingOn === 'qa') {
+    return `You had already written ${runFile(ctx, 'completion.md')} and were waiting on the QA verifier: Ergo has restarted it. Change nothing; wait for its "Ergo:" message.`;
+  }
+  if (waitingOn === 'workers') {
+    return `You were waiting on your workers: Ergo has restarted the ones that had not reported. Do not redo their pieces; wait for the "Ergo:" message saying they finished.`;
+  }
+  return '';
+}
+
+/**
+ * One-line message a stopped run's manager is resumed with (its own conversation, so it remembers the work): carry
+ * on exactly where it was interrupted. `workersDone` is the hand-off for workers that reported while it was stopped.
+ */
+export function buildResumeMessage(
+  ctx: Pick<CliRunPromptContext, 'runDirRel' | 'qaEnabled'>,
+  opts: { userMessage?: string; waitingOn?: ResumeWaitingOn; workersDone?: string } = {}
+): string {
+  const completionFile = runFile(ctx, 'completion.md');
+  const user = String(opts.userMessage || '').trim();
+  const wait = resumeWaitNote(opts.waitingOn, ctx);
+  return oneLine(
+    `Ergo: the user stopped this run partway and has now resumed it. Continue exactly where you left off — do not start over, and check the files you were editing, since your last step may have been cut off. ` +
+    (user ? `The user's message: "${oneLine(user, MAX_FOLLOW_UP_CHARS)}". ` : '') +
+    (opts.workersDone ? `${opts.workersDone} ` : wait ? `${wait} ` : '') +
+    (opts.waitingOn === 'qa' ? '' : `When the task is done and verified, write ${completionFile} (overwrite it if it exists) as your final action${ctx.qaEnabled ? '; QA will check it' : ''}.`),
+    MAX_FOLLOW_UP_CHARS + 6000
+  );
+}
+
+/**
+ * Prompt for a NEW manager that picks up a stopped run whose own conversation can't be resumed: a short note on
+ * top of the run's original manager prompt (the earlier work is in the repository; continue it, don't start over).
+ */
+export function buildResumedManagerPrompt(
+  originalPrompt: string,
+  ctx: Pick<CliRunPromptContext, 'runDirRel'>,
+  opts: { userMessage?: string; waitingOn?: ResumeWaitingOn } = {}
+): string {
+  const user = String(opts.userMessage || '').trim();
+  const wait = resumeWaitNote(opts.waitingOn, ctx);
+  const head =
+    `RESUMING A STOPPED RUN:\n` +
+    `An earlier manager started this task and the user stopped it partway. Its work so far is already in the repository (and possibly in ` +
+    `"${ctx.runDirRel}/"). Before changing anything, inspect the current state of the files the task touches, keep what is done and works, ` +
+    `and continue from there. Do not start the task over.` +
+    (wait ? `\n${wait}` : '') +
+    (user ? `\n\nTHE USER'S MESSAGE ON RESUMING:\n${user.slice(0, MAX_FOLLOW_UP_CHARS)}` : '');
+  return `${head}\n\n${originalPrompt}`;
+}
+
+/** Note on top of the prompt of a worker restarted after its run was stopped. */
+export function buildResumedWorkerNote(): string {
+  return (
+    `RESUMING: you started this piece earlier and the run was stopped before you reported. Some of your changes may already be in the ` +
+    `files below: check their current state first and continue from there rather than starting over.`
+  );
+}
+
 /**
  * Prompt for a NEW manager that continues a finished run whose own conversation can't be resumed (the CLI has no
  * resumable session id, or the process and its id are gone): the task, what was done so far (the completion log and
@@ -696,6 +835,7 @@ export function buildContinuationPrompt(
     `Ergo watches the run folder "${ctx.runDirRel}/" (relative to your working directory).`
   );
   sections.push(...buildMemorySections(ctx, completionFile));
+  sections.push(buildCliQuestionSection(ctx));
   if (Math.floor(ctx.maxWorkers || 0) >= 2) {
     sections.push(
       `OPTIONAL — WORKERS: only if the follow-up is large and splits into independent pieces with DISJOINT files, write "${delegateFile}" ` +
@@ -712,7 +852,7 @@ export function buildContinuationPrompt(
     `FINAL STEP — COMPLETION RECORD (REQUIRED):\n` +
     `When the follow-up is implemented and verified, write "${completionFile}" (overwrite it) as your LAST action, covering this follow-up, in exactly this format:\n\n` +
     `${COMPLETION_FORMAT}\n\n` +
-    `Under 120 words; only files you actually changed and checks you actually ran. Then reply with one short sentence and end your turn.`
+    `${COMPLETION_RECORD_RULES} Then reply with one short sentence and end your turn.`
   );
   return sections.join('\n\n');
 }

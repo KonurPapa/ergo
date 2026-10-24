@@ -56,7 +56,7 @@ const MANAGER_RULES = `EXECUTION RULES (harness-enforced)
 ${CODE_SEARCH_RULE}
 - Respond to decomposition and verification requests with ONLY the JSON object described in your skill — no prose, no fences.
 - Every piece's instructions must be self-contained: the worker sees only the bible and that piece.
-- Call ask_human only when blocked by a genuine decision no file can answer.`;
+- Call ask_human only when blocked by a genuine decision no file, command or reasonable default can settle; one question per call, shaped as its description says.`;
 
 /** Fixed rules appended to the worker skill — byte-stable. */
 const WORKER_RULES = `EXECUTION RULES (harness-enforced)

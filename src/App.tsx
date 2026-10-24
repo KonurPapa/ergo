@@ -1540,6 +1540,25 @@ function App() {
     prepareLaunch: prepareCliLaunch,
     projectId: activeProjectId,
     dataProjectIdRef: loadedProjectIdRef,
+    // A CLI manager's question.md uses the same question card as the in-app pipeline's ask_human.
+    requestHumanInput: (taskId, prompt) =>
+      new Promise<string>((resolve) => {
+        const wrappedResolve = (answer: string) => {
+          if (pendingHumanInputsRef.current[taskId]?.resolve === wrappedResolve) delete pendingHumanInputsRef.current[taskId];
+          resolve(answer);
+        };
+        pendingHumanInputsRef.current[taskId] = { prompt, resolve: wrappedResolve };
+        setPendingHumanInputs((prev) => ({ ...prev, [taskId]: { prompt, resolve: wrappedResolve } }));
+      }),
+    cancelHumanInput: (taskId) => {
+      const drop = <T,>(rec: Record<string | number, T>) => {
+        const next = { ...rec };
+        for (const k of Object.keys(next)) if (String(k) === String(taskId)) delete next[k];
+        return next;
+      };
+      pendingHumanInputsRef.current = drop(pendingHumanInputsRef.current);
+      setPendingHumanInputs(drop);
+    },
   });
   cliRunsRef.current = cliRuns;
 
@@ -1830,8 +1849,9 @@ function App() {
       }
     }
 
-    // 5. Kill every CLI agent of the task. A CLI run that hasn't finished is finalized as "stopped" by the run
-    //    controller (completion log, task status, steps, running job) — nothing more to do for it here.
+    // 5. Kill every CLI agent of the task. A CLI run that hasn't finished is paused by the run controller exactly
+    //    where it was (steps, running job, task status; no completion log) so Resume can pick it up — nothing more
+    //    to do for it here.
     const cliOutcome = cliRunsRef.current.stopCliRun(taskId);
 
     // 6. Remove from queue
@@ -2024,7 +2044,7 @@ function App() {
   // Trigger In-Place Task Execution
   // If a CLI agent is configured, spawn a terminal session inside the Build & Verification card.
   // Otherwise, run executeTaskWithAi in place and stream logs directly into Build & Verification and Completion.
-  const handleExecuteTask = async (task: TaskItem, execOpts?: { followUp?: string }) => {
+  const handleExecuteTask = async (task: TaskItem, execOpts?: { followUp?: string; startOver?: boolean }) => {
     setSelectedTaskId(task.id);
     // A follow-up from the prompt box continues the task's last in-app run instead of starting it over.
     const followUp = typeof execOpts?.followUp === 'string' && execOpts.followUp.trim() ? execOpts.followUp.trim() : '';
@@ -2068,6 +2088,15 @@ function App() {
       );
     };
     const latestTaskFor = (t: TaskItem): TaskItem => tasksRef.current.find((x) => String(x.id) === String(t.id)) || t;
+
+    // A CLI run stopped partway resumes exactly where it stopped (Start over launches a new run instead).
+    if (effectiveCli?.command && !execOpts?.startOver && cliRunsRef.current.isCliRunPaused(task.id)) {
+      const resumed = await cliRunsRef.current.resumeCliRun(task.id);
+      if (!resumed.ok) {
+        showToast({ type: 'error', title: 'Could Not Resume Task', message: `"${task.title}": ${resumed.error}`, duration: 8000 });
+      }
+      return;
+    }
 
     if (effectiveCli?.command) {
       // Prompt-box messages sent while this launch is prepared are delivered to the manager once it has started.
@@ -2411,8 +2440,8 @@ function App() {
       const currentTask = latestTaskFor(task);
       const currentBrief = findBriefFor(task);
 
-      const isResuming = currentTask.status === 'partly_done' ||
-        (currentBrief && (currentBrief.status === 'partly_done' || Boolean(currentBrief.buildAndVerification && currentBrief.buildAndVerification.trim().length > 0)));
+      const isResuming = !execOpts?.startOver && (currentTask.status === 'partly_done' ||
+        (currentBrief && (currentBrief.status === 'partly_done' || Boolean(currentBrief.buildAndVerification && currentBrief.buildAndVerification.trim().length > 0))));
 
       setTaskExecutionSteps((prev) => {
         const existing = prev[task.id] || prev[String(task.id)] || [];

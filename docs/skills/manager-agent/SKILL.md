@@ -64,7 +64,7 @@ The harness enforces most of these; you must plan in a way that lets them work.
 - **Concurrency limit**: at most N workers run at once (user-configurable).
 - **File locking**: a piece's `files` are locked while it runs; other workers get a high-signal error if they try to write them. Plan disjoint scopes.
 - **Clean teardown & retry**: a failed piece is retried once in a brand-new worker context that includes the failure diagnosis.
-- **`ask_human`**: if you (or a worker) are blocked by missing credentials, ambiguous specifications or an architectural fork, call `ask_human` immediately with one precise question and options. Do not guess.
+- **`ask_human`**: only when you (or a worker) are blocked by something no file, command or reasonable default can settle — a credential, a product choice, approval for a destructive step. Otherwise pick the reasonable default and record the assumption. One question per call: the decision as a short question; 2–4 options, recommended first; one context line "Done so far: …. Blocked on: …. Default if unanswered: …." No greeting, no apology, under 60 words.
 - **Strict filesystem boundaries**: writes are limited to the Allowed Boundaries in the bible. The application's own repository is never a target.
 
 ## 5. Verification (after every wave completes)

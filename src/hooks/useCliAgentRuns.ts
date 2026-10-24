@@ -19,6 +19,7 @@ import type {
   AgentSessionStatus,
   CliDetectedPrompt,
   ExecutionStep,
+  HumanInputPrompt,
   PermissionLevel,
   RunOutcome,
   RunStageModel,
@@ -55,12 +56,18 @@ import {
   buildTaskContentText,
   buildQaCliPrompt,
   buildQaFailMessage,
+  buildQuestionAnswerMessage,
+  buildResumeMessage,
+  buildResumedManagerPrompt,
+  buildResumedWorkerNote,
   buildWorkerCliPrompt,
   buildWorkersDoneMessage,
   hasUserPermissionOverride,
   parseCliResumeId,
   parseDelegatePlan,
+  parseQuestionFile,
   type CliRunPromptContext,
+  type ResumeWaitingOn,
   type CliWorkerPiece,
 } from '../lib/cliAgents';
 import { cliBiblePath, writeCliBible } from '../lib/cliBible';
@@ -74,6 +81,7 @@ import { buildRunOutcomeRecord } from '../lib/agentPipeline/escalation';
 import { familyForTarget } from '../lib/modelCatalog/availability';
 import { recordSteeringMessage } from '../lib/agentPipeline/steeringLog';
 import type { TaskMessageOptions, TaskMessageResult } from '../lib/taskMessages';
+import { QUESTION_SIGNAL_PROTOCOL } from '../lib/bridgeProtocol';
 
 // ─── Public types ─────────────────────────────────────────────────────────────────────
 
@@ -148,6 +156,13 @@ export interface CliAgentRunsDeps {
   /** Select a task and reveal its card. */
   openTask: (taskId: string | number) => void;
   /**
+   * Show a manager's question as the task's question card (the in-app pipeline's ask_human card). Resolves with the
+   * user's answer; '' when the card was dismissed without one (e.g. Stop).
+   */
+  requestHumanInput: (taskId: string | number, prompt: HumanInputPrompt) => Promise<string>;
+  /** Remove the task's question card without an answer (the question was answered another way, or is moot). */
+  cancelHumanInput: (taskId: string | number) => void;
+  /**
    * Resolve the CLI launch config for a task (used when a restored run needs to start workers or QA, or a follow-up
    * resumes its manager). `skipRouting`: don't pick models — the run reuses the ones it launched with.
    */
@@ -168,10 +183,17 @@ export type StopCliRunResult = 'stopping' | 'finalized' | 'none';
 
 export interface CliAgentRunsApi {
   launchCliRun: (params: LaunchCliRunParams) => Promise<boolean>;
-  /** Resolves when the task's current CLI run has written its completion log (immediately when none is running). */
+  /** Resolves when the task's current CLI run has written its completion log or was stopped (immediately when none is running). */
   waitForCliRun: (taskId: string | number) => Promise<void>;
-  /** Kill every agent of the task; finalizes the run as stopped when it hadn't finished yet. */
+  /**
+   * Kill every agent of the task. A run that hadn't finished is paused where it was — nothing is logged, and
+   * resumeCliRun picks it up later.
+   */
   stopCliRun: (taskId: string | number) => StopCliRunResult;
+  /** The task's CLI run was stopped partway and can be resumed. */
+  isCliRunPaused: (taskId: string | number) => boolean;
+  /** Resume a stopped run from where it stopped (the manager's own conversation when the CLI can resume it). */
+  resumeCliRun: (taskId: string | number, message?: string) => Promise<TaskMessageResult>;
   /** Stop one worker or QA agent (the manager is stopped through stopCliRun). */
   killAgentSession: (ptySessionId: string) => void;
   /** Push a new permission level to every running agent. */
@@ -392,7 +414,10 @@ const RECORD_SECTION_CAP = 5;
  * whatever it actually wrote: each section capped to a few short lines.
  */
 function compactCompletionRecord(md: string, reviewItems: string[]): string {
-  const summary = extractSection(md, ['summary']);
+  // "Done" (older records: "Summary").
+  const summary = extractSection(md, ['done', 'summary']);
+  const tryIt = extractSection(md, ['try it']);
+  const separately = extractSection(md, ['separately']);
   const changed = extractSection(md, ['changed', 'completed work & created files', 'completed work', 'created files']);
   const verified = extractSection(md, ['verified', 'verification']);
   if (!summary && !changed && !verified) {
@@ -406,12 +431,14 @@ function compactCompletionRecord(md: string, reviewItems: string[]): string {
     return kept.join('\n');
   };
   const out: string[] = [];
-  if (summary) out.push(`**Summary:** ${truncate(summary.replace(/\s*\n\s*/g, ' '), 400)}`);
+  if (summary) out.push(`**Done:** ${truncate(summary.replace(/\s*\n\s*/g, ' '), 400)}`);
+  if (tryIt) out.push(`**Try it:** ${truncate(tryIt.replace(/\s*\n\s*/g, ' '), 240)}`);
   if (changed) out.push(`**Changed:**\n${bullets(changed, RECORD_SECTION_CAP)}`);
   if (verified) out.push(`**Verified:** ${truncate(verified.replace(/^[-*•]\s*/gm, '').replace(/\s*\n\s*/g, '; '), 300)}`);
   out.push(
     `**Needs your review:** ${reviewItems.length ? `\n${[...reviewItems.slice(0, 3).map((i) => `- [ ] ${truncate(i, 180)}`), ...(reviewItems.length > 3 ? [`- …and ${reviewItems.length - 3} more (see the task's review items)`] : [])].join('\n')}` : 'None'}`
   );
+  if (separately && !NONE_RE.test(separately.trim())) out.push(`**Separately:** ${truncate(separately.replace(/\s*\n\s*/g, ' '), 200)}`);
   return out.join('\n\n');
 }
 
@@ -434,6 +461,8 @@ interface RunWorker {
   stepId: string;
   ptySessionId: string;
   resultFile?: string;
+  /** Was working when the run was stopped: restarted on resume, told to continue its piece. */
+  resumed?: boolean;
 }
 
 interface PersistedRunState {
@@ -495,6 +524,19 @@ interface PersistedRunState {
   pendingFollowUps?: string[];
   /** The manager CLI's own conversation id (Claude: --session-id; Codex / Antigravity: from its exit text), to resume it. */
   cliSessionId?: string;
+  /** The manager's open question (its question.md), shown as the task's question card until answered. */
+  question?: { key: string; prompt: HumanInputPrompt; stepId: string };
+  /**
+   * Stopped by the user partway: its agents were killed and nothing was logged (no completion log, no checklist or
+   * task-done changes). Resume picks the run up from here. Not finalized: the run is still open.
+   */
+  paused?: {
+    at: string;
+    /** The manager was still working (not exited while workers / QA ran): resume starts it again. */
+    managerWasLive?: boolean;
+    /** QA was verifying: resume runs that attempt again. */
+    qaInterrupted?: boolean;
+  };
   /** Model + effort per role the run launched with: a restored run or a follow-up never routes models again. */
   roles?: CliLaunchConfig['roles'];
   retryRoles?: CliLaunchConfig['retryRoles'];
@@ -531,7 +573,7 @@ function withDonePromise(state: PersistedRunState): RunState {
     resolveDone = resolve;
   });
   const run: RunState = { ...state, done, resolveDone };
-  if (state.finalized) resolveDone();
+  if (state.finalized || state.paused) resolveDone();
   return run;
 }
 
@@ -807,6 +849,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     ...(run.relatedSources ? { relatedSources: run.relatedSources } : {}),
     ...(run.codeSearch ? { codeSearchAvailable: true, ...(run.codeSearchPath ? { codeSearchPath: run.codeSearchPath } : {}) } : {}),
     ...(run.likelyFiles?.length ? { likelyFiles: run.likelyFiles } : {}),
+    // Managers ask through question.md only when the bridge reports it (protocol 3); else the old way.
+    ...((bridgeClient.getStatus().bridgeInfo?.protocol ?? 0) >= QUESTION_SIGNAL_PROTOCOL ? { questionFile: true } : {}),
   });
 
   /** The run's project isn't open: App's tasks/briefs belong to another project (which may reuse this task id). */
@@ -968,7 +1012,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     // no process, so kill the one that just started — unless a newer launch already took over this pty key.
     const current = findSession(ptySessionId);
     const superseded = Boolean(current && current.spawnId !== spawnId);
-    const stale = !current || current.status === 'cancelled' || run.finalized || runsRef.current.get(rk(run)) !== run;
+    const stale = !current || current.status === 'cancelled' || run.finalized || Boolean(run.paused) || runsRef.current.get(rk(run)) !== run;
     if (!superseded && stale) {
       void killAgentSessions({ sessionId: ptySessionId });
       if (current) {
@@ -1160,7 +1204,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
 
   const reportWorkersToManager = async (run: RunState) => {
     const round = currentRoundWorkers(run);
-    if (run.finalized || run.deferredFinalize || run.workersReported || round.length === 0) return;
+    if (run.finalized || run.deferredFinalize || run.paused || run.workersReported || round.length === 0) return;
     if (round.some((w) => w.status === 'queued' || w.status === 'running')) return;
     run.workersReported = true;
     saveRunState(run);
@@ -1221,19 +1265,22 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       status: 'running',
     });
     const memoryHits = await prefetchPromptMemory(run.projectId, `${w.piece.title}\n${w.piece.instructions}`);
+    if (run.paused) return; // stopped while the memory search ran: the worker is queued again for resume
     if (run.finalized || w.status !== 'running') {
       // Stopped while the memory search ran (finishWorker is a no-op for a worker already settled).
       finishWorker(run, w, false, 'Stopped before it started.');
       return;
     }
-    const prompt = buildWorkerCliPrompt(task, latestBrief(run), w.piece, runCtx(run, memoryHits));
+    const piecePrompt = buildWorkerCliPrompt(task, latestBrief(run), w.piece, runCtx(run, memoryHits));
+    const prompt = w.resumed ? `${buildResumedWorkerNote()}\n\n${piecePrompt}` : piecePrompt;
     const res = await spawnAgent(run, 'worker', { pieceId: w.piece.id, label, prompt });
+    if (!res.ok && res.cancelled && run.paused) return;
     if (!res.ok) finishWorker(run, w, false, res.cancelled ? 'Stopped before it started.' : `Worker could not start: ${res.error}`);
   };
 
   const launchQueuedWorkers = (run: RunState) => {
-    // A run waiting for its project to reopen to be finalized starts nothing new.
-    if (run.finalized || run.deferredFinalize) return;
+    // A run waiting for its project to reopen to be finalized (or stopped by the user) starts nothing new.
+    if (run.finalized || run.deferredFinalize || run.paused) return;
     const limit = Math.max(1, Math.floor(depsRef.current.agentPipelineOptionsRef.current.maxConcurrentAgents || 1));
     let running = run.workers.filter((w) => w.status === 'running').length;
     for (const w of run.workers) {
@@ -1289,7 +1336,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     }));
     const qaTask = latestTask(run);
     const memoryHits = await prefetchPromptMemory(run.projectId, taskMemoryQuery(qaTask));
-    if (run.finalized) return; // stopped while the memory search ran: the stop path settles QA / the run
+    if (run.finalized || run.paused) return; // stopped while the memory search ran: the stop path settles QA / the run
     const prompt = buildQaCliPrompt(qaTask, latestBrief(run), { ...runCtx(run, memoryHits), completionMarkdown, attempt: shownAttempt });
     const res = await spawnAgent(run, 'qa', { label: shownAttempt > 1 ? `QA Verifier · attempt ${shownAttempt}` : 'QA Verifier', prompt });
     if (!res.ok && res.cancelled) return; // stopped while starting: the stop path settles QA / the run
@@ -1307,7 +1354,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
 
   // ── Finalize ──
   const finalizeRun = async (run: RunState, opts: FinalizeOptions): Promise<void> => {
-    if (run.finalized) return;
+    // A stopped run is paused, not ended: nothing is logged until it is resumed and finishes.
+    if (run.finalized || run.paused) return;
     const d0 = depsRef.current;
     if (run.projectId && run.projectId !== d0.projectId) {
       // Tasks/briefs in memory belong to the open project: write this run's log when its project is open again.
@@ -1323,6 +1371,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       return;
     }
     const briefAtStart = latestBrief(run);
+    clearQuestion(run, 'cancelled', '↳ The run ended before you answered.');
     run.finalized = true;
     if (briefLoggedRun(briefAtStart, run)) {
       run.deferredFinalize = undefined;
@@ -1701,6 +1750,254 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     return true;
   };
 
+  /** The task (and its brief) shows this status; the rest of both is left as it is. */
+  const setTaskStatus = (run: RunState, status: TaskStatus) => {
+    if (isForeignRun(run)) return;
+    const d = depsRef.current;
+    const tasks = d.tasksRef.current;
+    const nextTasks = tasks.map((t) => (String(t.id) === run.taskKey && t.status !== status ? { ...t, status, isDone: status === 'done' } : t));
+    const briefs = d.briefsRef.current;
+    const briefIdx = findBriefIndex(briefs, run.taskId, latestTask(run).title);
+    const nextBriefs =
+      briefIdx === -1 || briefs[briefIdx].status === status ? briefs : briefs.map((b, i) => (i === briefIdx ? { ...b, status } : b));
+    if (nextTasks.some((t, i) => t !== tasks[i]) || nextBriefs !== briefs) d.syncAndSaveProject(nextTasks, nextBriefs, true);
+  };
+
+  // ── Stop / resume ──
+
+  /**
+   * Settle a run the user stopped partway (stopCliRun already set run.paused and killed its agents). The run stays
+   * open exactly where it was: no completion log, no checklist or done changes, no run record. Workers that were
+   * working are queued again and QA's attempt is rolled back, so resumeRun restarts them. `note` replaces the
+   * manager step's stop line (e.g. a resume that could not start).
+   */
+  const pauseRun = async (run: RunState, note?: string): Promise<void> => {
+    if (run.finalized || !run.paused) return;
+    clearQuestion(run, 'cancelled', '■ Stopped before you answered — the manager can ask again after Resume.');
+    run.paused = {
+      ...run.paused,
+      managerWasLive: run.paused.managerWasLive ?? run.managerExitCode === undefined,
+      qaInterrupted: Boolean(run.paused.qaInterrupted || run.qaActive),
+    };
+    for (const w of run.workers) {
+      if (w.status === 'running') {
+        w.status = 'queued';
+        w.resumed = true;
+        patchStep(run, w.stepId, { status: 'cancelled', detail: `${w.piece.instructions.trim()}\n\n■ Stopped by user — this worker starts again when the task is resumed.` });
+        void killAgentSessions({ sessionId: w.ptySessionId });
+      }
+    }
+    if (run.qaActive) {
+      patchStep(run, qaStepId(run), { status: 'cancelled', detail: 'Stopped by user — QA runs again when the task is resumed.' });
+      run.qaActive = false;
+      run.qaRuns = Math.max(0, run.qaRuns - 1); // the resumed attempt reuses this attempt's number and step
+    }
+    const stopLine = note || '■ Stopped by user. Nothing was logged — Resume picks the run up from here.';
+    updateSteps(run, (steps) =>
+      steps.map((st) => {
+        if (st.id === run.managerStepId) return { ...st, status: 'cancelled', detail: `${st.detail}\n\n${stopLine}` };
+        return st.status === 'running' && st.id.includes(run.runId) ? { ...st, status: 'cancelled' } : st;
+      })
+    );
+    const completedAt = new Date().toISOString();
+    updateJobs((jobs) =>
+      jobs.map((j) =>
+        String(j.taskId) === run.taskKey && (j.status === 'in_progress' || j.status === 'queued') ? { ...j, status: 'cancelled', completedAt } : j
+      )
+    );
+    clearExecuting(run.taskId);
+    setTaskStatus(run, 'partly_done');
+    saveRunState(run);
+    run.resolveDone();
+
+    // Usage so far, and (Codex / Antigravity) the manager's conversation id, once the CLIs have flushed their logs.
+    await sleep(1500);
+    await Promise.all(
+      sessionsRef.current
+        .filter((s) => s.runId === run.runId && s.spawnId)
+        .map(async (s) => {
+          const u = await fetchCliSessionUsage(s.ptySessionId);
+          if (u && s.spawnId) usageBySpawnRef.current.set(s.spawnId, u);
+        })
+    );
+    applyRunUsage(run);
+    const manager = findSession(run.managerSessionId);
+    if (manager && manager.runId === run.runId) await captureResumeId(run, manager);
+    saveRunState(run);
+  };
+
+  /**
+   * Pick a stopped run up where it stopped: the manager's own conversation is resumed when the CLI can (else a new
+   * manager gets the original prompt with a "continue, don't start over" note), interrupted workers start again and
+   * an interrupted QA attempt runs again. Runs in the run's event queue.
+   */
+  const resumeRun = async (run: RunState, message = ''): Promise<TaskMessageResult> => {
+    if (!run.paused || run.finalized) return { ok: false, error: 'This run is not stopped.' };
+    if (runsRef.current.get(rk(run)) !== run) return { ok: false, error: 'A newer run of this task has started.' };
+    if (isForeignRun(run)) return { ok: false, error: "Open this task's project to resume it." };
+    const launch = await ensureLaunch(run);
+    if (!launch) return { ok: false, error: 'No CLI agent is configured for the active AI profile.' };
+    if (!run.cliName) run.cliName = launch.cliName || launch.cmd;
+
+    const paused = run.paused;
+    const userMessage = [...(run.pendingFollowUps || []), message.trim()].filter(Boolean).join('\n\n');
+    run.paused = undefined;
+    run.pendingFollowUps = [];
+    run.managerExitCode = paused.managerWasLive ? undefined : run.managerExitCode;
+    renewDonePromise(run);
+    saveRunState(run);
+
+    reviveRunJob(run);
+    depsRef.current.setExecutingTaskId(run.taskId);
+    setTaskStatus(run, 'in_progress');
+    patchStep(run, run.managerStepId, (s) => ({
+      ...s,
+      status: 'running',
+      detail: `${s.detail}\n\n▶ Resumed by user${userMessage ? `: "${truncate(userMessage, 400)}"` : ''}.`,
+    }));
+    if (userMessage) {
+      recordSteeringMessage({ taskId: String(run.taskId), runId: run.runId, role: 'manager', text: userMessage, phase: 'mid-run' });
+    }
+
+    // Workers that reported while the run was stopped: their hand-off goes into the manager's resume message.
+    const round = currentRoundWorkers(run);
+    const roundSettled = round.length > 0 && round.every((w) => w.status === 'done' || w.status === 'failed');
+    let workersDone: string | undefined;
+    if (roundSettled && !run.workersReported) {
+      workersDone = buildWorkersDoneMessage(
+        round.map((w) => ({ pieceId: w.piece.id, title: w.piece.title, fileRel: `${runDirRel(run.runId)}/worker-${w.piece.id}.md`, ok: w.status === 'done' })),
+        runCtx(run)
+      );
+    }
+    const workersQueued = run.workers.some((w) => w.status === 'queued');
+    // A message for a manager that was waiting on QA is work to do first: QA then checks its new completion record.
+    const rerunQa = Boolean(paused.qaInterrupted && !(userMessage && paused.managerWasLive));
+    const waitingOn: ResumeWaitingOn = rerunQa ? 'qa' : workersQueued ? 'workers' : undefined;
+
+    let delivery: TaskMessageResult['delivery'] = 'unpaused';
+    if (paused.managerWasLive) {
+      const started = await startResumedManager(run, launch, { userMessage, waitingOn, workersDone });
+      if (!started.ok) {
+        run.paused = paused;
+        if (userMessage) run.pendingFollowUps = [userMessage];
+        await pauseRun(run, `⚠ Could not resume the manager: ${started.error}`);
+        return { ok: false, error: `Could not resume the manager: ${started.error}` };
+      }
+      if (workersDone) run.workersReported = true;
+      if (waitingOn) setSessionStatus(run.managerSessionId, 'waiting');
+    } else if (userMessage) {
+      // The manager had already exited (its workers / QA were still running): the message continues the run once they finish.
+      run.pendingFollowUps = [userMessage];
+      delivery = 'held';
+    }
+    saveRunState(run);
+
+    if (rerunQa) await launchQa(run, run.lastCompletion || '');
+    launchQueuedWorkers(run);
+    // Manager gone and nothing left to wait for: close the run out as the exit it was.
+    if (!paused.managerWasLive && !rerunQa && !run.workers.some((w) => w.status === 'queued' || w.status === 'running')) {
+      await finalizeRun(run, { reason: 'exit', exitCode: run.managerExitCode ?? null, completionMarkdown: run.lastCompletion });
+    }
+    return { ok: true, delivery, target: 'Manager' };
+  };
+
+  /** Start the manager of a resumed run: its own conversation when the CLI can resume it, else a new manager. */
+  const startResumedManager = async (
+    run: RunState,
+    launch: CliLaunchConfig,
+    opts: { userMessage: string; waitingOn: ResumeWaitingOn; workersDone?: string },
+    allowResume = true
+  ): Promise<{ ok: true; resumed: boolean } | { ok: false; error: string }> => {
+    const base = baseCommandName(launch.cmd);
+    const previous = findSession(run.managerSessionId);
+    const startedBefore = Boolean(previous && previous.runId === run.runId && previous.spawnId);
+    const sameCli = !previous || baseCommandName(previous.cmd) === base;
+    let resumeId: string | undefined;
+    if (allowResume && startedBefore && sameCli && (base === 'claude' || base === 'codex' || base === 'agy')) {
+      resumeId = run.cliSessionId || (previous ? await captureResumeId(run, previous) : undefined);
+    }
+    const ctx = runCtx(run);
+    let prompt: string;
+    if (resumeId) {
+      prompt = buildResumeMessage(ctx, opts);
+    } else {
+      const original = run.managerPrompt || buildManagerCliPrompt(latestTask(run), latestBrief(run), ctx);
+      if (!run.managerPrompt) run.managerPrompt = original;
+      // Never started (stopped while the files were scouted): its original prompt as it was.
+      prompt = startedBefore ? buildResumedManagerPrompt(original, ctx, { userMessage: opts.userMessage, waitingOn: opts.waitingOn }) : original;
+      if (!startedBefore && opts.userMessage) prompt = `${prompt}\n\nTHE USER'S MESSAGE:\n${opts.userMessage}`;
+      if (opts.workersDone) prompt = `${prompt}\n\n${opts.workersDone}`;
+    }
+    // A resumed Claude session log holds the earlier turns too: count them once.
+    if (resumeId && base === 'claude' && previous?.spawnId) usageBySpawnRef.current.delete(previous.spawnId);
+    const res = await spawnAgent(run, 'manager', { label: 'Manager', prompt, ...(resumeId ? { resumeSessionId: resumeId } : {}) });
+    if (!res.ok) return { ok: false, error: res.cancelled ? 'it was stopped while starting' : res.error };
+    if (resumeId && res.session.spawnId) {
+      resumeAttemptsRef.current.set(run.runId, {
+        spawnId: res.session.spawnId,
+        at: Date.now(),
+        message: opts.userMessage,
+        resumeOf: { waitingOn: opts.waitingOn, ...(opts.workersDone ? { workersDone: opts.workersDone } : {}) },
+      });
+    }
+    noteOnStep(
+      run,
+      run.managerStepId,
+      resumeId
+        ? `↳ Resumed the manager's ${run.cliName} conversation where it stopped.`
+        : startedBefore
+          ? `↳ The manager's conversation can't be resumed: a new manager continues from the work already in the repository.`
+          : '↳ Task prompt dispatched; watching the manager live.'
+    );
+    return { ok: true, resumed: Boolean(resumeId) };
+  };
+
+  // ── Questions (the manager's question.md) ──
+
+  const questionToastId = (run: PersistedRunState) => `cli-question-${rk(run)}`;
+
+  /** Show the run's open question: the task's question card and a toast; the manager waits on the user. */
+  const showQuestion = (run: RunState) => {
+    const q = run.question;
+    if (!q || isForeignRun(run)) return;
+    setSessionStatus(run.managerSessionId, 'waiting');
+    const d = depsRef.current;
+    d.showToast({
+      id: questionToastId(run),
+      type: 'warning',
+      title: `Manager is asking — ${truncate(latestTask(run).title, 60)}`,
+      message: truncate(q.prompt.question, 280),
+      duration: 0,
+      actionLabel: 'Answer',
+      onAction: () => depsRef.current.openTask(run.taskId),
+    });
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
+    void d.requestHumanInput(run.taskId, q.prompt).then((answer) => answerQuestion(run, q.key, answer));
+  };
+
+  /** Close the open question (answered, replaced or moot): its card, toast and step. */
+  const clearQuestion = (run: RunState, status: ExecutionStep['status'], note: string) => {
+    const q = run.question;
+    if (!q) return;
+    run.question = undefined;
+    saveRunState(run);
+    depsRef.current.dismissToast(questionToastId(run));
+    depsRef.current.cancelHumanInput(run.taskId);
+    patchStep(run, q.stepId, (st) => ({ ...st, status, detail: `${st.detail}\n\n${note}` }));
+  };
+
+  /** The user answered the question card: the answer is typed into the manager, which continues. */
+  const answerQuestion = async (run: RunState, key: string, answer: string) => {
+    const text = answer.trim();
+    // '' = dismissed (e.g. Stop); a different key = an older card.
+    if (!text || run.question?.key !== key || run.finalized || run.paused) return;
+    const question = run.question.prompt.question;
+    clearQuestion(run, 'success', `You answered: "${truncate(text, 400)}"`);
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
+    const res = await sendUserMessage(run.taskId, buildQuestionAnswerMessage(question, text));
+    if (!res.ok) noteOnStep(run, run.managerStepId, `⚠ Your answer could not reach the manager: ${res.error}`);
+  };
+
   // ── Prompt box: mid-run steering and post-run follow-ups ──
 
   /** An agent that can take a message now: alive, and not a worker / QA verifier that already reported. */
@@ -1879,7 +2176,9 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
   };
 
   /** Resume attempts in flight (in memory): a resume the CLI rejects at once falls back to a continuation prompt. */
-  const resumeAttemptsRef = useRef<Map<string, { spawnId: string; at: number; message: string }>>(new Map());
+  const resumeAttemptsRef = useRef<
+    Map<string, { spawnId: string; at: number; message: string; resumeOf?: { waitingOn: ResumeWaitingOn; workersDone?: string } }>
+  >(new Map());
 
   /**
    * Post-run follow-up whose manager process is gone: resume the manager's own conversation with the message
@@ -1948,7 +2247,18 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     const attempt = resumeAttemptsRef.current.get(run.runId);
     if (!attempt || attempt.spawnId !== session.spawnId) return false;
     resumeAttemptsRef.current.delete(run.runId);
-    if (code === 0 || Date.now() - attempt.at > 30_000 || run.lastCompletion) return false;
+    if (code === 0 || Date.now() - attempt.at > 30_000) return false;
+    if (attempt.resumeOf) {
+      // Resuming a stopped run: a new manager picks up from the work already in the repository.
+      run.cliSessionId = undefined;
+      saveRunState(run);
+      noteOnStep(run, run.managerStepId, `⚠ Resuming the conversation failed (exit code ${code}); starting a new manager instead.`);
+      const launch = await ensureLaunch(run);
+      if (!launch) return false;
+      const res = await startResumedManager(run, launch, { userMessage: attempt.message, ...attempt.resumeOf }, false);
+      return res.ok;
+    }
+    if (run.lastCompletion) return false;
     run.cliSessionId = undefined;
     saveRunState(run);
     noteOnStep(run, run.managerStepId, `⚠ Resuming the conversation failed (exit code ${code}); starting a new manager from the completion log instead.`);
@@ -1959,6 +2269,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
   /** Post-run (runs in the run's event queue, after any finalize): reopen the run and hand the manager the message. */
   const continueRunWith = async (run: RunState, message: string, opts: TaskMessageOptions): Promise<TaskMessageResult> => {
     if (runsRef.current.get(rk(run)) !== run) return { ok: false, error: 'A newer run of this task has started — send the message again.' };
+    if (run.paused && !run.finalized) return resumeRun(run, message);
     const manager = findSession(run.managerSessionId);
     const managerAlive = Boolean(manager && manager.runId === run.runId && isLiveAgent(manager));
     if (!run.finalized) {
@@ -2020,7 +2331,11 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       .filter((st) => st.projectId === projectId && st.taskKey === taskKey)
       .sort((a, b) => (Date.parse(b.startedAt) || 0) - (Date.parse(a.startedAt) || 0))[0];
     let state: PersistedRunState | undefined =
-      saved && (saved.finalized || briefLoggedRun(brief, saved)) ? { ...saved, finalized: true, deferredFinalize: undefined } : undefined;
+      saved && saved.paused && !saved.finalized
+        ? saved // stopped partway: resumed where it stopped
+        : saved && (saved.finalized || briefLoggedRun(brief, saved))
+          ? { ...saved, finalized: true, deferredFinalize: undefined }
+          : undefined;
     if (!state) {
       if (!brief || !(brief.completion || '').trim()) return undefined;
       const lastRunId = brief.lastRunOutcome?.runId || brief.completionRunId?.split('#')[0];
@@ -2070,6 +2385,15 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     const run = runsRef.current.get(runKeyOf(projectId, taskKey)) ?? adoptRunForFollowUp(projectId, taskKey);
     if (!run) return { ok: false, error: 'no-run' };
 
+    if (run.paused && !run.finalized) {
+      // Stopped partway: the message resumes the run where it stopped.
+      let resumed: TaskMessageResult = { ok: false, error: 'The run could not be resumed.' };
+      await enqueue(rk(run), async () => {
+        resumed = await resumeRun(run, message);
+      });
+      return resumed;
+    }
+
     if (!run.finalized && !run.deferredFinalize) {
       // Mid-run: the agent the user is looking at while it works, else the manager.
       const shown = opts.ptySessionId ? findSession(opts.ptySessionId) : undefined;
@@ -2079,6 +2403,12 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         : manager && manager.runId === run.runId && isLiveAgent(manager)
           ? manager
           : undefined;
+      if (target && target.role === 'manager' && run.question) {
+        // A message to a manager waiting on its question answers it.
+        const question = run.question.prompt.question;
+        clearQuestion(run, 'success', `You answered from the prompt box: "${truncate(message, 400)}"`);
+        return steerLiveAgent(run, target, buildQuestionAnswerMessage(question, message), opts, 'mid-run');
+      }
       if (target) return steerLiveAgent(run, target, message, opts, 'mid-run');
       // The manager exited while workers / QA still run: the message continues the run once they finish.
       run.pendingFollowUps = [...(run.pendingFollowUps || []), message];
@@ -2236,7 +2566,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
           });
         }
         saveRunState(run);
-        setSessionStatus(run.managerSessionId, 'waiting');
+        // Written just before a Stop: the workers are queued and start when the run is resumed.
+        if (!run.paused) setSessionStatus(run.managerSessionId, 'waiting');
         patchStep(run, run.managerStepId, (s) => ({
           ...s,
           detail: `${s.detail}\n\n↳ Delegated ${pieces.length} piece(s) to workers (${pieces.map((p) => p.id).join(', ')}); waiting for their results.`,
@@ -2256,11 +2587,42 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         }, 3000);
         return;
       }
+      case 'question': {
+        if (ev.role !== 'manager' || run.finalized || run.deferredFinalize || run.paused) return;
+        const parsed = parseQuestionFile(ev.content);
+        if (!parsed.question) return;
+        clearQuestion(run, 'cancelled', '↳ Replaced by a newer question.');
+        const stepId = `step-question-${run.taskKey}-${run.runId}-${ev.mtime}`;
+        const prompt: HumanInputPrompt = {
+          id: `cli-question-${run.runId}-${ev.mtime}`,
+          taskId: run.taskId,
+          question: parsed.question,
+          ...(parsed.options.length ? { options: parsed.options } : {}),
+          ...(parsed.context ? { context: parsed.context } : {}),
+          allowFreeform: true,
+        };
+        upsertStep(run, {
+          id: stepId,
+          taskId: run.taskId,
+          time: nowTime(),
+          stage: 'human_input',
+          agentRole: 'manager',
+          title: 'Question from the Manager',
+          detail: [parsed.question, parsed.context].filter(Boolean).join('\n\n'),
+          status: 'running',
+        });
+        run.question = { key, prompt, stepId };
+        saveRunState(run);
+        showQuestion(run);
+        return;
+      }
       case 'complete': {
         if (ev.role !== 'manager') return;
+        clearQuestion(run, 'cancelled', '↳ The manager finished without waiting for an answer.');
         run.lastCompletion = ev.content;
         saveRunState(run);
-        if (run.finalized || run.deferredFinalize || run.qaActive) return;
+        // Stopped: the resumed manager writes it again when it is done.
+        if (run.finalized || run.deferredFinalize || run.paused || run.qaActive) return;
         if (currentRoundWorkers(run).some((w) => w.status === 'queued' || w.status === 'running')) {
           cancelOpenWorkers(run, 'The manager finished the task before this worker reported.');
         }
@@ -2272,7 +2634,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         return;
       }
       case 'qa-verdict': {
-        if (ev.role !== 'qa' || !run.qaActive || run.finalized || run.deferredFinalize) return;
+        // Stopped: that QA attempt runs again on resume.
+        if (ev.role !== 'qa' || !run.qaActive || run.finalized || run.deferredFinalize || run.paused) return;
         const verdict = qaVerdictFrom(ev.content, ev.verdict);
         run.qaActive = false;
         const qaBase = run.qaBase ?? 0;
@@ -2377,14 +2740,15 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
 
     const run = runForSession(session);
     if (run && role === 'manager') void captureResumeId(run, session);
-    if (wasTerminal || !run || run.finalized) return;
+    if (run && role === 'manager' && run.question) clearQuestion(run, 'cancelled', '↳ The manager exited before you answered.');
+    if (wasTerminal || !run || run.finalized || run.paused) return;
 
     // Signal files are polled once more at exit: give that last signal a moment to arrive (without holding up
     // this task's event queue), then decide what the exit means for the run.
     const qaRunAtExit = run.qaRuns;
     setTimeout(() => {
       void enqueue(rk(run), async () => {
-        if (run.finalized || run.deferredFinalize) return;
+        if (run.finalized || run.deferredFinalize || run.paused) return;
         if (role === 'worker') {
           const w = [...run.workers].reverse().find((x) => x.ptySessionId === ev.sessionId);
           if (w && (w.status === 'running' || w.status === 'queued')) {
@@ -2399,6 +2763,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
             await finalizeRun(run, { reason: 'qa-error', completionMarkdown: run.lastCompletion });
           }
         } else {
+          // A resume the CLI rejected at once: a new manager takes over (also while workers / QA still run).
+          if (await retryFailedResume(run, session, ev.code)) return;
           const workersOpen = currentRoundWorkers(run).some((w) => w.status === 'queued' || w.status === 'running');
           if (run.qaActive || workersOpen) {
             // One-shot CLIs exit right after writing completion.md / delegate.json. The run finalizes when QA
@@ -2407,7 +2773,6 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
             saveRunState(run);
             return;
           }
-          if (await retryFailedResume(run, session, ev.code)) return;
           await finalizeRun(run, { reason: 'exit', exitCode: ev.code, completionMarkdown: run.lastCompletion });
         }
       });
@@ -2641,6 +3006,13 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     const activeIds = new Set(relevant.filter((r) => r.isActive).map((r) => r.id));
     const reconcile = async (run: RunState) => {
       const managerNow = findSession(run.managerSessionId);
+      if (run.paused && !run.finalized) {
+        // Stopped by the user: its agents were killed on purpose and show as stopped, not failed.
+        for (const s of sessionsRef.current) {
+          if (s.runId === run.runId && !s.session.isActive && s.status === 'failed') setSessionStatus(s.ptySessionId, 'cancelled');
+        }
+        return;
+      }
       if (run.finalized) {
         if (managerNow?.session.isActive && managerNow.runId === run.runId && !TERMINAL_STATUSES.has(managerNow.status)) {
           setSessionStatus(run.managerSessionId, 'done');
@@ -2683,6 +3055,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         }
       } else if (manager?.status !== 'starting') {
         setSessionStatus(run.managerSessionId, waitingOnAgents ? 'waiting' : 'running');
+        // Its question is still open (the card is gone after a reload): show it again.
+        if (run.question) showQuestion(run);
       }
       // Project load marks every in-progress job cancelled; this run is still going, so its job is too.
       if (reviveRunJob(run)) depsRef.current.setExecutingTaskId((cur) => cur ?? run.taskId);
@@ -2703,6 +3077,15 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     for (const state of listPersistedRuns()) {
       if (state.finalized || state.projectId !== depsRef.current.projectId) continue;
       if (!wanted.has(state.taskKey)) continue;
+      if (state.paused) {
+        // Stopped partway: stays open (unfinalized) so Resume can pick it up — unless a newer run replaced it.
+        const current = runsRef.current.get(rk(state));
+        if (!current) runsRef.current.set(rk(state), withDonePromise(state));
+        else if (current.runId !== state.runId && (Date.parse(current.startedAt) || 0) >= (Date.parse(state.startedAt) || 0)) {
+          saveRunState(withDonePromise({ ...state, finalized: true }));
+        }
+        continue;
+      }
       if (activeIds.has(state.managerSessionId) && !state.deferredFinalize) continue;
       const current = runsRef.current.get(rk(state));
       if (current && current.runId !== state.runId) {
@@ -2800,8 +3183,22 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     launchQueuedWorkers,
     finishWorker,
     sendUserMessage,
+    pauseRun,
+    resumeRun,
+    clearQuestion,
   });
-  implRef.current = { finalizeRun, spawnAgent, restoreAgentSessions, handlePrompt, launchQueuedWorkers, finishWorker, sendUserMessage };
+  implRef.current = {
+    finalizeRun,
+    spawnAgent,
+    restoreAgentSessions,
+    handlePrompt,
+    launchQueuedWorkers,
+    finishWorker,
+    sendUserMessage,
+    pauseRun,
+    resumeRun,
+    clearQuestion,
+  };
 
   /**
    * Kill every agent of one project's task — by session id, never by task id (other projects reuse task ids).
@@ -2849,6 +3246,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
 
       // Retire a previous run of this task (its sessions are replaced below).
       const previous = runsRef.current.get(runKeyOf(projectId, taskKey));
+      if (previous?.question) implRef.current.clearQuestion(previous, 'cancelled', '↳ A new run started before you answered.');
       if (previous && !previous.finalized) {
         previous.finalized = true;
         saveRunState(previous);
@@ -3016,8 +3414,9 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       run.codeSearch = codeIndexed;
       run.codeSearchPath = launch.cwd;
       if (scout) run.likelyFiles = scout.files;
-      // Stopped or relaunched while the files were scouted: that path owns the task now.
-      if (run.finalized || runsRef.current.get(runKeyOf(projectId, taskKey)) !== run) return false;
+      // Stopped or relaunched while the files were scouted: that path owns the task now (a stopped run resumes
+      // from here: its manager has not started yet).
+      if (run.finalized || run.paused || runsRef.current.get(runKeyOf(projectId, taskKey)) !== run) return false;
       const prompt = buildManagerCliPrompt(task, resetBrief, runCtx(run));
       run.managerPrompt = prompt;
       saveRunState(run);
@@ -3092,7 +3491,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
 
     const waitForCliRun = (taskId: string | number): Promise<void> => {
       const run = runsRef.current.get(runKeyOf(depsRef.current.projectId, taskId));
-      return run && !run.finalized ? run.done : Promise.resolve();
+      return run && !run.finalized && !run.paused ? run.done : Promise.resolve();
     };
 
     const stopCliRun = (taskId: string | number): StopCliRunResult => {
@@ -3112,8 +3511,33 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       }
       if (!run) return 'none';
       if (run.finalized) return 'finalized';
-      void enqueue(rk(run), () => implRef.current.finalizeRun(run, { reason: 'stopped', completionMarkdown: run.lastCompletion }));
+      if (run.paused) return 'stopping';
+      if (run.deferredFinalize) {
+        // Already ending (its log is being written): let it finish.
+        const deferred = run.deferredFinalize;
+        void enqueue(rk(run), () => implRef.current.finalizeRun(run, deferred));
+        return 'stopping';
+      }
+      // Paused right away, so nothing queued behind this (signals, exits) advances or finalizes the run.
+      run.paused = { at: new Date().toISOString() };
+      saveRunState(run);
+      void enqueue(rk(run), () => implRef.current.pauseRun(run));
       return 'stopping';
+    };
+
+    const isCliRunPaused = (taskId: string | number) => {
+      const run = runsRef.current.get(runKeyOf(depsRef.current.projectId, taskId));
+      return Boolean(run && run.paused && !run.finalized);
+    };
+
+    const resumeCliRun = async (taskId: string | number, message = ''): Promise<TaskMessageResult> => {
+      const run = runsRef.current.get(runKeyOf(depsRef.current.projectId, taskId));
+      if (!run || !run.paused || run.finalized) return { ok: false, error: 'This task has no stopped run to resume.' };
+      let result: TaskMessageResult = { ok: false, error: 'The run could not be resumed.' };
+      await enqueue(rk(run), async () => {
+        result = await implRef.current.resumeRun(run, message);
+      });
+      return result;
     };
 
     const killAgentSession = (ptySessionId: string) => {
@@ -3134,7 +3558,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         patchSession(ptySessionId, (x) => ({ ...x, status: 'cancelled', pendingPrompt: null }));
       }
       const run = runForSession(s);
-      if (!run || run.finalized) return;
+      if (!run || run.finalized || run.paused) return;
       void enqueue(rk(run), async () => {
         if (s.role === 'worker') {
           const w = [...run.workers].reverse().find((x) => x.ptySessionId === ptySessionId);
@@ -3187,7 +3611,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
 
     const hasActiveCliRun = (taskId: string | number) => {
       const run = runsRef.current.get(runKeyOf(depsRef.current.projectId, taskId));
-      return Boolean(run && !run.finalized);
+      return Boolean(run && !run.finalized && !run.paused);
     };
 
     const forgetTask = (taskId: string | number) => {
@@ -3195,6 +3619,11 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       const projectId = depsRef.current.projectId;
       const run = runsRef.current.get(runKeyOf(projectId, taskKey));
       if (run) {
+        if (run.question) {
+          depsRef.current.dismissToast(questionToastId(run));
+          depsRef.current.cancelHumanInput(run.taskId);
+          run.question = undefined;
+        }
         if (!run.finalized) {
           run.finalized = true;
           saveRunState(run);
@@ -3218,7 +3647,12 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     const supersedeFinishedRun = (taskId: string | number) => {
       const key = runKeyOf(depsRef.current.projectId, String(taskId));
       const run = runsRef.current.get(key);
-      // Only finished / finalizing runs: an active run's agents are still working and must be stopped first.
+      // Only finished / finalizing / stopped runs: an active run's agents are still working and must be stopped first.
+      if (run && run.paused && !run.finalized) {
+        // Started over instead of resumed: the stopped run is closed (still without a completion log).
+        run.finalized = true;
+        saveRunState(run);
+      }
       if (run && (run.finalized || run.finalizePending)) runsRef.current.delete(key);
     };
 
@@ -3228,6 +3662,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       launchCliRun,
       waitForCliRun,
       stopCliRun,
+      isCliRunPaused,
+      resumeCliRun,
       killAgentSession,
       applyPermissionLevel,
       restoreAgentSessions: (taskIds) => implRef.current.restoreAgentSessions(taskIds),

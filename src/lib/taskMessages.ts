@@ -15,6 +15,8 @@ export type TaskMessageDelivery =
   | 'resumed'
   /** No resumable conversation: a new manager continues the run from its completion log. */
   | 'restarted'
+  /** The run had been stopped partway: it was resumed and picks up where it stopped, with the message. */
+  | 'unpaused'
   /** The manager is gone while workers / QA still run: the message continues the run once they finish. */
   | 'held';
 
@@ -50,6 +52,8 @@ export function describeTaskMessage(result: TaskMessageResult): string {
       return `Continuing the task — resumed ${to}'s conversation`;
     case 'restarted':
       return `Continuing the task — a new ${to} picks up from the completion log`;
+    case 'unpaused':
+      return `Resuming the stopped run — ${to} picks up where it stopped`;
     case 'held':
       return `Held — continues the task once its running agents finish`;
     default:

@@ -10,16 +10,14 @@ import { type BibleStore } from './bible';
 import { type HardenerResult } from './hardener';
 import { runToolLoop } from './providerLoop';
 import { formatOverviewDocToMarkdown } from './summary';
+import { COMPLETION_RECORD_FORMAT, COMPLETION_RECORD_RULES } from '../humanFacingOutput';
 
 const LOGGER_SYSTEM =
   `You are the Logger AI in Ergo's task execution pipeline. Write the completion log for a task that was just executed by a manager and its worker sub-agents.\n` +
   `The completion log is a SHORT note a human scans in a few seconds to confirm the work is right — not a log of the execution. ` +
   `Be accurate — do NOT fabricate details that are not in the event log, verification or QA sections. No code, no command output, no narrative of the process.\n\n` +
-  `"completion" (markdown, under 120 words) uses exactly these bold headings:\n` +
-  `**Summary:** one or two plain sentences: what now works.\n` +
-  `**Changed:** at most 5 bullets, \`path\` — a few words (group related files).\n` +
-  `**Verified:** one line: what was checked and the result (QA verdict included).\n` +
-  `**Needs your review:** at most 3 "- [ ]" items, or "None".\n\n` +
+  `"completion" (markdown) uses exactly these bold headings, in this order:\n${COMPLETION_RECORD_FORMAT}\n` +
+  `${COMPLETION_RECORD_RULES} The Verified line includes the QA verdict.\n\n` +
   `"buildAndVerification" (markdown, at most 4 short bullets): pieces done, retries, how it was verified.\n` +
   `"createdFiles": every file created, written or modified (paths only).\n\n` +
   `HUMAN REVIEW:\n` +

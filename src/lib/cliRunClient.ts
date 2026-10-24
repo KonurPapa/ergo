@@ -47,7 +47,7 @@ export interface PolicyResult {
 }
 
 /** Signal files an agent writes into its run dir when it reaches a milestone. */
-export type AgentSignalKind = 'delegate' | 'worker-done' | 'complete' | 'qa-verdict';
+export type AgentSignalKind = 'delegate' | 'worker-done' | 'complete' | 'qa-verdict' | 'question';
 
 export type CliAgentEvent =
   | ({ type: 'spawned'; label: string; pieceId?: string } & CliAgentEventBase)
