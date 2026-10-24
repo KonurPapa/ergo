@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { type AIProviderId, type AgentRole, type UserApiKey, type CliDetectedAgent, type AuthMode, type ContextCompactionSetting } from '../types';
 import { compactionThreshold, contextWindowFor, DEFAULT_OLLAMA_CONTEXT } from '../lib/agentPipeline/compaction';
 import { PRICE_SNAPSHOT } from '../lib/modelCatalog/priceSnapshot';
@@ -10,6 +10,10 @@ import {
   testAiConnection,
   fetchOllamaModels,
   fetchDetectedCliAgents,
+  fetchCliAuthStatus,
+  installCli,
+  triggerCliLogin,
+  type CliAuthStatus,
   type ProviderModel
 } from '../lib/aiProviders';
 import { CLI_AGENT_PRESETS, getDefaultCliPresetForProvider } from '../lib/cliAgents';
@@ -175,6 +179,15 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     status: 'idle'
   });
 
+  // One-click subscription connect (mirrors the onboarding flow)
+  const [subAuthStatus, setSubAuthStatus] = useState<CliAuthStatus | null>(null);
+  const [isCheckingSubAuth, setIsCheckingSubAuth] = useState(false);
+  const [isConnectingSub, setIsConnectingSub] = useState(false);
+  const [subConnectError, setSubConnectError] = useState<string | null>(null);
+  // New profiles show nothing below the provider grid until a provider is picked
+  const [providerChosen, setProviderChosen] = useState(false);
+  const subPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // Primary Provider Test State
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -208,6 +221,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
   const resetForm = (pId: AIProviderId = 'openai') => {
     const p = SUPPORTED_AI_PROVIDERS.find((item) => item.id === pId) || SUPPORTED_AI_PROVIDERS[0];
     setEditingId(null);
+    setProviderChosen(false);
     setKeyName('');
     setApiKey('');
     setProviderId(pId);
@@ -275,6 +289,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
       (k.cliExtraArgs !== undefined && k.cliExtraArgs !== (matchedPreset?.defaultArgs || ''))
     ));
     setProviderId(resolvedProvider);
+    setProviderChosen(true);
     const resolvedBaseUrl = k.baseUrl || p.defaultBaseUrl || '';
     setBaseUrl(resolvedBaseUrl);
 
@@ -374,6 +389,32 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     }
   }, [isOpen, editingKey]);
 
+  // The bridge's auth-status/install/login endpoints only understand these CLIs; anything else signs in via the terminal.
+  const subPreset = CLI_AGENT_PRESETS.find((p) => p.id === selectedCliId);
+  const subCli = subPreset && ['claude', 'codex', 'agy'].includes(subPreset.command) ? subPreset.command : null;
+  const subCliName = subPreset?.label || 'your AI subscription';
+  const isSubscriptionFlow = isOpen && providerChosen && authMode === 'cli_subscription' && providerId !== 'ollama';
+
+  useEffect(() => {
+    setSubConnectError(null);
+    if (!isSubscriptionFlow || !subCli) {
+      setSubAuthStatus(null);
+      return;
+    }
+    let cancelled = false;
+    setIsCheckingSubAuth(true);
+    fetchCliAuthStatus(subCli).then((st) => {
+      if (cancelled) return;
+      setSubAuthStatus(st);
+      setIsCheckingSubAuth(false);
+    });
+    return () => { cancelled = true; };
+  }, [isSubscriptionFlow, subCli]);
+
+  useEffect(() => () => {
+    if (subPollingRef.current) clearInterval(subPollingRef.current);
+  }, []);
+
   if (!isOpen) return null;
 
   // Auto-detect provider when user pastes key
@@ -438,6 +479,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
 
   const handlePrimaryProviderChange = (pId: AIProviderId) => {
     setProviderId(pId);
+    setProviderChosen(true);
     const pMeta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === pId);
     if (!keyName || keyName.endsWith('Profile') || keyName.endsWith('Key') || keyName.endsWith('Ollama')) {
       setKeyName(pId === 'ollama' ? 'Local Ollama Profile' : `${pMeta?.shortName || pId} Profile`);
@@ -640,6 +682,77 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     return `Summarizes older context at ${k(at)} tokens (window ${k(window)}${setting?.mode === 'manual' ? '' : ', 80%'}). The newest 4 tool exchanges stay word for word.`;
   };
 
+  const openSubTerminalLogin = () => {
+    const agent = detectedCliAgents.find((a) => a.id === selectedCliId);
+    const isAgy = subPreset?.command === 'agy';
+    const cmd = customCliCommand.trim() || agent?.detectedPath || subPreset?.command || 'claude';
+    setCliTerminalState({
+      isOpen: true,
+      title: `Sign in: ${subCliName}`,
+      cmd,
+      args: isAgy ? [] : (agent?.loginArgs || ['login']),
+      status: 'running'
+    });
+  };
+
+  // Single "Connect" action: install if missing, launch browser sign-in, poll until authenticated.
+  const handleSubscriptionConnect = async () => {
+    setSubConnectError(null);
+    if (!subCli || subCli === 'agy' || customCliCommand.trim()) {
+      openSubTerminalLogin();
+      return;
+    }
+    setIsConnectingSub(true);
+    try {
+      let status = subAuthStatus;
+      if (!status?.isInstalled) {
+        const res = await installCli(subCli);
+        status = await fetchCliAuthStatus(subCli);
+        setSubAuthStatus(status);
+        if (!status.isInstalled && !res.success) {
+          setSubConnectError(res.error || `Could not install ${subCliName}. Try the Provider API Key tab instead.`);
+          setIsConnectingSub(false);
+          return;
+        }
+      }
+      if (status?.isAuthenticated) {
+        setIsConnectingSub(false);
+        return;
+      }
+
+      const loginRes = await triggerCliLogin(subCli);
+      if (!loginRes.success || loginRes.error) {
+        setSubConnectError(loginRes.error || `Could not launch sign-in for ${subCliName}.`);
+        setIsConnectingSub(false);
+        return;
+      }
+      if (loginRes.authUrl) {
+        const popup = window.open(loginRes.authUrl, 'ai_auth_window', 'width=650,height=750,noopener,noreferrer');
+        if (!popup) setSubConnectError('Your browser blocked the sign-in window. Allow popups and click Connect again.');
+      }
+
+      if (subPollingRef.current) clearInterval(subPollingRef.current);
+      const started = Date.now();
+      subPollingRef.current = setInterval(async () => {
+        if (Date.now() - started > 90_000) {
+          if (subPollingRef.current) clearInterval(subPollingRef.current);
+          setIsConnectingSub(false);
+          setSubConnectError('Sign-in timed out. If you finished signing in, click Connect again.');
+          return;
+        }
+        const st = await fetchCliAuthStatus(subCli);
+        if (st.isAuthenticated) {
+          if (subPollingRef.current) clearInterval(subPollingRef.current);
+          setSubAuthStatus(st);
+          setIsConnectingSub(false);
+        }
+      }, 2000);
+    } catch (err: any) {
+      setSubConnectError(err.message || 'Sign-in hit an unexpected error.');
+      setIsConnectingSub(false);
+    }
+  };
+
   const handleSave = () => {
     const finalName = keyName.trim() || `${providerMeta.name} ${authMode === 'cli_subscription' ? 'Subscription' : 'API'} Profile`;
 
@@ -798,7 +911,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
             <div style={{ marginBottom: '0.65rem' }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(115px, 1fr))', gap: '0.5rem' }}>
                 {SUPPORTED_AI_PROVIDERS.filter((p) => p.id !== 'mock' && p.id !== 'cli_subscription').map((p) => {
-                  const isSelected = p.id === providerId;
+                  const isSelected = providerChosen && p.id === providerId;
                   return (
                     <button
                       key={p.id}
@@ -843,6 +956,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
               </div>
             </div>
 
+            {providerChosen && (<>
             {/* Profile Label */}
             <div className="input-group" style={{ marginBottom: '0.85rem' }}>
               <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
@@ -1046,8 +1160,105 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
               </div>
             )}
 
-            {/* CLI Management Card (Active for Cloud Subscription bridge or Local Ollama CLI tools like Aider) */}
-            {(authMode === 'cli_subscription' || providerId === 'ollama') && (
+            {/* One-click subscription connection (same flow as onboarding) */}
+            {authMode === 'cli_subscription' && providerId !== 'ollama' && (() => {
+              const connected = Boolean(subAuthStatus?.isInstalled && subAuthStatus.isAuthenticated);
+              const busy = isConnectingSub || isCheckingSubAuth;
+              return (
+                <div
+                  style={{
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border-subtle)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '1rem',
+                    marginBottom: '0.85rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.75rem'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <ShieldCheck size={16} color="var(--accent-emerald)" />
+                    <span style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--text-bright)' }}>
+                      {connected ? `Connected to ${subCliName}` : `Connect ${subCliName}`}
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>
+                    {connected
+                      ? <>Signed in{subAuthStatus?.userEmail ? <> as <strong style={{ color: 'var(--text-bright)' }}>{subAuthStatus.userEmail}</strong></> : ''}. Save the profile to use your subscription.</>
+                      : 'Connect in one click. Ergo installs and signs in for you.'}
+                  </p>
+                  {!connected && (
+                    <button
+                      type="button"
+                      onClick={handleSubscriptionConnect}
+                      disabled={busy}
+                      style={{
+                        padding: '0.7rem 1.2rem',
+                        borderRadius: '10px',
+                        background: 'var(--accent-primary)',
+                        color: '#ffffff',
+                        fontWeight: 700,
+                        fontSize: '0.86rem',
+                        border: 'none',
+                        cursor: busy ? 'not-allowed' : 'pointer',
+                        opacity: busy ? 0.8 : 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '0.5rem'
+                      }}
+                    >
+                      {busy && <Loader2 size={16} className="animate-spin" />}
+                      <span>{isConnectingSub ? 'Connecting...' : isCheckingSubAuth ? 'Checking...' : `Connect with ${subCliName}`}</span>
+                    </button>
+                  )}
+                  {subConnectError && (
+                    <div style={{ fontSize: '0.74rem', color: 'var(--accent-rose)', display: 'flex', gap: '0.35rem', alignItems: 'flex-start' }}>
+                      <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 2 }} />
+                      <span>{subConnectError}</span>
+                    </div>
+                  )}
+                  {cliTerminalState.isOpen && (
+                    <ResizableTerminalContainer
+                      defaultHeight={320}
+                      minHeight={200}
+                      maxHeight={650}
+                      maximizedHeight={560}
+                      storageKey="ergo_terminal_height_credentials"
+                      style={{ border: '1px solid rgba(255, 255, 255, 0.12)', borderRadius: '6px' }}
+                      headerLeft={
+                        <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-bright)' }}>{cliTerminalState.title}</span>
+                      }
+                      headerRight={
+                        <button
+                          type="button"
+                          className="terminal-ctrl-btn is-danger"
+                          onClick={() => setCliTerminalState({ isOpen: false, title: '', cmd: 'bash', args: [], status: 'idle' })}
+                          title="Close Terminal"
+                        >
+                          <X size={11} />
+                          <span>Close</span>
+                        </button>
+                      }
+                    >
+                      <AgentTerminal
+                        cmd={cliTerminalState.cmd}
+                        args={cliTerminalState.args}
+                        cwd="~"
+                        onExit={(code) => {
+                          setCliTerminalState((prev) => ({ ...prev, status: code === 0 ? 'completed' : 'error' }));
+                          if (subCli) fetchCliAuthStatus(subCli).then(setSubAuthStatus);
+                        }}
+                      />
+                    </ResizableTerminalContainer>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* CLI Management Card (Local Ollama CLI tools like Aider) */}
+            {providerId === 'ollama' && (
               <div
                 style={{
                   background: providerId === 'ollama' ? 'rgba(139, 92, 246, 0.04)' : 'rgba(16, 185, 129, 0.04)',
@@ -2441,6 +2652,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 <span>{editingId ? 'Save Profile Changes' : 'Save AI Profile'}</span>
               </button>
             </div>
+
+            </>)}
 
             {/* Connection Test Banner */}
             {testResult && (
