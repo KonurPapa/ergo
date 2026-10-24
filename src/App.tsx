@@ -1418,6 +1418,15 @@ function App() {
       }
     }
 
+    // A subscription profile must sign in as the user: an API key in the env makes the CLI bill (and fail) on that key instead.
+    if (activeKey && isSubscriptionTarget(activeKey)) {
+      const cmd = effectiveCli.command;
+      if (cmd.includes('claude')) delete env.ANTHROPIC_API_KEY;
+      else if (cmd.includes('codex')) delete env.OPENAI_API_KEY;
+      else if (cmd.includes('agy')) delete env.GEMINI_API_KEY;
+      else if (cmd.includes('grok')) delete env.XAI_API_KEY;
+    }
+
     const hasApiKeyForCli = Boolean(
       (effectiveCli.command.includes('claude') && env.ANTHROPIC_API_KEY) ||
       (effectiveCli.command.includes('codex') && env.OPENAI_API_KEY) ||

@@ -770,7 +770,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     const finalProviderKeys: Partial<Record<AIProviderId, { apiKey?: string; baseUrl?: string }>> = {
       ...providerKeys,
       [providerId]: {
-        apiKey: apiKey.trim() || providerKeys[providerId]?.apiKey,
+        apiKey: authMode === 'cli_subscription' && providerId !== 'ollama' ? undefined : (apiKey.trim() || providerKeys[providerId]?.apiKey),
         baseUrl: baseUrl.trim() || providerKeys[providerId]?.baseUrl
       }
     };
@@ -780,6 +780,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
       name: finalName,
       provider: providerId,
       apiKey: authMode === 'cli_subscription' ? 'cli_subscription_active' : apiKey.trim(),
+      authMode: providerId === 'ollama' ? 'api_key' : authMode,
       baseUrl: baseUrl.trim(),
       cliAgentId: selectedCliId || undefined,
       cliPresetId: selectedCliId || undefined,

@@ -903,13 +903,9 @@ async function runCliSubscription(req: ToolLoopRequest, tools: ToolDefinition[],
         `When you are finished, reply with your summary ending with "STATUS: DONE".`;
     }
 
+    // Subscription runs sign in as the user: never hand the CLI its own provider's API key (req.apiKey can be a
+    // stale per-provider key), or it bills that key instead and fails with "invalid API key".
     const cliEnv: Record<string, string> = {};
-    if (req.apiKey && req.apiKey !== 'cli_subscription_active') {
-      if (binary === 'claude') cliEnv['ANTHROPIC_API_KEY'] = req.apiKey.trim();
-      else if (binary === 'codex' || binary === 'openai') cliEnv['OPENAI_API_KEY'] = req.apiKey.trim();
-      else if (binary === 'agy' || binary === 'antigravity') cliEnv['GEMINI_API_KEY'] = req.apiKey.trim();
-      else if (binary === 'grok') cliEnv['XAI_API_KEY'] = req.apiKey.trim();
-    }
 
     const res = await fetch(bridgeClient.getApiUrl('/api/cli/execute'), {
       method: 'POST',

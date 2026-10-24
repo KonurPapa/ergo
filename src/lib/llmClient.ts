@@ -42,17 +42,12 @@ export async function callAiEngine(
             : cliTarget;
 
     const env: Record<string, string> = {};
-    if (config.apiKey && config.apiKey !== 'cli_subscription_active') {
-      if (binary === 'claude') env['ANTHROPIC_API_KEY'] = config.apiKey.trim();
-      else if (binary === 'codex' || binary === 'openai') env['OPENAI_API_KEY'] = config.apiKey.trim();
-      else if (binary === 'agy' || binary === 'antigravity') env['GEMINI_API_KEY'] = config.apiKey.trim();
-      else if (binary === 'grok') env['XAI_API_KEY'] = config.apiKey.trim();
-    }
+    // Only other providers' keys: the subscription CLI's own key would override the user's login.
     if (config.providerKeys) {
-      if (config.providerKeys.anthropic?.apiKey) env['ANTHROPIC_API_KEY'] = config.providerKeys.anthropic.apiKey.trim();
-      if (config.providerKeys.openai?.apiKey) env['OPENAI_API_KEY'] = config.providerKeys.openai.apiKey.trim();
-      if (config.providerKeys.gemini?.apiKey) env['GEMINI_API_KEY'] = config.providerKeys.gemini.apiKey.trim();
-      if (config.providerKeys.grok?.apiKey) env['XAI_API_KEY'] = config.providerKeys.grok.apiKey.trim();
+      if (config.providerKeys.anthropic?.apiKey && binary !== 'claude') env['ANTHROPIC_API_KEY'] = config.providerKeys.anthropic.apiKey.trim();
+      if (config.providerKeys.openai?.apiKey && binary !== 'codex') env['OPENAI_API_KEY'] = config.providerKeys.openai.apiKey.trim();
+      if (config.providerKeys.gemini?.apiKey && binary !== 'agy') env['GEMINI_API_KEY'] = config.providerKeys.gemini.apiKey.trim();
+      if (config.providerKeys.grok?.apiKey && binary !== 'grok') env['XAI_API_KEY'] = config.providerKeys.grok.apiKey.trim();
     }
 
     const res = await fetch(bridgeClient.getApiUrl('/api/cli/execute'), {
