@@ -7,6 +7,7 @@ import { app, Menu, Notification, Tray, nativeImage, shell, utilityProcess, type
 import { autoUpdater } from 'electron-updater';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { BridgeUpdateState } from '../../src/lib/bridgeProtocol.ts';
 
 const APP_ID = 'network.appwrite.ergo.bridge';
 const ERGO_URL = 'https://ergo.appwrite.network';
@@ -15,7 +16,10 @@ const PROTOCOL = 'ergo-bridge';
 /** Added to the login item (Windows, Linux) so a start at login stays quiet instead of opening Ergo. */
 const AT_LOGIN_ARG = '--at-login';
 const RESTART_DELAYS_MS = [1_000, 5_000, 15_000, 60_000];
-const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+/** A downloaded update installs at the first of these checks that finds no agent session running. */
+const INSTALL_IDLE_POLL_MS = 30_000;
+const BUSY_QUERY_TIMEOUT_MS = 5_000;
 const MAX_LOG_BYTES = 5 * 1024 * 1024;
 
 type BridgeState = { kind: 'starting' } | { kind: 'running'; port: number } | { kind: 'stopped'; detail: string };
@@ -29,6 +33,9 @@ let state: BridgeState = { kind: 'starting' };
 let consecutiveFailures = 0;
 let quitting = false;
 let onReady: OnReady = 'nothing';
+let update: BridgeUpdateState = { status: 'idle' };
+let installTimer: ReturnType<typeof setInterval> | null = null;
+let pendingBusyQuery: ((sessions: number) => void) | null = null;
 let log: (text: string) => void = (text) => void process.stdout.write(text);
 
 const isProtocolLaunch = (argv: string[]) => argv.some((arg) => arg.startsWith(`${PROTOCOL}:`));
@@ -77,6 +84,7 @@ function start() {
   // Windows only shows a tray icon's menu on right-click unless asked.
   if (process.platform === 'win32') tray.on('click', () => tray?.popUpContextMenu());
   refreshTray();
+  setupUpdater();
   startBridge();
   checkForUpdates();
   setInterval(checkForUpdates, UPDATE_CHECK_INTERVAL_MS).unref();
@@ -91,6 +99,8 @@ function startBridge() {
     env: {
       ...process.env,
       ERGO_BRIDGE_HOME: path.join(app.getPath('userData'), 'bridge'),
+      // Reported to the web app (with the bridge's protocol), which asks an older bridge to update.
+      ERGO_BRIDGE_VERSION: app.getVersion(),
       // Built-in skill guides: extraResources when packaged, the repo's own docs/ under `npm start`.
       ERGO_BRIDGE_RESOURCES: app.isPackaged ? process.resourcesPath : path.resolve(__dirname, '..', '..'),
     },
@@ -98,8 +108,18 @@ function startBridge() {
   bridge = child;
   child.stdout?.on('data', (chunk) => log(String(chunk)));
   child.stderr?.on('data', (chunk) => log(String(chunk)));
-  child.on('message', (message: { type?: string; port?: number; message?: string }) => {
-    if (message.type === 'listening' && message.port) bridgeReady(message.port);
+  child.on('message', (message: { type?: string; port?: number; message?: string; sessions?: number }) => {
+    if (message.type === 'listening' && message.port) {
+      child.postMessage({ type: 'update-state', state: update });
+      bridgeReady(message.port);
+    }
+    // The web app found this bridge out of date (POST /api/bridge/update).
+    if (message.type === 'check-update') checkForUpdates();
+    if (message.type === 'busy' && pendingBusyQuery) {
+      const resolve = pendingBusyQuery;
+      pendingBusyQuery = null;
+      resolve(message.sessions ?? 0);
+    }
     if (message.type === 'fatal') {
       state = { kind: 'stopped', detail: message.message || 'it failed to start' };
       refreshTray();
@@ -151,8 +171,14 @@ function refreshTray() {
       ? 'starting…'
       : `not running (${state.detail})`;
   tray.setToolTip(`Ergo Bridge: ${status}`);
+  const updateLabel =
+    update.status === 'downloading' ? `Downloading update ${update.version ?? ''} (${update.percent ?? 0}%)`
+      : update.status === 'ready' ? `Update ${update.version ?? ''} installs when no task is running`
+        : update.status === 'installing' ? 'Installing update…'
+          : null;
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: `Ergo Bridge is ${status}`, enabled: false },
+    ...(updateLabel ? [{ label: updateLabel, enabled: false }] : []),
     { label: 'Open Ergo', click: openErgo },
     { type: 'separator' },
     { label: 'Start at login', type: 'checkbox', checked: isStartAtLogin(), click: (item) => setStartAtLogin(item.checked) },
@@ -196,15 +222,84 @@ function linuxAutostartFile() {
   return path.join(app.getPath('appData'), 'autostart', 'ergo-bridge.desktop');
 }
 
-function checkForUpdates() {
+/**
+ * Updates are automatic: found updates download right away, and a downloaded update installs (quietly, then the app
+ * starts again) as soon as no agent session is running, so a running task is never cut off. The web app sees the
+ * progress through the bridge (`bridge.update`) and can ask for a check (POST /api/bridge/update).
+ */
+function setupUpdater() {
   if (!app.isPackaged) return;
   autoUpdater.logger = {
     info: (message?: unknown) => log(`[Ergo Bridge] Updater: ${String(message)}\n`),
     warn: (message?: unknown) => log(`[Ergo Bridge] Updater: ${String(message)}\n`),
     error: (message?: unknown) => log(`[Ergo Bridge] Updater error: ${String(message)}\n`),
   };
-  // Unsigned macOS builds can't update themselves; failures are logged and retried at the next check.
-  autoUpdater.checkForUpdatesAndNotify().catch((err: Error) => log(`[Ergo Bridge] Update check failed: ${err.message}\n`));
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on('checking-for-update', () => setUpdate({ status: 'checking' }));
+  autoUpdater.on('update-available', (info) => setUpdate({ status: 'downloading', version: info.version, percent: 0 }));
+  autoUpdater.on('download-progress', (progress) => setUpdate({ ...update, status: 'downloading', percent: Math.round(progress.percent) }));
+  autoUpdater.on('update-not-available', () => setUpdate({ status: 'up-to-date' }));
+  autoUpdater.on('update-downloaded', (info) => {
+    setUpdate({ status: 'ready', version: info.version });
+    installWhenIdle();
+  });
+  // Unsigned macOS builds can't update themselves; the error is shown and the next check tries again.
+  autoUpdater.on('error', (err: Error) => setUpdate({ status: 'error', message: err.message }));
+}
+
+function setUpdate(next: BridgeUpdateState) {
+  update = next;
+  bridge?.postMessage({ type: 'update-state', state: update });
+  refreshTray();
+}
+
+function checkForUpdates() {
+  if (!app.isPackaged) {
+    setUpdate({ status: 'error', message: 'This is a development build of Ergo Bridge: it does not update itself.' });
+    return;
+  }
+  if (update.status === 'ready') return installWhenIdle();
+  if (update.status === 'checking' || update.status === 'downloading' || update.status === 'installing') return;
+  autoUpdater.checkForUpdates().catch((err: Error) => {
+    log(`[Ergo Bridge] Update check failed: ${err.message}\n`);
+    setUpdate({ status: 'error', message: err.message });
+  });
+}
+
+/** Agent sessions running in the bridge (0 when it doesn't answer: a stuck bridge mustn't block its own update). */
+function runningSessions(): Promise<number> {
+  const child = bridge;
+  if (!child) return Promise.resolve(0);
+  return new Promise((resolve) => {
+    pendingBusyQuery = resolve;
+    child.postMessage({ type: 'busy-query' });
+    setTimeout(() => {
+      if (pendingBusyQuery === resolve) {
+        pendingBusyQuery = null;
+        resolve(0);
+      }
+    }, BUSY_QUERY_TIMEOUT_MS);
+  });
+}
+
+function installWhenIdle() {
+  if (installTimer) return;
+  const attempt = async () => {
+    const sessions = await runningSessions();
+    if (sessions > 0) {
+      if (update.waitingForSessions !== sessions) setUpdate({ ...update, waitingForSessions: sessions });
+      return;
+    }
+    if (installTimer) clearInterval(installTimer);
+    installTimer = null;
+    setUpdate({ status: 'installing', version: update.version });
+    log(`[Ergo Bridge] Installing update ${update.version ?? ''}\n`);
+    // Silent install, then start the new version.
+    autoUpdater.quitAndInstall(true, true);
+  };
+  installTimer = setInterval(() => void attempt(), INSTALL_IDLE_POLL_MS);
+  void attempt();
 }
 
 function settingsPath() {

@@ -5,6 +5,22 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { withUserToolPaths } from './tool-paths.ts';
+import { activeSessionCount, setBridgeHost } from '../../bridge/selfUpdate.ts';
+import type { BridgeUpdateState } from '../../src/lib/bridgeProtocol.ts';
+
+// The updater runs in the main process (main.ts); it sends its state here so the bridge can report it to the web app,
+// and asks how many agent sessions are running before it installs.
+let update: BridgeUpdateState = { status: 'idle' };
+setBridgeHost({
+  version: process.env.ERGO_BRIDGE_VERSION || 'unknown',
+  getUpdate: () => update,
+  requestUpdate: () => process.parentPort.postMessage({ type: 'check-update' }),
+});
+process.parentPort.on('message', (event) => {
+  const message = event.data as { type?: string; state?: BridgeUpdateState };
+  if (message.type === 'update-state' && message.state) update = message.state;
+  if (message.type === 'busy-query') process.parentPort.postMessage({ type: 'busy', sessions: activeSessionCount() });
+});
 
 async function main() {
   const home = process.env.ERGO_BRIDGE_HOME;
