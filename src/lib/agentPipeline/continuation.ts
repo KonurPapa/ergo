@@ -34,6 +34,7 @@ import { bridgeClient } from '../bridgeClient';
 import { getAllowedRoots } from '../mcpClient';
 import { overviewDocumentFor } from '../overviewUtils';
 import { BibleStore, FileLockRegistry, buildBibleSections } from './bible';
+import { buildOfflineTaskBrief } from './taskBrief';
 import { runCleaner } from './cleaner';
 import {
   DEFAULT_AGENT_PIPELINE_OPTIONS,
@@ -254,8 +255,8 @@ export async function continueTaskWithAi(
       hardenerReason = prior.hardenerReason;
       overviewDoc = prior.overviewDoc;
     } else {
-      overviewDoc = brief ? overviewDocumentFor(brief) : { brief: '', goals: task.title, output_as: '', raw: task.title };
-      const text = `${task.category || ''} ${task.title} ${task.subtasks.map((s) => s.text).join(' ')} ${overviewDoc.output_as || ''}`;
+      overviewDoc = brief ? overviewDocumentFor(brief) : { raw: buildOfflineTaskBrief(task) };
+      const text = `${task.category || ''} ${task.title} ${task.subtasks.map((s) => s.text).join(' ')} ${overviewDoc.raw}`;
       taskKind = normalizeTaskKind(overviewDoc.taskKind) || (isExplicitCodeTask(text) ? 'coding' : inferTaskKind(text));
       requiresHardener = overviewDoc.requiresHardener;
       hardenerReason = overviewDoc.hardenerReason;
@@ -335,20 +336,20 @@ export async function continueTaskWithAi(
           detail: hardenerEval.reason,
           status: 'success',
         });
-        if (mgr.allScenariosPass || attempt >= maxAttempts) break;
+        if (mgr.allCriteriaPass || attempt >= maxAttempts) break;
         diagnostics = mgr.verificationSummary;
         continue;
       }
       hardener = await runHardener(ctx, runBible, tools, taskKind, filesArray, attempt);
       if (hardener.verdict !== 'fail' || attempt >= maxAttempts) break;
       diagnostics =
-        hardener.failures.map((f) => `- [${f.scenario}] ${f.diagnostics}`).join('\n') + (hardener.evidence ? `\n\nEvidence: ${hardener.evidence}` : '');
+        hardener.failures.map((f) => `- [${f.criterion}] ${f.diagnostics}`).join('\n') + (hardener.evidence ? `\n\nEvidence: ${hardener.evidence}` : '');
       runBible.appendEvent({ actor: 'pipeline', kind: 'retry', text: `QA failed on follow-up attempt ${attempt}; re-running the manager with the diagnostics.` });
       ctx.emit({
         id: `step-retry-${attempt}`,
         stage: 'retry',
         title: `QA Failed — Retrying Manager (attempt ${attempt + 1} of ${maxAttempts})`,
-        detail: hardener.failures.map((f) => `✗ ${f.scenario}: ${f.diagnostics.slice(0, 200)}`).join('\n'),
+        detail: hardener.failures.map((f) => `✗ ${f.criterion}: ${f.diagnostics.slice(0, 200)}`).join('\n'),
         status: 'warning',
       });
     }
@@ -361,14 +362,14 @@ export async function continueTaskWithAi(
       usedToolCalling: mgr.usedToolCalling,
       hardener,
       qaAttempts: attempt,
-      allScenariosPass: mgr.allScenariosPass,
+      allCriteriaPass: mgr.allCriteriaPass,
       overviewDoc,
     });
     runBible.appendEvent({ actor: 'pipeline', kind: 'info', text: `Follow-up complete — status ${result.updatedTask.status}; usage ${formatUsage(ctx.usage)}.` });
     await runBible.persist();
     const outcome: RunOutcome = hardener
       ? hardener.verdict === 'pass' ? 'passed' : hardener.verdict === 'fail' ? 'qa_failed' : 'unverified'
-      : mgr.allScenariosPass ? 'completed' : 'failed';
+      : mgr.allCriteriaPass ? 'completed' : 'failed';
     const newCompletion = `${header}\n\n${result.updatedBrief.completion}`;
     const updatedBrief: AgentContextItem = {
       ...result.updatedBrief,

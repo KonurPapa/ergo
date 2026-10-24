@@ -18,8 +18,7 @@ interface CreateProjectModalProps {
     name: string,
     customFolder: string,
     description: string,
-    initialTodoContent?: string,
-    initialAgentContextContent?: string
+    initialTodoContent?: string
   ) => void;
   storageDirectory?: string;
   existingProjects?: ProjectData[];
@@ -41,7 +40,6 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
   const [duplicatedSource, setDuplicatedSource] = useState<{
     name: string;
     todoContent: string;
-    agentContextContent: string;
   } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -83,7 +81,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
     const found = existingProjects.find((p) => p.id === projectId);
     if (!found) return;
 
-    if (!found.todoMarkdown || !found.agentContextMarkdown) {
+    if (!found.todoMarkdown) {
       setDuplicateError(`Selected project "${found.name}" is missing required markdown content.`);
       setDuplicatedSource(null);
       return;
@@ -92,8 +90,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
     setDuplicateError(null);
     setDuplicatedSource({
       name: found.name,
-      todoContent: found.todoMarkdown,
-      agentContextContent: found.agentContextMarkdown
+      todoContent: found.todoMarkdown
     });
 
     if (!name.trim()) {
@@ -112,7 +109,6 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
     if (!files || files.length === 0) return;
 
     let todoFile: File | null = null;
-    let agentFile: File | null = null;
     let folderBaseName = '';
 
     for (let i = 0; i < files.length; i++) {
@@ -125,9 +121,6 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
 
       if (f.name === 'TODO.md') {
         todoFile = f;
-      }
-      if (f.name === 'AGENT_CONTEXT.md') {
-        agentFile = f;
       }
     }
 
@@ -142,7 +135,6 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
 
     try {
       const todoText = await todoFile.text();
-      const agentText = agentFile ? await agentFile.text() : '';
 
       const sourceTitle = folderBaseName
         ? folderBaseName.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
@@ -150,8 +142,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
 
       setDuplicatedSource({
         name: sourceTitle,
-        todoContent: todoText,
-        agentContextContent: agentText
+        todoContent: todoText
       });
 
       if (!name.trim()) {
@@ -181,7 +172,6 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
           });
           if (handle && handle.name) {
             let todoText = '';
-            let agentText = '';
 
             try {
               const todoHandle = await handle.getFileHandle('TODO.md');
@@ -195,22 +185,13 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
               return;
             }
 
-            try {
-              const agentHandle = await handle.getFileHandle('AGENT_CONTEXT.md');
-              const agentFile = await agentHandle.getFile();
-              agentText = await agentFile.text();
-            } catch {
-              // AGENT_CONTEXT.md is optional / legacy
-            }
-
             const formattedName = handle.name
               .replace(/[-_]/g, ' ')
               .replace(/\b\w/g, (c: string) => c.toUpperCase());
 
             setDuplicatedSource({
               name: formattedName,
-              todoContent: todoText,
-              agentContextContent: agentText
+              todoContent: todoText
             });
 
             if (!name.trim()) {
@@ -250,8 +231,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
       name.trim(),
       currentSlug,
       description.trim(),
-      duplicatedSource?.todoContent,
-      duplicatedSource?.agentContextContent
+      duplicatedSource?.todoContent
     );
     setName('');
     setFolderName('');

@@ -17,8 +17,8 @@ import type {
   WorkspaceSyncResponse,
 } from './types';
 
-const PROMPT_CAP = 1800;
-const SELECTED_CAP = 1_500;
+const PROMPT_CAP = 6_000;
+const SELECTED_CAP = 2_000;
 
 async function postJson<T>(endpoint: string, body: unknown): Promise<T> {
   const res = await bridgeClient.fetch(endpoint, {
@@ -59,13 +59,26 @@ export async function findRelatedTasks(req: RelatedTasksRequest): Promise<Relate
 
 // ─── Rendering ──────────────────────────────────────────────────────────────
 
+/**
+ * How the overview call should use the related tasks it selects. Tested on deliberately vague tasks: "never copy
+ * their requirements" made the overview, and then the manager, declare the related open work out of scope.
+ */
+export const RELATED_INTERPRETATION_GUIDANCE =
+  'RELATED TASKS: select only the candidates (tasks or notes) that are genuinely useful context for this task. ' +
+  'When this task is sparse or vague, it was most likely written as shorthand for work described elsewhere in the project, so use the selected ones to infer what it means: ' +
+  'open subtasks of an in-progress task it names are probably its scope; open bug reports in the same area are probably the symptom; ' +
+  'done tasks show existing code to reuse; notes and pending tasks give constraints and conflicts (e.g. something that must not be removed yet). ' +
+  'Write that inferred scope into what you write, citing the task id. Do not pull in work from tasks in a different area.';
+
+/** One line of at most `max` chars; markdown links keep only their text (`[AGENTS.md](http://AGENTS.md)` → `AGENTS.md`). */
 function clip(text: string | undefined, max: number): string {
-  const s = String(text ?? '').replace(/\s+/g, ' ').trim();
+  const s = String(text ?? '').replace(/\[([^\]]+)\]\([^)\s]*\)/g, '$1').replace(/\s+/g, ' ').trim();
   return s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s;
 }
 
-/** Short status label: done / in progress / not started / partly done / archived. */
-export function relatedStatusLabel(c: Pick<RelatedTaskCandidate, 'status' | 'isDone' | 'source'>): string {
+/** Short status label: done / in progress / not started / partly done / archived / note. */
+export function relatedStatusLabel(c: Pick<RelatedTaskCandidate, 'status' | 'isDone' | 'source' | 'kind'>): string {
+  if (c.kind === 'note') return 'note';
   if (c.isDone || c.status === 'done') return 'done';
   if (c.status) return c.status.replace(/_/g, ' ');
   return c.source === 'archive' ? 'archived' : 'open';
@@ -89,32 +102,57 @@ function joinCapped(lines: string[], cap: number, unit: string): string {
 }
 
 /**
- * Compact candidate list for the Summary LLM (stage 2), one line per candidate:
- *   `[<taskId>] <title> (<status>) — subtasks: a; b; c — done: <completion summary>`
- * plus matching freeform notes. Hard cap ~1800 chars (~450 tokens): room for all 10 candidates. Empty string when there is nothing.
+ * The candidates the overview call selects from: the related tasks, then the matching freeform notes as `kind: 'note'`
+ * entries (their `note:<key>` id as taskId). Selection, saving, reuse and the strict fallback all work on this pool,
+ * so a selected note reaches the agents like a selected task.
+ */
+export function relatedSelectionPool(candidates: RelatedTaskCandidate[], notes: RelatedNoteCandidate[] = []): RelatedTaskCandidate[] {
+  return [
+    ...(candidates || []),
+    ...(notes || []).map((n): RelatedTaskCandidate => ({
+      taskId: n.id,
+      title: n.title,
+      kind: 'note',
+      source: 'workspace',
+      summaryNote: n.text,
+      matchedOn: n.title,
+      score: n.score,
+      z: n.z,
+    })),
+  ];
+}
+
+/**
+ * Compact candidate list for the overview call (stage 2), one line per candidate:
+ *   `[<taskId>] <title> (<status>) — subtasks: a; b; c — note: <summary note> — done: <completion summary>`
+ * and matching freeform notes as `[note:<key>] Note "<title>": <text>`, selectable like tasks; all lines in z order. Up
+ * to 5 subtasks each: a vague task's scope is often a later subtask of the task it points at. Hard cap ~6000 chars
+ * (~1500 tokens, read by the tiny overview model); the lowest-ranked candidates are the ones left out. Empty string when there is nothing.
  */
 export function formatRelatedCandidatesForPrompt(candidates: RelatedTaskCandidate[], notes: RelatedNoteCandidate[] = []): string {
-  const lines: string[] = [];
+  const ranked: Array<{ z: number; line: string }> = [];
   for (const c of candidates || []) {
-    let line = `[${c.taskId}] ${clip(c.title, 70)} (${relatedStatusLabel(c)})`;
+    // Users often write tasks as whole sentences: titles and subtasks are kept nearly whole so the brief can carry them.
+    let line = `[${c.taskId}] ${clip(c.title, 160)} (${relatedStatusLabel(c)})`;
+    const subs = (c.subtasks || []).slice(0, 5).map((s) => clip(s, 120)).filter(Boolean);
+    if (subs.length) line += ` — subtasks: ${subs.join('; ')}`;
     // The part that matched (often one subtask of a broad task) says most about why it's a candidate.
-    const matched = clip(c.matchedOn, 90);
-    if (matched && !c.title.toLowerCase().startsWith(matched.toLowerCase().replace(/…$/, ''))) {
-      line += ` — matched: ${matched}`;
-    } else {
-      const subs = (c.subtasks || []).slice(0, 2).map((s) => clip(s, 45)).filter(Boolean);
-      if (subs.length) line += ` — subtasks: ${subs.join('; ')}`;
-    }
-    if (c.completionSummary) line += ` — done: ${clip(c.completionSummary, 140)}`;
-    lines.push(line);
+    const matched = clip(c.matchedOn, 160);
+    const shown = `${c.title} ${subs.join(' ')}`.toLowerCase();
+    if (matched && !shown.includes(matched.toLowerCase().replace(/…$/, ''))) line += ` — matched: ${matched}`;
+    // Notes and completion summaries carry the facts the brief needs (paths, findings): kept nearly whole.
+    if (c.summaryNote) line += ` — note: ${clip(c.summaryNote, 240)}`;
+    if (c.completionSummary) line += ` — done: ${clip(c.completionSummary, 300)}`;
+    ranked.push({ z: c.z, line });
   }
-  for (const n of notes || []) lines.push(`[note] ${clip(n.title, 60)}: ${clip(n.text, 160)}`);
+  for (const n of notes || []) ranked.push({ z: n.z, line: `[${n.id}] Note "${clip(n.title, 60)}": ${clip(n.text, 200)}` });
+  const lines = ranked.sort((a, b) => b.z - a.z).map((r) => r.line);
   return lines.length ? joinCapped(lines, PROMPT_CAP, 'candidate') : '';
 }
 
 /**
- * Context block for the agents doing the work: the SELECTED related tasks with status, subtasks and what was
- * built. Cap ~1500 chars. Empty string when nothing is selected.
+ * Context block for the agents doing the work: the SELECTED related tasks (status, subtasks, summary note, what was
+ * built) and notes from relatedSelectionPool. Cap ~2000 chars. Empty string when nothing is selected.
  */
 export function formatSelectedRelatedContext(candidates: RelatedTaskCandidate[], selectedIds: string[]): string {
   const wanted = new Set((selectedIds || []).map(String));
@@ -122,13 +160,30 @@ export function formatSelectedRelatedContext(candidates: RelatedTaskCandidate[],
   const blocks: string[] = [];
   for (const c of candidates || []) {
     if (!wanted.has(String(c.taskId))) continue;
+    if (c.kind === 'note') {
+      blocks.push(`- Note "${clip(c.title, 80)}": ${clip(c.summaryNote, 400)}`);
+      continue;
+    }
     const lines = [`- [${c.taskId}] ${clip(c.title, 120)} (${relatedStatusLabel(c)}${c.category ? `, ${clip(c.category, 40)}` : ''})`];
     const subs = (c.subtasks || []).map((s) => clip(s, 100)).filter(Boolean);
     if (subs.length) lines.push(`  Subtasks: ${subs.join('; ')}`);
+    if (c.summaryNote) lines.push(`  Note: ${clip(c.summaryNote, 300)}`);
     if (c.completionSummary) lines.push(`  Done: ${clip(c.completionSummary, 300)}`);
     blocks.push(lines.join('\n'));
   }
-  return blocks.length ? joinCapped(blocks, SELECTED_CAP, 'related task') : '';
+  return blocks.length ? joinCapped(blocks, SELECTED_CAP, 'related item') : '';
+}
+
+/**
+ * One-line index of the SELECTED related items (`[#6] Onboarding wizard; Note "Security review"`): what a manager
+ * keyed off a working brief gets instead of their full context, which the brief already carries.
+ */
+export function formatRelatedSourcesLine(candidates: RelatedTaskCandidate[], selectedIds: string[]): string {
+  const wanted = new Set((selectedIds || []).map(String));
+  return (candidates || [])
+    .filter((c) => wanted.has(String(c.taskId)))
+    .map((c) => (c.kind === 'note' ? `Note "${clip(c.title, 60)}"` : `[#${c.taskId}] ${clip(c.title, 70)}`))
+    .join('; ');
 }
 
 // ─── Saved selections ───────────────────────────────────────────────────────

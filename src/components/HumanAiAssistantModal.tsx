@@ -34,7 +34,6 @@ interface HumanAiAssistantModalProps {
   onClose: () => void;
   project: ProjectData;
   todoMarkdown: string;
-  agentContextMarkdown: string;
   aiConfig: AIProviderConfig;
   mcpServers: MCPServer[];
   onApplyAssistantResult: (
@@ -68,7 +67,6 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
   onClose,
   project,
   todoMarkdown,
-  agentContextMarkdown,
   aiConfig,
   mcpServers,
   onApplyAssistantResult,
@@ -112,14 +110,7 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
     if (isOpen) {
       setHistoryIndex(-1);
       setDraftPrompt('');
-      storageManager.loadSkillDoc('human-assistant').then((content) => {
-        if (content && !content.includes('Strict JSON Output Schema') && !content.includes('createdTasks')) {
-          setSkillDocContent(content);
-        } else {
-          setSkillDocContent(DEFAULT_HUMAN_ASSISTANT_SKILL);
-          storageManager.saveSkillDoc('human-assistant', DEFAULT_HUMAN_ASSISTANT_SKILL);
-        }
-      });
+      storageManager.loadSkillDoc('human-assistant').then((content) => setSkillDocContent(content || DEFAULT_HUMAN_ASSISTANT_SKILL));
       setConfirmDeletions(false);
     }
   }, [isOpen]);
@@ -255,7 +246,6 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
         trimmed,
         intent,
         todoMarkdown,
-        agentContextMarkdown,
         project,
         aiConfig,
         connectedServers,

@@ -18,20 +18,9 @@ export function useAutosave(options: UseAutosaveOptions = {}) {
   const { defaultDelaySec = 5, onSaved, onError } = options;
 
   // Delay setting in seconds
-  const [delaySec, setDelaySecState] = useState<number>(() => {
-    const saved = localStorage.getItem('ergo_autosave_delay_sec');
-    if (saved) {
-      const parsed = parseFloat(saved);
-      if (!isNaN(parsed) && parsed >= 0.5) return parsed;
-    }
-    return defaultDelaySec;
-  });
-
-  // Enabled toggle
-  const [isEnabled, setIsEnabledState] = useState<boolean>(() => {
-    const saved = localStorage.getItem('ergo_autosave_enabled');
-    return saved !== null ? saved === 'true' : true;
-  });
+  // Saved in the user's config/settings.json by App (which restores them on load); Ergo's defaults until then.
+  const [delaySec, setDelaySecState] = useState<number>(defaultDelaySec);
+  const [isEnabled, setIsEnabledState] = useState<boolean>(true);
 
   const [status, setStatus] = useState<AutosaveStatus>('idle');
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
@@ -42,16 +31,14 @@ export function useAutosave(options: UseAutosaveOptions = {}) {
   const pendingFilesRef = useRef<FileToSave[] | null>(null);
   const isSavingRef = useRef<boolean>(false);
 
-  // Setters with localStorage persistence
+  // Setters
   const setDelaySec = useCallback((seconds: number) => {
     const valid = Math.max(0.5, Math.min(300, seconds));
     setDelaySecState(valid);
-    localStorage.setItem('ergo_autosave_delay_sec', String(valid));
   }, []);
 
   const setIsEnabled = useCallback((enabled: boolean) => {
     setIsEnabledState(enabled);
-    localStorage.setItem('ergo_autosave_enabled', String(enabled));
     if (!enabled && timerRef.current) {
       clearTimeout(timerRef.current);
       timerRef.current = null;

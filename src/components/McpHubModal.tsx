@@ -25,7 +25,7 @@ import {
   updateSkill,
   deleteSkill,
   toggleSkill,
-  syncSkillsToWorkspace
+  subscribeWorkspaceSkills
 } from '../lib/skillsManager';
 import {
   Unplug,
@@ -64,7 +64,6 @@ import {
   ChevronUp,
   Sparkles,
   Wrench,
-  FileCode,
   HelpCircle,
   Copy
 } from 'lucide-react';
@@ -317,24 +316,13 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
     instructions: '',
     triggerKeywords: ''
   });
-  const [skillsSyncSuccessMsg, setSkillsSyncSuccessMsg] = useState<string | null>(null);
-
-  const handleSyncSkillsNow = async () => {
-    try {
-      await syncSkillsToWorkspace(skills);
-      setSkillsSyncSuccessMsg(`Synced ${skills.length} skills to .agents/skills/ in workspace codebase.`);
-      setTimeout(() => setSkillsSyncSuccessMsg(null), 4000);
-    } catch {
-      setSkillsSyncSuccessMsg('Skills saved to workspace settings.');
-      setTimeout(() => setSkillsSyncSuccessMsg(null), 4000);
-    }
-  };
+  // Skills load from the user's machine after the app opens; follow the loaded (and later saved) list.
+  useEffect(() => subscribeWorkspaceSkills(setSkills), []);
 
   const handleToggleSkill = (skillId: string) => {
     toggleSkill(skillId);
     const updated = getWorkspaceSkills();
     setSkills(updated);
-    syncSkillsToWorkspace(updated).catch(() => { });
   };
 
   const handleOpenAddSkill = () => {
@@ -366,8 +354,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
       deleteSkill(skillId);
       const updated = getWorkspaceSkills();
       setSkills(updated);
-      syncSkillsToWorkspace(updated).catch(() => { });
-    }
+      }
   };
 
   const handleSaveSkillForm = (e: React.FormEvent) => {
@@ -402,7 +389,6 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
 
     const updated = getWorkspaceSkills();
     setSkills(updated);
-    syncSkillsToWorkspace(updated).catch(() => { });
     setIsSkillModalOpen(false);
     setEditingSkill(null);
   };
@@ -1136,30 +1122,11 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                     </div>
                     <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0, maxWidth: '680px', lineHeight: 1.45 }}>
                       Built-in Ergo MCP tools enable the internal AI agent to interact directly with tasks, swim lanes, and executions.
-                      Global skills define autonomous agent behaviors and are automatically synced to <code style={{ color: '#c084fc' }}>.agents/skills/</code> in your workspace.
+                      Global skills define autonomous agent behaviors. They are saved on this computer, in <code style={{ color: '#c084fc' }}>config/workspace-skills.json</code> in your Ergo folder.
                     </p>
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={handleSyncSkillsNow}
-                      style={{
-                        fontSize: '0.78rem',
-                        padding: '0.45rem 0.85rem',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '0.45rem',
-                        borderColor: 'rgba(168, 85, 247, 0.35)',
-                        color: '#e9d5ff'
-                      }}
-                      title="Write skill files to .agents/skills/ in the project folder"
-                    >
-                      <Folder size={14} color="#c084fc" />
-                      <span>Sync Codebase (.agents/skills/)</span>
-                    </button>
-
                     <button
                       type="button"
                       className="btn btn-primary"
@@ -1179,25 +1146,6 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                     </button>
                   </div>
                 </div>
-
-                {skillsSyncSuccessMsg && (
-                  <div
-                    style={{
-                      background: 'rgba(16, 185, 129, 0.12)',
-                      border: '1px solid rgba(16, 185, 129, 0.35)',
-                      borderRadius: 'var(--radius-sm)',
-                      padding: '0.55rem 0.85rem',
-                      color: '#6ee7b7',
-                      fontSize: '0.78rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem'
-                    }}
-                  >
-                    <CheckCircle2 size={15} />
-                    <span>{skillsSyncSuccessMsg}</span>
-                  </div>
-                )}
 
                 {/* Sub-view switcher pills */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.75rem' }}>
@@ -1496,7 +1444,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                       }}
                     >
                       <span>
-                        Skills guide the AI with specialized workflows, rules, and triggers. Active skills are automatically written to <code style={{ color: '#c084fc' }}>.agents/skills/</code> when work begins.
+                        Skills guide the AI with specialized workflows, rules, and triggers. They are saved on this computer, so every browser you open Ergo in sees the same skills.
                       </span>
                       <button
                         type="button"
@@ -1690,10 +1638,6 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                                   </pre>
                                 </div>
 
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.68rem', color: 'var(--text-dim)' }}>
-                                  <FileCode size={12} />
-                                  <span>Codebase file: <code>{skill.filePath || `.agents/skills/${skill.id.replace(/^skill-/, '')}/SKILL.md`}</code></span>
-                                </div>
                               </div>
                             )}
                           </div>

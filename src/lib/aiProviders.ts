@@ -36,7 +36,7 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
     score: 6.5,
     scoreLabel: '6.5 / 10 (Standard)',
     tier: 'standard',
-    description: 'Synthesizes discovery evidence and task brief into a structured, executable specification (the "Bible") with Gherkin acceptance criteria.',
+    description: 'Folds the task, its related tasks and the project context into the working brief: the exact spec (the "Bible") the manager works from, with a strict "Done when" checklist.',
     defaultModels: {
       openai: 'gpt-5',
       anthropic: 'claude-sonnet-5-5',
@@ -53,7 +53,7 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
     score: 9.0,
     scoreLabel: '9.0 / 10 (Frontier)',
     tier: 'advanced',
-    description: 'Frontier brain: plans puzzle pieces, directs workers, verifies execution against criteria, and remediates failed scenarios. Requires peak reasoning and architectural capability.',
+    description: 'Frontier brain: plans puzzle pieces, directs workers, verifies execution against the brief\'s criteria, and remediates failed ones. Requires peak reasoning and architectural capability.',
     defaultModels: {
       openai: 'gpt-5.4',
       anthropic: 'claude-opus-5-5',
@@ -104,7 +104,7 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
     score: 9.0,
     scoreLabel: '9.0 / 10 (Frontier QA)',
     tier: 'advanced',
-    description: 'Adversarial quality assurance harness: tests edge cases, verifies contract scenarios via browser/commands, and catches regressions before completion.',
+    description: 'Adversarial quality assurance harness: tests edge cases, verifies the brief\'s "Done when" criteria via browser/commands, and catches regressions before completion.',
     defaultModels: {
       openai: 'gpt-5.4',
       anthropic: 'claude-opus-5-5',

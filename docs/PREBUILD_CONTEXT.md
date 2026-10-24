@@ -124,7 +124,7 @@ Your logic decouples this loop. By having one specific skill to "draft tasks" an
 
 Standard agents keep their plans hidden. OpenClaw relies on a single configuration file called SOUL.md to define its identity and rules, but its active "thoughts" during a task are just internal scratchpad data.
 
-In your app, the AI's internal state is the user interface. By utilizing your dual-file structure—the terse TODO.md for the human-facing ask and the verbose AGENT_CONTEXT.md for the brief—the human and the AI share the exact same mental map of the project. If the AI misses an edge case, the human sees it immediately in the UI and can adjust the task before any execution happens.
+In your app, the AI's internal state is the user interface. By utilizing your dual-file structure—the terse TODO.md for the human-facing ask and the working brief each run writes from it—the human and the AI share the exact same mental map of the project. If the AI misses an edge case, the human sees it immediately in the UI and can adjust the task before any execution happens.
 3. Interactive UI vs. Textual Output
 
 Because OpenClaw lives in messaging apps, its output is largely conversational text. If it runs a data analysis script, it sends you a summary message.

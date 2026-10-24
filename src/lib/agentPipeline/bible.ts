@@ -13,7 +13,6 @@
 import {
   type BibleEvent,
   type BibleSections,
-  type DiscoveryJobPayload,
   type McpRootBoundary,
   type OverviewDocument,
   type ProjectData,
@@ -57,33 +56,10 @@ export function pathWithin(target: string, scopePath: string): boolean {
   return t.startsWith(s + '/') || t.includes('/' + s + '/');
 }
 
-function truncate(text: string | undefined, max: number): string {
-  if (!text) return '';
-  const clean = text.replace(/\s+/g, ' ').trim();
-  return clean.length > max ? clean.slice(0, max - 1) + '…' : clean;
-}
-
-import { type SearchResult } from '../memory';
-
-/** discoveredContext entry holding the selected related tasks' context block. */
-const RELATED_TASKS_SOURCE = 'related-tasks';
-const MAX_RELATED_CONTEXT_CHARS = 1600;
-
-type DiscoveredEntry = BibleSections['discoveredContext'][number];
-
-function relatedContextOf(entries: DiscoveredEntry[]): string {
-  const text = entries.find((c) => c.source === RELATED_TASKS_SOURCE)?.text?.trim() || '';
-  return text.length > MAX_RELATED_CONTEXT_CHARS ? `${text.slice(0, MAX_RELATED_CONTEXT_CHARS - 1)}…` : text;
-}
-
-function pushRelatedSection(out: string[], entries: DiscoveredEntry[]): void {
-  const related = relatedContextOf(entries);
-  if (!related) return;
-  out.push('## Related Tasks (context from this project — read before starting)');
-  out.push('_Selected as useful context for this task. Reference only: they are not requirements of this task._');
-  out.push(related, '');
-}
-
+/**
+ * The stable sections of a run's bible. The spec is the Summary step's working brief, verbatim: related tasks, prior
+ * knowledge and project guidelines reach the run only through it (the Summary folds in what matters).
+ */
 export function buildBibleSections(args: {
   task: TaskItem;
   project: ProjectData;
@@ -93,65 +69,9 @@ export function buildBibleSections(args: {
   requiresHardener?: boolean;
   hardenerReason?: string;
   allowedRoots: McpRootBoundary[];
-  guidelines?: Array<{ path: string; excerpt: string }>;
-  memoryHits?: SearchResult[];
-  /** Context block for the related tasks the Summary step selected (formatSelectedRelatedContext). */
-  relatedContext?: string;
-  discoveryPayload?: DiscoveryJobPayload;
   runId: string;
 }): BibleSections {
-  const {
-    task,
-    project,
-    overviewDoc,
-    requiredMcps,
-    taskKind,
-    requiresHardener,
-    hardenerReason,
-    allowedRoots,
-    guidelines,
-    memoryHits,
-    relatedContext,
-    discoveryPayload,
-    runId
-  } = args;
-
-  let discoveredContext: Array<{
-    taskId?: string | number;
-    title?: string;
-    category?: string;
-    sourceDocument?: string;
-    snippet?: string;
-    similarity?: number;
-    source?: string;
-    text?: string;
-  }> = [];
-
-  if (memoryHits && memoryHits.length > 0) {
-    discoveredContext = memoryHits.map((hit) => ({
-      similarity: hit.similarity,
-      source: hit.chunk.metadata.source || hit.chunk.namespace,
-      snippet: truncate(hit.chunk.text, 350)
-    }));
-  } else if (discoveryPayload?.additionalContext?.length) {
-    discoveredContext = discoveryPayload.additionalContext.map((c) => ({
-      taskId: c.taskId,
-      title: c.title,
-      category: c.category,
-      sourceDocument: c.sourceDocument,
-      snippet: truncate(c.overview || c.buildAndVerification || c.completion, 250) || undefined
-    }));
-  }
-
-  // Selected related tasks ride along as one discovered-context entry, rendered as its own section.
-  if (relatedContext && relatedContext.trim()) {
-    discoveredContext.push({ source: RELATED_TASKS_SOURCE, text: relatedContext.trim() });
-  }
-
-  const effectiveGuidelines =
-    guidelines ||
-    (discoveryPayload?.guidelineDocs || []).map((g) => ({ path: g.path, excerpt: g.excerpt }));
-
+  const { task, project, overviewDoc, requiredMcps, taskKind, requiresHardener, hardenerReason, allowedRoots, runId } = args;
   return {
     title: task.title,
     metadata: {
@@ -167,18 +87,23 @@ export function buildBibleSections(args: {
       hardenerReason
     },
     subtasks: task.subtasks.map((s) => ({ text: s.text, isDone: Boolean(s.isDone), isHumanReview: Boolean(s.isHumanReview) })),
-    gherkin: (overviewDoc.brief || '').trim(),
-    goals: (overviewDoc.goals || '').trim(),
-    outputAs: (overviewDoc.output_as || '').trim(),
+    spec: (overviewDoc.raw || '').trim(),
     requiredMcps: [...requiredMcps],
-    allowedRoots: allowedRoots.map((r) => r.path),
-    discoveredContext,
-    guidelines: effectiveGuidelines,
-    discoveryNotes: discoveryPayload?.discoveryNotes?.trim() || undefined
+    allowedRoots: allowedRoots.map((r) => r.path)
   };
 }
 
-async function writeStorageFile(filePath: string, content: string): Promise<void> {
+/** The "Done when" bullets of a working brief, in order (the criteria the manager verifies: C1, C2, …). */
+export function doneWhenCriteria(spec: string): string[] {
+  const m = (spec || '').match(/\*\*Done when:\*\*([\s\S]*?)(?=\n\s*\*\*[A-Z][^*\n]*:\*\*|$)/);
+  if (!m) return [];
+  return m[1]
+    .split('\n')
+    .map((l) => l.match(/^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$/)?.[1] || '')
+    .filter(Boolean);
+}
+
+export async function writeStorageFile(filePath: string, content: string): Promise<void> {
   try {
     const res = await fetch(bridgeClient.getApiUrl('/api/files/write'), {
       method: 'POST',
@@ -211,7 +136,7 @@ export class BibleStore {
     return `${this.runDir}/TASK_CONTEXT.md`;
   }
 
-  /** Deterministic stable sections (the cached shared prefix). */
+  /** Deterministic stable sections (the cached shared prefix), and the manager's whole view of the task. */
   renderStable(): string {
     const s = this.sections;
     const out: string[] = [];
@@ -228,7 +153,7 @@ export class BibleStore {
     }
     out.push(`- **Run ID**: ${s.metadata.runId}`, '');
 
-    out.push('## Target Task & Subtasks');
+    out.push('## Task Checklist');
     if (s.subtasks.length > 0) {
       for (const st of s.subtasks) out.push(`- [${st.isDone ? 'x' : ' '}] ${st.text}${st.isHumanReview ? ' **[Human Review]**' : ''}`);
     } else {
@@ -236,94 +161,12 @@ export class BibleStore {
     }
     out.push('');
 
-    out.push('## Overview & Acceptance Criteria (Gherkin Scenarios)');
-    out.push('```gherkin');
-    out.push(s.gherkin || `Feature: ${s.title}`);
-    out.push('```', '');
+    out.push("## Working Brief (the Summary step's spec)");
+    out.push(s.spec || `**Goal:** ${s.title}`, '');
 
-    out.push('## Deliverable Goals');
-    out.push(s.goals || '1. Complete the task as described.', '');
-
-    out.push('## Output Destination & Method');
-    out.push(`- **Destination**: ${s.outputAs || 'Record concise output results in local vector memory.'}`);
+    out.push('## Run Environment');
     out.push(`- **Required MCPs**: ${s.requiredMcps.length > 0 ? s.requiredMcps.join(', ') : '(none — pure reasoning/text)'}`);
-    out.push(`- **Allowed Boundaries**: ${s.allowedRoots.length > 0 ? s.allowedRoots.join(', ') : s.metadata.projectPath}`, '');
-
-    pushRelatedSection(out, s.discoveredContext);
-
-    const priorKnowledge = s.discoveredContext.filter((c) => c.source !== RELATED_TASKS_SOURCE);
-    if (priorKnowledge.length > 0) {
-      out.push('## Prior Knowledge & Context (Vector Memory)');
-      for (const c of priorKnowledge) {
-        if (c.similarity !== undefined) {
-          const sim = ` [${(c.similarity * 100).toFixed(0)}% match]`;
-          const src = c.source ? ` (${c.source})` : '';
-          out.push(`- **Prior Knowledge${sim}${src}**: ${c.snippet || 'Referenced for context.'}`);
-        } else {
-          out.push(`- **Task #${c.taskId} (${c.title || ''})** [from \`${c.sourceDocument || 'context'}\` / ${c.category || 'General'}]: ${c.snippet || 'Referenced for context.'}`);
-        }
-      }
-      out.push('');
-    }
-
-    if (s.guidelines.length > 0) {
-      out.push('## Project Guidelines');
-      for (const g of s.guidelines) {
-        out.push(`### ${g.path}`);
-        out.push('```');
-        out.push(g.excerpt.trim());
-        out.push('```');
-      }
-      out.push('');
-    }
-
-    if (s.discoveryNotes) {
-      out.push('## Discovery Notes');
-      out.push(s.discoveryNotes, '');
-    }
-    return out.join('\n').trimEnd() + '\n';
-  }
-
-  /**
-   * Slim context for Manager (Step 3): Gherkin criteria, goals, output destination, and metadata.
-   * Excludes verbose discovered context dumps and project guideline excerpts, which are intended
-   * for worker implementation rather than manager decomposition and verification.
-   */
-  renderManagerContext(): string {
-    const s = this.sections;
-    const out: string[] = [];
-    out.push(`# TASK EXECUTION BIBLE: ${s.title}`, '');
-    out.push('## Metadata');
-    out.push(`- **Task ID**: #${s.metadata.taskId}`);
-    out.push(`- **Category**: ${s.metadata.category}`);
-    out.push(`- **Status**: ${s.metadata.status}`);
-    out.push(`- **Project**: ${s.metadata.projectName} (${s.metadata.projectPath})`);
-    out.push(`- **Task Kind**: ${s.metadata.taskKind}`);
-    out.push('');
-
-    out.push('## Target Task & Subtasks');
-    if (s.subtasks.length > 0) {
-      for (const st of s.subtasks) out.push(`- [${st.isDone ? 'x' : ' '}] ${st.text}${st.isHumanReview ? ' **[Human Review]**' : ''}`);
-    } else {
-      out.push(`- [ ] ${s.title}`);
-    }
-    out.push('');
-
-    out.push('## Overview & Acceptance Criteria (Gherkin Scenarios)');
-    out.push('```gherkin');
-    out.push(s.gherkin || `Feature: ${s.title}`);
-    out.push('```', '');
-
-    out.push('## Deliverable Goals');
-    out.push(s.goals || '1. Complete the task as described.', '');
-
-    out.push('## Output Destination & Method');
-    out.push(`- **Destination**: ${s.outputAs || 'Record results in build log.'}`);
-    out.push(`- **Required MCPs**: ${s.requiredMcps.length > 0 ? s.requiredMcps.join(', ') : '(none — pure reasoning/text)'}`);
-    out.push(`- **Allowed Boundaries**: ${s.allowedRoots.length > 0 ? s.allowedRoots.join(', ') : s.metadata.projectPath}`, '');
-
-    pushRelatedSection(out, s.discoveredContext);
-
+    out.push(`- **Allowed Boundaries**: ${s.allowedRoots.length > 0 ? s.allowedRoots.join(', ') : s.metadata.projectPath}`);
     return out.join('\n').trimEnd() + '\n';
   }
 
@@ -338,7 +181,7 @@ export class BibleStore {
     for (const p of this.pieces) {
       const files = p.files.length > 0
         ? p.files.map((f) => `\`${f}\``).join(', ')
-        : p.kind === 'then'
+        : p.kind === 'verify'
           ? '_read-only (verification)_'
           : this.sections.metadata.taskKind === 'coding'
             ? '_read-write (workspace)_'

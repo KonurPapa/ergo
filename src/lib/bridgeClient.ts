@@ -14,6 +14,7 @@
  * - Disconnect detection and user reconnect notifications
  */
 
+import type { BridgeInfo } from './bridgeProtocol';
 export interface BridgeStatus {
   isConnected: boolean;
   isChecking: boolean;
@@ -30,6 +31,8 @@ export interface BridgeStatus {
   isMixedContentBlocked?: boolean;
   lastCheckedAt?: string;
   lastHeartbeat?: string;
+  /** What the connected bridge reports about itself; null for a bridge older than the version handshake. */
+  bridgeInfo?: BridgeInfo | null;
 }
 
 /**
@@ -127,6 +130,7 @@ class BridgeClient {
   private storageDir: string = '~/.ergo';
   private homeDir: string = '';
   private appDir: string = '';
+  private bridgeInfo: BridgeInfo | null = null;
   private lastError: string | null = null;
   private isMixedContentBlocked: boolean = false;
   private lastDiagnosis: BridgeDiagnosis = 'unreachable';
@@ -335,7 +339,8 @@ class BridgeClient {
       awaitingPermission: this.heldRequests.size > 0,
       isMixedContentBlocked: this.isMixedContentBlocked,
       lastCheckedAt: this.lastCheckedAt,
-      lastHeartbeat: this.lastCheckedAt
+      lastHeartbeat: this.lastCheckedAt,
+      bridgeInfo: this.isConnected ? this.bridgeInfo : undefined
     };
   }
 
@@ -482,6 +487,7 @@ class BridgeClient {
       this.isMixedContentBlocked = false;
       this.lastCheckedAt = new Date().toISOString();
       if (data.resolvedPath) this.storageDir = data.resolvedPath;
+      this.bridgeInfo = data.bridge && typeof data.bridge.protocol === 'number' ? (data.bridge as BridgeInfo) : null;
       if (data.homeDir) this.homeDir = data.homeDir;
       if (typeof data.appDir === 'string' && data.appDir) {
         this.appDir = data.appDir;

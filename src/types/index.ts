@@ -401,9 +401,7 @@ export interface ProjectData {
   description: string;
   folderPath: string; // e.g. "projects/default-workspace"
   todoFilePath: string; // e.g. "projects/default-workspace/TODO.md"
-  agentContextFilePath?: string; // (Legacy)
   todoMarkdown: string;
-  agentContextMarkdown?: string; // (Legacy)
   runningJobsDoc?: RunningJobsDoc;
   connectedMcps: string[];
   swimLanes?: SwimLaneDoc[];
@@ -420,17 +418,16 @@ export interface HumanInputPrompt {
 
 /**
  * Structured Overview document produced by the Summary AI.
- * This is the single source of truth handed to the Builder AI.
- * The brief is structured as human-verifiable Gherkin scenarios (Given-When-Then).
+ * The working brief is the single source of truth handed to the manager (and the spec section of the bible).
  * The user can edit it mid-task to steer the agent.
  */
 export interface OverviewDocument {
-  brief: string;         // Human-verifiable Gherkin scenarios (Given-When-Then) detailing done-state acceptance specifications
-  goals: string;         // Specific success criteria and expected outcomes
-  output_as: string;     // Format and location of the final output (MCP, file, markdown, etc.)
-  context?: string;      // (Optional)
-  constraints?: string;  // (Optional)
-  raw?: string;          // Raw markdown rendition of the overview
+  /** The working brief (docs/skills/task-brief): Goal / Scope / Known context / Constraints / Done when / Assumptions. */
+  raw: string;
+  /** Legacy fields of overviews saved before the working brief (read only, never written). */
+  brief?: string;
+  goals?: string;
+  output_as?: string;
   requiredMcps?: string[]; // MCP servers the Summary step selected (kept so a reused overview needs no new call)
   /** Related tasks the Summary step judged useful context (kept so a reused overview reuses the selection too). */
   relatedTaskIds?: string[];
@@ -520,9 +517,8 @@ export interface ManagerBiblePayload {
     sourceFileName?: string;
   };
   overview: {
-    brief: string; // The human-verifiable Gherkin scenarios (Given-When-Then)
-    goals: string; // Numbered checklist of deliverables
-    output_as: string; // Exact destination & tool method
+    /** The working brief. */
+    spec: string;
     requiredMcps?: string[];
   };
   discoveredContext: Array<{
@@ -543,11 +539,11 @@ export interface ManagerBiblePayload {
 /**
  * Pipeline stages emitted as ExecutionStep updates.
  *  - context: Step 1 Discovery
- *  - overview: Step 2 Summary (Gherkin brief)
- *  - decompose: Step 3 Manager decomposing Gherkin into puzzle pieces
+ *  - overview: Step 2 Summary (the working brief)
+ *  - decompose: Step 3 Manager decomposing the brief's "Done when" criteria into puzzle pieces
  *  - subagent: a worker sub-agent executing one puzzle piece
  *  - mcp_call: an individual tool call (manager or worker)
- *  - verify: Manager verifying accumulated pieces against Gherkin scenarios
+ *  - verify: Manager verifying accumulated pieces against the brief's criteria
  *  - cleaner: Step 4 lint/format pass (coding tasks only)
  *  - hardener: Step 5 QA / eval harness
  *  - retry: QA failure fed back into a fresh Step 3 attempt
@@ -866,7 +862,6 @@ export type HumanAiIntent = 'task' | 'architect';
 export interface HumanAiAssistantResult {
   summary: string;
   todoMarkdown?: string;
-  agentContextMarkdown?: string;
   requiresDeletionApproval?: boolean;
   deletionReason?: string;
   aggregatedReport?: string;
@@ -926,21 +921,21 @@ export interface AgentPipelineOptions {
   enableCleaner: boolean;
 }
 
-export type PuzzlePieceKind = 'given' | 'when' | 'then' | 'edge';
+export type PuzzlePieceKind = 'setup' | 'build' | 'verify' | 'edge';
 export type PuzzlePieceStatus = 'pending' | 'running' | 'done' | 'failed' | 'blocked' | 'skipped';
 
 /**
- * One discrete, verifiable unit of work decomposed by the Manager from the Gherkin scenarios.
+ * One discrete, verifiable unit of work decomposed by the Manager from the working brief's "Done when" criteria.
  * Each piece is executed by an isolated worker sub-agent with a clean, scoped context.
  */
 export interface PuzzlePiece {
   id: string;                 // e.g. "P1"
-  kind: PuzzlePieceKind;      // given = preconditions, when = implementation, then = acceptance checks, edge = alternate flows / recovery
+  kind: PuzzlePieceKind;      // setup = preconditions, build = implementation, verify = acceptance checks (read-only), edge = failure / edge cases
   title: string;
   /** Self-contained instructions for the worker (it sees nothing else about the task besides the shared bible prefix). */
   instructions: string;
-  /** Gherkin scenario titles this piece satisfies or verifies. */
-  scenarioRefs: string[];
+  /** Ids of the "Done when" criteria (C1, C2, …) this piece satisfies or verifies. */
+  criterionRefs: string[];
   /** Files this piece is allowed to create/modify (write scope + lock set). Empty = read-only piece. */
   files: string[];
   /** Piece IDs that must be done before this piece may start. */
@@ -993,14 +988,8 @@ export interface BibleSections {
     hardenerReason?: string;
   };
   subtasks: Array<{ text: string; isDone: boolean; isHumanReview?: boolean }>;
-  /** Gherkin scenarios (Given-When-Then) — the acceptance criteria. */
-  gherkin: string;
-  /** Numbered deliverable goals checklist. */
-  goals: string;
-  outputAs: string;
+  /** The Summary step's working brief, verbatim: the manager's whole spec. */
+  spec: string;
   requiredMcps: string[];
   allowedRoots: string[];
-  discoveredContext: Array<{ taskId?: string | number; title?: string; category?: string; sourceDocument?: string; snippet?: string; similarity?: number; source?: string; text?: string }>;
-  guidelines: Array<{ path: string; excerpt: string }>;
-  discoveryNotes?: string;
 }

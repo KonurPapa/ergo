@@ -595,8 +595,8 @@ const RelatedTaskRow: React.FC<{
   );
 };
 
-const RelatedNoteRow: React.FC<{ note: RelatedNoteCandidate }> = ({ note }) => (
-  <div className="related-task-row is-candidate">
+const RelatedNoteRow: React.FC<{ note: RelatedNoteCandidate; variant?: 'selected' | 'candidate' }> = ({ note, variant = 'candidate' }) => (
+  <div className={`related-task-row is-${variant}`}>
     <div className="related-task-head">
       <StickyNote size={12} className="related-task-icon" />
       <span className="related-task-title">{note.title || 'Workspace note'}</span>
@@ -674,6 +674,10 @@ export const RelatedTasksPanel: React.FC<{
   const selected = (selectedIds || []).map((id) => byId.get(String(id))).filter((c): c is RelatedTaskCandidate => Boolean(c));
   const selectedSet = new Set(selected.map((c) => String(c.taskId)));
   const others = candidates.filter((c) => !selectedSet.has(String(c.taskId)));
+  // Notes are selectable too (their note:… ids sit in the same selection).
+  const pickedIds = new Set((selectedIds || []).map(String));
+  const selectedNotes = notes.filter((n) => pickedIds.has(n.id));
+  const otherNotes = notes.filter((n) => !pickedIds.has(n.id));
   const row = (c: RelatedTaskCandidate, variant: 'selected' | 'candidate') => (
     <RelatedTaskRow
       key={c.taskId}
@@ -684,6 +688,7 @@ export const RelatedTasksPanel: React.FC<{
     />
   );
   const noteRows = notes.map((n) => <RelatedNoteRow key={n.id} note={n} />);
+  const otherNoteRows = otherNotes.map((n) => <RelatedNoteRow key={n.id} note={n} />);
   const countLabel = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
 
   let body: React.ReactNode;
@@ -707,16 +712,19 @@ export const RelatedTasksPanel: React.FC<{
         </div>
       </>
     );
-  } else if (selected.length > 0) {
+  } else if (selected.length > 0 || selectedNotes.length > 0) {
     body = (
       <>
-        <div className="related-task-list is-selected">{selected.map((c) => row(c, 'selected'))}</div>
-        {(others.length > 0 || notes.length > 0) && (
+        <div className="related-task-list is-selected">
+          {selected.map((c) => row(c, 'selected'))}
+          {selectedNotes.map((n) => <RelatedNoteRow key={n.id} note={n} variant="selected" />)}
+        </div>
+        {(others.length > 0 || otherNotes.length > 0) && (
           <CollapsibleList
-            label={`${countLabel(others.length, 'other candidate')} considered${notes.length > 0 ? ` · ${countLabel(notes.length, 'note')}` : ''}`}
+            label={`${countLabel(others.length, 'other candidate')} considered${otherNotes.length > 0 ? ` · ${countLabel(otherNotes.length, 'note')}` : ''}`}
           >
             {others.map((c) => row(c, 'candidate'))}
-            {noteRows}
+            {otherNoteRows}
           </CollapsibleList>
         )}
       </>

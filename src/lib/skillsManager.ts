@@ -1,5 +1,5 @@
 import { type WorkspaceSkill } from '../types';
-import { writeFilesToDisk } from './fileSystem';
+import { readFilesFromDisk, writeFilesToDisk } from './fileSystem';
 
 export const BUILTIN_WORKSPACE_SKILLS: WorkspaceSkill[] = [
   {
@@ -67,78 +67,102 @@ export const BUILTIN_WORKSPACE_SKILLS: WorkspaceSkill[] = [
   }
 ];
 
-const STORAGE_KEY = 'ergo_workspace_skills';
-
 /**
- * Load all workspace skills from storage or initialize with built-in skills.
+ * Workspace skills live on the user's machine, in <storage root>/config/workspace-skills.json (read and written through
+ * the bridge): the user's own skills plus their changes to the built-ins. The built-ins themselves ship with the app.
+ * The app keeps the loaded list in memory; nothing about skills is kept in the browser.
  */
+const SKILLS_FILE = 'config/workspace-skills.json';
+/** Where skills used to be kept (browser localStorage): moved to SKILLS_FILE once, then cleared. */
+const LEGACY_STORAGE_KEY = 'ergo_workspace_skills';
+
+interface SkillsFile {
+  version: 1;
+  /** The user's own skills. */
+  custom: WorkspaceSkill[];
+  /** The user's changes to built-in skills (enabled flag, edited text), by id. */
+  builtinOverrides: Record<string, Partial<WorkspaceSkill>>;
+}
+
+let cache: WorkspaceSkill[] = BUILTIN_WORKSPACE_SKILLS;
+const listeners = new Set<(skills: WorkspaceSkill[]) => void>();
+
+const OVERRIDABLE: Array<keyof WorkspaceSkill> = ['name', 'description', 'rules', 'instructions', 'triggerKeywords', 'enabled', 'updatedAt'];
+
+function fromFile(file: Partial<SkillsFile> | null): WorkspaceSkill[] {
+  const overrides = file?.builtinOverrides || {};
+  const builtins = BUILTIN_WORKSPACE_SKILLS.map((b) => ({ ...b, ...(overrides[b.id] || {}), id: b.id, isBuiltIn: true }));
+  const custom = (Array.isArray(file?.custom) ? file!.custom : []).filter((s) => s && s.id && !BUILTIN_WORKSPACE_SKILLS.some((b) => b.id === s.id));
+  return [...builtins, ...custom.map((s) => ({ ...s, isBuiltIn: false }))];
+}
+
+function toFile(skills: WorkspaceSkill[]): SkillsFile {
+  const builtinOverrides: Record<string, Partial<WorkspaceSkill>> = {};
+  for (const b of BUILTIN_WORKSPACE_SKILLS) {
+    const current = skills.find((s) => s.id === b.id);
+    if (!current) continue;
+    const diff: Partial<WorkspaceSkill> = {};
+    for (const key of OVERRIDABLE) {
+      if (JSON.stringify(current[key]) !== JSON.stringify(b[key])) (diff as any)[key] = current[key];
+    }
+    if (Object.keys(diff).length > 0) builtinOverrides[b.id] = diff;
+  }
+  return { version: 1, custom: skills.filter((s) => !s.isBuiltIn), builtinOverrides };
+}
+
+function setCache(skills: WorkspaceSkill[]) {
+  cache = skills;
+  listeners.forEach((cb) => cb(skills));
+}
+
+/** The workspace skills as last loaded from (or saved to) disk; the built-ins until the first load finishes. */
 export function getWorkspaceSkills(): WorkspaceSkill[] {
+  return cache;
+}
+
+export function subscribeWorkspaceSkills(cb: (skills: WorkspaceSkill[]) => void): () => void {
+  listeners.add(cb);
+  return () => listeners.delete(cb);
+}
+
+/** Reads the skills from the user's machine (moving any browser-kept skills there once). Never throws. */
+export async function loadWorkspaceSkills(): Promise<WorkspaceSkill[]> {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      const parsed: WorkspaceSkill[] = JSON.parse(saved);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        // Merge in any newly added built-ins that may not be present in saved
-        const existingIds = new Set(parsed.map((s) => s.id));
-        const missingBuiltins = BUILTIN_WORKSPACE_SKILLS.filter((b) => !existingIds.has(b.id));
-        return [...parsed, ...missingBuiltins];
+    const files = await readFilesFromDisk([SKILLS_FILE]);
+    const raw = files[SKILLS_FILE];
+    if (raw) {
+      setCache(fromFile(JSON.parse(raw)));
+      return cache;
+    }
+    let legacy: WorkspaceSkill[] | null = null;
+    try {
+      const saved = localStorage.getItem(LEGACY_STORAGE_KEY);
+      legacy = saved ? JSON.parse(saved) : null;
+    } catch {}
+    if (Array.isArray(legacy) && legacy.length > 0) {
+      const merged = fromFile(toFile(legacy.map((s) => ({ ...s, isBuiltIn: BUILTIN_WORKSPACE_SKILLS.some((b) => b.id === s.id) }))));
+      if (await writeSkillsFile(merged)) {
+        try {
+          localStorage.removeItem(LEGACY_STORAGE_KEY);
+        } catch {}
       }
+      setCache(merged);
     }
   } catch (err) {
-    console.warn('[Skills Manager] Failed to load skills from localStorage:', err);
+    console.warn('[Skills Manager] Could not load workspace skills from disk:', err);
   }
-  return BUILTIN_WORKSPACE_SKILLS;
+  return cache;
 }
 
-/**
- * Persist skills to storage and write markdown skill files to disk.
- */
+async function writeSkillsFile(skills: WorkspaceSkill[]): Promise<boolean> {
+  const res = await writeFilesToDisk([{ filePath: SKILLS_FILE, content: JSON.stringify(toFile(skills), null, 2) }]);
+  return res.success;
+}
+
+/** Saves the skills to the user's machine. */
 export function saveWorkspaceSkills(skills: WorkspaceSkill[]): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(skills));
-  } catch (err) {
-    console.warn('[Skills Manager] Failed to save skills to localStorage:', err);
-  }
-
-  // Asynchronously write active skill docs to workspace disk (.agents/skills/<id>/SKILL.md)
-  syncSkillsToWorkspace(skills).catch((err) => {
-    console.warn('[Skills Manager] Non-fatal: could not write skill markdown files to disk:', err);
-  });
-}
-
-/**
- * Synchronize skill markdown files directly into the project's codebase (.agents/skills/<id>/SKILL.md)
- */
-export async function syncSkillsToWorkspace(skills?: WorkspaceSkill[]): Promise<void> {
-  const allSkills = skills || getWorkspaceSkills();
-  const filesToWrite = allSkills.map((skill) => {
-    const dirName = skill.id.replace(/^skill-/, '');
-    const filePath = skill.filePath || `.agents/skills/${dirName}/SKILL.md`;
-    const content = `---
-name: "${skill.name}"
-description: "${skill.description.replace(/"/g, '\\"')}"
-enabled: ${skill.enabled}
-triggers: [${skill.triggerKeywords.map((k) => `"${k}"`).join(', ')}]
----
-
-# ${skill.name}
-
-${skill.description}
-
-## Rules & Constraints
-${skill.rules || 'Follow standard workspace safety rules.'}
-
-## Instructions
-${skill.instructions}
-`;
-    return { filePath, content };
-  });
-
-  try {
-    await writeFilesToDisk(filesToWrite);
-  } catch (err) {
-    console.warn('[Skills Manager] Failed to write skill files to disk:', err);
-  }
+  setCache(skills);
+  writeSkillsFile(skills).catch((err) => console.warn('[Skills Manager] Could not save workspace skills to disk:', err));
 }
 
 /**

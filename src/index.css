@@ -3370,71 +3370,12 @@ button.related-task-title.is-link:focus-visible {
   border-color: #cbd5e1;
 }
 
-/* Gherkin brief & goals boxes inside Overview */
-.gherkin-brief-box {
-  padding: 0.55rem 0.7rem;
-  background: rgba(6, 182, 212, 0.05);
-  border: 1px solid rgba(6, 182, 212, 0.2);
-  border-radius: 5px;
-  font-size: 0.75rem;
-  color: var(--text-main);
-  line-height: 1.45;
-}
 
-.gherkin-brief-title {
-  font-weight: 700;
-  color: var(--accent-cyan);
-  margin-bottom: 0.35rem;
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-}
 
-.gherkin-brief-pre {
-  margin: 0;
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  font-family: var(--font-mono);
-  font-size: 0.74rem;
-  white-space: pre-wrap;
-  line-height: 1.45;
-}
 
-.goals-brief-box {
-  padding: 0.5rem 0.7rem;
-  background: rgba(139, 92, 246, 0.05);
-  border: 1px solid rgba(139, 92, 246, 0.2);
-  border-radius: 5px;
-}
 
-.goals-brief-title {
-  font-weight: 700;
-  color: var(--accent-violet);
-  margin-bottom: 0.25rem;
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
 
-.output-brief-box {
-  padding: 0.45rem 0.7rem;
-  background: rgba(245, 158, 11, 0.05);
-  border: 1px solid rgba(245, 158, 11, 0.2);
-  border-radius: 5px;
-}
 
-.output-brief-title {
-  font-weight: 700;
-  color: var(--accent-amber);
-  margin-bottom: 0.2rem;
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
 
 .brief-section-header {
   padding: 0.45rem 0.75rem;
@@ -5745,57 +5686,34 @@ button.related-task-title.is-link:focus-visible {
   font-size: 0.78rem;
 }
 
-/* Gherkin top card inside Steps & Actions */
-.ai-step-gherkin-card {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(16, 185, 129, 0.25);
-  border-radius: 5px;
-  overflow: hidden;
-  margin-bottom: 0.35rem;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
 
-.ai-step-gherkin-card:hover {
-  border-color: rgba(16, 185, 129, 0.4);
-  background: rgba(16, 185, 129, 0.025);
-}
 
-.ai-step-gherkin-header {
-  display: flex;
+
+
+
+
+
+
+
+/* Overview tab: link to the latest run's TASK_CONTEXT.md bible */
+.bible-deep-link {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0.32rem 0.55rem;
+  gap: 0.3rem;
+  margin-bottom: 0.45rem;
+  padding: 0.12rem 0.45rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--accent-emerald);
+  background: rgba(16, 185, 129, 0.06);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 4px;
   cursor: pointer;
-  user-select: none;
 }
 
-.ai-step-gherkin-body {
-  padding: 0.45rem 0.6rem 0.6rem 0.6rem;
-  border-top: 1px solid rgba(16, 185, 129, 0.15);
-  background: rgba(0, 0, 0, 0.28);
-}
-
-[data-theme="light"] .ai-step-gherkin-card {
-  background: #ffffff;
-  border: 1px solid rgba(16, 185, 129, 0.35);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
-}
-
-[data-theme="light"] .ai-step-gherkin-header {
-  background: #ffffff;
-}
-
-[data-theme="light"] .ai-step-gherkin-header:hover {
-  background: #f8fafc;
-}
-
-[data-theme="light"] .ai-step-gherkin-body {
-  background: #f8fafc;
-  border-top: 1px solid rgba(16, 185, 129, 0.18);
-}
-
-[data-theme="light"] .gherkin-brief-pre {
-  color: var(--text-main);
+.bible-deep-link:hover {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.45);
 }
 
 /* Interactive Widget Containers */

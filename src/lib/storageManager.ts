@@ -8,7 +8,10 @@ import {
 import { INITIAL_PROJECTS } from './demoData';
 import { callMcpTool } from './mcpClient';
 import { bridgeClient } from './bridgeClient';
-import summaryAgentSkillRaw from '../../docs/skills/summary-agent/SKILL.md?raw';
+import humanAssistantSkillRaw from '../../docs/skills/human-assistant/SKILL.md?raw';
+import contextAnalyzerSkillRaw from '../../docs/skills/assistant-context-analyzer/SKILL.md?raw';
+import todoBuilderSkillRaw from '../../docs/skills/assistant-todo-builder/SKILL.md?raw';
+import taskBriefSkillRaw from '../../docs/skills/task-brief/SKILL.md?raw';
 import managerAgentSkillRaw from '../../docs/skills/manager-agent/SKILL.md?raw';
 import workerAgentSkillRaw from '../../docs/skills/worker-agent/SKILL.md?raw';
 import cleanerAgentSkillRaw from '../../docs/skills/cleaner-agent/SKILL.md?raw';
@@ -20,164 +23,23 @@ const STORE_NAME = 'handles';
 const ROOT_HANDLE_KEY = 'root_directory_handle';
 const ROOT_HANDLE_NAME_KEY = 'ergo_root_folder_name';
 
-export const DEFAULT_HUMAN_ASSISTANT_SKILL = `---
-name: human-assistant
-description: Human-side workspace AI copilot. Directly reads, crafts, and writes TODO.md and workspace task lists in native markdown format on behalf of the user.
-argument-hint: <natural language instruction for task management>
-allowed-tools: Read Edit Write Grep Glob Bash AskUserQuestion
----
+/**
+ * Ergo's built-in skills (docs/skills), shipped with the app so every user has the current version. A user who edits
+ * their copy on disk (<storage root>/config/skills/<name>/SKILL.md) gets their own version instead: the bridge reports
+ * whether a disk copy differs from the default it seeded (`edited`).
+ */
+export const BUILTIN_SKILL_DOCS: Readonly<Record<string, string>> = {
+  'human-assistant': humanAssistantSkillRaw,
+  'assistant-context-analyzer': contextAnalyzerSkillRaw,
+  'assistant-todo-builder': todoBuilderSkillRaw,
+  'task-brief': taskBriefSkillRaw,
+  'manager-agent': managerAgentSkillRaw,
+  'worker-agent': workerAgentSkillRaw,
+  'cleaner-agent': cleanerAgentSkillRaw,
+  'hardener-agent': hardenerAgentSkillRaw,
+};
 
-# human-assistant — Human Workspace AI Copilot
-
-You are the **Human Workspace AI Assistant** in Ergo. You directly edit and write the project's \`TODO.md\` and workspace markdown files.
-
-You write directly in markdown format to the files — no JSON wrapping, no intermediaries, no syntax translation.
-
----
-
-## 🌟 CORE PRINCIPLE: HUMAN-SIDE FIRST
-
-You live and operate in the **Human Side** (\`TODO.md\`).
-
-1. **Always Assume Human Side FIRST**: Everything the user tells you—details, steps, features, requirements, subtasks—is written directly into \`TODO.md\` as tasks and subtasks first.
-2. **Comprehensive Task Lists**: Capture the user's full intent with clear, concrete subtasks in \`TODO.md\`.
-3. **Memory & Context Integration**: Durable architectural knowledge and concise task outcomes are preserved directly in local vector memory.
-
----
-
-## 🎯 OPERATIONAL MODES: TASK vs ARCHITECT
-
-The AI assistant operates in two distinct modes:
-
-### 1. Task Mode (Default)
-- **ONLY for a Single Task / Subtasks**: Dedicated exclusively to creating or modifying a single task and its subtasks. This is either the task the user has currently selected, or a different task they explicitly call out (such as creating a new task).
-- **Strict Isolation (ZERO BLEED-OVER)**: Confine your changes strictly to this single task. There must be **no bleed-over into other tasks** (do not reorder, edit, delete, or alter any other tasks in \`TODO.md\`).
-- **Flesh Out Prompt**: The user provides a basic prompt or idea; your job is to flesh it out into a complete, well-formed task with concrete domain-specific subtask steps.
-
-### 2. Architect Mode
-- **ALWAYS for Numerous Tasks**: Specifically designed for creating or modifying multiple tasks across the workspace.
-- **Higher-Level Scope**: NEVER assume it is confined to a single task; always assume that the instructions the user gives are higher-level, broader architectural goals that should span multiple tasks, subtasks, and roadmap milestones.
-- **Extrapolate Broadly**: Break down the user's high-level vision into structured categories and tasks with clear domain subtasks.
-- **Strict Markdown Hierarchy**: Always maintain correct markdown list formatting (numbered tasks \`1.\`, \`2.\`, 4-space indented subtasks \`    - \`, and category headers \`##\`).
-
----
-
-## Direct Markdown Editing Flow (STRICTLY FOLLOW)
-
-1. Read TODO.md                  (Inspect current tasks, numbering, categories)
-2. Check Mode & Interpret Intent (Task mode = single task; Architect mode = multi-task roadmap)
-3. Write TODO.md                 (Apply changes directly in markdown — Human side FIRST)
-4. Report Summary                (Concise report with clickable line pointers)
-
----
-
-## TODO.md Markdown Formatting Rules
-
-Use 4 spaces (not tabs) for subtask indentation. The exact format:
-
-\`\`\`markdown
-## Category Name
-
-1. Task title
-    - Subtask step one
-    - Subtask step two
-2. Another task
-3. Single atomic task with no subtasks
-\`\`\`
-
-Key rules:
-- **Numbered lists** (\`1.\`, \`2.\`, etc.) for tasks. Restart numbering at 1 within each category.
-- **4-space-indented dash** (\`    - \`) for subtasks under a task.
-- **Headings** (\`##\`) for category grouping (optional — omit if no categories exist).
-- **Strikethrough** (\`~~Task title~~\`) to mark a task as done.
-- **\`**human review**\`** prefix on subtasks that need manual review.
-- Preserve any existing header comments (\`<!-- ... -->\`).
-- Keep blank lines between categories, not between tasks within the same category.
-
----
-
-## Deletion Rule (CRITICAL)
-
-You **MUST NEVER** delete tasks without explicit user permission.
-
----
-
-## Direct File Output Format
-
-When editing files, output the markdown directly into TODO.md:
-
-\`\`\`markdown:TODO.md
-# TODO.md content directly in markdown
-\`\`\`
-`;
-
-export const DEFAULT_ASSISTANT_CONTEXT_ANALYZER_SKILL = `---
-name: assistant-context-analyzer
-description: AI Step 1: Skims existing headers, categories, and tasks against the user query to extract relevant context, structures to copy, or data references in under 200 words.
-argument-hint: <user query and current workspace files>
-allowed-tools: Read Grep
----
-
-# assistant-context-analyzer — Step 1: Context & Relevance Analyzer
-
-You are **AI 1** in the Ergo Human AI Assistant 3-stage pipeline.
-
-Your sole responsibility is to analyze the user's query in the context of the existing \`TODO.md\` workspace tasks and produce a concise briefing for **AI 2 (TODO Builder)**.
-
-1. **Skim Existing Headers & Tasks**: Inspect current categories (\`## ...\`), task titles (\`1. ...\`), subtasks (\`    - ...\`), and task briefs.
-2. **Interpret Mode & Scope**:
-   - **Task Mode**: ONLY for creating or modifying a single task/subtasks — either the task currently selected, or a different task explicitly called out (e.g. creating a new task). Strict isolation, zero bleed-over.
-   - **Architect Mode**: ALWAYS for creating or modifying numerous tasks. Treat user instructions as higher-level goals spanning multiple tasks, subtasks, and roadmap milestones.
-3. **Extract Relevant Context**:
-   - Relevant existing tasks or category structures that should be mirrored or copied.
-   - Relevant data, references, or IDs mentioned in existing tasks or briefs.
-   - Category placement recommendations and next available task number.
-4. **Output Constraint**: Keep your final analysis **short and sweet — no more than 200 words total**.
-`;
-
-export const DEFAULT_ASSISTANT_TODO_BUILDER_SKILL = `---
-name: assistant-todo-builder
-description: AI Step 2: Takes the user query, the context analysis from AI 1, and the current TODO.md to build or edit the TODO.md task structure with strict markdown formatting.
-argument-hint: <user query, AI 1 context, and current TODO.md>
-allowed-tools: Read Edit Write
----
-
-# assistant-todo-builder — Step 2: TODO.md Task Builder
-
-You are **AI 2** in the Ergo Human AI Assistant 3-stage pipeline.
-
-Your sole responsibility is to take the user's request, the **Context Analysis from AI 1**, the active mode (**Task** or **Architect**), and the current \`TODO.md\` file, and generate the **complete, updated \`TODO.md\`** in native markdown.
-
-- **Task Mode (Default)**: ONLY for creating or modifying a single task and its subtasks — either the currently selected task, or a specific task explicitly called out (e.g. creating a new task). Confine all modifications strictly to that single task with ZERO bleed-over into other tasks.
-- **Architect Mode**: ALWAYS for creating or modifying numerous tasks. Never assume it is confined to a single task, treating instructions as higher-level architectural workflows spanning multiple tasks and roadmap milestones.
-- **Strict Formatting**: 4 spaces for subtask indentation (\`    - \`), numbered lists (\`1.\`), category headers (\`##\`), and never truncate output early.
-`;
-
-export const DEFAULT_ASSISTANT_CONTEXT_SYNCER_SKILL = `---
-name: assistant-context-syncer
-description: AI Step 3: Synchronizes technical task briefs and drafts/edits rich Overviews for all new or modified tasks.
-argument-hint: <updated TODO.md, AI 1 context, and current briefs>
-allowed-tools: Read Edit Write
----
-
-# assistant-context-syncer — Step 3: Context Syncer & Overview Drafter
-
-You are **AI 3** in the Ergo Human AI Assistant 3-stage pipeline.
-
-Your sole responsibility is to take the **updated \`TODO.md\`** produced by AI 2, the **Context Analysis from AI 1**, and current task briefs, and generate the updated briefs.
-
-1. Ensure 1-to-1 paired \`### N. Task Title\` sections matching \`TODO.md\` order and numbering.
-2. For all created/modified tasks, draft rich \`Overview\`s detailing Done-State, In Context, and Seams.
-3. Keep standard section schema with Status, Overview, Build & Verification, and Completion.
-`;
-
-// Pipeline skill defaults are bundled straight from docs/skills via Vite raw imports so the
-// on-disk fallback can never drift from the documented prompt.
-export const DEFAULT_SUMMARY_AGENT_SKILL = summaryAgentSkillRaw;
-export const DEFAULT_MANAGER_AGENT_SKILL = managerAgentSkillRaw;
-export const DEFAULT_WORKER_AGENT_SKILL = workerAgentSkillRaw;
-export const DEFAULT_CLEANER_AGENT_SKILL = cleanerAgentSkillRaw;
-export const DEFAULT_HARDENER_AGENT_SKILL = hardenerAgentSkillRaw;
+export const DEFAULT_HUMAN_ASSISTANT_SKILL = humanAssistantSkillRaw;
 
 /**
  * Open IndexedDB database for persisting FileSystemDirectoryHandle
@@ -923,9 +785,11 @@ export class StorageManager {
   }
 
   /**
-   * Load Skill Document (config/skills/<skillName>/SKILL.md)
+   * A skill's text: the user's own copy when they edited it on disk (config/skills/<skillName>/SKILL.md), else Ergo's
+   * built-in version. A skill Ergo doesn't ship comes from disk only. Null when there is neither.
    */
   public async loadSkillDoc(skillName = 'human-assistant'): Promise<string | null> {
+    const builtin = BUILTIN_SKILL_DOCS[skillName] ?? null;
     try {
       const res = await this.apiFetch('/api/skills/read', {
         method: 'POST',
@@ -934,102 +798,26 @@ export class StorageManager {
       });
       if (res.ok) {
         const data = await res.json();
-        if (data.content && !data.content.includes('Strict JSON Output Schema') && !data.content.includes('createdTasks')) {
-          try {
-            localStorage.setItem(`ergo_skill_${skillName}`, data.content);
-          } catch {}
-          return data.content;
-        }
+        const content = typeof data.content === 'string' && data.content.trim() ? data.content : null;
+        // `edited` comes from the bridge (true only for a copy the user changed); older bridges don't report it.
+        if (content && (data.edited === true || !builtin)) return content;
       }
     } catch {}
-
-    // Fallback to Filesystem MCP
-    try {
-      const mcpRes = await callMcpTool('mcp-filesystem', 'read_file', {
-        path: `config/skills/${skillName}/SKILL.md`
-      });
-      if (mcpRes.success && mcpRes.data?.content) {
-        if (!mcpRes.data.content.includes('Strict JSON Output Schema') && !mcpRes.data.content.includes('createdTasks')) {
-          try {
-            localStorage.setItem(`ergo_skill_${skillName}`, mcpRes.data.content);
-          } catch {}
-          return mcpRes.data.content;
-        }
-      }
-    } catch {}
-
-    // Fallback to localStorage only if it doesn't contain outdated JSON schemas
-    const cached = localStorage.getItem(`ergo_skill_${skillName}`);
-    if (cached) {
-      if (cached.includes('Strict JSON Output Schema') || cached.includes('createdTasks')) {
-        try {
-          localStorage.removeItem(`ergo_skill_${skillName}`);
-        } catch {}
-      } else {
-        return cached;
-      }
-    }
-
-    let fallbackContent: string | null = null;
-    if (skillName === 'human-assistant') {
-      fallbackContent = DEFAULT_HUMAN_ASSISTANT_SKILL;
-    } else if (skillName === 'assistant-context-analyzer') {
-      fallbackContent = DEFAULT_ASSISTANT_CONTEXT_ANALYZER_SKILL;
-    } else if (skillName === 'assistant-todo-builder') {
-      fallbackContent = DEFAULT_ASSISTANT_TODO_BUILDER_SKILL;
-    } else if (skillName === 'assistant-context-syncer') {
-      fallbackContent = DEFAULT_ASSISTANT_CONTEXT_SYNCER_SKILL;
-    } else if (skillName === 'summary-agent') {
-      fallbackContent = DEFAULT_SUMMARY_AGENT_SKILL;
-    } else if (skillName === 'manager-agent') {
-      fallbackContent = DEFAULT_MANAGER_AGENT_SKILL;
-    } else if (skillName === 'worker-agent') {
-      fallbackContent = DEFAULT_WORKER_AGENT_SKILL;
-    } else if (skillName === 'cleaner-agent') {
-      fallbackContent = DEFAULT_CLEANER_AGENT_SKILL;
-    } else if (skillName === 'hardener-agent') {
-      fallbackContent = DEFAULT_HARDENER_AGENT_SKILL;
-    }
-
-    if (fallbackContent) {
-      try {
-        localStorage.setItem(`ergo_skill_${skillName}`, fallbackContent);
-      } catch {}
-      // Auto-save to local disk so the user immediately has the file on disk to see and edit
-      this.saveSkillDoc(skillName, fallbackContent).catch(() => {});
-      return fallbackContent;
-    }
-
-    return null;
+    return builtin;
   }
 
-  /**
-   * Save Skill Document (config/skills/<skillName>/SKILL.md)
-   */
-  public async saveSkillDoc(skillName = 'human-assistant', content: string): Promise<boolean> {
-    try {
-      localStorage.setItem(`ergo_skill_${skillName}`, content);
-    } catch {}
-
-    let saved = false;
+  /** Writes the user's own version of a skill to disk (config/skills/<skillName>/SKILL.md). */
+  public async saveSkillDoc(skillName: string, content: string): Promise<boolean> {
     try {
       const res = await this.apiFetch('/api/skills/write', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ skillName, content })
       });
-      if (res.ok) saved = true;
-    } catch {}
-
-    try {
-      const mcpRes = await callMcpTool('mcp-filesystem', 'write_file', {
-        path: `config/skills/${skillName}/SKILL.md`,
-        content
-      });
-      if (mcpRes.success) saved = true;
-    } catch {}
-
-    return saved;
+      return res.ok;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -1045,11 +833,10 @@ export class StorageManager {
           if (handle.kind === 'directory') {
             const projectDirHandle = handle as FileSystemDirectoryHandle;
             const todoMd = (await readFileTextFromDir(projectDirHandle, 'TODO.md')) || '';
-            const agentMd = (await readFileTextFromDir(projectDirHandle, 'AGENT_CONTEXT.md')) || '';
             const swimLanes: Array<{ id: string; title: string; filePath: string; markdown: string }> = [];
 
             for await (const [fileName, fileHandle] of (projectDirHandle as any).entries()) {
-              if (fileHandle.kind === 'file' && fileName.endsWith('.md') && fileName !== 'AGENT_CONTEXT.md') {
+              if (fileHandle.kind === 'file' && fileName.endsWith('.md')) {
                 const content = (await readFileTextFromDir(projectDirHandle, fileName)) || '';
                 const title = fileName === 'TODO.md' ? 'Human Workspace' : fileName.replace(/\.md$/i, '').replace(/[-_]/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
                 swimLanes.push({
@@ -1083,7 +870,6 @@ export class StorageManager {
               folderPath: `projects/${name}`,
               todoFilePath: `projects/${name}/TODO.md`,
               todoMarkdown: todoMd,
-              agentContextMarkdown: agentMd,
               runningJobsDoc,
               swimLanes,
               connectedMcps: ['mcp-filesystem', 'mcp-fetch', 'mcp-git', 'mcp-github', 'mcp-slack']
@@ -1190,8 +976,7 @@ export class StorageManager {
    */
   public async createProjectOnDisk(
     folderPath: string,
-    todoContent: string,
-    agentContextContent: string
+    todoContent: string
   ): Promise<{ success: boolean; error?: string }> {
     const initialJobs = JSON.stringify({
       version: 1,
@@ -1237,7 +1022,7 @@ export class StorageManager {
       const res = await this.apiFetch('/api/projects/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folderPath, todoContent, agentContextContent })
+        body: JSON.stringify({ folderPath, todoContent })
       });
       if (res.ok) {
         return { success: true };

@@ -1,3 +1,5 @@
+import { getPref, setPref } from './userPrefs';
+
 export interface ScheduledJob {
   id: string;
   taskId: string | number;
@@ -9,11 +11,12 @@ export interface ScheduledJob {
   lastRunAt?: string;
 }
 
+/** Kept on the user's machine with their other preferences (userPrefs.ts). */
 const STORAGE_KEY = 'ergo_scheduled_tasks';
 
 export function getScheduledJobs(): ScheduledJob[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = getPref(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
@@ -25,7 +28,7 @@ export function getScheduledJobs(): ScheduledJob[] {
 
 export function saveScheduledJobs(jobs: ScheduledJob[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs));
+    setPref(STORAGE_KEY, JSON.stringify(jobs));
   } catch (err) {
     console.error('[Scheduler] Failed to save scheduled jobs:', err);
   }

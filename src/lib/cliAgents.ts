@@ -1,5 +1,6 @@
 import type { AIProviderId, CliAgentPreset, CliAgentConfig, UserApiKey, TaskItem, AgentContextItem, EffortLevel, PermissionLevel } from '../types';
 import { hasUsableOverview } from './overviewUtils';
+import { isTaskBrief } from './agentPipeline/taskBrief';
 
 export const CLI_AGENT_PRESETS: CliAgentPreset[] = [
   {
@@ -117,7 +118,13 @@ export function getEffectiveCliAgent(key?: UserApiKey | null, fallback?: CliAgen
   };
 }
 
-/** Task content shared by every CLI prompt: title, category, notes, objectives, checklist, Gherkin criteria. */
+/** Task content shared by every CLI prompt: title, category, notes, the working brief (or the user's overview), checklist. */
+/** The overview a run generated or the user wrote (trimmed); undefined for none or text merely copied from the task. */
+function usableOverview(brief: AgentContextItem | undefined): string | undefined {
+  const text = hasUsableOverview(brief) ? (brief?.overview || brief?.brief || '').trim() : '';
+  return text || undefined;
+}
+
 function buildTaskContentSections(task: TaskItem, brief?: AgentContextItem, heading = 'TASK TO COMPLETE'): string[] {
   const sections: string[] = [];
 
@@ -137,9 +144,14 @@ function buildTaskContentSections(task: TaskItem, brief?: AgentContextItem, head
   }
 
   // Only an overview a run generated (or the user wrote) — never text merely copied from the task.
-  const overview = hasUsableOverview(brief) ? brief?.overview || brief?.brief : undefined;
-  if (overview && overview.trim()) {
-    sections.push(`OBJECTIVES & CONTEXT:\n${overview.trim()}`);
+  const overview = usableOverview(brief);
+  if (overview && isTaskBrief(overview)) {
+    sections.push(
+      `WORKING BRIEF (your spec: Ergo's Summary agent wrote it for you from this task and the related tasks and notes in this project; ` +
+      `work from it, and where the code contradicts it, trust the code and say so in your completion record):\n${overview}`
+    );
+  } else if (overview) {
+    sections.push(`OBJECTIVES & CONTEXT:\n${overview}`);
   }
 
   if (task.subtasks && task.subtasks.length > 0) {
@@ -149,19 +161,7 @@ function buildTaskContentSections(task: TaskItem, brief?: AgentContextItem, head
     sections.push(`CHECKLIST / SUBTASKS:\n${subtaskLines}`);
   }
 
-  // Extract Gherkin criteria if embedded in brief
-  const gherkin = extractGherkin(overview);
-  if (gherkin) {
-    sections.push(`ACCEPTANCE CRITERIA (GHERKIN):\n${gherkin}`);
-  }
-
   return sections;
-}
-
-function extractGherkin(text: string | undefined): string | null {
-  const match = text ? text.match(/```gherkin([\s\S]*?)```/) : null;
-  const body = match?.[1]?.trim();
-  return body ? body : null;
 }
 
 /** The task's own content (title, category, objectives, checklist, criteria) as plain text, e.g. for the file scout. */
@@ -215,6 +215,11 @@ export interface CliRunPromptContext {
    */
   relatedContext?: string;
   /**
+   * One-line index of the same related tasks (formatRelatedSourcesLine). A working brief already carries their facts,
+   * so prompts built on one show this line instead of relatedContext.
+   */
+  relatedSources?: string;
+  /**
    * The agent's folder has a ready code index: the prompts tell it to find code with the code_search tool first (on
    * the ergo-memory MCP server). `codeSearchPath`: the folder, for CLIs whose server can't tell the agent's cwd.
    */
@@ -241,7 +246,7 @@ const MAX_COMPLETION_IN_QA_PROMPT = 12_000;
 const MAX_OVERVIEW_IN_WORKER_PROMPT = 4_000;
 const MAX_MEMORY_HITS_IN_PROMPT = 4;
 const MAX_MEMORY_HIT_CHARS = 240;
-const MAX_RELATED_CONTEXT_CHARS = 1_600;
+const MAX_RELATED_CONTEXT_CHARS = 2_100;
 
 function runFile(ctx: Pick<CliRunPromptContext, 'runDirRel'>, name: string): string {
   return `${ctx.runDirRel.replace(/\/+$/, '')}/${name}`;
@@ -318,15 +323,22 @@ function buildLikelyFilesSection(ctx: Pick<CliRunPromptContext, 'codeSearchAvail
   ];
 }
 
-/** RELATED TASKS section (empty when the run has no selected related tasks). */
-function buildRelatedSection(ctx: Pick<CliRunPromptContext, 'relatedContext'>): string[] {
+/**
+ * RELATED TASKS section (empty when the run has no selected related tasks). Under a working brief, which already
+ * carries their facts, only the one-line index of its sources.
+ */
+function buildRelatedSection(ctx: Pick<CliRunPromptContext, 'relatedContext' | 'relatedSources'>, brief?: AgentContextItem): string[] {
+  const sources = (ctx.relatedSources || '').trim();
+  if (sources && isTaskBrief(usableOverview(brief))) return [`BRIEF SOURCES (related tasks and notes the brief was built from): ${sources}`];
   const text = (ctx.relatedContext || '').trim();
   if (!text) return [];
   const capped = text.length > MAX_RELATED_CONTEXT_CHARS ? `${text.slice(0, MAX_RELATED_CONTEXT_CHARS - 1)}…` : text;
   return [
     `RELATED TASKS (context from this project — read before starting):\n` +
-    `Other tasks in this project judged useful context for this one (shared area, dependency, prior work, or a conflict to avoid). ` +
-    `Reference only — they are not part of this task's requirements.\n${capped}`,
+    `Tasks and notes from this project that were judged to explain this one. Read this task in their light, especially when its own text is short: ` +
+    `open items here that this task points at are most likely what the user means by it, done work shows what exists to reuse, ` +
+    `and notes and pending tasks are constraints to respect (e.g. something that must not be removed yet). ` +
+    `Do not take on separate work that merely shares the area.\n${capped}`,
   ];
 }
 
@@ -355,9 +367,9 @@ export function buildManagerCliPrompt(task: TaskItem, brief: AgentContextItem | 
   const completionFile = runFile(ctx, 'completion.md');
   const maxWorkers = Math.min(MAX_DELEGATED_WORKERS, Math.max(0, Math.floor(ctx.maxWorkers || 0)));
   const canDelegate = maxWorkers >= 2;
-  const hasGherkin = Boolean(extractGherkin(brief?.overview || brief?.brief));
+  const keyedToBrief = isTaskBrief(usableOverview(brief));
 
-  sections.push(...buildRelatedSection(ctx));
+  sections.push(...buildRelatedSection(ctx, brief));
 
   sections.push(
     `YOUR ROLE:\n` +
@@ -375,7 +387,9 @@ export function buildManagerCliPrompt(task: TaskItem, brief: AgentContextItem | 
     (ctx.codeSearchAvailable
       ? `1. Find the relevant code with code_search (see FINDING CODE) and read enough around it to understand the flow; check the project's conventions and how tests/build/lint are run before changing anything.\n`
       : `1. Inspect the repository first (structure, conventions, existing code, how tests/build/lint are run) before changing anything.\n`) +
-    `2. Implement every change the task needs so that all objectives${hasGherkin ? ', acceptance criteria (Gherkin scenarios)' : ''} and checklist items are satisfied. Follow the project's existing style.\n` +
+    (keyedToBrief
+      ? `2. Implement what the working brief's Scope and "Done when" require, and every checklist item, within its Constraints. Follow the project's existing style.\n`
+      : `2. Implement every change the task needs so that all objectives and checklist items are satisfied. Follow the project's existing style.\n`) +
     `3. Verify your work: run the relevant tests, build, type-check and/or lint commands that exist in this project and fix what fails. If nothing can be run, verify by re-reading the changed code against the requirements.\n` +
     `4. Write the completion record (see FINAL STEP). That is the last thing you do.\n` +
     `Do not ask the user for confirmation of the plan — proceed autonomously. Only stop to ask if the task is genuinely impossible to do without information you cannot find.`
@@ -467,7 +481,7 @@ export function buildWorkerCliPrompt(
     sections.push(`OVERALL TASK CONTEXT (for background only — do not work on anything outside your piece):\n${excerpt}`);
   }
 
-  sections.push(...buildRelatedSection(ctx));
+  sections.push(...buildRelatedSection(ctx, brief));
 
   sections.push(
     `RULES:\n` +
@@ -500,7 +514,7 @@ export function buildQaCliPrompt(
 ): string {
   const qaFile = runFile(ctx, 'qa.md');
   const completionFile = runFile(ctx, 'completion.md');
-  const hasGherkin = Boolean(extractGherkin(brief?.overview || brief?.brief));
+  const keyedToBrief = isTaskBrief(usableOverview(brief));
   const sections: string[] = [];
 
   sections.push(
@@ -540,7 +554,7 @@ export function buildQaCliPrompt(
     `HOW TO VERIFY:\n` +
     `1. Inspect the changed files listed in the completion record (and anything else the task touches) and compare them with the task requirements.\n` +
     `2. Run the project's relevant checks that exist — tests, build, type-check, lint — and note the exact commands and results. Running them may create build output; that's fine, but do not change source files.\n` +
-    `3. Check every ${hasGherkin ? 'acceptance criterion (each Gherkin scenario) and ' : ''}checklist item, and whether each claim in the completion record is true (files really exist and contain what is claimed, commands really pass).\n` +
+    `3. Check every ${keyedToBrief ? '"Done when" item and Constraint in the working brief and every ' : ''}checklist item, and whether each claim in the completion record is true (files really exist and contain what is claimed, commands really pass).\n` +
     `4. Be strict but fair: FAIL only for real problems (a requirement not met, a broken build/test, a bug, a false claim, missing files). Style nits alone are not a failure; mention them as notes.\n` +
     `Work autonomously; do not ask the user questions.`
   );

@@ -1,8 +1,7 @@
 /**
  * Session Retrospective — Distills durable project knowledge from task execution.
  *
- * Instead of dumping raw build transcripts and verbose event logs into AGENT_CONTEXT.md,
- * this module extracts only high-signal lessons — architectural decisions, bug fixes,
+ * Instead of keeping raw build transcripts and verbose event logs, this module extracts only high-signal lessons — architectural decisions, bug fixes,
  * gotchas, and reusable patterns — and stores them as searchable vector memory chunks.
  *
  * Called by the Logger at the end of each successful task execution.
@@ -44,7 +43,7 @@ export interface RetrospectiveInput {
   taskId: string | number;
   taskTitle: string;
   projectId?: string;
-  /** The Gherkin brief / overview that scoped the task */
+  /** The working brief / overview that scoped the task */
   overview: string;
   /** Build & verification log (condensed from the bible) */
   buildLog: string;
@@ -52,8 +51,8 @@ export interface RetrospectiveInput {
   completion: string;
   /** Files created or modified during execution */
   createdFiles: string[];
-  /** Whether all Gherkin scenarios passed */
-  allScenariosPass: boolean;
+  /** Whether every "Done when" criterion of the working brief passed */
+  allCriteriaPass: boolean;
   /** QA verdict from the hardener (if run) */
   qaVerdict?: string;
   /** Event log excerpt (last N events from the bible) */
@@ -160,7 +159,7 @@ function extractLessons(input: RetrospectiveInput): Learning[] {
 
   const summaryParts = [
     `Task: "${input.taskTitle}"`,
-    input.allScenariosPass ? 'All scenarios passed.' : 'Execution completed.',
+    input.allCriteriaPass ? 'All criteria passed.' : 'Execution completed.',
     conciseOutput ? `Output: ${conciseOutput.slice(0, 300)}` : '',
     input.createdFiles.length > 0
       ? `Files: ${input.createdFiles.slice(0, 10).join(', ')}${input.createdFiles.length > 10 ? ` (+${input.createdFiles.length - 10} more)` : ''}`
@@ -290,57 +289,6 @@ export async function runSessionRetrospective(input: RetrospectiveInput): Promis
   if (taskChunks.length > 0) stored += await addChunks(taskChunks);
 
   console.log(`[SessionRetrospective] Stored ${stored} new chunk(s) in vector memory`);
-  return stored;
-}
-
-/**
- * Migrate existing AGENT_CONTEXT.md items into the vector store.
- *
- * Called during the transition period to seed the vector memory with
- * historical task data. Keyed deterministically on internal task ID and project ID.
- */
-export async function migrateAgentContextToMemory(
-  items: Array<{
-    id: string;
-    title: string;
-    overview: string;
-    buildAndVerification?: string;
-    completion?: string;
-    projectId?: string;
-  }>
-): Promise<number> {
-  if (items.length === 0) return 0;
-  console.log(`[SessionRetrospective] Migrating ${items.length} AGENT_CONTEXT items to vector memory…`);
-
-  const chunks = items
-    .filter((item) => item.overview && item.overview.trim().length > 20)
-    .map((item) => {
-      const normTaskId = String(item.id).replace(/^brief_/, '');
-      const projId = item.projectId || 'default';
-      // Combine overview + completion into a single searchable chunk
-      const text = [
-        `Task: ${item.title}`,
-        item.overview,
-        item.completion ? `Completion: ${item.completion.slice(0, 500)}` : '',
-      ]
-        .filter(Boolean)
-        .join('\n');
-
-      return {
-        id: `migrated_${projId}_${normTaskId}`,
-        namespace: 'tasks' as MemoryNamespace,
-        text,
-        metadata: {
-          taskId: normTaskId,
-          taskTitle: item.title,
-          projectId: item.projectId,
-          source: 'migration',
-        } as ChunkMetadata,
-      };
-    });
-
-  const stored = await addChunks(chunks);
-  console.log(`[SessionRetrospective] Migration complete: ${stored} chunks stored`);
   return stored;
 }
 

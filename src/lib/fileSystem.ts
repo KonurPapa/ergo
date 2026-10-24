@@ -83,11 +83,10 @@ export async function readFilesFromDisk(
  */
 export async function createProjectOnDisk(
   folderPath: string,
-  todoContent: string,
-  agentContextContent: string = ''
+  todoContent: string
 ): Promise<CreateProjectDiskResult> {
   try {
-    const res = await storageManager.createProjectOnDisk(folderPath, todoContent, agentContextContent);
+    const res = await storageManager.createProjectOnDisk(folderPath, todoContent);
     if (!res.success) {
       return {
         success: false,

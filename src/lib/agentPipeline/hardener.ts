@@ -12,7 +12,7 @@ import { loadPipelineSkill } from './skills';
 
 export interface HardenerResult {
   verdict: 'pass' | 'fail' | 'inconclusive';
-  failures: Array<{ scenario: string; diagnostics: string }>;
+  failures: Array<{ criterion: string; diagnostics: string }>;
   evidence: string;
   usage: TokenUsage;
 }
@@ -38,8 +38,8 @@ export async function runHardener(
     agentRole: 'hardener',
     title: 'Hardener: QA / Eval Harness',
     detail: taskKind === 'coding'
-      ? 'Acting as a human QA engineer: running the system through its UI/CLI to prove the scenarios pass…'
-      : 'Acting as the human recipient: verifying every Then/And clause against the produced artifacts…',
+      ? 'Acting as a human QA engineer: running the system through its UI/CLI to prove every "Done when" criterion holds…'
+      : 'Acting as the human recipient: verifying every "Done when" criterion against the produced artifacts…',
     status: 'running'
   });
 
@@ -91,11 +91,11 @@ export async function runHardener(
     if (v === 'pass' || v === 'fail' || v === 'inconclusive') verdict = v;
     failures = Array.isArray(parsed.failures)
       ? parsed.failures
-          .map((f: any) => ({ scenario: String(f?.scenario ?? 'unspecified scenario'), diagnostics: String(f?.diagnostics ?? '') }))
+          .map((f: any) => ({ criterion: String(f?.criterion ?? 'unspecified criterion'), diagnostics: String(f?.diagnostics ?? '') }))
           .filter((f: { diagnostics: string }) => f.diagnostics.trim().length > 0 || verdict === 'fail')
       : [];
     evidence = typeof parsed.evidence === 'string' ? parsed.evidence : JSON.stringify(parsed.evidence ?? '');
-    if (verdict === 'fail' && failures.length === 0) failures = [{ scenario: 'unspecified', diagnostics: evidence || 'Hardener reported fail without details.' }];
+    if (verdict === 'fail' && failures.length === 0) failures = [{ criterion: 'unspecified', diagnostics: evidence || 'Hardener reported fail without details.' }];
   } else {
     evidence = result.error ? `Hardener call failed: ${result.error}` : result.text.slice(0, 1500);
   }
@@ -103,7 +103,7 @@ export async function runHardener(
   bible.appendEvent({
     actor: 'hardener',
     kind: verdict === 'fail' ? 'qa_fail' : 'qa_pass',
-    text: `${verdict.toUpperCase()}${failures.length ? ` — ${failures.map((f) => `[${f.scenario}] ${f.diagnostics}`).join(' || ')}` : ''}${evidence ? ` | evidence: ${evidence.slice(0, 700)}` : ''}`
+    text: `${verdict.toUpperCase()}${failures.length ? ` — ${failures.map((f) => `[${f.criterion}] ${f.diagnostics}`).join(' || ')}` : ''}${evidence ? ` | evidence: ${evidence.slice(0, 700)}` : ''}`
   });
   await bible.persist();
   ctx.emit({
@@ -111,7 +111,7 @@ export async function runHardener(
     stage: 'hardener',
     agentRole: 'hardener',
     title: verdict === 'pass' ? 'Hardener: QA Passed' : verdict === 'fail' ? `Hardener: QA Failed (${failures.length} issue${failures.length === 1 ? '' : 's'})` : 'Hardener: QA Inconclusive',
-    detail: (failures.length > 0 ? failures.map((f) => `✗ ${f.scenario}: ${f.diagnostics}`).join('\n') + '\n\n' : '') + evidence.slice(0, 800),
+    detail: (failures.length > 0 ? failures.map((f) => `✗ ${f.criterion}: ${f.diagnostics}`).join('\n') + '\n\n' : '') + evidence.slice(0, 800),
     status: verdict === 'pass' ? 'success' : 'warning',
     usage: { ...usage }
   });

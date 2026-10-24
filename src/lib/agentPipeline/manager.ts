@@ -2,12 +2,12 @@
  * Step 3 — Manager: decomposition → fan-out workers → verification.
  *
  * The manager is a deterministic harness with LLM calls only at task boundaries:
- *  1. Decompose (one JSON call, read-only tools) the Gherkin scenarios into puzzle pieces.
+ *  1. Decompose (one JSON call, read-only tools) the working brief's "Done when" criteria into puzzle pieces.
  *  2. Schedule pieces in dependency waves under the concurrency limit; each piece runs in an
  *     isolated worker sub-agent with a clean context (shared bible prefix + one piece contract),
  *     scoped writes, and file locks. The first worker of a run is started alone to warm the
  *     provider cache before the rest fan out.
- *  3. Verify every scenario against the workspace + event log (JSON), spawning remediation pieces
+ *  3. Verify every criterion against the workspace + event log (JSON), spawning remediation pieces
  *     once if needed.
  *
  * Nothing volatile (timestamps, attempt numbers, run ids) is placed in the cached system blocks;
@@ -27,7 +27,7 @@ import {
   resolveRoleTarget,
   throwIfAborted
 } from './contracts';
-import { type BibleStore, type FileLockRegistry, normalizePath } from './bible';
+import { type BibleStore, type FileLockRegistry, doneWhenCriteria, normalizePath } from './bible';
 import { runToolLoop } from './providerLoop';
 import { createToolExecutor } from './toolExecutor';
 import { loadPipelineSkill } from './skills';
@@ -36,13 +36,13 @@ import { verifyDeliverableHealth } from './verifier';
 export interface ManagerRunResult {
   pieces: PuzzlePiece[];
   createdFiles: string[];
-  allScenariosPass: boolean;
+  allCriteriaPass: boolean;
   verificationSummary: string;
   usage: TokenUsage;
   usedToolCalling: boolean;
 }
 
-const PIECE_KINDS: PuzzlePieceKind[] = ['given', 'when', 'then', 'edge'];
+const PIECE_KINDS: PuzzlePieceKind[] = ['setup', 'build', 'verify', 'edge'];
 const MAX_PIECES = 12;
 
 /** How every API agent finds code (byte-stable; shared by the manager, worker and direct prompts). */
@@ -73,11 +73,11 @@ export const MANAGER_DIRECT_STABLE = `You are the Direct Implementation Agent (S
 You are executing a straightforward, standalone deliverable task directly without spawning sub-agents.
 
 YOUR MISSION:
-1. Review the TASK_CONTEXT bible (Gherkin acceptance criteria, goals, and output destination).
+1. Review the TASK_CONTEXT bible: its working brief (Goal, Scope, Known context, Constraints, Done when) is your whole spec.
 2. Call the write_file tool to write the complete, high-quality, fully functioning deliverable to the exact target destination.
 3. MANDATORY COMPLETENESS RULE:
    - Skeletons, placeholder bodies, empty canvases, or partial outlines are STRICTLY PROHIBITED.
-   - All checklist goals and acceptance scenarios MUST be fully implemented and working in the deliverable.
+   - Every Scope item and every "Done when" criterion MUST be fully implemented and working in the deliverable.
    - If the task is a game or interactive application, you must implement the full game loop, player rendering, keyboard input listeners (WASD/arrows), collision detection, scoring, and win states.
    - If the task is writing or research, provide full, finished content rather than placeholders or stubs.
 4. If the task is an HTML game, script, or page, include all HTML, CSS, and JavaScript in that file so it executes cleanly and independently in a browser without external CDN dependencies.
@@ -98,7 +98,7 @@ CRITICAL HARNESS RULES:
 ${CODE_SEARCH_RULE}`;
 
 export function isStraightforwardTask(bible: BibleStore): boolean {
-  const { metadata, subtasks, outputAs } = bible.sections;
+  const { metadata, subtasks, spec } = bible.sections;
   const taskKind = metadata.taskKind;
 
   // Non-coding tasks with small subtask count
@@ -111,8 +111,8 @@ export function isStraightforwardTask(bible: BibleStore): boolean {
     return true;
   }
 
-  // Standalone single-file deliverable patterns in outputAs or title
-  const outputText = (outputAs || '').toLowerCase();
+  // Standalone single-file deliverable patterns in the brief or title
+  const outputText = (spec || '').toLowerCase();
   const titleText = (bible.sections.title || '').toLowerCase();
   const isSingleFileDeliverable =
     /\.(html|htm|jsx|tsx|vue|svelte|py|sh|ts|js|md|json|css|sql|txt|csv|tsv|yaml|yml)\b/i.test(outputText) ||
@@ -151,7 +151,7 @@ export function extractTargetFilePaths(text: string): string[] {
   const matches = text.match(/(?:(?:[a-zA-Z]:[\\/]|~?\/)[\w.-]+(?:[\\/][\w.-]+)*\.[a-z0-9]+|projects\/[^\s`"'\\]+\.[a-z0-9]+|[^\s`"'\\]+\.(html|htm|jsx|tsx|vue|svelte|py|sh|ts|js|md|json|css|sql|txt|csv|tsv|yaml|yml|gd|tscn|tres))/gi);
   if (!matches) return [];
   const unique = Array.from(new Set(matches.map(normalizePath)));
-  return unique.filter((p) => !p.endsWith('TODO.md') && !p.endsWith('AGENT_CONTEXT.md') && !p.endsWith('TASK_CONTEXT.md') && !p.endsWith('FILE_LOCKS.md') && !p.endsWith('RUNNING_JOBS.json') && !p.endsWith('JOBS.json'));
+  return unique.filter((p) => !p.endsWith('TODO.md') && !p.endsWith('TASK_CONTEXT.md') && !p.endsWith('FILE_LOCKS.md') && !p.endsWith('RUNNING_JOBS.json') && !p.endsWith('JOBS.json'));
 }
 
 export function extractCodeBlocks(text: string): Array<{ lang: string; code: string }> {
@@ -161,7 +161,7 @@ export function extractCodeBlocks(text: string): Array<{ lang: string; code: str
   while ((m = regex.exec(text)) !== null) {
     const lang = (m[1] || '').trim().toLowerCase();
     const code = m[2] || '';
-    if (code.trim().length > 0 && !['json', 'gherkin'].includes(lang)) {
+    if (code.trim().length > 0 && lang !== 'json') {
       blocks.push({ lang, code: code.trim() });
     } else if (lang === 'json' && code.trim().length > 0) {
       try {
@@ -185,62 +185,19 @@ export function extractCodeBlocks(text: string): Array<{ lang: string; code: str
   return blocks;
 }
 
-// ─── Gherkin helpers ────────────────────────────────────────────────────────
+// ─── Criteria ───────────────────────────────────────────────────────────────
 
-export function extractScenarioTitles(gherkin: string): string[] {
-  const titles: string[] = [];
-  for (const line of gherkin.split('\n')) {
-    const m = line.match(/^\s*Scenario(?: Outline)?:\s*(.+?)\s*$/i);
-    if (m) titles.push(m[1]);
-  }
-  return titles;
+/** The working brief's "Done when" bullets as numbered criteria: C1, C2, … */
+export function briefCriteria(spec: string): Array<{ id: string; text: string }> {
+  return doneWhenCriteria(spec).map((text, i) => ({ id: `C${i + 1}`, text }));
 }
 
-/** Splits the Gherkin text into per-scenario blocks keyed by title (the Feature header is kept separately). */
-export function scenarioBlocks(gherkin: string): { feature: string; blocks: Map<string, string> } {
-  const blocks = new Map<string, string>();
-  const lines = gherkin.split('\n');
-  let feature = '';
-  let current: string | null = null;
-  let buf: string[] = [];
-  const flush = () => {
-    if (current !== null) blocks.set(current, buf.join('\n').trimEnd());
-    buf = [];
-  };
-  for (const line of lines) {
-    const m = line.match(/^\s*Scenario(?: Outline)?:\s*(.+?)\s*$/i);
-    if (m) {
-      flush();
-      current = m[1];
-      buf.push(line);
-    } else if (current === null) {
-      if (line.trim()) feature = feature ? `${feature}\n${line}` : line;
-    } else {
-      buf.push(line);
-    }
-  }
-  flush();
-  return { feature: feature.trim(), blocks };
-}
-
-function normalizeTitle(t: string): string {
-  return t.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-}
-
-function quoteScenarios(gherkin: string, refs: string[]): string {
-  const { feature, blocks } = scenarioBlocks(gherkin);
-  const wanted: string[] = [];
-  for (const ref of refs) {
-    const key = normalizeTitle(ref);
-    for (const [title, block] of blocks) {
-      const nt = normalizeTitle(title);
-      if (nt === key || nt.includes(key) || key.includes(nt)) {
-        if (!wanted.includes(block)) wanted.push(block);
-      }
-    }
-  }
-  const body = wanted.length > 0 ? wanted.join('\n\n') : gherkin.trim();
-  return `\`\`\`gherkin\n${feature && wanted.length > 0 ? `${feature}\n` : ''}${body}\n\`\`\``;
+/** The criteria a piece references, quoted verbatim (all of them when it references none we know). */
+function quoteCriteria(criteria: Array<{ id: string; text: string }>, refs: string[]): string {
+  const wanted = new Set(refs.map((r) => r.trim().toUpperCase()));
+  const picked = criteria.filter((c) => wanted.has(c.id));
+  const list = picked.length > 0 ? picked : criteria;
+  return list.length > 0 ? list.map((c) => `- ${c.id}: ${c.text}`).join('\n') : '- (the brief lists no "Done when" criteria — satisfy its Goal and Scope)';
 }
 
 // ─── Piece normalization ────────────────────────────────────────────────────
@@ -256,7 +213,7 @@ function makePiece(partial: Partial<PuzzlePiece> & { id: string; kind: PuzzlePie
     kind: partial.kind,
     title: partial.title,
     instructions: partial.instructions,
-    scenarioRefs: partial.scenarioRefs || [],
+    criterionRefs: partial.criterionRefs || [],
     files: (partial.files || []).map(normalizePath).filter(Boolean),
     dependsOn: partial.dependsOn || [],
     status: 'pending',
@@ -264,10 +221,10 @@ function makePiece(partial: Partial<PuzzlePiece> & { id: string; kind: PuzzlePie
   };
 }
 
-/** Validates the model's decomposition and applies the implicit given → when → then/edge ordering. */
+/** Validates the model's decomposition and applies the implicit setup → build → verify/edge ordering. */
 export function normalizePieces(
   raw: any,
-  scenarioTitles: string[],
+  criterionIds: string[],
   startIndex = 1,
   options?: { taskKind?: TaskKind; targetFilePaths?: string[] }
 ): PuzzlePiece[] {
@@ -279,8 +236,8 @@ export function normalizePieces(
     if (!item || typeof item !== 'object') continue;
     const title = typeof item.title === 'string' && item.title.trim() ? item.title.trim() : `Piece ${n}`;
     const instructions = typeof item.instructions === 'string' && item.instructions.trim() ? item.instructions.trim() : title;
-    const kindRaw = typeof item.kind === 'string' ? item.kind.trim().toLowerCase() : 'when';
-    const kind: PuzzlePieceKind = (PIECE_KINDS as string[]).includes(kindRaw) ? (kindRaw as PuzzlePieceKind) : 'when';
+    const kindRaw = typeof item.kind === 'string' ? item.kind.trim().toLowerCase() : 'build';
+    const kind: PuzzlePieceKind = (PIECE_KINDS as string[]).includes(kindRaw) ? (kindRaw as PuzzlePieceKind) : 'build';
     const newId = `P${n}`;
     if (typeof item.id === 'string' && item.id.trim()) idMap.set(item.id.trim(), newId);
     idMap.set(newId, newId);
@@ -290,8 +247,8 @@ export function normalizePieces(
         kind,
         title,
         instructions,
-        scenarioRefs: toStringArray(item.scenarioRefs),
-        files: kind === 'then' ? [] : toStringArray(item.files),
+        criterionRefs: toStringArray(item.criterionRefs),
+        files: kind === 'verify' ? [] : toStringArray(item.files),
         dependsOn: toStringArray(item.dependsOn)
       })
     );
@@ -301,12 +258,12 @@ export function normalizePieces(
   for (const p of pieces) {
     p.dependsOn = Array.from(new Set(p.dependsOn.map((d) => idMap.get(d) || d).filter((d) => d !== p.id && pieces.some((x) => x.id === d))));
   }
-  // Implicit ordering: when ⇐ given; then/edge ⇐ given + when.
-  const givens = pieces.filter((p) => p.kind === 'given').map((p) => p.id);
-  const whens = pieces.filter((p) => p.kind === 'when').map((p) => p.id);
+  // Implicit ordering: build ⇐ setup; verify/edge ⇐ setup + build.
+  const setups = pieces.filter((p) => p.kind === 'setup').map((p) => p.id);
+  const builds = pieces.filter((p) => p.kind === 'build').map((p) => p.id);
   for (const p of pieces) {
-    if (p.kind === 'when') p.dependsOn = Array.from(new Set([...p.dependsOn, ...givens]));
-    if (p.kind === 'then' || p.kind === 'edge') p.dependsOn = Array.from(new Set([...p.dependsOn, ...givens, ...whens.filter((w) => w !== p.id)]));
+    if (p.kind === 'build') p.dependsOn = Array.from(new Set([...p.dependsOn, ...setups]));
+    if (p.kind === 'verify' || p.kind === 'edge') p.dependsOn = Array.from(new Set([...p.dependsOn, ...setups, ...builds.filter((w) => w !== p.id)]));
   }
   // Break accidental cycles: a piece may not depend on something that depends on it (drop the later edge).
   for (const p of pieces) {
@@ -317,30 +274,30 @@ export function normalizePieces(
   }
   // Ensure implementing pieces for coding tasks or tasks with target files are granted read-write access
   const targetFiles = (options?.targetFilePaths || []).filter(Boolean);
-  const implPieces = pieces.filter((p) => p.kind !== 'then');
+  const implPieces = pieces.filter((p) => p.kind !== 'verify');
   if (targetFiles.length > 0 && implPieces.length > 0) {
     const hasAnyFiles = implPieces.some((p) => p.files.length > 0);
     if (!hasAnyFiles) {
-      const whenPieces = implPieces.filter((p) => p.kind === 'when');
-      const targetPieces = whenPieces.length > 0 ? whenPieces : implPieces;
+      const buildPieces = implPieces.filter((p) => p.kind === 'build');
+      const targetPieces = buildPieces.length > 0 ? buildPieces : implPieces;
       for (const p of targetPieces) {
         p.files = [...targetFiles];
       }
     }
   }
 
-  // Only append a dedicated 'then' verification piece when there are multiple (2+) implementing pieces
-  // that need cross-piece integration verification. For a single self-contained piece (e.g. 1 'when' piece),
-  // the worker verifies its own deliverable, saving an entire redundant worker loop!
-  const hasMultipleImplPieces = pieces.filter((p) => p.kind === 'when' || p.kind === 'given').length >= 2;
-  if (hasMultipleImplPieces && !pieces.some((p) => p.kind === 'then')) {
+  // Only append a dedicated 'verify' piece when there are multiple (2+) implementing pieces that need cross-piece
+  // integration verification. For a single self-contained piece (e.g. 1 'build' piece), the worker verifies its own
+  // deliverable, saving an entire redundant worker loop.
+  const hasMultipleImplPieces = pieces.filter((p) => p.kind === 'build' || p.kind === 'setup').length >= 2;
+  if (hasMultipleImplPieces && !pieces.some((p) => p.kind === 'verify')) {
     pieces.push(
       makePiece({
         id: `P${n}`,
-        kind: 'then',
+        kind: 'verify',
         title: 'Acceptance verification',
-        instructions: 'Verify every Then/And clause of the referenced scenarios against the workspace with evidence (commands, file excerpts). Do not modify files.',
-        scenarioRefs: scenarioTitles,
+        instructions: 'Verify every referenced "Done when" criterion against the workspace with evidence (commands, file excerpts). Do not modify files.',
+        criterionRefs: criterionIds,
         files: [],
         dependsOn: pieces.map((p) => p.id)
       })
@@ -349,16 +306,16 @@ export function normalizePieces(
   return pieces;
 }
 
-function fallbackPieces(scenarioTitles: string[], startIndex = 1, targetFilePaths: string[] = []): PuzzlePiece[] {
+function fallbackPieces(criterionIds: string[], startIndex = 1, targetFilePaths: string[] = []): PuzzlePiece[] {
   const a = `P${startIndex}`;
   return [
     makePiece({
       id: a,
-      kind: 'when',
+      kind: 'build',
       title: 'Implement and verify the task',
       instructions:
-        'Implement everything the Gherkin scenarios in the bible require, writing output to the destination described under "Output Destination & Method". Inspect and verify your own work with commands and evidence before finishing.',
-      scenarioRefs: scenarioTitles,
+        'Implement everything the working brief in the bible requires (its Scope and every "Done when" criterion, within its Constraints). Inspect and verify your own work with commands and evidence before finishing.',
+      criterionRefs: criterionIds,
       files: targetFilePaths,
       dependsOn: []
     })
@@ -402,11 +359,11 @@ export async function runManager(
   const [managerSkill, workerSkill] = await Promise.all([loadPipelineSkill('manager-agent'), loadPipelineSkill('worker-agent')]);
   const managerStable = `${managerSkill}\n\n${MANAGER_RULES}`;
   const workerStable = `${workerSkill}\n\n${WORKER_RULES}`;
-  // Manager receives slim context (Gherkin + Goals + Output Destination) without verbose guidelines/discovered dumps
-  const managerContext = bible.renderManagerContext();
-  // Workers receive the full bible with guidelines and discovered context
-  const workerSharedBible = bible.renderStable();
-  const scenarioTitles = extractScenarioTitles(bible.sections.gherkin);
+  // The manager and every worker share one bible prefix: the Summary step's working brief is the whole spec.
+  const managerContext = bible.renderStable();
+  const criteria = briefCriteria(bible.sections.spec);
+  const criterionIds = criteria.map((c) => c.id);
+  const criteriaLine = criteria.length > 0 ? criteria.map((c) => c.id).join(', ') : '(none listed — cover the Goal and Scope)';
   // The SAME tool list is offered to every role/phase (tools render at position 0 of the prompt, so any
   // difference would forfeit cache sharing between manager, workers and hardener). What each phase may
   // actually do is enforced by the executor scope (read-only / write paths), not by pruning definitions.
@@ -463,7 +420,7 @@ export async function runManager(
       `${followUp.message.trim()}\n\n` +
       `### What the earlier run did\n${followUp.priorState.trim()}\n\n` +
       `- Inspect the existing deliverables (${Array.from(createdFiles).join(', ') || 'in workspace'}) and keep what works.\n` +
-      `- Do what the follow-up asks (and fix anything it reveals); the goals and scenarios above still apply.\n`
+      `- Do what the follow-up asks (and fix anything it reveals); the brief above still applies.\n`
     : '';
   const resumeNotice = followUp
     ? followUpNotice
@@ -490,15 +447,13 @@ export async function runManager(
     const directMessage =
       `Execute this task directly per the bible above.\n` +
       `- Task kind: ${bible.sections.metadata.taskKind}\n` +
-      `- Output destination: ${bible.sections.outputAs}\n` +
-      `- Scenarios to cover (${scenarioTitles.length}): ${scenarioTitles.map((t) => `"${t}"`).join(', ') || '(cover the whole brief)'}\n` +
-      `- Deliverable Goals checklist:\n${bible.sections.goals || '(complete all task requirements)'}\n` +
+      `- "Done when" criteria to satisfy: ${criteriaLine}\n` +
       `- MANDATORY TOOL USE: When creating or modifying code deliverables, you MUST invoke the write_file tool on the Filesystem MCP. Outputting code blocks in chat or markdown does NOT count as task completion. Deliverable files MUST physically exist on disk.\n` +
       resumeNotice +
       (attempt > 1 && priorFailureDiagnostics
         ? `\n## Prior attempt failed QA — fix exactly these:\n${priorFailureDiagnostics}\n\n${bible.renderEventLog({ last: 15 })}\n`
         : '') +
-      `\nProduce the complete, fully functioning deliverable per all goals and scenarios (no placeholder skeletons/stubs), verify your work with commands/evidence, and reply with a condensed summary ending with "STATUS: DONE".`;
+      `\nProduce the complete, fully functioning deliverable per the brief's Scope and every criterion (no placeholder skeletons/stubs), verify your work with commands/evidence, and reply with a condensed summary ending with "STATUS: DONE".`;
 
     const CORE_DIRECT_TOOL_NAMES = new Set(['write_file', 'edit_file', 'read_file', 'list_directory', 'get_file_info', 'run_command', 'ask_human']);
     const directTools = managerTarget.provider === 'ollama'
@@ -531,7 +486,7 @@ export async function runManager(
     if (result.stopReason === 'no_tool_support') usedToolCalling = false;
 
     const parsedStatus = parseWorkerStatus(result.text);
-    const targetFilePaths = extractTargetFilePaths(bible.sections.outputAs + ' ' + (bible.sections.goals || ''));
+    const targetFilePaths = extractTargetFilePaths(bible.sections.spec);
 
     // Fallback: If no files were recorded as written, but target files were requested
     // and the model emitted code blocks in text, automatically save the deliverable.
@@ -687,10 +642,10 @@ export async function runManager(
 
     const directPiece = makePiece({
       id: 'P1',
-      kind: 'when',
+      kind: 'build',
       title: bible.sections.title,
       instructions: 'Direct execution by Manager',
-      scenarioRefs: scenarioTitles,
+      criterionRefs: criterionIds,
       files: Array.from(new Set([...Array.from(createdFiles), ...targetFilePaths])),
       dependsOn: []
     });
@@ -723,7 +678,7 @@ export async function runManager(
     return {
       pieces: directPieces,
       createdFiles: Array.from(createdFiles),
-      allScenariosPass: directOk,
+      allCriteriaPass: directOk,
       verificationSummary: summary,
       usage,
       usedToolCalling
@@ -736,23 +691,22 @@ export async function runManager(
     id: decomposeStepId,
     stage: 'decompose',
     agentRole: 'manager',
-    title: attempt > 1 ? `Manager AI: Re-planning after QA failure (attempt ${attempt})` : 'Manager AI: Decomposing Gherkin Scenarios into Puzzle Pieces',
-    detail: 'Reading the bible and splitting the scenarios into Given / When / Then / Edge pieces with disjoint file scopes…',
+    title: attempt > 1 ? `Manager AI: Re-planning after QA failure (attempt ${attempt})` : 'Manager AI: Decomposing the Brief into Puzzle Pieces',
+    detail: 'Reading the bible and splitting the "Done when" criteria into setup / build / verify / edge pieces with disjoint file scopes…',
     status: 'running'
   });
 
   const decomposeMessage =
-    `Decompose the Gherkin scenarios in the bible into puzzle pieces per your Decomposition Output Contract.\n` +
+    `Decompose the working brief in the bible into puzzle pieces per your Decomposition Output Contract.\n` +
     `- Task kind: ${bible.sections.metadata.taskKind}\n` +
-    `- Output destination: ${bible.sections.outputAs}\n` +
-    `- Scenarios to cover (${scenarioTitles.length}): ${scenarioTitles.map((t) => `"${t}"`).join(', ') || '(none parsed — cover the whole brief)'}\n` +
+    `- "Done when" criteria to cover: ${criteriaLine}\n` +
     `- Concurrency limit: ${ctx.options.maxConcurrentAgents} worker(s).\n` +
-    `- CRITICAL EFFICIENCY RULE: If this task builds a standalone deliverable, single file (e.g. an HTML game, standalone script, single component), or simple deliverable, plan EXACTLY 1 piece of kind "when" covering all scenarios ("Implement and self-verify deliverable"). Do NOT split it into multiple workers or a separate "then" worker. A single worker will implement and verify it directly.\n` +
+    `- CRITICAL EFFICIENCY RULE: If this task builds a standalone deliverable, single file (e.g. an HTML game, standalone script, single component), or simple deliverable, plan EXACTLY 1 piece of kind "build" covering all criteria ("Implement and self-verify deliverable"). Do NOT split it into multiple workers or a separate "verify" worker. A single worker will implement and verify it directly.\n` +
     resumeNotice +
     (attempt > 1 && priorFailureDiagnostics
       ? `\n## Prior attempt failed QA — fix exactly these (fresh workers will be spawned)\n${priorFailureDiagnostics}\n\n${bible.renderPieces()}\n${bible.renderEventLog({ last: 25 })}\n`
       : '') +
-    `\nReturn ONLY the JSON object with the "pieces" array: { "pieces": [ { "id": "P1", "kind": "when", "title": "...", "instructions": "...", "scenarioRefs": [...], "files": [...], "dependsOn": [] } ], "notes": "..." }.`;
+    `\nReturn ONLY the JSON object with the "pieces" array: { "pieces": [ { "id": "P1", "kind": "build", "title": "...", "instructions": "...", "criterionRefs": ["C1", ...], "files": [...], "dependsOn": [] } ], "notes": "..." }.`;
 
   let pieces: PuzzlePiece[] = [];
   let decomposeNotes = '';
@@ -782,12 +736,12 @@ export async function runManager(
     if (result.stopReason === 'error') {
       bible.appendEvent({ actor: 'manager', kind: 'error', text: `Decomposition call failed: ${result.error}` });
     }
-    const targetFilePaths = extractTargetFilePaths(bible.sections.outputAs + ' ' + (bible.sections.goals || ''));
+    const targetFilePaths = extractTargetFilePaths(bible.sections.spec);
     const parsed = parseJsonLoose<any>(result.text);
-    pieces = parsed ? normalizePieces(parsed, scenarioTitles, 1, { taskKind: bible.sections.metadata.taskKind, targetFilePaths }) : [];
+    pieces = parsed ? normalizePieces(parsed, criterionIds, 1, { taskKind: bible.sections.metadata.taskKind, targetFilePaths }) : [];
     decomposeNotes = typeof parsed?.notes === 'string' ? parsed.notes.trim() : '';
     if (pieces.length === 0) {
-      pieces = fallbackPieces(scenarioTitles, 1, targetFilePaths);
+      pieces = fallbackPieces(criterionIds, 1, targetFilePaths);
       decomposeNotes = decomposeNotes || 'Decomposition JSON unusable — fell back to a single implementation piece plus verification.';
     }
   }
@@ -820,10 +774,10 @@ export async function runManager(
     const lines: string[] = [];
     lines.push(`## Your Piece: ${piece.id} (${piece.kind}) — ${piece.title}`, '');
     lines.push('### Instructions', piece.instructions, '');
-    lines.push('### Scenarios you must satisfy or verify', quoteScenarios(bible.sections.gherkin, piece.scenarioRefs), '');
+    lines.push('### "Done when" criteria you must satisfy or verify', quoteCriteria(criteria, piece.criterionRefs), '');
     if (piece.files.length > 0) {
       lines.push('### Files you own (write scope)', ...piece.files.map((f) => `- ${f}`), '');
-    } else if (bible.sections.metadata.taskKind === 'coding' && piece.kind !== 'then') {
+    } else if (bible.sections.metadata.taskKind === 'coding' && piece.kind !== 'verify') {
       const allowedRoots = bible.sections.allowedRoots && bible.sections.allowedRoots.length > 0
         ? bible.sections.allowedRoots.join(', ')
         : 'workspace';
@@ -847,10 +801,10 @@ export async function runManager(
   };
 
   const executePieceOnce = async (piece: PuzzlePiece, onFirstResponse: () => void): Promise<{ ok: boolean; summary: string; error?: string }> => {
-    const targetFilePaths = extractTargetFilePaths(bible.sections.outputAs + ' ' + (bible.sections.goals || ''));
+    const targetFilePaths = extractTargetFilePaths(bible.sections.spec);
     const effectiveWritePaths = piece.files.length > 0
       ? piece.files
-      : (bible.sections.metadata.taskKind === 'coding' && piece.kind !== 'then' && targetFilePaths.length > 0)
+      : (bible.sections.metadata.taskKind === 'coding' && piece.kind !== 'verify' && targetFilePaths.length > 0)
         ? targetFilePaths
         : undefined;
 
@@ -859,7 +813,7 @@ export async function runManager(
       tools,
       scope: {
         actorLabel: `worker ${piece.id}`,
-        readOnly: piece.kind === 'then',
+        readOnly: piece.kind === 'verify',
         allowedWritePaths: effectiveWritePaths
       },
       agentRole: 'worker',
@@ -870,7 +824,7 @@ export async function runManager(
     });
     const isSinglePiece = pieces.length === 1;
     const effectiveWorkerMaxRounds = isSinglePiece ? Math.min(5, maxRounds) : Math.min(8, maxRounds);
-    const effectiveWorkerBible = isSinglePiece ? managerContext : workerSharedBible;
+    const effectiveWorkerBible = managerContext;
     const result = await runToolLoop({
       ...workerProviderBase,
       model: workerModel,
@@ -888,7 +842,7 @@ export async function runManager(
     if (result.stopReason === 'no_tool_support') usedToolCalling = false;
 
     // Fallback: If worker owns files or target files exist, but none were written via tools, extract code blocks from text
-    const pieceTargets = piece.files.length > 0 ? piece.files : (bible.sections.metadata.taskKind === 'coding' && piece.kind !== 'then' ? targetFilePaths : []);
+    const pieceTargets = piece.files.length > 0 ? piece.files : (bible.sections.metadata.taskKind === 'coding' && piece.kind !== 'verify' ? targetFilePaths : []);
     if (pieceTargets.length > 0 && !pieceTargets.some((f) => createdFiles.has(normalizePath(f)))) {
       const blocks = extractCodeBlocks(result.text);
       if (blocks.length > 0) {
@@ -1096,8 +1050,8 @@ export async function runManager(
       id: verifyStepId,
       stage: 'verify',
       agentRole: 'manager',
-      title: round === 1 ? 'Manager AI: Verifying Scenarios Against Workspace' : 'Manager AI: Re-verifying After Remediation',
-      detail: 'Checking every Gherkin scenario against the actual files, commands and the event log…',
+      title: round === 1 ? 'Manager AI: Verifying the Criteria Against Workspace' : 'Manager AI: Re-verifying After Remediation',
+      detail: 'Checking every "Done when" criterion against the actual files, commands and the event log…',
       status: 'running'
     });
     const executor = createToolExecutor({
@@ -1108,7 +1062,7 @@ export async function runManager(
       stepIdPrefix: `step-tool-verify-a${attempt}-r${round}`
     });
     const verifyMessage =
-      `All pieces have finished. Verify each Gherkin scenario against the ACTUAL workspace state (read files, run tests/commands) and the event log — not against what the pieces claimed. Then return ONLY the verification JSON from your skill ({ allPass, scenarioResults, remediation }).\n\n` +
+      `All pieces have finished. Verify each "Done when" criterion (${criteriaLine}) against the ACTUAL workspace state (read files, run tests/commands) and the event log — not against what the pieces claimed. Then return ONLY the verification JSON from your skill ({ allPass, criterionResults, remediation }).\n\n` +
       (followUp ? `This run continues a finished run for the user's follow-up: also verify that it was done.\n${followUpNotice}\n` : '') +
       `${bible.renderPieces()}\n${bible.renderEventLog({ last: 40 })}` +
       (createdFiles.size > 0 ? `\n### Files written this run\n${Array.from(createdFiles).map((f) => `- ${f}`).join('\n')}\n` : '');
@@ -1130,20 +1084,20 @@ export async function runManager(
     if (result.stopReason === 'no_tool_support') usedToolCalling = false;
     const parsed = parseJsonLoose<any>(result.text);
     const failedPieces = pieces.filter((p) => p.status !== 'done');
-    const scenarioResults: Array<{ scenario: string; pass: boolean; evidence: string }> = Array.isArray(parsed?.scenarioResults)
-      ? parsed.scenarioResults.map((r: any) => ({ scenario: String(r?.scenario ?? ''), pass: Boolean(r?.pass), evidence: String(r?.evidence ?? '') }))
+    const criterionResults: Array<{ criterion: string; pass: boolean; evidence: string }> = Array.isArray(parsed?.criterionResults)
+      ? parsed.criterionResults.map((r: any) => ({ criterion: String(r?.criterion ?? ''), pass: Boolean(r?.pass), evidence: String(r?.evidence ?? '') }))
       : [];
-    allPass = Boolean(parsed?.allPass) && failedPieces.length === 0 && scenarioResults.every((r) => r.pass);
+    allPass = Boolean(parsed?.allPass) && failedPieces.length === 0 && criterionResults.every((r) => r.pass);
     const healthReport = await verifyDeliverableHealth(Array.from(createdFiles));
     if (!healthReport.ok) {
       allPass = false;
     }
-    const failing = scenarioResults.filter((r) => !r.pass);
+    const failing = criterionResults.filter((r) => !r.pass);
     verificationSummary =
       (!healthReport.ok ? `[STARTUP SMOKE TEST FAILED] ${healthReport.summaryText} | ` : '') +
       (parsed
-        ? `${allPass ? 'All scenarios pass.' : `${failing.length} failing scenario(s).`} ` +
-          scenarioResults.map((r) => `${r.pass ? '✓' : '✗'} ${r.scenario}${r.evidence ? ` — ${condense(r.evidence, 240)}` : ''}`).join(' | ')
+        ? `${allPass ? 'All criteria pass.' : `${failing.length} failing criteri${failing.length === 1 ? 'on' : 'a'}.`} ` +
+          criterionResults.map((r) => `${r.pass ? '✓' : '✗'} ${r.criterion}${r.evidence ? ` — ${condense(r.evidence, 240)}` : ''}`).join(' | ')
         : `Verification returned no parseable JSON${result.error ? ` (${result.error})` : ''}: ${condense(result.text, 500)}`) +
       (failedPieces.length > 0 ? ` | Unfinished pieces: ${failedPieces.map((p) => `${p.id} (${p.status})`).join(', ')}` : '');
     bible.appendEvent({ actor: 'manager', kind: 'verify', text: `round ${round}: ${verificationSummary}` });
@@ -1151,7 +1105,7 @@ export async function runManager(
       id: verifyStepId,
       stage: 'verify',
       agentRole: 'manager',
-      title: allPass ? 'Manager AI: All Scenarios Verified' : `Manager AI: Verification Found ${failing.length + failedPieces.length} Issue(s)`,
+      title: allPass ? 'Manager AI: All Criteria Verified' : `Manager AI: Verification Found ${failing.length + failedPieces.length} Issue(s)`,
       detail: verificationSummary,
       status: allPass ? 'success' : 'warning',
       usage: { ...result.usage }
@@ -1160,7 +1114,7 @@ export async function runManager(
 
     if (allPass || round === 2) break;
 
-    // Remediation: convert the manager's proposed fixes into new when pieces + a final then piece.
+    // Remediation: convert the manager's proposed fixes into new build pieces + a final verify piece.
     const remediation: any[] = Array.isArray(parsed?.remediation) ? parsed.remediation : [];
     const retryable = failedPieces.filter((p) => p.status === 'failed' || p.status === 'blocked');
     if (remediation.length === 0 && retryable.length === 0) break;
@@ -1168,11 +1122,11 @@ export async function runManager(
     const newPieces = normalizePieces(
       {
         pieces: [
-          ...remediation.map((r) => ({ ...r, kind: 'when' })),
-          ...retryable.map((p) => ({ title: `Retry: ${p.title}`, instructions: `${p.instructions}\n\nPrevious failure: ${p.lastError || 'unknown'}`, scenarioRefs: p.scenarioRefs, files: p.files, kind: p.kind === 'then' ? 'then' : 'when' }))
+          ...remediation.map((r) => ({ ...r, kind: 'build' })),
+          ...retryable.map((p) => ({ title: `Retry: ${p.title}`, instructions: `${p.instructions}\n\nPrevious failure: ${p.lastError || 'unknown'}`, criterionRefs: p.criterionRefs, files: p.files, kind: p.kind === 'verify' ? 'verify' : 'build' }))
         ]
       },
-      scenarioTitles,
+      criterionIds,
       nextIndex
     );
     if (newPieces.length === 0) break;
@@ -1205,7 +1159,7 @@ export async function runManager(
   return {
     pieces,
     createdFiles: Array.from(createdFiles),
-    allScenariosPass: allPass,
+    allCriteriaPass: allPass,
     verificationSummary,
     usage,
     usedToolCalling

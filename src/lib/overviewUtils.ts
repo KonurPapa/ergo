@@ -7,6 +7,7 @@
  * generated overview is kept and reused by reruns — no new Summary call — until the task's text changes.
  */
 import type { AgentContextItem, OverviewDocument } from '../types';
+import { isTaskBrief } from './agentPipeline/taskBrief';
 
 interface OverviewTaskRef {
   id: string | number;
@@ -15,9 +16,6 @@ interface OverviewTaskRef {
 }
 
 type OverviewBriefRef = Pick<AgentContextItem, 'overview' | 'brief' | 'overviewSource' | 'overviewTaskHash' | 'overviewDocument'>;
-
-/** Markers only the pipeline's Summary agent writes (Gherkin brief, "## Goals" sections). */
-const SUMMARY_MARKERS_RE = /```gherkin|^\s*(?:Feature|Scenario):|^#{1,3}\s*(?:Goals|Acceptance Brief|Output)\b/im;
 
 function overviewTextOf(brief: OverviewBriefRef | undefined | null): string {
   return (brief?.overview || brief?.brief || '').trim();
@@ -39,8 +37,8 @@ export function hasUsableOverview(brief: OverviewBriefRef | undefined | null): b
   const text = overviewTextOf(brief);
   if (!text) return false;
   if (brief?.overviewSource) return true;
-  // Saved before overviews were stamped: only text with the Summary agent's own structure counts.
-  return SUMMARY_MARKERS_RE.test(text);
+  // Saved before overviews were stamped: only a working brief counts.
+  return isTaskBrief(text);
 }
 
 /** A generated overview whose task was edited afterwards: shown, but regenerated on the next run. */
@@ -53,20 +51,20 @@ export function isOverviewStale(brief: OverviewBriefRef | undefined | null, task
   );
 }
 
-/** A run may reuse the saved overview instead of generating a new one. */
+/**
+ * A run may reuse the saved overview instead of generating a new one. A generated overview from before the working
+ * brief (Done-State and other older formats) is written again in the brief format; the user's own text is always kept.
+ */
 export function isOverviewReusable(brief: OverviewBriefRef | undefined | null, task: OverviewTaskRef): boolean {
-  return hasUsableOverview(brief) && !isOverviewStale(brief, task);
+  if (!hasUsableOverview(brief) || isOverviewStale(brief, task)) return false;
+  return brief?.overviewSource === 'user' || isTaskBrief(overviewTextOf(brief));
 }
 
 /** The structured overview for a reusable brief: the saved Summary document, else one built from the text. */
 export function overviewDocumentFor(brief: OverviewBriefRef): OverviewDocument {
   const text = overviewTextOf(brief);
-  if (brief.overviewDocument && brief.overviewSource !== 'user') return { ...brief.overviewDocument };
-  const gherkin = text.match(/```gherkin([\s\S]*?)```/)?.[1]?.trim() || '';
+  if (brief.overviewDocument && brief.overviewSource !== 'user') return { ...brief.overviewDocument, raw: brief.overviewDocument.raw || text };
   return {
-    brief: gherkin,
-    goals: text,
-    output_as: '',
     raw: text,
     // A user rewrite keeps the tool and related-task selections (and the task rating) of the overview it replaced.
     ...(brief.overviewDocument?.requiredMcps ? { requiredMcps: brief.overviewDocument.requiredMcps } : {}),

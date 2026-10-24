@@ -63,8 +63,11 @@ import {
   type CliRunPromptContext,
   type CliWorkerPiece,
 } from '../lib/cliAgents';
+import { cliBiblePath, writeCliBible } from '../lib/cliBible';
 import { isBypassAcceptanceDialog, keystrokesForOption, pickApproveOption, promptSummary } from '../lib/cliPromptParser';
-import { runSessionRetrospective, searchMemory, type SearchResult } from '../lib/memory';
+import { runSessionRetrospective } from '../lib/memory';
+import { prefetchPromptMemory, taskMemoryQuery } from '../lib/memory/promptMemory';
+import { getRunState, listRunStates, loadRunStates, pruneRunStates, putRunState, type StoredRunState } from '../lib/runStateStore';
 import { refreshCodeIndex } from '../lib/mcpClient';
 import { runFileScout } from '../lib/codeIndex/runFileScout';
 import { buildRunOutcomeRecord } from '../lib/agentPipeline/escalation';
@@ -114,6 +117,8 @@ export interface LaunchCliRunParams {
   priorBriefStatus?: AgentContextItem['status'] | null;
   /** Context block for the related tasks selected for this task; the manager and worker prompts show it. */
   relatedContext?: string;
+  /** One-line index of those related tasks: shown instead of the block when the overview is a working brief. */
+  relatedSources?: string;
   /**
    * Per-run override of the QA verifier. Defaults to the task's "QA verification" switch (brief.qaVerification, off
    * unless set). Persisted with the run, so a restored run keeps it.
@@ -283,54 +288,7 @@ function truncate(text: string, max: number): string {
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
-/** Most time a launch waits for its memory pre-fetch; a slower (or failed) search launches without it. */
-const MEMORY_PREFETCH_TIMEOUT_MS = 1500;
-const MEMORY_PREFETCH_QUERY_CHARS = 1500;
-
 type PromptMemoryHits = NonNullable<CliRunPromptContext['memoryHits']>;
-
-/** Search query for an agent's job: the task title + its subtasks. */
-function taskMemoryQuery(task: TaskItem): string {
-  return [task.title, ...(task.subtasks || []).map((s) => s.text)].join('\n');
-}
-
-/** Search hits → RELEVANT MEMORY entries (one per document; the doc id works with memory_get). */
-function toPromptMemoryHits(results: SearchResult[]): PromptMemoryHits {
-  const seen = new Set<string>();
-  const hits: PromptMemoryHits = [];
-  for (const { chunk } of results) {
-    const meta = chunk.metadata || {};
-    const id = meta.docId || chunk.id;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    const title = meta.title || meta.taskTitle;
-    hits.push({ id, label: `${meta.kind || chunk.namespace}${title ? ` · ${title}` : ''}`, text: chunk.text });
-  }
-  return hits;
-}
-
-/**
- * Memory relevant to an agent's job, for its launch prompt. Fail-soft: a failed, slow (> 1.5 s) or unscoped
- * search yields no hits and never blocks the launch.
- */
-async function prefetchPromptMemory(projectId: string | undefined, query: string): Promise<PromptMemoryHits> {
-  const q = query.replace(/\s+/g, ' ').trim().slice(0, MEMORY_PREFETCH_QUERY_CHARS);
-  if (!projectId || !q) return []; // memory is project-scoped: never pre-fetch across projects
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const results = await Promise.race([
-      searchMemory(q, { projectId, topK: 4, minSimilarity: 0.35, includeHidden: true }),
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), MEMORY_PREFETCH_TIMEOUT_MS);
-      }),
-    ]);
-    return results ? toPromptMemoryHits(results) : [];
-  } catch {
-    return [];
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
-}
 
 function firstLines(text: string, n: number): string {
   const lines = text.replace(/\r/g, '').split('\n');
@@ -490,6 +448,12 @@ interface PersistedRunState {
   briefSnapshot?: AgentContextItem;
   /** Selected related tasks' context (from launch), for the manager and every worker the run starts later. */
   relatedContext?: string;
+  /** Their one-line index (from launch), shown instead of the block when the overview is a working brief. */
+  relatedSources?: string;
+  /** The run's TASK_CONTEXT.md under the storage root (cliBible.ts): the brief as handed over, the log, the prompt. */
+  bibleFilePath?: string;
+  /** The manager's launch prompt, exactly as sent (kept for the bible). */
+  managerPrompt?: string;
   /** The run's folder has a ready code index (checked at launch): prompts tell agents to use code_search first. */
   codeSearch?: boolean;
   /** That folder (the agents' cwd at launch). */
@@ -558,10 +522,8 @@ interface FinalizeOptions {
   exitCode?: number | null;
 }
 
-const RUN_STORAGE_PREFIX = 'ergo_cli_run_';
 /** Queued hand-off entry that only submits (its text was typed before a prompt opened). */
 const SUBMIT_ONLY = '\u0000submit';
-const RUN_STORAGE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 
 function withDonePromise(state: PersistedRunState): RunState {
   let resolveDone: () => void = () => {};
@@ -625,61 +587,29 @@ function runOutcomeFor(reason: FinalizeReason, verdict: string | undefined, fail
   return verdict === 'PASS' ? 'passed' : 'completed';
 }
 
+/** Saves the run's state on the user's machine (runStateStore.ts); the run keeps working if that fails. */
 function saveRunState(run: RunState): void {
-  try {
-    const { launch: _launch, done: _done, resolveDone: _resolve, finalizePending, ...persisted } = run;
-    // Keep the dedupe list bounded; old signal keys only matter for replays of the latest file versions.
-    const trimmed: PersistedRunState = {
-      ...persisted,
-      finalized: persisted.finalized && !finalizePending,
-      handledSignals: persisted.handledSignals.slice(-200),
-    };
-    localStorage.setItem(`${RUN_STORAGE_PREFIX}${run.runId}`, JSON.stringify({ ...trimmed, savedAt: Date.now() }));
-  } catch {
-    // Storage full or unavailable: the run still works in memory.
-  }
+  const { launch: _launch, done: _done, resolveDone: _resolve, finalizePending, ...persisted } = run;
+  // Keep the dedupe list bounded; old signal keys only matter for replays of the latest file versions.
+  const trimmed: PersistedRunState = {
+    ...persisted,
+    finalized: persisted.finalized && !finalizePending,
+    handledSignals: persisted.handledSignals.slice(-200),
+  };
+  putRunState(trimmed as unknown as StoredRunState);
+}
+
+function asRunState(state: StoredRunState | null, runId?: string): PersistedRunState | null {
+  if (!state || (runId && state.runId !== runId) || !Array.isArray((state as any).workers)) return null;
+  return state as unknown as PersistedRunState;
 }
 
 function loadRunState(runId: string): PersistedRunState | null {
-  try {
-    const raw = localStorage.getItem(`${RUN_STORAGE_PREFIX}${runId}`);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || parsed.runId !== runId || !Array.isArray(parsed.workers)) return null;
-    return parsed as PersistedRunState;
-  } catch {
-    return null;
-  }
+  return asRunState(getRunState(runId), runId);
 }
 
 function listPersistedRuns(): PersistedRunState[] {
-  const out: PersistedRunState[] = [];
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (!key || !key.startsWith(RUN_STORAGE_PREFIX)) continue;
-      const state = loadRunState(key.slice(RUN_STORAGE_PREFIX.length));
-      if (state) out.push(state);
-    }
-  } catch {}
-  return out;
-}
-
-function pruneOldRunStates(): void {
-  try {
-    const stale: string[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (!key || !key.startsWith(RUN_STORAGE_PREFIX)) continue;
-      try {
-        const savedAt = JSON.parse(localStorage.getItem(key) || '{}')?.savedAt;
-        if (typeof savedAt !== 'number' || Date.now() - savedAt > RUN_STORAGE_TTL_MS) stale.push(key);
-      } catch {
-        stale.push(key);
-      }
-    }
-    stale.forEach((k) => localStorage.removeItem(k));
-  } catch {}
+  return listRunStates().map((s) => asRunState(s)).filter((s): s is PersistedRunState => s !== null);
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────────────
@@ -702,6 +632,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
   const baseStatusRef = useRef<Map<string, AgentSessionStatus>>(new Map());
   const usageBySpawnRef = useRef<Map<string, TokenUsage>>(new Map());
   const stepPersistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bibleTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const warnedPermissionOverrideRef = useRef(false);
   const promptToastSigRef = useRef<Map<string, string>>(new Map());
   /** Hand-off messages held back while the agent shows a prompt (typing into a menu could answer it). */
@@ -805,6 +736,31 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       return next;
     });
     if (persist) schedulePersist();
+    scheduleBibleWrite(run);
+  };
+
+  /** Re-renders the run's TASK_CONTEXT.md from its steps, at most once per second per run. */
+  const scheduleBibleWrite = (run: RunState) => {
+    if (!run.bibleFilePath) return;
+    const key = runKeyOf(run.projectId, run.taskKey);
+    if (bibleTimersRef.current.has(key)) return;
+    bibleTimersRef.current.set(
+      key,
+      setTimeout(() => {
+        bibleTimersRef.current.delete(key);
+        const d = depsRef.current;
+        if (!run.bibleFilePath || (run.projectId && run.projectId !== d.projectId)) return;
+        void writeCliBible(run.bibleFilePath, {
+          task: run.taskSnapshot,
+          brief: run.briefSnapshot,
+          runId: run.runId,
+          cliName: run.cliName,
+          relatedSources: run.relatedSources,
+          managerPrompt: run.managerPrompt,
+          steps: d.taskExecutionStepsRef.current[run.taskKey] || [],
+        });
+      }, 1000)
+    );
   };
 
   const upsertStep = (run: RunState, step: ExecutionStep) => {
@@ -848,6 +804,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     memoryToolsAvailable: true,
     ...(memoryHits && memoryHits.length > 0 ? { memoryHits } : {}),
     ...(run.relatedContext ? { relatedContext: run.relatedContext } : {}),
+    ...(run.relatedSources ? { relatedSources: run.relatedSources } : {}),
     ...(run.codeSearch ? { codeSearchAvailable: true, ...(run.codeSearchPath ? { codeSearchPath: run.codeSearchPath } : {}) } : {}),
     ...(run.likelyFiles?.length ? { likelyFiles: run.likelyFiles } : {}),
   });
@@ -1693,7 +1650,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       buildLog: buildRecord,
       completion: completionText,
       createdFiles,
-      allScenariosPass: status === 'done' && (!qa || qa.verdict === 'PASS'),
+      allCriteriaPass: status === 'done' && (!qa || qa.verdict === 'PASS'),
       ...(qa ? { qaVerdict: qa.verdict.toLowerCase() } : {}),
     }).catch(() => {});
 
@@ -2502,6 +2459,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
   // ── Restore / resync ──
   const restoreAgentSessions = async (taskIds: Iterable<string | number>): Promise<void> => {
     const wanted = new Set(Array.from(taskIds, (id) => String(id)));
+    await loadRunStates(); // the runs saved on this machine, before any is matched to a live session
     const rows = await fetchAgentSessionsStrict();
     if (!rows) return;
     const projectId = depsRef.current.projectId;
@@ -2777,7 +2735,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
   restoreRef.current = restoreAgentSessions;
 
   useEffect(() => {
-    pruneOldRunStates();
+    void loadRunStates().then(pruneRunStates);
     const unsubscribe = subscribeAgentEvents(
       (ev) => handleEventRef.current(ev),
       () => {
@@ -2790,7 +2748,9 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
             .filter((run) => run.projectId === d.projectId)
             .map((run) => run.taskKey),
         ]);
-        void restoreRef.current(ids);
+        // Re-read the saved runs too: another browser may have started or finished one, or the first load ran
+        // before the bridge was reachable.
+        void loadRunStates(true).then(() => restoreRef.current(ids));
       }
     );
     return () => {
@@ -2877,6 +2837,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       preSteps,
       priorBriefStatus,
       relatedContext,
+      relatedSources,
       qaEnabled,
       maxWorkers,
       runPlanNote,
@@ -2929,6 +2890,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         cliName: launch.cliName || launch.cmd,
         managerSessionId,
         managerStepId,
+        bibleFilePath: cliBiblePath(projectId, task.id, runId),
         qaEnabled: qaEnabled ?? brief?.qaVerification === true,
         maxWorkers: Math.max(1, Math.min(8, Math.floor(maxWorkers ?? (opts.maxConcurrentAgents || 1)) || 1)),
         maxQaRetries: Math.max(0, Math.floor(opts.maxQaRetries || 0)),
@@ -2941,6 +2903,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         handledSignals: [],
         finalized: false,
         ...(relatedContext && relatedContext.trim() ? { relatedContext: relatedContext.trim() } : {}),
+        ...(relatedSources && relatedSources.trim() ? { relatedSources: relatedSources.trim() } : {}),
       });
       run.launch = launch;
       // Persisted (models only, no keys): a restored run or a follow-up reuses them instead of routing again.
@@ -2986,6 +2949,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         stage: 'execution',
         agentRole: 'manager',
         ptySessionId: managerSessionId,
+        bibleFilePath: run.bibleFilePath,
         title: `Manager Agent (${launch.cliName || launch.cmd})`,
         detail: `Running \`${launch.cmd}\` in \`${launch.cwd}\`. ${
           run.maxWorkers >= 2 ? 'The manager works through the task and may delegate separable pieces to worker agents' : 'The manager works through the task itself'
@@ -3015,7 +2979,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       d.setExecutingTaskId(task.id);
       d.syncAndSaveProject(nextTasks, nextBriefs, true);
 
-      // Alongside the memory prefetch: bring the code index up to date, then let the small model scout the files.
+      // Bring the code index up to date, then let the small model scout the files.
       const scoutStepId = `step-scout-${taskKey}-${runId}`;
       const scoutAndIndex = (async () => {
         const indexed = await refreshCodeIndex(launch.cwd);
@@ -3046,16 +3010,18 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         }));
         return { indexed, scout };
       })();
-      const [memoryHits, { indexed: codeIndexed, scout }] = await Promise.all([
-        prefetchPromptMemory(projectId, taskMemoryQuery(task)),
-        scoutAndIndex,
-      ]);
+      // Prior knowledge from memory reaches the manager through the working brief (the overview call folds it in);
+      // the manager's own prompt carries no pre-fetched memory, only the memory tools.
+      const { indexed: codeIndexed, scout } = await scoutAndIndex;
       run.codeSearch = codeIndexed;
       run.codeSearchPath = launch.cwd;
       if (scout) run.likelyFiles = scout.files;
-      // Stopped or relaunched while the memory search ran: that path owns the task now.
+      // Stopped or relaunched while the files were scouted: that path owns the task now.
       if (run.finalized || runsRef.current.get(runKeyOf(projectId, taskKey)) !== run) return false;
-      const prompt = buildManagerCliPrompt(task, resetBrief, runCtx(run, memoryHits));
+      const prompt = buildManagerCliPrompt(task, resetBrief, runCtx(run));
+      run.managerPrompt = prompt;
+      saveRunState(run);
+      scheduleBibleWrite(run);
       const res = await implRef.current.spawnAgent(run, 'manager', { label: 'Manager', prompt });
       if (res.ok) {
         patchStep(run, managerStepId, (s) => ({ ...s, detail: `${s.detail}\nTask prompt dispatched; watching the manager live.` }));

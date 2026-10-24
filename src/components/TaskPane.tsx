@@ -551,7 +551,6 @@ interface SwimLaneColumnProps {
   onOpenAssistant?: () => void;
   onCloseAssistant?: () => void;
   project?: ProjectData | null;
-  agentContextMarkdown?: string;
   aiConfig?: AIProviderConfig;
   mcpServers?: MCPServer[];
   onApplyAssistantResult?: (result: HumanAiAssistantResult, confirmedDeletions: boolean) => void;
@@ -589,7 +588,6 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   onOpenAssistant,
   onCloseAssistant,
   project,
-  agentContextMarkdown = '',
   aiConfig,
   mcpServers = [],
   onApplyAssistantResult,
@@ -2652,7 +2650,6 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
           onClose={onCloseAssistant || (() => { })}
           project={project}
           todoMarkdown={lane.markdown}
-          agentContextMarkdown={agentContextMarkdown}
           aiConfig={aiConfig}
           mcpServers={mcpServers}
           onApplyAssistantResult={(result, confirmedDeletions) => {
@@ -2947,7 +2944,6 @@ interface TaskPaneProps {
   isAssistantOpen?: boolean;
   onCloseAssistant?: () => void;
   project?: ProjectData | null;
-  agentContextMarkdown?: string;
   aiConfig?: AIProviderConfig;
   mcpServers?: MCPServer[];
   onApplyAssistantResult?: (result: HumanAiAssistantResult, confirmedDeletions: boolean) => void;
@@ -2981,7 +2977,6 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   isAssistantOpen = false,
   onCloseAssistant = () => { },
   project,
-  agentContextMarkdown = '',
   aiConfig,
   mcpServers = [],
   onApplyAssistantResult = () => { },
@@ -3147,7 +3142,6 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
               onOpenAssistant={onOpenDraftModal}
               onCloseAssistant={onCloseAssistant}
               project={project}
-              agentContextMarkdown={agentContextMarkdown}
               aiConfig={aiConfig}
               mcpServers={mcpServers}
               onApplyAssistantResult={onApplyAssistantResult}

@@ -12,7 +12,6 @@ import { searchMemory, type SearchResult } from '../memory';
 import { findRelatedTasks, formatRelatedCandidatesForPrompt } from '../memory/relatedTasks';
 import type { RelatedNoteCandidate, RelatedTaskCandidate, RelatedTasksRequest, RelatedTasksResponse } from '../memory/types';
 import { callMcpTool } from '../mcpClient';
-import { formatSkillsForAiContext, syncSkillsToWorkspace } from '../skillsManager';
 import { type AgentContextItem, type AssembledBaselineContext, type ExecutionStep, type TaskItem } from '../../types';
 import { bridgeClient } from '../bridgeClient';
 import {
@@ -169,12 +168,6 @@ function cap(text: string | undefined, max: number): string {
   return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
-function connectedServerLines(ctx: PipelineContext): string[] {
-  return ctx.connectedMcps
-    .filter((m) => m.status === 'connected')
-    .map((m) => `- ${m.name} (id: ${m.id}) — tools: ${m.tools.map((t) => t.name).join(', ')}`);
-}
-
 /** Builds the compact Markdown baseline context handed directly to the Summary AI. */
 function buildBaselineMarkdown(
   ctx: PipelineContext,
@@ -282,16 +275,8 @@ function buildBaselineMarkdown(
   out.push('## Environment');
   out.push(`- **Project**: ${project.name} (${project.folderPath})`);
   out.push(`- **Allowed boundaries**: ${ctx.allowedRoots.map((r) => r.path).join(', ') || project.folderPath}`);
-  const servers = connectedServerLines(ctx);
-  out.push('- **Connected MCP servers**:');
-  if (servers.length > 0) out.push(...servers.map((l) => `  ${l}`));
-  else out.push('  - (none connected)');
-
-  // 4. Global Workspace Skills & MCP Tool Instructions
-  const skillsContext = formatSkillsForAiContext();
-  if (skillsContext) {
-    out.push('', skillsContext);
-  }
+  // Connected MCP servers are listed (with their tools) by the Summary step's own message. The in-app assistant's
+  // workspace skills are not task context, so they stay out of the brief writer's input.
 
   return out.join('\n').trimEnd() + '\n';
 }
@@ -307,16 +292,9 @@ export async function assembleTaskContext(ctx: PipelineContext): Promise<Baselin
     id: 'step-context',
     stage: 'context',
     title: 'Vector Memory: Assembling Baseline Context',
-    detail: 'Finding related tasks, querying local vector store, syncing workspace skills, and reading guidelines…',
+    detail: 'Finding related tasks, querying local vector store, and reading guidelines…',
     status: 'running'
   });
-
-  // Sync active skills to codebase (.agents/skills/<id>/SKILL.md) when AI starts work
-  try {
-    await syncSkillsToWorkspace();
-  } catch (err) {
-    console.warn('[Ergo Context] Non-fatal: skills codebase sync failed:', err);
-  }
 
   // 1. Local Vector Memory semantic search + related-task candidates (both 0 tokens, run together)
   let memoryHits: SearchResult[] = [];

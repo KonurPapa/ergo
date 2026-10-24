@@ -1,21 +1,25 @@
 /**
- * Step 2 — Summary: synthesizes the Overview & Execution Brief (Gherkin scenarios, goals,
- * output destination, strictly filtered MCPs, task kind) from the Markdown baseline, then
- * assembles the stable sections of the TASK_CONTEXT.md bible.
- *
- * Token efficiency: ingests Markdown (not pretty-printed JSON) and relies on the skill doc as the
- * single source of Gherkin examples instead of duplicating them in the system prompt.
+ * Step 2 — Summary: writes the working brief (docs/skills/task-brief, the same spec CLI runs hand their manager) from
+ * the Markdown baseline — task, related tasks and notes, prior knowledge, project guidelines — and picks the MCPs, task
+ * kind and Hardener decision. The brief, verbatim, is the spec section of the TASK_CONTEXT.md bible: the manager and
+ * workers get nothing else about the task.
  */
-import { type OverviewDocument, type TaskKind, type TaskRating, type TokenUsage, type BibleSections } from '../../types';
-import { buildVerboseOverviewAndRequiredMcps } from '../ai';
-import { parseJsonLoose } from '../llmClient';
+import { type AgentContextItem, type MCPServer, type OverviewDocument, type TaskItem, type TaskKind, type TaskRating, type TokenUsage, type BibleSections } from '../../types';
+import { extractStringFromAiValue, parseJsonLoose } from '../llmClient';
 import { type PipelineContext, addUsage, emptyUsage, isAbortError, throwIfAborted, buildToolLoopRequest } from './contracts';
-import { buildBibleSections } from './bible';
+import { buildBibleSections, doneWhenCriteria } from './bible';
+import { buildOfflineTaskBrief } from './taskBrief';
 import { type BaselineContext } from './context';
 import { runToolLoop } from './providerLoop';
 import { loadPipelineSkill } from './skills';
 import { isOverviewReusable, overviewDocumentFor } from '../overviewUtils';
-import { formatSelectedRelatedContext, resolveSavedRelatedIds, savedRelatedSelection, strictRelatedFallback } from '../memory/relatedTasks';
+import {
+  RELATED_INTERPRETATION_GUIDANCE,
+  relatedSelectionPool,
+  resolveSavedRelatedIds,
+  savedRelatedSelection,
+  strictRelatedFallback,
+} from '../memory/relatedTasks';
 import { normalizeTaskRating } from './taskRating';
 import { TASK_RATING_SCALES } from './autoRouter';
 
@@ -31,36 +35,23 @@ export interface SummaryResult {
   usage: TokenUsage;
 }
 
-/** Formats structured OverviewDocument into clean Markdown with goals and output destination (Gherkin optional). */
-export function formatOverviewDocToMarkdown(
-  doc?: OverviewDocument | null,
-  options: { includeGherkin?: boolean } = { includeGherkin: false }
-): string {
+/** The overview's Markdown: the working brief (or, for an overview saved before it, its goals and output). */
+export function formatOverviewDocToMarkdown(doc?: OverviewDocument | null): string {
   if (!doc) return '';
   if (doc.raw && doc.raw.trim().length > 0) return doc.raw.trim();
-  const parts: string[] = [];
-  if (options.includeGherkin && doc.brief) {
-    parts.push(`## Acceptance Brief (Gherkin)\n\n\`\`\`gherkin\n${doc.brief.trim()}\n\`\`\``);
-  }
-  if (doc.goals) {
-    parts.push(`## Goals & Success Criteria\n\n${doc.goals.trim()}`);
-  }
-  if (doc.output_as) {
-    parts.push(`## Output Destination\n\n${doc.output_as.trim()}`);
-  }
-  return parts.join('\n\n');
+  return [doc.goals, doc.output_as].map((t) => (t || '').trim()).filter(Boolean).join('\n\n');
 }
 
 const TASK_KINDS: TaskKind[] = ['coding', 'writing', 'research', 'ops', 'data', 'other'];
 
 const OUTPUT_CONTRACT =
   'OUTPUT CONTRACT: return ONLY valid JSON (no markdown fences) with exactly these keys: ' +
-  '"brief" (Gherkin scenarios as a single string), "goals" (numbered checklist string), "output_as" (string: exact destination paths and MCP tool used — do NOT instruct agents to edit AGENT_CONTEXT.md or TODO.md), ' +
+  '"brief" (the working brief as one Markdown string, in exactly the format and headings your skill defines), ' +
   '"requiredMcps" (array of connected MCP server names/ids actually needed — 0 to 2 typical; provision shell/process-execution tools or domain MCPs like Godot whenever headless execution, scripts, tests, or CLI commands are involved), ' +
   '"taskKind" (one of coding | writing | research | ops | data | other — MUST be "coding" if the task contains verbs like write, script, scaffold, compile, or references languages/extensions like .py, .ts, .sh), ' +
   '"requiresHardener" (boolean: true for large coding/architectural tasks requiring independent QA proof; false for small/generic tasks or single-action MCP calls), ' +
   '"hardenerReason" (short string explaining why Hardener QA is required or skipped), ' +
-  '"relatedTaskIds" (array of ids from the "Candidate Related Tasks" list whose content is genuinely useful context for THIS task — a shared feature area, a dependency, prior work to build on, or a conflict to avoid; [] when none are or there is no list; 0 to 5 typical), ' +
+  '"relatedTaskIds" (array of ids — task ids or note:… ids — from the "Candidate Related Tasks" list whose content is genuinely useful context for THIS task — a shared feature area, a dependency, prior work to build on, or a conflict to avoid; [] when none are or there is no list; 0 to 5 typical), ' +
   `"taskRating" (object {"complexity": 1-5, "reasoning": 1-5} rating how demanding the task is — ${TASK_RATING_SCALES}).`;
 
 /**
@@ -77,6 +68,51 @@ export function validateRelatedTaskIds(ids: unknown, candidates: ReadonlyArray<{
     if (id && known.has(id) && !out.includes(id)) out.push(id);
   }
   return out;
+}
+
+/**
+ * The MCP servers the task needs: the model's picks that name a connected server or one of its tools, plus the user's
+ * own selections; without picks, the servers the task's wording points at.
+ */
+export function resolveRequiredMcps(
+  task: TaskItem,
+  brief: AgentContextItem | undefined,
+  connectedMcps: MCPServer[],
+  picked: unknown
+): string[] {
+  const activeMcps = connectedMcps.filter((m) => m.status === 'connected');
+  let resolved: string[] = [];
+  if (Array.isArray(picked) && picked.length > 0) {
+    resolved = picked
+      .map((m) => (typeof m === 'string' ? m.trim() : m && typeof m === 'object' ? (m as any).name || (m as any).id || '' : ''))
+      .filter((ref: string) => {
+        if (!ref) return false;
+        const lower = ref.toLowerCase();
+        return activeMcps.some((m) => m.id.toLowerCase() === lower || m.name.toLowerCase() === lower || m.tools.some((t) => t.name.toLowerCase() === lower));
+      });
+    const userExplicit = [...(task.mcpRequired || []), ...(brief?.requiredMcps || []), ...(brief?.selectedMcpTools || [])];
+    if (userExplicit.length > 0) resolved = Array.from(new Set([...resolved, ...userExplicit]));
+  }
+  if (resolved.length > 0) return resolved;
+
+  const text = `${task.title} ${task.subtasks.map((s) => s.text).join(' ')} ${brief?.overview || ''}`.toLowerCase();
+  const find = (pred: (m: MCPServer) => boolean) => activeMcps.find(pred);
+  const fs = find((m) => m.id === 'mcp-filesystem' || m.name.toLowerCase().includes('filesystem'));
+  const git = find((m) => m.id === 'mcp-git' || m.name.toLowerCase().includes('git'));
+  const fetch = find((m) => m.id === 'mcp-fetch' || m.name.toLowerCase().includes('fetch'));
+  const godot = find((m) => m.id.toLowerCase().includes('godot') || m.name.toLowerCase().includes('godot'));
+  const shell = find((m) => m.id.toLowerCase().includes('shell') || m.id.toLowerCase().includes('bash') || m.id.toLowerCase().includes('terminal') || m.tools.some((t) => t.name === 'run_command'));
+  const add = (m: MCPServer | undefined) => {
+    if (m && !resolved.includes(m.name)) resolved.push(m.name);
+  };
+  if (/\b(git|commit|branch|repository)\b/.test(text)) add(git);
+  if (/fetch|url|http|api|download/.test(text)) add(fetch);
+  if (text.includes('godot')) add(godot);
+  if (/cli|headless|terminal|command|script|run|test/.test(text)) add(shell);
+  if (/file|code|component|create|write|edit|refactor|implement|script|python/.test(text)) add(fs);
+  const category = (task.category || '').toLowerCase();
+  if (resolved.length === 0 && fs && (task.subtasks.length > 0 || /code|dev|backend|frontend/.test(category))) add(fs);
+  return resolved;
 }
 
 export function isExplicitCodeTask(text: string): boolean {
@@ -143,23 +179,22 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
       id: 'step-overview',
       stage: 'overview',
       agentRole: 'summary',
-      title: 'Summary AI: Building Gherkin Brief & Tool Plan',
-      detail: 'Synthesizing the baseline context into Given-When-Then acceptance scenarios, goals, output destination and the filtered MCP list…',
+      title: 'Summary AI: Writing the Working Brief',
+      detail: 'Folding the task, its related tasks, prior knowledge and project guidelines into the working brief the manager works from, and picking the MCPs…',
       status: 'running'
     });
 
     const serverLines = connectedMcps.filter((m) => m.status === 'connected').map((m) => `- ${m.name} (id: ${m.id}) — tools: ${m.tools.map((t) => t.name).join(', ')}`);
 
-    const relatedGuidance = baseline.relatedCandidates.length > 0
-      ? '\nRELATED TASKS: put in "relatedTaskIds" only the candidates that are genuinely useful context for this task. ' +
-        'When this task is sparse, use the selected tasks\' context (what they built, their subtasks) to fill gaps in goals and output_as — never copy their requirements into this task.\n'
+    const relatedGuidance = baseline.relatedCandidates.length > 0 || baseline.relatedNotes.length > 0
+      ? `\n${RELATED_INTERPRETATION_GUIDANCE} Put the selected ids in "relatedTaskIds".\n`
       : '';
     const userMessage =
       `${baseline.baselineMarkdown}\n\n## Connected MCP Servers (choose only what this task needs)\n${serverLines.length > 0 ? serverLines.join('\n') : '- (none connected)'}\n${relatedGuidance}\n\n` +
-      'Produce the Overview & Execution Brief JSON now.';
+      'Write the working brief JSON now.';
 
     try {
-      const skill = await loadPipelineSkill('summary-agent');
+      const skill = await loadPipelineSkill('task-brief');
       const result = await runToolLoop(
         buildToolLoopRequest(ctx, 'summary', {
           stableSystem: `${skill}\n\n${OUTPUT_CONTRACT}`,
@@ -183,36 +218,18 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
   }
   throwIfAborted(ctx.signal);
 
-  const { overviewDoc, requiredMcps } = reusedDoc
-    ? {
-        overviewDoc: reusedDoc,
-        // The saved tool selection, limited to servers still connected.
-        requiredMcps: (reusedDoc.requiredMcps || []).filter((id) => connectedMcps.some((m) => m.id === id || m.name === id)),
-      }
-    : buildVerboseOverviewAndRequiredMcps(task, brief, undefined, connectedMcps, parsed, baseline.memoryHits);
+  // The brief the model wrote; without one (failed call, or no brief in its answer) the offline brief: the task's own
+  // checklist in the brief format. The task checklist itself is in the bible either way.
+  const writtenBrief = extractStringFromAiValue(parsed?.brief).trim();
+  const overviewDoc: OverviewDocument = reusedDoc ?? {
+    raw: writtenBrief.length > 30 ? writtenBrief : buildOfflineTaskBrief(task, brief?.overview || brief?.sourceContent || ''),
+  };
+  const requiredMcps = reusedDoc
+    ? // The saved tool selection, limited to servers still connected.
+      (reusedDoc.requiredMcps || []).filter((id) => connectedMcps.some((m) => m.id === id || m.name === id))
+    : resolveRequiredMcps(task, brief, connectedMcps, parsed?.requiredMcps);
 
-  // Completeness Guard: Ensure all explicit task subtasks are preserved in overviewDoc.goals
-  if (task.subtasks.length > 0) {
-    const goalsLower = (overviewDoc.goals || '').toLowerCase();
-    const missingSubtasks = task.subtasks.filter((s) => {
-      const cleanText = s.text.replace(/^[0-9]+[.)-]\s*/, '').trim().toLowerCase();
-      const significantWords = cleanText.split(/\s+/).filter((w) => w.length >= 4);
-      if (significantWords.length === 0) return !goalsLower.includes(cleanText);
-      const matchCount = significantWords.filter((w) => goalsLower.includes(w)).length;
-      return matchCount < Math.min(2, significantWords.length);
-    });
-
-    if (missingSubtasks.length > 0) {
-      const currentGoals = (overviewDoc.goals || '').trim();
-      const existingNumberedCount = (currentGoals.match(/^\d+\./gm) || []).length;
-      const appendedGoals = missingSubtasks
-        .map((s, idx) => `${existingNumberedCount + idx + 1}. Complete subtask: ${s.text}${s.isDone ? ' [Completed]' : ''}`)
-        .join('\n');
-      overviewDoc.goals = currentGoals ? `${currentGoals}\n${appendedGoals}` : appendedGoals;
-    }
-  }
-
-  const combinedText = `${task.category} ${task.title} ${task.subtasks.map((s) => s.text).join(' ')} ${overviewDoc.output_as} ${overviewDoc.brief || ''}`;
+  const combinedText = `${task.category} ${task.title} ${task.subtasks.map((s) => s.text).join(' ')} ${overviewDoc.raw}`;
   let taskKind: TaskKind = normalizeTaskKind(parsed?.taskKind);
   if (!taskKind || taskKind === 'other') {
     taskKind = inferTaskKind(combinedText);
@@ -249,7 +266,7 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
     }
   }
 
-  const outputText = (overviewDoc.output_as || '').toLowerCase();
+  const outputText = overviewDoc.raw.toLowerCase();
   const titleText = (task.title || '').toLowerCase();
   const isStandaloneSingleDeliverable =
     /\.(html|htm|jsx|tsx|vue|svelte|py|sh|ts|js|md|json|css|sql|txt|csv|tsv|yaml|yml)\b/i.test(outputText) ||
@@ -275,7 +292,7 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
     const isMultiFileOrComplex =
       taskKind === 'coding' &&
       !/\b(single|isolated|pure html|standalone|one file)\b/i.test(`${task.title} ${task.subtasks.map((s) => s.text).join(' ')}`) &&
-      (task.subtasks.length >= 3 || (overviewDoc.goals && overviewDoc.goals.split('\n').filter(Boolean).length >= 3));
+      (task.subtasks.length >= 3 || doneWhenCriteria(overviewDoc.raw).length >= 3);
 
     if (isMultiFileOrComplex) {
       requiresHardener = true;
@@ -292,7 +309,7 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
   // ── Related tasks (stage 2) ────────────────────────────────────────────────
   // Fresh: the ids the model picked from the candidates. Reuse: the selection saved with the overview (no call),
   // limited to tasks that are still candidates. Undefined: a reused overview saved before selections existed.
-  const candidates = baseline.relatedCandidates || [];
+  const candidates = relatedSelectionPool(baseline.relatedCandidates || [], baseline.relatedNotes || []);
   let selectedRelatedTaskIds: string[] | undefined;
   if (reusedDoc) {
     selectedRelatedTaskIds = resolveSavedRelatedIds(reusedDoc.relatedTaskIds ? reusedDoc : brief?.overviewDocument, candidates);
@@ -305,10 +322,6 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
         : strictRelatedFallback(candidates);
     Object.assign(overviewDoc, savedRelatedSelection(candidates, selectedRelatedTaskIds));
   }
-  const relatedContext =
-    selectedRelatedTaskIds && selectedRelatedTaskIds.length > 0 && candidates.length > 0
-      ? formatSelectedRelatedContext(candidates, selectedRelatedTaskIds).trim()
-      : '';
 
   const sections = buildBibleSections({
     task,
@@ -319,16 +332,14 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
     requiresHardener,
     hardenerReason,
     allowedRoots: ctx.allowedRoots,
-    guidelines: baseline.guidelines,
-    memoryHits: baseline.memoryHits,
-    relatedContext,
     runId: ctx.runId
   });
 
   addUsage(ctx.usage, usage);
 
-  console.log('%c[Ergo Agent Pipeline] ── Step 2: Summary → Overview & Execution Brief ──', 'color: #f59e0b; font-weight: bold; font-size: 13px;');
-  console.log(JSON.stringify({ brief: overviewDoc.brief, goals: overviewDoc.goals, output_as: overviewDoc.output_as, requiredMcps, taskKind, requiresHardener, hardenerReason }, null, 2));
+  console.log('%c[Ergo Agent Pipeline] ── Step 2: Summary → Working Brief ──', 'color: #f59e0b; font-weight: bold; font-size: 13px;');
+  console.log(overviewDoc.raw);
+  console.log(JSON.stringify({ requiredMcps, taskKind, requiresHardener, hardenerReason }, null, 2));
 
   // The context step shows the selection next to its candidates.
   if (selectedRelatedTaskIds && baseline.contextStep) {
@@ -349,8 +360,8 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
     id: 'step-overview',
     stage: 'overview',
     agentRole: 'summary',
-    title: reusedDoc ? 'Summary AI: Reused Saved Overview (no new call)' : 'Summary AI: Overview & Tool Plan Ready',
-    detail: `${reusedDoc ? 'Reused the overview saved from an earlier run — edit the task to regenerate it. ' : ''}Gherkin brief ready — kind: ${taskKind}${requiredMcps.length > 0 ? ` · MCPs: ${requiredMcps.join(', ')}` : ' · no external MCPs'} · hardener: ${requiresHardener ? 'required' : 'skipped'} · output: ${overviewDoc.output_as.slice(0, 90)}`,
+    title: reusedDoc ? 'Summary AI: Reused Saved Brief (no new call)' : 'Summary AI: Working Brief Ready',
+    detail: `${reusedDoc ? 'Reused the brief saved from an earlier run — edit the task to regenerate it. ' : ''}Working brief ready — kind: ${taskKind}${requiredMcps.length > 0 ? ` · MCPs: ${requiredMcps.join(', ')}` : ' · no external MCPs'} · hardener: ${requiresHardener ? 'required' : 'skipped'}`,
     status: 'success',
     overviewDocument: overviewDoc,
     usage: { ...usage }

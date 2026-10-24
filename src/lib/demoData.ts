@@ -14,8 +14,7 @@ export function createNewProjectData(
   name: string,
   customFolder?: string,
   description?: string,
-  initialTodoMarkdown?: string,
-  initialAgentContextMarkdown?: string
+  initialTodoMarkdown?: string
 ): ProjectData {
   const slug = createSlug(customFolder || name);
   const id = `project-${Date.now()}`;
@@ -30,33 +29,7 @@ export function createNewProjectData(
     - Define project scope and task list
     - Verify AI task execution and vector memory context`;
 
-  const defaultAgentContextMarkdown = `<!-- Project: ${name} | Folder: ${folderPath} -->
-<!-- Linked Tasks: ${todoFilePath} -->
-# ${name} Context — the verbose half of \`${todoFilePath}\`
-
-\`TODO.md\` is the **human** view for ${name}. This file is the **agent** view: the full overview for an item before it's built, mid-task build & verification notes, and the completion record of what was built and where the task stands.
-
-Rules of the split:
-- Sections here mirror \`${todoFilePath}\` **by item number and title** — same numbers, same order.
-- Heavily bound to ${name} (${folderPath}).
-
----
-
-### 1. Initial Task Setup
-
-**Status:** not started
-
-**Overview**
-Setup initial project structure and link human task list with agent context briefs.
-
-**Build & Verification**
-Created project folder structure under ${folderPath} with isolated TODO.md and local vector storage. Verified directory paths and markdown file references.
-
-**Completion**
-Initial project structure initialized. All core links verified.`;
-
   const todoMd = initialTodoMarkdown || defaultTodoMarkdown;
-  const agentMd = initialAgentContextMarkdown || defaultAgentContextMarkdown;
 
   return {
     id,
@@ -65,7 +38,6 @@ Initial project structure initialized. All core links verified.`;
     folderPath,
     todoFilePath,
     todoMarkdown: todoMd,
-    agentContextMarkdown: agentMd,
     connectedMcps: ['mcp-filesystem', 'mcp-fetch', 'mcp-git'],
     swimLanes: [
       {
@@ -102,30 +74,6 @@ export const INITIAL_PROJECTS: ProjectData[] = [
 1. Initial Task Setup
     - Define project scope and task list
     - Verify AI task execution and vector memory context`,
-    agentContextMarkdown: `<!-- Project: Default Workspace | Folder: projects/default-workspace -->
-<!-- Linked Tasks: projects/default-workspace/TODO.md -->
-# Default Workspace Context — the verbose half of \`projects/default-workspace/TODO.md\`
-
-\`TODO.md\` is the **human** view for Default Workspace. This file is the **agent** view: the full overview for an item before it's built, mid-task build & verification notes, and the completion record of what was built and where the task stands.
-
-Rules of the split:
-- Sections here mirror \`projects/default-workspace/TODO.md\` **by item number and title** — same numbers, same order.
-- Heavily bound to Default Workspace (projects/default-workspace).
-
----
-
-### 1. Initial Task Setup
-
-**Status:** not started
-
-**Overview**
-Setup initial project structure and link human task list with agent context briefs.
-
-**Build & Verification**
-Created project folder structure under projects/default-workspace with isolated TODO.md and local vector storage. Verified directory paths and markdown file references.
-
-**Completion**
-Initial project structure initialized. All core links verified.`,
     swimLanes: [
       {
         id: 'lane-default',
@@ -159,7 +107,7 @@ export const DEMO_PROJECTS = INITIAL_PROJECTS;
 export const RETIRED_MCP_SERVER_IDS: ReadonlySet<string> = new Set(['mcp-laya']);
 
 /**
- * A saved MCP server list (e.g. localStorage `ergo_mcp_servers`) without retired servers, so existing users lose
+ * A saved MCP server list (config/mcp-servers.json) without retired servers, so existing users lose
  * them cleanly instead of keeping them as "custom" servers. Anything that isn't an array is returned unchanged.
  */
 export function removeRetiredMcpServers<T>(saved: T): T {

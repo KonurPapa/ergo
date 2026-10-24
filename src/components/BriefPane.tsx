@@ -31,6 +31,8 @@ import {
   agentStatusLabel,
 } from './AgentSessionTabs';
 import { hasUsableOverview, isOverviewStale, overviewTaskFingerprint } from '../lib/overviewUtils';
+import { isTaskBrief } from '../lib/agentPipeline/taskBrief';
+import { openFileInIdeOrSystem } from '../lib/mcpClient';
 import { promptSummary } from '../lib/cliPromptParser';
 import { StepStatusIcon, StepUsageBadge, PieceChip, BiblePreview, RelatedTasksPanel } from './ExecutionStepExtras';
 import { BvTokenCounterCard, type TaskBilling } from './BvTokenCounterCard';
@@ -72,7 +74,9 @@ import {
   SlidersHorizontal,
   Copy,
   Check,
-  CornerUpLeft
+  CornerUpLeft,
+  BookOpen,
+  ExternalLink
 } from 'lucide-react';
 
 import { RichTextToolbar } from './RichTextToolbar';
@@ -446,7 +450,6 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   const [completionText, setCompletionText] = useState('');
   const [viewModeSection2, setViewModeSection2] = useState<'notes' | 'steps'>('notes');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [isGherkinOpen, setIsGherkinOpen] = useState(false);
   const [isPurgeConfirmOpen, setIsPurgeConfirmOpen] = useState(false);
   const [isMcpModalOpen, setIsMcpModalOpen] = useState(false);
 
@@ -504,25 +507,14 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 
   const summaryDoc = summaryStep?.overviewDocument || null;
 
-  const gherkinBrief = React.useMemo(() => {
-    if (summaryDoc?.brief && summaryDoc.brief.trim().length > 0) return summaryDoc.brief.trim();
-    if (brief?.brief && brief.brief.includes('Feature:')) return brief.brief.trim();
-    const match = overviewText.match(/## Acceptance Brief \(Gherkin\)\s*```gherkin([\s\S]*?)```/);
-    if (match) return match[1].trim();
-    if (brief?.brief && brief.brief.trim().length > 0 && brief.brief.trim() !== overviewText.trim()) return brief.brief.trim();
-    return '';
-  }, [summaryDoc?.brief, brief?.brief, overviewText]);
+  // What the Summary document shows: the working brief (or, for an overview saved before it, its goals).
+  const summaryDocContent = React.useMemo(() => (summaryDoc ? (summaryDoc.raw || summaryDoc.goals || '').trim() : ''), [summaryDoc]);
 
-  const overviewDisplayContent = React.useMemo(() => {
-    return overviewText.replace(/## Acceptance Brief \(Gherkin\)\s*```gherkin[\s\S]*?```\s*/g, '').trim();
-  }, [overviewText]);
-
-  // What the Summary document shows: its goals, or (CLI runs, whose document has no output_as) the full overview.
-  const summaryDocContent = React.useMemo(() => {
-    if (!summaryDoc) return '';
-    const content = summaryDoc.output_as ? summaryDoc.goals : summaryDoc.goals || summaryDoc.raw || '';
-    return (content || '').replace(/## Acceptance Brief \(Gherkin\)\s*```gherkin[\s\S]*?```\s*/g, '').trim();
-  }, [summaryDoc]);
+  // The latest run's TASK_CONTEXT.md bible (the brief as handed to the manager, plus the run's log).
+  const bibleFilePath = React.useMemo(() => {
+    for (let i = executionSteps.length - 1; i >= 0; i--) if (executionSteps[i].bibleFilePath) return executionSteps[i].bibleFilePath;
+    return undefined;
+  }, [executionSteps]);
 
   // An overview exists only once a run's Summary step generated it (or the user wrote one) — shared rule with the
   // run launcher (lib/overviewUtils). A newly added task stays empty: text copied from the task never shows here.
@@ -541,7 +533,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     if (summaryDoc) return true;
     const trimmed = overviewText.trim();
     if (!trimmed || !isRealOverview) return false;
-    return /Scenario:|Given |Feature:|## (?:Acceptance Brief|Brief|Goals|Output)/.test(trimmed);
+    return isTaskBrief(trimmed);
   }, [summaryDoc, overviewText, isRealOverview]);
 
   // Determine if this task has already been started
@@ -703,9 +695,9 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     if (!bc.relatedCandidates) {
       return { relatedSummaryTag: `${bc.memoryHits?.length || 0} hits · ${bc.guidelines?.length || 0} guidelines`, relatedSelectedCount: 0 };
     }
-    const total = bc.relatedCandidates.length;
+    const total = bc.relatedCandidates.length + (bc.relatedNotes?.length || 0);
     if (total === 0) return { relatedSummaryTag: 'none found', relatedSelectedCount: 0 };
-    const known = new Set(bc.relatedCandidates.map((c) => String(c.taskId)));
+    const known = new Set([...bc.relatedCandidates.map((c) => String(c.taskId)), ...(bc.relatedNotes || []).map((n) => n.id)]);
     const selectedCount = bc.selectedRelatedTaskIds ? bc.selectedRelatedTaskIds.filter((id) => known.has(String(id))).length : null;
     const candidatesLabel = `${total} candidate${total === 1 ? '' : 's'}`;
     return {
@@ -1781,6 +1773,18 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 
               {shownStage === 'overview' && (
                 <div className="ai-sub-card-body stage-panel" role="tabpanel">
+                  {bibleFilePath && (
+                    <button
+                      type="button"
+                      className="bible-deep-link"
+                      onClick={() => { void openFileInIdeOrSystem(bibleFilePath); }}
+                      title={`Open the run's bible: the brief exactly as handed to the manager, plus the execution log (${bibleFilePath})`}
+                    >
+                      <BookOpen size={11} />
+                      <span>TASK_CONTEXT.md</span>
+                      <ExternalLink size={10} />
+                    </button>
+                  )}
                   {isOverviewOutdated && !isOverviewSynthesizing && (
                     <div className="stage-panel-note">The task changed after this overview was written. The next run writes a new one.</div>
                   )}
@@ -1815,29 +1819,12 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                     <div className="brief-markdown-render">
                       {summaryDoc && !showOverviewText ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
-                          {/* <div className="goals-brief-title">Goals & Success Criteria</div> */}
                           <div style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: '1.45' }}>
-                            <MarkdownRenderer content={summaryDocContent || overviewDisplayContent || overviewText} />
+                            <MarkdownRenderer content={summaryDocContent || overviewText} />
                           </div>
-                          {/* {summaryDoc.goals && (
-                            <div className="goals-brief-box">
-                              <div className="goals-brief-title">Goals & Success Criteria</div>
-                              <div style={{ fontSize: '0.78rem', whiteSpace: 'pre-wrap', color: 'var(--text-main)', lineHeight: '1.45' }}>
-                                {summaryDoc.goals}
-                              </div>
-                            </div>
-                          )} */}
-                          {summaryDoc.output_as && (
-                            <div className="output-brief-box">
-                              <div className="output-brief-title">Completion Goal</div>
-                              <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
-                                {summaryDoc.output_as}
-                              </span>
-                            </div>
-                          )}
                         </div>
                       ) : (
-                        <MarkdownRenderer content={overviewDisplayContent || overviewText} />
+                        <MarkdownRenderer content={overviewText} />
                       )}
                     </div>
                   ) : (
@@ -2048,48 +2035,6 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                             <span>Agent terminals</span>
                           </div>
                           {unclaimedAgents.map((agent) => renderAgentTerminal(agent))}
-                        </div>
-                      )}
-
-                      {/* Acceptance Brief (Gherkin Scenarios) - Collapsed by default */}
-                      {gherkinBrief && (
-                        <div className={`ai-step-gherkin-card ${isGherkinOpen ? 'is-open' : 'is-collapsed'}`}>
-                          <div
-                            className="ai-step-gherkin-header"
-                            onClick={() => setIsGherkinOpen((v) => !v)}
-                            title={isGherkinOpen ? 'Collapse Acceptance Brief' : 'Expand Acceptance Brief'}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                              <button
-                                type="button"
-                                className={`card-collapse-btn ${!isGherkinOpen ? 'is-collapsed' : ''}`}
-                                aria-label={isGherkinOpen ? 'Collapse Acceptance Brief' : 'Expand Acceptance Brief'}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setIsGherkinOpen((v) => !v);
-                                }}
-                              >
-                                <ChevronDown size={11} className="collapse-chevron" />
-                              </button>
-                              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                                <span>🥒</span>
-                                <span>Acceptance Brief (Gherkin Scenarios)</span>
-                              </span>
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                              <span className="card-item-tag-completed" style={{ fontSize: '0.65rem' }}>
-                                Gherkin Spec
-                              </span>
-                            </div>
-                          </div>
-
-                          {isGherkinOpen && (
-                            <div className="ai-step-gherkin-body">
-                              <pre className="gherkin-brief-pre">
-                                {gherkinBrief}
-                              </pre>
-                            </div>
-                          )}
                         </div>
                       )}
 

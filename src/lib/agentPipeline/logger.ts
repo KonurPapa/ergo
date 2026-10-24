@@ -39,7 +39,7 @@ export interface LoggerArgs {
   usedToolCalling: boolean;
   hardener?: HardenerResult;
   qaAttempts: number;
-  allScenariosPass: boolean;
+  allCriteriaPass: boolean;
   overviewDoc?: OverviewDocument;
 }
 
@@ -66,7 +66,7 @@ export async function runLogger(
     : '';
 
   const hardenerText = args.hardener
-    ? `QA verdict: ${args.hardener.verdict.toUpperCase()}${args.hardener.failures.length ? `\nQA failures:\n${args.hardener.failures.map((f) => `- [${f.scenario}] ${f.diagnostics}`).join('\n')}` : ''}${args.hardener.evidence ? `\nQA evidence: ${args.hardener.evidence.slice(0, 1200)}` : ''}`
+    ? `QA verdict: ${args.hardener.verdict.toUpperCase()}${args.hardener.failures.length ? `\nQA failures:\n${args.hardener.failures.map((f) => `- [${f.criterion}] ${f.diagnostics}`).join('\n')}` : ''}${args.hardener.evidence ? `\nQA evidence: ${args.hardener.evidence.slice(0, 1200)}` : ''}`
     : 'QA verdict: (hardener disabled)';
 
   const userPrompt =
@@ -75,7 +75,7 @@ export async function runLogger(
     `Original Subtasks: ${task.subtasks.map((s) => `${s.isHumanReview ? '[human review] ' : ''}${s.text}`).join('; ') || 'none'}\n` +
     `Task is flagged for human review: ${task.isHumanReview ? 'YES' : 'NO'}\n` +
     `Manager attempts (QA retries): ${args.qaAttempts}\n` +
-    `Manager verification: ${args.allScenariosPass ? 'all scenarios pass' : 'NOT all scenarios pass'}\n` +
+    `Manager verification: ${args.allCriteriaPass ? 'all criteria pass' : 'NOT all criteria pass'}\n` +
     `Files written during execution: ${args.createdFiles.length > 0 ? args.createdFiles.join(', ') : 'none detected'}\n` +
     `Token usage (whole run): ${formatUsage(ctx.usage)}\n` +
     `Execution bible on disk: ${bible.filePath}\n\n` +
@@ -115,7 +115,7 @@ export async function runLogger(
     if (e?.name === 'AbortError') throw e;
     console.warn('[Ergo Logger] falling back to deterministic record:', e?.message || e);
     buildAndVerificationContent = `**Build Record (${buildDate}):**\n\n${bible.renderEventLog({ last: 6 })}`;
-    completionContent = `**Completion (${buildDate}):**\n\n${args.allScenariosPass ? 'Manager verified all scenarios.' : 'Manager verification did not confirm all scenarios.'} ${hardenerText.split('\n')[0]}.${workerPatternNote}`;
+    completionContent = `**Completion (${buildDate}):**\n\n${args.allCriteriaPass ? 'Manager verified every "Done when" criterion.' : 'Manager verification did not confirm every "Done when" criterion.'} ${hardenerText.split('\n')[0]}.${workerPatternNote}`;
   }
   addUsage(ctx.usage, usage);
 
@@ -131,14 +131,14 @@ export async function runLogger(
   // QA outcome drives human review.
   if (args.hardener?.verdict === 'fail') {
     needsHumanReview = true;
-    for (const f of args.hardener.failures) humanReviewSteps.push(`QA failed: ${f.scenario} — ${f.diagnostics.slice(0, 160)}`);
+    for (const f of args.hardener.failures) humanReviewSteps.push(`QA failed: ${f.criterion} — ${f.diagnostics.slice(0, 160)}`);
   } else if (args.hardener?.verdict === 'inconclusive') {
     needsHumanReview = true;
     humanReviewSteps.push(`Manually confirm QA: ${(args.hardener.evidence || 'the hardener could not obtain evidence').slice(0, 160)}`);
   }
-  if (!args.allScenariosPass && !humanReviewSteps.some((s) => s.startsWith('Manager verification'))) {
+  if (!args.allCriteriaPass && !humanReviewSteps.some((s) => s.startsWith('Manager verification'))) {
     needsHumanReview = true;
-    humanReviewSteps.push('Manager verification did not confirm every scenario — inspect the event log in TASK_CONTEXT.md.');
+    humanReviewSteps.push('Manager verification did not confirm every "Done when" criterion — inspect the event log in TASK_CONTEXT.md.');
   }
 
   // Preserve existing human review subtasks and merge new ones.
@@ -249,7 +249,7 @@ export async function runLogger(
       buildLog: buildAndVerificationContent,
       completion: completionContent,
       createdFiles: allCreatedFiles,
-      allScenariosPass: args.allScenariosPass,
+      allCriteriaPass: args.allCriteriaPass,
       qaVerdict: args.hardener?.verdict,
       eventLog: bible.renderEventLog({ last: 20 }),
     };

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { getPref, removePref, setPref } from '../lib/userPrefs';
 import { type AIProviderId, type UserApiKey } from '../types';
 import {
   fetchCliAuthStatus,
@@ -234,7 +235,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   const checkStatus = async (cliName: string) => {
     setIsCheckingAuth(true);
     try {
-      const isExplicitlyDisconnected = localStorage.getItem(`ergo_disconnected_${selectedProvider}`) === 'true';
+      const isExplicitlyDisconnected = getPref(`ergo_disconnected_${selectedProvider}`) === 'true';
       const status = await fetchCliAuthStatus(cliName);
       if (isExplicitlyDisconnected) {
         setAuthStatus({
@@ -286,7 +287,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           );
           localStorage.setItem('ergo_user_api_keys', JSON.stringify(filtered));
         }
-        localStorage.setItem(`ergo_disconnected_${currentMeta.id}`, 'true');
+        setPref(`ergo_disconnected_${currentMeta.id}`, 'true');
       } catch { }
 
       // 3. Notify parent app to purge secrets and active keys in memory and storageManager
@@ -406,7 +407,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     }
 
     try {
-      localStorage.removeItem(`ergo_disconnected_${selectedProvider}`);
+      removePref(`ergo_disconnected_${selectedProvider}`);
     } catch { }
 
     setIsConnectingSubscription(true);

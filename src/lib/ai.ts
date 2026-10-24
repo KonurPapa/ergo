@@ -20,11 +20,13 @@ import {
 } from '../types';
 import { callMcpTool, formatConnectionsForAiPrompt, getAllowedRoots } from './mcpClient';
 import { storageManager } from './storageManager';
-import { parseTodoMarkdown, parseAgentContextMarkdown } from './parser';
-import { callAiEngine, stripSkillFrontmatter, extractStringFromAiValue } from './llmClient';
-import { type SearchResult, runSessionRetrospective, type RetrospectiveInput } from './memory';
+import { parseTodoMarkdown } from './parser';
+import { callAiEngine, stripSkillFrontmatter } from './llmClient';
+import { runSessionRetrospective, type RetrospectiveInput } from './memory';
 import { extractTaskRatingLine } from './agentPipeline/taskRating';
-import { TASK_RATING_SCALES } from './agentPipeline/autoRouter';
+import { buildOfflineTaskBrief, buildTaskBriefPrompts } from './agentPipeline/taskBrief';
+import { resolveRequiredMcps } from './agentPipeline/summary';
+import { loadPipelineSkill } from './agentPipeline/skills';
 
 // The agent execution pipeline (Discovery → Summary → Manager → Cleaner → Hardener → Logger)
 // lives in ./agentPipeline. Re-exported here so existing imports keep working.
@@ -33,213 +35,15 @@ export { callAiEngine } from './llmClient';
 
 
 /**
- * Drafts new scannable tasks for TODO.md and verbose briefs for AGENT_CONTEXT.md
- */
-export async function draftTasksWithAi(
-  userPrompt: string,
-  _currentProject: ProjectData,
-  aiConfig: AIProviderConfig,
-  connectedMcps: MCPServer[]
-): Promise<{ newTasks: Partial<TaskItem>[]; newBriefs: Partial<AgentContextItem>[] }> {
-  const mcpNames = connectedMcps.filter((m) => m.status === 'connected').map((m) => m.name);
-  const runtimeConnectionsPrompt = formatConnectionsForAiPrompt(connectedMcps);
-
-  // If real AI credentials are set for OpenAI, Anthropic, Gemini, or Ollama, make live call to provider
-  if (aiConfig.provider !== 'none' && aiConfig.provider !== 'mock' && (aiConfig.apiKey || aiConfig.provider === 'ollama')) {
-    try {
-      const systemPrompt = `You are Ergo AI, an agentic workspace task architect.
-Given a user project goal, generate dual-layer project tasks:
-1) Scannable TODO task items for TODO.md
-2) Detailed technical context briefs for AGENT_CONTEXT.md with Overview, Build & Verification, and Completion sections.
-
-${runtimeConnectionsPrompt}
-
-SUBTASK RULES:
-- Subtasks represent the concrete, sequential steps or broken-out components of a task.
-- Single-ask / Atomic tasks = NO subtasks ("subtasks": []). NEVER generate artificial filler subtasks.
-- Only include subtasks if the task genuinely has multiple distinct execution steps.
-- NEVER use generic boilerplate like "Research and plan...", "Implement core work...", or "Review and validate...".
-
-Select appropriate tools from the active runtime connections listed above for each task's "mcpRequired" array where relevant.
-
-Respond strictly with valid JSON matching this schema:
-{
-  "tasks": [
-    {
-      "title": "Task title",
-      "category": "Core Tasks",
-      "isHumanReview": false,
-      "subtasks": [],
-      "mcpRequired": ["tool_name"]
-    }
-  ],
-  "briefs": [
-    {
-      "title": "Task title",
-      "overview": "**Done-State:** User visible behavior\\n\\n**In Context:** Evaluated in relationship to overall project goals and other tasks\\n\\n**Seams:** Affected code files & constraints",
-      "buildAndVerification": "",
-      "completion": ""
-    }
-  ]
-}`;
-      const responseText = await callAiEngine(userPrompt, systemPrompt, aiConfig, 'general');
-      const cleanJson = responseText.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
-      const parsed = JSON.parse(cleanJson);
-      if (parsed.tasks && parsed.briefs && Array.isArray(parsed.tasks)) {
-        return {
-          newTasks: parsed.tasks,
-          newBriefs: parsed.briefs.map((b: any) => ({
-            ...b,
-            overview: b.overview || b.brief || '',
-            buildAndVerification: b.buildAndVerification || b.built || '',
-            completion: b.completion || b.validation || b.humanReview || '',
-            brief: b.overview || b.brief || '',
-            built: b.buildAndVerification || b.built || '',
-            validation: b.completion || b.validation || ''
-          }))
-        };
-      }
-    } catch (e: any) {
-      console.warn(`[Ergo AI] ${aiConfig.provider} live API call notice (falling back to native workspace generator):`, e.message);
-    }
-  }
-
-  await new Promise((resolve) => setTimeout(resolve, 1200)); // Simulated thinking time
-
-  if (userPrompt.toLowerCase().includes('vscode') || userPrompt.toLowerCase().includes('vs code') || userPrompt.toLowerCase().includes('editor') || userPrompt.toLowerCase().includes('markdown')) {
-    return {
-      newTasks: [
-        {
-          title: 'VS Code Editor Live Document Sync & Edit Automation',
-          category: 'MCP Access',
-          status: 'not_started',
-          isDone: false,
-          isHumanReview: true,
-          subtasks: [
-            { id: 'sub-v1', text: 'Connect VS Code Editor MCP via local stdio IPC bridge', isDone: false },
-            { id: 'sub-v2', text: 'Drive active editor file edits in sync with TODO.md & AGENT_CONTEXT.md', isDone: false },
-            { id: 'sub-v3', text: 'Verify bi-directional change propagation in VS Code workspace', isDone: false, isHumanReview: true }
-          ],
-          mcpRequired: ['vscode_edit_document', 'vscode_sync_markdown']
-        }
-      ],
-      newBriefs: [
-        {
-          title: 'VS Code Editor Live Document Sync & Edit Automation',
-          status: 'not started',
-          overview: `**Done-State:** Enable Ergo to drive live edits inside VS Code active document buffer and sync plain markdown files (\`TODO.md\` and \`AGENT_CONTEXT.md\`) in real-time.\n\n` +
-                    `**In Context:** Evaluated alongside workspace editor tools to ensure non-destructive live synchronization.\n\n` +
-                    `**Seams:** \`vscode-ipc://ergo-vscode-bridge\`, \`edit_active_document\`, \`sync_markdown_files\`.\n` +
-                    `**Connected MCPs:** ${mcpNames.join(', ') || 'VS Code Editor MCP'}`,
-          buildAndVerification: '',
-          completion: '',
-          brief: `**Done-State:** Enable Ergo to drive live edits inside VS Code active document buffer and sync plain markdown files in real-time.`,
-          built: '',
-          validation: ''
-        }
-      ]
-    };
-  }
-
-  if (userPrompt.toLowerCase().includes('pdf') || userPrompt.toLowerCase().includes('bluebeam') || userPrompt.toLowerCase().includes('scale') || userPrompt.toLowerCase().includes('takeoff')) {
-    return {
-      newTasks: [
-        {
-          title: 'High-DPI Plan Sheet Scale Auto-Calibration',
-          category: 'Missing features todos',
-          status: 'not_started',
-          isDone: false,
-          isHumanReview: true,
-          subtasks: [
-            { id: 'sub-1', text: 'Run OCR cascade (pdf.js -> tesseract.js -> Vision AI) on title block', isDone: false },
-            { id: 'sub-2', text: 'Verify 1/4" = 1\'-0" scale fraction against paper dimensions', isDone: false, isHumanReview: true }
-          ],
-          mcpRequired: ['bluebeam']
-        },
-        {
-          title: 'Export Layered Diff PDF for Revision Compare',
-          category: 'Import/Export',
-          status: 'not_started',
-          isDone: false,
-          subtasks: [
-            { id: 'sub-3', text: 'Generate low-level /OCG optional content layers using pdflayers.js', isDone: false },
-            { id: 'sub-4', text: 'Embed v1 JSON metadata into PDF stream for re-import recovery', isDone: false }
-          ],
-          mcpRequired: ['bluebeam', 'gdrive']
-        }
-      ],
-      newBriefs: [
-        {
-          title: 'High-DPI Plan Sheet Scale Auto-Calibration',
-          status: 'not started',
-          brief: `**Goal:** Automatically detect and calibrate paper scale fractions (e.g. 1/8"=1'-0", 1/4"=1'-0") from vector PDF title blocks.\n\n` +
-                 `**Seams:** \`lib/scaleOcr.js\`, \`lib/ocrgate.js\`, \`lib/titleblock.js\`.\n` +
-                 `**Quality Gate:** Floor confidence at 62 for free text, 40 for canonical scale matches.\n` +
-                 `**Connected MCPs:** ${mcpNames.join(', ') || 'Bluebeam MCP'}`,
-          built: '',
-          validation: '',
-          humanReview: 'Test against 300 DPI scanned raster blueprints and verify OCR bounding boxes.',
-          followUps: 'Test against 300 DPI scanned raster blueprints and verify OCR bounding boxes.'
-        },
-        {
-          title: 'Export Layered Diff PDF for Revision Compare',
-          status: 'not started',
-          brief: `**Goal:** Emit ISO-32000 compliant PDF layers (/OCG) containing base sheet, revision overlay, and diff clouds.\n\n` +
-                 `**Seams:** \`lib/pdflayers.js\`, \`lib/diffpdf.js\`.\n` +
-                 `**Out of Scope:** Automatic AI redrawing of changed polyline geometry.`,
-          built: '',
-          validation: '',
-          humanReview: 'Verify in Adobe Acrobat and Bluebeam Revu layer panel for correct OCG grouping.',
-          followUps: 'Verify in Adobe Acrobat and Bluebeam Revu layer panel for correct OCG grouping.'
-        }
-      ]
-    };
-  }
-
-  // Default generated task from user prompt (atomic ask = no artificial subtasks)
-  const cleanTitle = userPrompt.slice(0, 50).trim();
-  return {
-    newTasks: [
-      {
-        title: cleanTitle || 'New Feature Workflow',
-        category: 'Major TODOs for beta',
-        status: 'not_started',
-        isDone: false,
-        isHumanReview: userPrompt.toLowerCase().includes('review'),
-        subtasks: [],
-        mcpRequired: mcpNames.slice(0, 2)
-      }
-    ],
-    newBriefs: [
-      {
-        title: cleanTitle || 'New Feature Workflow',
-        status: 'not started',
-        brief: `**Goal:** ${userPrompt}\n\n` +
-               `**Target Seams:** Main application components, storage engine, and MCP bridges.\n` +
-               `**Data Model:** Additive schema updates. Fully backwards compatible.\n` +
-               `**Connected MCP Tools:** ${mcpNames.join(', ') || 'Local Workspace'}`,
-        built: '',
-        validation: '',
-        humanReview: 'Inspect performance impact, verify memory footprint, and confirm UI responsiveness.',
-        followUps: 'Inspect performance impact, verify memory footprint, and confirm UI responsiveness.'
-      }
-    ]
-  };
-}
-
-
-/**
- * Executes a 3-agent sequential AI pipeline:
- * 1. AI 1 (assistant-context-analyzer): Skims headers & tasks, extracts relevance & context (<= 200 words).
- * 2. AI 2 (assistant-todo-builder): Builds TODO.md task structure in native markdown.
- * 3. AI 3 (assistant-context-syncer): Syncs AGENT_CONTEXT.md and drafts rich Overviews.
- * Logs each agent's output to console before handoff.
+ * The Human AI Assistant: a 2-step pipeline that edits the human task list.
+ * 1. AI 1 (assistant-context-analyzer): skims the task list, extracts relevance & context (<= 200 words).
+ * 2. AI 2 (assistant-todo-builder): writes the updated TODO.md in native markdown.
+ * Tasks get no overview here: a run's Summary step writes each task's working brief when it first runs.
  */
 export async function runHumanAiAssistant(
   userPrompt: string,
   intent: HumanAiIntent = 'task',
   currentTodoMarkdown: string,
-  currentAgentContextMarkdown: string,
   project: ProjectData,
   aiConfig: AIProviderConfig,
   connectedMcps: MCPServer[],
@@ -247,21 +51,16 @@ export async function runHumanAiAssistant(
 ): Promise<HumanAiAssistantResult> {
   const allowedRoots = await getAllowedRoots();
   const runtimeConnectionsPrompt = formatConnectionsForAiPrompt(connectedMcps, allowedRoots);
-  const mcpNames = connectedMcps.filter((m) => m.status === 'connected').map((m) => m.name);
 
-  // Load the 3 dedicated skill instructions
-  const [skill1Raw, skill2Raw, skill3Raw] = await Promise.all([
+  const [skill1Raw, skill2Raw] = await Promise.all([
     storageManager.loadSkillDoc('assistant-context-analyzer'),
-    storageManager.loadSkillDoc('assistant-todo-builder'),
-    storageManager.loadSkillDoc('assistant-context-syncer')
+    storageManager.loadSkillDoc('assistant-todo-builder')
   ]);
 
   const skill1Doc = stripSkillFrontmatter(skill1Raw);
   const skill2Doc = stripSkillFrontmatter(customSkillDoc || skill2Raw);
-  const skill3Doc = stripSkillFrontmatter(skill3Raw);
 
   const safeTodoMarkdown = currentTodoMarkdown || '';
-  const safeAgentContextMarkdown = currentAgentContextMarkdown || '';
 
   const modeGuidance = intent === 'architect'
     ? `OPERATIONAL MODE: ARCHITECT MODE (ALWAYS NUMEROUS TASKS — HIGHER-LEVEL ROADMAP)
@@ -296,7 +95,7 @@ export async function runHumanAiAssistant(
   // ─── Live 3-Agent Sequential Pipeline (When AI Provider is Connected) ───
   if (aiConfig.provider !== 'none' && aiConfig.provider !== 'mock' && (aiConfig.apiKey || aiConfig.provider === 'ollama')) {
     try {
-      console.log('%c[Ergo AI Assistant] 🚀 Starting 3-Agent Pipeline...', 'color: #6366f1; font-weight: bold;');
+      console.log('%c[Ergo AI Assistant] 🚀 Starting 2-Agent Pipeline...', 'color: #6366f1; font-weight: bold;');
 
       // ── Step 1: AI 1 — Context & Relevance Analyzer ──
       const ai1SystemPrompt = `You are AI 1 (Context & Relevance Analyzer) in Ergo.
@@ -307,7 +106,7 @@ ACTIVE MCP CONNECTIONS & PERMITTED ROOTS:
 ${runtimeConnectionsPrompt}
 
 YOUR TASK:
-1. Skim the current categories, task titles, subtasks, and briefs in TODO.md and AGENT_CONTEXT.md.
+1. Skim the current categories, task titles and subtasks in TODO.md.
 2. Compare them against the user request.
 3. Extract relevant existing structures to copy/mirror, target category, next task number, constraints, and relevant active MCP tools.
 4. Output a concise analysis strictly under 200 words.
@@ -315,11 +114,6 @@ YOUR TASK:
 CURRENT TODO.md:
 \`\`\`markdown
 ${safeTodoMarkdown}
-\`\`\`
-
-CURRENT AGENT_CONTEXT.md:
-\`\`\`markdown
-${safeAgentContextMarkdown}
 \`\`\``;
 
       // Step 1: AI 1 uses primary task model ('general')
@@ -327,7 +121,7 @@ ${safeAgentContextMarkdown}
       const ai1Response = await callAiEngine(userPrompt, ai1SystemPrompt, aiConfig, ai1ModelType, 'text');
       const ai1Analysis = ai1Response.trim() || 'Standalone request. Create new task(s) matching workspace conventions.';
 
-      console.log('%c[Ergo AI Assistant] ── Step 1 / 3: Context & Relevance Analysis (AI 1) ──', 'color: #38bdf8; font-weight: bold;');
+      console.log('%c[Ergo AI Assistant] ── Step 1 / 2: Context & Relevance Analysis (AI 1) ──', 'color: #38bdf8; font-weight: bold;');
       console.log(ai1Analysis);
 
       // ── Step 2: AI 2 — TODO.md Task Builder ──
@@ -383,84 +177,10 @@ ${ai1Analysis}`;
         }
       }
 
-      console.log('%c[Ergo AI Assistant] ── Step 2 / 3: Updated TODO.md Output (AI 2) ──', 'color: #34d399; font-weight: bold;');
+      console.log('%c[Ergo AI Assistant] ── Step 2 / 2: Updated TODO.md Output (AI 2) ──', 'color: #34d399; font-weight: bold;');
       console.log(updatedTodoMarkdown);
 
-      // ── Step 3: AI 3 — AGENT_CONTEXT.md Syncer & Overview Drafter ──
-      const ai3SystemPrompt = `You are AI 3 (AGENT_CONTEXT.md Syncer & Overview Drafter) in Ergo.
-${skill3Doc ? `\nSKILL INSTRUCTIONS:\n${skill3Doc}\n` : ''}
-
-PROJECT: "${project.name || 'Default Workspace'}" (${project.folderPath})
-ACTIVE MCP CONNECTIONS & PERMITTED ROOTS:
-${runtimeConnectionsPrompt}
-
-YOUR OBJECTIVE:
-Synchronize AGENT_CONTEXT.md so that every task in the new TODO.md has a paired \`### N. Task Title\` section in the exact same numerical order.
-Most importantly, draft or edit rich, domain-specific \`Overview\`s for any new or modified tasks, detailing:
-- **Done-State**: Clear definition of user-visible behavior or completion criteria.
-- **In Context**: How this task connects with the broader system, roadmap, or dependencies.
-- **Seams**: Specific files, libraries, active MCP tools (${mcpNames.join(', ') || 'Local Workspace'}), or APIs involved.
-
-SECTION FORMAT SCHEMA:
-### N. Task Title
-
-**Status:** not started
-
-**Overview**
-
-[Detailed overview describing Done-State, In Context, and Seams]
-
-**Build & Verification**
-
-
-**Completion**
-
-
----
-
-Preserve existing unmodified task sections and file preambles.
-DO NOT TRUNCATE. Output the complete updated AGENT_CONTEXT.md from start to finish.
-
-CURRENT AGENT_CONTEXT.md:
-\`\`\`markdown
-${safeAgentContextMarkdown}
-\`\`\`
-
-NEW TODO.md (Produced by AI 2):
-\`\`\`markdown
-${updatedTodoMarkdown}
-\`\`\`
-
-Output your updated AGENT_CONTEXT.md directly inside a code fence:
-\`\`\`markdown:AGENT_CONTEXT.md
-...complete updated AGENT_CONTEXT.md content...
-\`\`\``;
-
-      const ai3UserPrompt = `USER REQUEST:
-${userPrompt}
-
-AI 1 CONTEXT ANALYSIS:
-${ai1Analysis}
-
-NEW TODO.md TO SYNC:
-${updatedTodoMarkdown}`;
-
-      const ai3Response = await callAiEngine(ai3UserPrompt, ai3SystemPrompt, aiConfig, 'general', 'text');
-      const agentFenceMatch = ai3Response.match(/```(?:markdown)?(?::|\s+)?(?:AGENT_CONTEXT\.md|agent_context|agent)\s*\n([\s\S]*?)```/i);
-      let updatedAgentContextMarkdown = agentFenceMatch ? agentFenceMatch[1].trim() : '';
-
-      if (!updatedAgentContextMarkdown) {
-        const cleanRaw = ai3Response.replace(/^```(?:markdown)?\s*\n/i, '').replace(/\n```$/i, '').trim();
-        if (/^\s*(?:#|###)/m.test(cleanRaw)) {
-          updatedAgentContextMarkdown = cleanRaw;
-        } else {
-          updatedAgentContextMarkdown = safeAgentContextMarkdown;
-        }
-      }
-
-      console.log('%c[Ergo AI Assistant] ── Step 3 / 3: Synchronized AGENT_CONTEXT.md Output (AI 3) ──', 'color: #a78bfa; font-weight: bold;');
-      console.log(updatedAgentContextMarkdown);
-      console.log('%c[Ergo AI Assistant] ── 3-Agent Pipeline Completed Successfully ✅ ──', 'color: #10b981; font-weight: bold;');
+      console.log('%c[Ergo AI Assistant] ── 2-Agent Pipeline Completed Successfully ✅ ──', 'color: #10b981; font-weight: bold;');
 
       const summaryText = intent === 'architect'
         ? `Architected multi-task roadmap structure across workspace.`
@@ -468,15 +188,14 @@ ${updatedTodoMarkdown}`;
 
       return {
         summary: summaryText,
-        todoMarkdown: updatedTodoMarkdown,
-        agentContextMarkdown: updatedAgentContextMarkdown
+        todoMarkdown: updatedTodoMarkdown
       };
     } catch (e: any) {
-      console.warn(`[Ergo AI Assistant] Live API notice (falling back to offline 3-stage generator):`, e.message);
+      console.warn(`[Ergo AI Assistant] Live API notice (falling back to the offline generator):`, e.message);
     }
   }
 
-  // ─── Offline 3-Stage Pipeline Fallback (No API Key or Offline) ───
+  // ─── Offline Fallback (No API Key or Offline) ───
   await new Promise((resolve) => setTimeout(resolve, 600));
 
   // Extract clean task title from user prompt
@@ -563,11 +282,11 @@ ${updatedTodoMarkdown}`;
 - **Structure to Follow**: 4-space indented subtasks, numbered task hierarchy.
 - **Key Data & Constraints**: Extrapolate concrete domain steps for ${interpretedTitle}.`;
 
-  console.log('%c[Ergo AI Assistant] ── Step 1 / 3: Context Analysis (Offline AI 1) ──', 'color: #38bdf8; font-weight: bold;');
+  console.log('%c[Ergo AI Assistant] ── Step 1 / 2: Context Analysis (Offline AI 1) ──', 'color: #38bdf8; font-weight: bold;');
   console.log(offlineAnalysis);
 
   if (intent === 'architect') {
-    // Offline Step 2 & 3: Architect Mode (Multiple Tasks & Subtasks)
+    // Offline Step 2: Architect Mode (Multiple Tasks & Subtasks)
     const architectTasks = [
       {
         title: `Architecture & Data Contracts for ${interpretedTitle}`,
@@ -596,50 +315,36 @@ ${updatedTodoMarkdown}`;
     ];
 
     let newTodoAppend = '';
-    let newContextAppend = '';
 
     architectTasks.forEach((t) => {
       const currentTaskNum = nextNum++;
       const subtaskLines = t.subtasks.map((s) => `    - ${s}`).join('\n');
       newTodoAppend += `${currentTaskNum}. ${t.title}\n${subtaskLines}\n`;
-      newContextAppend += `\n### ${currentTaskNum}. ${t.title}\n\n**Status:** not started\n\n**Overview**\n\n**Done-State:** Complete implementation of ${t.title}.\n\n**In Context:** Part of the broader ${interpretedTitle} architecture.\n\n**Seams:** Core workspace files and active MCP tools (${mcpNames.join(', ') || 'Local Workspace'}).\n\n**Build & Verification**\n\n\n\n**Completion**\n\n\n\n---\n`;
     });
 
     const updatedTodo = safeTodoMarkdown.trimEnd() ? `${safeTodoMarkdown.trimEnd()}\n\n${newTodoAppend}` : newTodoAppend;
-    const updatedAgentContext = safeAgentContextMarkdown.trimEnd() ? `${safeAgentContextMarkdown.trimEnd()}\n${newContextAppend}` : newContextAppend.trimStart();
 
-    console.log('%c[Ergo AI Assistant] ── Step 2 / 3: Updated TODO.md (Offline AI 2) ──', 'color: #34d399; font-weight: bold;');
+    console.log('%c[Ergo AI Assistant] ── Step 2 / 2: Updated TODO.md (Offline AI 2) ──', 'color: #34d399; font-weight: bold;');
     console.log(updatedTodo);
-    console.log('%c[Ergo AI Assistant] ── Step 3 / 3: Synchronized AGENT_CONTEXT.md (Offline AI 3) ──', 'color: #a78bfa; font-weight: bold;');
-    console.log(updatedAgentContext);
-    console.log('%c[Ergo AI Assistant] ── 3-Stage Pipeline Completed (Offline) ✅ ──', 'color: #10b981; font-weight: bold;');
 
     return {
       summary: `Architected 3 structured roadmap tasks and subtasks for "${interpretedTitle}".`,
-      todoMarkdown: updatedTodo,
-      agentContextMarkdown: updatedAgentContext
+      todoMarkdown: updatedTodo
     };
   }
 
-  // Offline Step 2 & 3: Task Mode (Single Task Focus)
+  // Offline Step 2: Task Mode (Single Task Focus)
   const domainSubtasks = generateDomainSubtasks(interpretedTitle, userPrompt);
   const subtasksBlock = domainSubtasks.map((s) => `    - ${s}`).join('\n');
   const newTodoBlock = `${nextNum}. ${interpretedTitle}\n${subtasksBlock}`;
   const updatedTodo = safeTodoMarkdown.trimEnd() ? `${safeTodoMarkdown.trimEnd()}\n${newTodoBlock}\n` : `${newTodoBlock}\n`;
 
-  const newBriefSection = `\n### ${nextNum}. ${interpretedTitle}\n\n**Status:** not started\n\n**Overview**\n\n**Done-State:** Complete execution of ${interpretedTitle} with all subtask verification steps fulfilled.\n\n**In Context:** Fleshed out single task derived from user request: "${userPrompt.slice(0, 100)}${userPrompt.length > 100 ? '...' : ''}".\n\n**Seams:** Main application components, storage engine, and MCP tools (${mcpNames.join(', ') || 'Local Workspace'}).\n\n**Build & Verification**\n\n\n\n**Completion**\n\n\n\n---\n`;
-  const updatedAgentContext = safeAgentContextMarkdown.trimEnd() ? `${safeAgentContextMarkdown.trimEnd()}\n${newBriefSection}` : newBriefSection.trimStart();
-
-  console.log('%c[Ergo AI Assistant] ── Step 2 / 3: Updated TODO.md (Offline AI 2) ──', 'color: #34d399; font-weight: bold;');
+  console.log('%c[Ergo AI Assistant] ── Step 2 / 2: Updated TODO.md (Offline AI 2) ──', 'color: #34d399; font-weight: bold;');
   console.log(updatedTodo);
-  console.log('%c[Ergo AI Assistant] ── Step 3 / 3: Synchronized AGENT_CONTEXT.md (Offline AI 3) ──', 'color: #a78bfa; font-weight: bold;');
-  console.log(updatedAgentContext);
-  console.log('%c[Ergo AI Assistant] ── 3-Stage Pipeline Completed (Offline) ✅ ──', 'color: #10b981; font-weight: bold;');
 
   return {
     summary: `Fleshed out single task #${nextNum}: "${interpretedTitle}".`,
-    todoMarkdown: updatedTodo,
-    agentContextMarkdown: updatedAgentContext
+    todoMarkdown: updatedTodo
   };
 }
 
@@ -672,12 +377,12 @@ export function extractRelatedTaskIdsLine(
 }
 
 /**
- * Runs AI Step 3 (Context Syncer & Overview Drafter) for a single task's Overview:
- * 1. Analyzes drift between the current Overview and the human task definition in TODO.md.
- * 2. Adds/edits missing pieces as necessary, ensuring rich Done-State, In Context, and Seams details.
+ * Writes a task's overview: the manager's working brief (skill docs/skills/task-brief; prompts in
+ * agentPipeline/taskBrief.ts). It is short on purpose — goal, scope, known context, constraints, done-when — and is
+ * the spec CLI task runs hand the manager.
  *
  * With `options.relatedCandidatesPrompt` (stage 1 of related-task matching), the model also picks the candidates
- * that are genuinely useful context for this task (stage 2) and uses them while writing; they come back as
+ * that are genuinely useful context for this task (stage 2) and folds them into the brief; they come back as
  * `relatedTaskIds` (unvalidated against the candidate list — callers intersect them with their candidates).
  *
  * The model also rates the task on a final `TASK_RATING:` line (Auto model selection); it comes back as
@@ -689,147 +394,39 @@ export async function syncTaskOverviewWithAi(
   project: ProjectData,
   aiConfig: AIProviderConfig,
   connectedMcps: MCPServer[],
-  todoMarkdown?: string,
-  _agentContextMarkdown?: string,
-  options: { relatedCandidatesPrompt?: string } = {}
+  options: { relatedCandidatesPrompt?: string; priorKnowledge?: string } = {}
 ): Promise<{ overview: string; relatedTaskIds: string[]; relatedSelectionMade: boolean; taskRating?: TaskRating }> {
-  const relatedCandidatesPrompt = (options.relatedCandidatesPrompt || '').trim();
-  const allowedRoots = await getAllowedRoots();
-  const runtimeConnectionsPrompt = formatConnectionsForAiPrompt(connectedMcps, allowedRoots);
-  const mcpNames = connectedMcps.filter((m) => m.status === 'connected').map((m) => m.name);
-
-  // Load the Step 3 skill instructions (assistant-context-syncer)
-  const skill3Raw = await storageManager.loadSkillDoc('assistant-context-syncer');
-  const skill3Doc = stripSkillFrontmatter(skill3Raw);
-
-  const subtasksList = task.subtasks && task.subtasks.length > 0
-    ? task.subtasks.map((st) => `    - ${st.isDone ? '~~' : ''}${st.isHumanReview ? '**human review** - ' : ''}${st.text}${st.isDone ? '~~' : ''}`).join('\n')
-    : '    (No subtasks defined)';
-
-  const formattedTaskBlock = `${task.id}. ${task.isDone ? '~~' : ''}${task.title}${task.isDone ? '~~' : ''}\n${subtasksList}`;
-
-  // Live 3-Stage Pipeline AI 3 execution
   if (aiConfig.provider !== 'none' && aiConfig.provider !== 'mock' && (aiConfig.apiKey || aiConfig.provider === 'ollama')) {
     try {
-      console.log('%c[Ergo AI Assistant] 🚀 Starting AI Step 3 Overview Syncer...', 'color: #8b5cf6; font-weight: bold;');
-
-      const ai3SystemPrompt = `You are AI 3 (AGENT_CONTEXT.md Syncer & Overview Drafter) in Ergo.
-${skill3Doc ? `\nSKILL INSTRUCTIONS:\n${skill3Doc}\n` : ''}
-
-PROJECT: "${project.name || 'Default Workspace'}" (${project.folderPath})
-ACTIVE MCP CONNECTIONS & PERMITTED ROOTS:
-${runtimeConnectionsPrompt}
-
-YOUR OBJECTIVE:
-Synchronize the Overview for Task #${task.id}: "${task.title}".
-1. **Identify Drift**: First analyze what drift exists between the current Overview and the human task definition (including title, category, status, and all subtasks). Check for:
-   - Newly added, deleted, or modified subtasks in TODO.md not reflected in the Overview.
-   - Status or scope changes (e.g. done/in-progress items).
-   - Missing or outdated Done-State completion criteria.
-   - Missing In Context relationships to the broader system and active workspace.
-   - Missing Seams (files, components, APIs, or active MCP tools: ${mcpNames.join(', ') || 'Local Workspace'}).
-2. **Reconcile & Update**: Add, edit, or reconcile any missing pieces, drift, or gaps. Preserve any valid existing notes, domain context, and rationale, while bringing the Overview into full alignment with the human task.
-3. **Format**: Maintain a rich, structured format covering:
-   - **Done-State**: Clear definition of user-visible behavior or completion criteria matching all subtasks.
-   - **In Context**: How this task connects with the broader system, roadmap, or dependencies.
-   - **Seams**: Specific files, components, active MCP tools (${mcpNames.join(', ') || 'Local Workspace'}), or APIs involved.
-
-OUTPUT FORMAT:
-Output ONLY the final updated markdown content for this task's Overview. Do NOT output markdown code fences around the entire response, and do NOT include the task heading or other sections like Build & Verification / Completion.${relatedCandidatesPrompt ? `
-
-RELATED TASKS:
-The user message lists CANDIDATE RELATED TASKS found by a local similarity search of this project — many are only superficially similar. Pick the ones that are genuinely useful context for THIS task: a shared feature area, a dependency, prior work to build on, or a conflict to avoid. Use them in **In Context** and **Seams**, and to fill gaps when the task itself is sparse. Never copy their requirements into this task.
-After the overview, add exactly one line: RELATED_TASK_IDS: <comma-separated candidate ids> — or RELATED_TASK_IDS: none. 0–5 is typical.` : ''}
-
-TASK RATING:
-End your answer with exactly one line rating how demanding the task is: TASK_RATING: kind=<coding|writing|research|ops|data|other>; complexity=<1-5>; reasoning=<1-5>
-Scales — ${TASK_RATING_SCALES}`;
-
-      const ai3UserPrompt = `HUMAN TASK IN TODO.md:
-\`\`\`markdown
-${formattedTaskBlock}
-\`\`\`
-
-CATEGORY: ${task.category || 'General'}
-STATUS: ${task.isDone ? 'done' : task.status}
-
-CURRENT OVERVIEW:
-\`\`\`markdown
-${currentOverview.trim() || '(Empty - no overview defined yet)'}
-\`\`\`
-${todoMarkdown ? `\nWORKSPACE TODO.md CONTEXT:\n\`\`\`markdown\n${todoMarkdown.slice(0, 1500)}\n\`\`\`` : ''}${
-        relatedCandidatesPrompt ? `\n\nCANDIDATE RELATED TASKS (choose the useful ones; ids in brackets):\n${relatedCandidatesPrompt}` : ''
-      }`;
-
-      const ai3Response = await callAiEngine(ai3UserPrompt, ai3SystemPrompt, aiConfig, 'general', 'text');
-      // The selection line goes first: it may sit after a code fence the model wrapped the overview in.
-      const { text: withoutRelated, relatedTaskIds, found: relatedSelectionMade } = extractRelatedTaskIdsLine(ai3Response);
+      const { system, user } = buildTaskBriefPrompts({
+        task,
+        skill: await loadPipelineSkill('task-brief'),
+        project,
+        serverNames: connectedMcps.filter((m) => m.status === 'connected').map((m) => m.name),
+        currentOverview,
+        relatedCandidatesPrompt: options.relatedCandidatesPrompt,
+        priorKnowledge: options.priorKnowledge,
+      });
+      const response = await callAiEngine(user, system, aiConfig, 'general', 'text');
+      // The selection line goes first: it may sit after a code fence the model wrapped the brief in.
+      const { text: withoutRelated, relatedTaskIds, found: relatedSelectionMade } = extractRelatedTaskIdsLine(response);
       const { text: answerText, rating: taskRating } = extractTaskRatingLine(withoutRelated);
-      let cleanedOverview = answerText.trim();
-
-      // Strip markdown code fence if wrapped
-      const fenceMatch = cleanedOverview.match(/^```(?:markdown)?(?::|\s+)?(?:overview|AGENT_CONTEXT\.md|agent_context)?\s*\n([\s\S]*?)```$/i);
-      if (fenceMatch) {
-        cleanedOverview = fenceMatch[1].trim();
-      }
-
-      // Strip accidental section headers if the model emitted full section schema
-      cleanedOverview = cleanedOverview
-        .replace(/^###\s+.*$/m, '')
-        .replace(/^\*\*Status:\*\*.*$/m, '')
-        .replace(/^\*\*Overview\*\*\s*/m, '')
-        .replace(/\*\*Build & Verification\*\*[\s\S]*$/m, '')
-        .trim();
-
-      if (cleanedOverview) {
-        console.log('%c[Ergo AI Assistant] ── Step 3: Synced Overview Output (AI 3) ──', 'color: #a78bfa; font-weight: bold;');
-        console.log(cleanedOverview);
-        if (relatedCandidatesPrompt) console.log('[Ergo AI Assistant] Related tasks selected:', relatedTaskIds.join(', ') || 'none');
+      const fenced = answerText.trim().match(/^```(?:markdown)?\s*\n([\s\S]*?)```$/i);
+      const overview = (fenced ? fenced[1] : answerText).trim();
+      if (overview) {
+        console.log('%c[Ergo AI Assistant] ── Working brief ──', 'color: #a78bfa; font-weight: bold;');
+        console.log(overview);
+        if (options.relatedCandidatesPrompt) console.log('[Ergo AI Assistant] Related tasks selected:', relatedTaskIds.join(', ') || 'none');
         console.log('[Ergo AI Assistant] Task rating:', taskRating ? `${taskRating.kind} · complexity ${taskRating.complexity} · reasoning ${taskRating.reasoning}` : 'missing');
-        return { overview: cleanedOverview, relatedTaskIds, relatedSelectionMade, ...(taskRating ? { taskRating } : {}) };
+        return { overview, relatedTaskIds, relatedSelectionMade, ...(taskRating ? { taskRating } : {}) };
       }
     } catch (e: any) {
-      console.warn(`[Ergo AI Assistant] Live Step 3 notice (falling back to offline syncer):`, e.message);
+      console.warn('[Ergo AI Assistant] Working brief call failed (using the offline brief):', e.message);
     }
   }
-
-  // ─── Offline Step 3 Fallback ───
-  await new Promise((resolve) => setTimeout(resolve, 400));
-
-  const subtasks = task.subtasks || [];
-  const subtaskBullets = subtasks.length > 0
-    ? subtasks.map((st) => `- ${st.isDone ? '[x] ~~' : '[ ] '}${st.text}${st.isDone ? '~~' : ''}`).join('\n')
-    : `- Complete core deliverable for "${task.title}".`;
-
-  const doneStateSection = `**Done-State:**\n${subtaskBullets}`;
-  const inContextSection = `**In Context:**\nPart of category **${task.category || 'General'}** in \`${project.name || 'Workspace'}\`. Aligned with current roadmap requirements in TODO.md.`;
-  const seamsSection = `**Seams:**\nTarget codebase located in \`${project.folderPath || './'}\` and active MCP tools (${mcpNames.join(', ') || 'Local Workspace'}).`;
-
-  let updatedOverview = '';
-  if (currentOverview && currentOverview.trim()) {
-    // Reconcile drift: check if current overview has Done-State, In Context, or Seams
-    const hasDoneState = /\*\*Done-State:?\*\*/i.test(currentOverview);
-    const hasInContext = /\*\*In Context:?\*\*/i.test(currentOverview);
-    const hasSeams = /\*\*Seams:?\*\*/i.test(currentOverview);
-
-    if (hasDoneState && hasInContext && hasSeams) {
-      // Reconcile subtask checklist drift under Done-State
-      updatedOverview = currentOverview.replace(
-        /\*\*Done-State:?\*\*[\s\S]*?(?=\n\n\*\*In Context|\n\n\*\*Seams|$)/i,
-        doneStateSection
-      );
-    } else {
-      updatedOverview = `${currentOverview.trim()}\n\n---\n\n### Synced Task Context\n\n${doneStateSection}\n\n${inContextSection}\n\n${seamsSection}`;
-    }
-  } else {
-    updatedOverview = `${doneStateSection}\n\n${inContextSection}\n\n${seamsSection}`;
-  }
-
-  console.log('%c[Ergo AI Assistant] ── Step 3: Synced Overview Output (Offline AI 3) ──', 'color: #a78bfa; font-weight: bold;');
-  console.log(updatedOverview);
 
   // No model ran, so nothing was selected.
-  return { overview: updatedOverview, relatedTaskIds: [], relatedSelectionMade: false };
+  return { overview: buildOfflineTaskBrief(task, currentOverview), relatedTaskIds: [], relatedSelectionMade: false };
 }
 
 // ─── Task Execution Pipeline Helpers ────────────────────────────────────────
@@ -894,90 +491,6 @@ export function extractAllWorkspaceTasks(
 }
 
 /**
- * Builds a compact task header index from all project markdown files (all swim lanes + AGENT_CONTEXT.md).
- * Produces only titles, categories, source document labels, and brief overview snippets (NOT full file bodies).
- * Used by the Discovery AI to find relevant context without ingesting entire files.
- */
-export function buildTaskHeaderIndex(
-  swimLanesOrTodo: SwimLaneDoc[] | string | undefined,
-  agentContextMarkdown: string,
-  todoFallback: string = ''
-): string {
-  const allWorkspaceEntries = extractAllWorkspaceTasks(swimLanesOrTodo, todoFallback);
-  const allBriefs = parseAgentContextMarkdown(agentContextMarkdown);
-
-  const lines: string[] = ['TASK HEADER INDEX ACROSS ALL WORKSPACE MARKDOWN DOCUMENTS:'];
-
-  // Group entries by document
-  const byLane = new Map<string, WorkspaceTaskEntry[]>();
-  for (const entry of allWorkspaceEntries) {
-    const key = `${entry.fileName} (${entry.laneTitle})`;
-    if (!byLane.has(key)) byLane.set(key, []);
-    byLane.get(key)!.push(entry);
-  }
-
-  byLane.forEach((entries, laneKey) => {
-    lines.push(`\n=== DOCUMENT: ${laneKey} ===`);
-    for (const { task, fileName } of entries) {
-      const brief = allBriefs.find(
-        (b) =>
-          (b.sourceTaskId != null && b.sourceTaskId === task.id) ||
-          b.title.trim().toLowerCase() === task.title.trim().toLowerCase() ||
-          b.itemNumber === task.id
-      );
-      const snippet = (brief?.overview || brief?.brief || '')
-        .slice(0, 150)
-        .replace(/\n/g, ' ')
-        .trim();
-      const archiveTag = task.isArchived ? ' [ARCHIVED]' : '';
-      const doneTag = task.isDone ? ' [DONE]' : '';
-      lines.push(`#${task.id}. ${task.title} (${task.category}) [Doc: ${fileName}]${archiveTag}${doneTag}`);
-      if (snippet) lines.push(`   Overview: ${snippet}${snippet.length === 150 ? '...' : ''}`);
-    }
-  });
-
-  return lines.join('\n');
-}
-
-/**
- * Returns full task + brief data for a given list of task IDs across all workspace documents.
- * Used to pass only the relevant tasks' context to the Builder AI.
- */
-export function getRelevantTasksContext(
-  relevantIds: (string | number)[],
-  swimLanesOrTodo: SwimLaneDoc[] | string | undefined,
-  agentContextMarkdown: string,
-  todoFallback: string = ''
-): string {
-  if (relevantIds.length === 0) return '';
-  const allWorkspaceEntries = extractAllWorkspaceTasks(swimLanesOrTodo, todoFallback);
-  const allBriefs = parseAgentContextMarkdown(agentContextMarkdown);
-
-  const lines: string[] = ['RELEVANT TASK CONTEXT (from Discovery AI across workspace documents):'];
-  for (const id of relevantIds) {
-    const entry = allWorkspaceEntries.find((e) => e.task.id === id);
-    if (!entry) continue;
-    const { task, fileName, laneTitle } = entry;
-    const brief = allBriefs.find(
-      (b) =>
-        (b.sourceTaskId != null && b.sourceTaskId === task.id) ||
-        b.title.trim().toLowerCase() === task.title.trim().toLowerCase() ||
-        b.itemNumber === task.id
-    );
-    lines.push(`\n### Task #${task.id}: ${task.title} (${task.category}) [Origin: ${fileName} / "${laneTitle}"]${task.isArchived ? ' [ARCHIVED]' : ''}`);
-    if (task.subtasks.length > 0) {
-      lines.push('Subtasks: ' + task.subtasks.map((s) => s.text).join('; '));
-    }
-    if (brief) {
-      if (brief.overview) lines.push(`Overview:\n${brief.overview}`);
-      if (brief.buildAndVerification) lines.push(`Build & Verification:\n${brief.buildAndVerification}`);
-      if (brief.completion) lines.push(`Completion:\n${brief.completion}`);
-    }
-  }
-  return lines.join('\n');
-}
-
-/**
  * Assembles a structured DiscoveryJobPayload object containing the target task
  * straight from the user and delineated entries for every related task discovered.
  */
@@ -985,11 +498,9 @@ export function buildDiscoveryJobPayload(
   targetTask: TaskItem,
   relevantTaskIds: (string | number)[],
   swimLanesOrTodo: SwimLaneDoc[] | string | undefined,
-  agentContextMarkdown: string,
   todoFallback: string = ''
 ): DiscoveryJobPayload {
   const allWorkspaceEntries = extractAllWorkspaceTasks(swimLanesOrTodo, todoFallback);
-  const allBriefs = parseAgentContextMarkdown(agentContextMarkdown);
   const totalTasksScanned = allWorkspaceEntries.length;
   const laneCount = Array.isArray(swimLanesOrTodo) && swimLanesOrTodo.length > 0 ? swimLanesOrTodo.length : 1;
 
@@ -999,13 +510,6 @@ export function buildDiscoveryJobPayload(
     const entry = allWorkspaceEntries.find((e) => e.task.id === id);
     if (!entry) continue;
     const { task, fileName, laneTitle } = entry;
-    const brief = allBriefs.find(
-      (b) =>
-        (b.sourceTaskId != null && b.sourceTaskId === task.id) ||
-        b.title.trim().toLowerCase() === task.title.trim().toLowerCase() ||
-        b.itemNumber === task.id
-    );
-
     additionalContext.push({
       taskId: task.id,
       title: task.title,
@@ -1015,10 +519,7 @@ export function buildDiscoveryJobPayload(
       isArchived: Boolean(task.isArchived),
       sourceDocument: fileName,
       swimLaneTitle: laneTitle,
-      subtasks: task.subtasks.map((s) => (typeof s === 'string' ? s : s.text)),
-      overview: brief?.overview || brief?.brief || undefined,
-      buildAndVerification: brief?.buildAndVerification || brief?.built || undefined,
-      completion: brief?.completion || brief?.validation || undefined
+      subtasks: task.subtasks.map((s) => (typeof s === 'string' ? s : s.text))
     });
   }
 
@@ -1048,145 +549,9 @@ export function buildDiscoveryJobPayload(
 
 
 /**
- * Synthesizes a comprehensive, verbose Overview document and determines
- * the specific MCP tools/servers strictly needed for this task.
- */
-export function buildVerboseOverviewAndRequiredMcps(
-  task: TaskItem,
-  brief: AgentContextItem | undefined,
-  _discoveryPayload?: DiscoveryJobPayload | { additionalContext?: DiscoveredTaskContextEntry[] } | null,
-  connectedMcps: MCPServer[] = [],
-  parsedAiOverview?: Partial<OverviewDocument> & { requiredMcps?: string[] },
-  memoryHits?: SearchResult[]
-): { overviewDoc: OverviewDocument; requiredMcps: string[] } {
-  const activeMcps = connectedMcps.filter((m) => m.status === 'connected');
-
-  // 1. Determine precise MCP requirements for THIS task
-  let resolvedMcps: string[] = [];
-  if (parsedAiOverview && Array.isArray(parsedAiOverview.requiredMcps) && parsedAiOverview.requiredMcps.length > 0) {
-    // Only accept MCPs that match connected servers or tool names
-    resolvedMcps = parsedAiOverview.requiredMcps
-      .map((m) => (typeof m === 'string' ? m.trim() : (m && typeof m === 'object' ? (m as any).name || (m as any).id || '' : '')))
-      .filter((mcpRef) => {
-        if (!mcpRef) return false;
-        const lower = mcpRef.toLowerCase();
-        return activeMcps.some(
-          (m) => m.id.toLowerCase() === lower || m.name.toLowerCase() === lower || m.tools.some((t) => t.name.toLowerCase() === lower)
-        );
-      });
-    // Incorporate user-explicit tools if already configured on the task or brief
-    const userExplicitTools = [
-      ...(task.mcpRequired || []),
-      ...(brief?.requiredMcps || []),
-      ...(brief?.selectedMcpTools || [])
-    ];
-    if (userExplicitTools.length > 0) {
-      resolvedMcps = Array.from(new Set([...resolvedMcps, ...userExplicitTools]));
-    }
-  }
-
-  // If AI didn't specify or we need fallback resolution, intelligently inspect task intent
-  if (resolvedMcps.length === 0) {
-    const textToScan = `${task.title} ${task.subtasks.map((s) => s.text).join(' ')} ${brief?.overview || ''}`.toLowerCase();
-    const hasFs = activeMcps.find((m) => m.id === 'mcp-filesystem' || m.name.toLowerCase().includes('filesystem'));
-    const hasGit = activeMcps.find((m) => m.id === 'mcp-git' || m.name.toLowerCase().includes('git'));
-    const hasFetch = activeMcps.find((m) => m.id === 'mcp-fetch' || m.name.toLowerCase().includes('fetch'));
-    const hasGodot = activeMcps.find((m) => m.id.toLowerCase().includes('godot') || m.name.toLowerCase().includes('godot'));
-    const hasShell = activeMcps.find((m) => m.id.toLowerCase().includes('shell') || m.id.toLowerCase().includes('bash') || m.id.toLowerCase().includes('terminal') || m.tools.some((t) => t.name === 'run_command'));
-
-    if (textToScan.includes('git') || textToScan.includes('commit') || textToScan.includes('branch') || textToScan.includes('repository')) {
-      if (hasGit && !resolvedMcps.includes(hasGit.name)) resolvedMcps.push(hasGit.name);
-    }
-    if (textToScan.includes('fetch') || textToScan.includes('url') || textToScan.includes('http') || textToScan.includes('api') || textToScan.includes('download')) {
-      if (hasFetch && !resolvedMcps.includes(hasFetch.name)) resolvedMcps.push(hasFetch.name);
-    }
-    if (textToScan.includes('godot')) {
-      if (hasGodot && !resolvedMcps.includes(hasGodot.name)) resolvedMcps.push(hasGodot.name);
-    }
-    if (textToScan.includes('cli') || textToScan.includes('headless') || textToScan.includes('terminal') || textToScan.includes('command') || textToScan.includes('script') || textToScan.includes('run') || textToScan.includes('test')) {
-      if (hasShell && !resolvedMcps.includes(hasShell.name)) resolvedMcps.push(hasShell.name);
-    }
-    if (textToScan.includes('file') || textToScan.includes('code') || textToScan.includes('component') || textToScan.includes('create') || textToScan.includes('write') || textToScan.includes('edit') || textToScan.includes('refactor') || textToScan.includes('implement') || textToScan.includes('script') || textToScan.includes('python')) {
-      if (hasFs && !resolvedMcps.includes(hasFs.name)) resolvedMcps.push(hasFs.name);
-    }
-    // Default to Filesystem MCP if code/files are likely modified and available
-    if (resolvedMcps.length === 0 && hasFs && (task.subtasks.length > 0 || task.category.toLowerCase().includes('code') || task.category.toLowerCase().includes('dev') || task.category.toLowerCase().includes('backend') || task.category.toLowerCase().includes('frontend'))) {
-      resolvedMcps.push(hasFs.name);
-    }
-  }
-
-  // 2. Build dense, human-verifiable Gherkin done-state acceptance brief & sections
-  let contextNotes = '';
-  if (_discoveryPayload?.additionalContext && _discoveryPayload.additionalContext.length > 0) {
-    contextNotes = `\n    And relevant context from task #${_discoveryPayload.additionalContext.map((c) => `${c.taskId} ("${c.title}")`).join(', #')} is incorporated`;
-  } else if (memoryHits && memoryHits.length > 0) {
-    const hitsDesc = memoryHits
-      .slice(0, 3)
-      .map((h) => `"${h.chunk.metadata?.taskTitle || h.chunk.id}"`)
-      .join(', ');
-    contextNotes = `\n    And relevant context from memory (${hitsDesc}) is incorporated`;
-  }
-
-  const gherkinSteps: string[] = [];
-  if (task.subtasks.length > 0) {
-    task.subtasks.forEach((s) => {
-      const cleanText = s.text.replace(/^[0-9]+[.)-]\s*/, '').replace(/\.$/, '').trim();
-      gherkinSteps.push(`    And the agent completes: ${cleanText}`);
-    });
-  } else {
-    gherkinSteps.push(`    And the agent implements the core feature deliverables for "${task.title}"`);
-  }
-
-  const fallbackBrief =
-`Feature: ${task.title} (${task.category || 'General'})
-  Scenario: Successful implementation of ${task.title}
-    Given the workspace environment and dependencies for ${task.category || 'the project'} are initialized${contextNotes}
-    When the user or pipeline triggers execution of task #${task.id}
-${gherkinSteps.join('\n')}
-    Then all acceptance checks, state transitions, and edge cases operate cleanly without silent failures
-    And all changed files pass type checks and verification before completion`;
-
-  const rawAiBrief = extractStringFromAiValue(parsedAiOverview?.brief || (parsedAiOverview as any)?.summary);
-  const isRawTitle = rawAiBrief.toLowerCase() === task.title.toLowerCase().trim() ||
-    rawAiBrief.toLowerCase().startsWith(`task #${task.id}`.toLowerCase()) ||
-    rawAiBrief.length <= task.title.length + 5;
-
-  const briefText = (!isRawTitle && rawAiBrief.length > 30)
-    ? rawAiBrief
-    : fallbackBrief;
-
-  const fallbackGoals = task.subtasks.length > 0
-    ? task.subtasks.map((s, idx) => `${idx + 1}. ${s.text}${s.isDone ? ' [Completed]' : ''}`).join('\n')
-    : `1. Implement and verify the core requirements for: ${task.title}\n2. Record comprehensive build log and verification notes.`;
-
-  const rawAiGoals = extractStringFromAiValue(parsedAiOverview?.goals);
-  const goals = (rawAiGoals.length > 5)
-    ? rawAiGoals
-    : fallbackGoals;
-
-  const fallbackOutputAs = resolvedMcps.some((m) => m.toLowerCase().includes('filesystem') || m.toLowerCase().includes('file'))
-    ? `Write and modify source files in workspace via Filesystem MCP, then record completion summary in build log.`
-    : resolvedMcps.some((m) => m.toLowerCase().includes('git'))
-      ? `Perform Git repository operations via Git MCP, then output commit logs and status.`
-      : `Return structured completion summary and results in build log.`;
-
-  const rawAiOutputAs = extractStringFromAiValue(parsedAiOverview?.output_as);
-  const output_as = (rawAiOutputAs.length > 5)
-    ? rawAiOutputAs
-    : fallbackOutputAs;
-
-  const raw = `## Brief\n\n${briefText}\n\n## Goals\n\n${goals}\n\n## Output As\n\n${output_as}`;
-
-  return {
-    overviewDoc: { brief: briefText, goals, output_as, raw },
-    requiredMcps: resolvedMcps
-  };
-}
-
-/**
   * Assembles the concise, structured JSON "Bible Prompt" for Step 3 Manager AI.
   * Filters out raw document blobs and extracts only the essential task data,
-  * Gherkin scenarios, goals, tool output target, and scoped discovered context.
+  * the working brief, and scoped discovered context.
   */
 export function buildManagerBiblePayload(
   discoveryPayload: DiscoveryJobPayload,
@@ -1222,9 +587,7 @@ export function buildManagerBiblePayload(
       sourceFileName: discoveryPayload.targetTask.sourceFileName
     },
     overview: {
-      brief: overviewDoc.brief,
-      goals: overviewDoc.goals,
-      output_as: overviewDoc.output_as,
+      spec: overviewDoc.raw,
       requiredMcps: discoveryPayload.requiredMcps || []
     },
     discoveredContext,
@@ -1262,16 +625,10 @@ export function formatManagerBibleMarkdown(bible: ManagerBiblePayload): string {
   }
   sections.push('');
 
-  sections.push(`## Overview & Acceptance Criteria (Gherkin Scenarios)`);
-  sections.push('```gherkin');
-  sections.push(bible.overview.brief.trim());
-  sections.push('```\n');
+  sections.push(`## Working Brief (the Summary step's spec)`);
+  sections.push(bible.overview.spec.trim() + '\n');
 
-  sections.push(`## Deliverable Goals`);
-  sections.push(bible.overview.goals.trim() + '\n');
-
-  sections.push(`## Output Destination & Method`);
-  sections.push(`- **Destination**: ${bible.overview.output_as}`);
+  sections.push(`## Run Environment`);
   sections.push(`- **Required MCPs**: ${bible.overview.requiredMcps && bible.overview.requiredMcps.length > 0 ? bible.overview.requiredMcps.join(', ') : '(none - pure reasoning/text)'}`);
   sections.push(`- **Allowed Boundaries**: ${bible.environment.allowedRoots.join(', ') || bible.environment.projectPath}\n`);
 
@@ -1320,7 +677,6 @@ export async function runOfflineExecution(
     task,
     [],
     project?.swimLanes,
-    project?.agentContextMarkdown || '',
     project?.todoMarkdown
   );
 
@@ -1347,12 +703,8 @@ export async function runOfflineExecution(
         ? 'mcp-filesystem'
         : (connectedMcps[0]?.id || 'mcp-filesystem');
 
-  const { overviewDoc, requiredMcps } = buildVerboseOverviewAndRequiredMcps(
-    task,
-    brief,
-    discoveryPayload,
-    connectedMcps
-  );
+  const overviewDoc: OverviewDocument = { raw: buildOfflineTaskBrief(task, brief?.overview || '') };
+  const requiredMcps = resolveRequiredMcps(task, brief, connectedMcps, undefined);
 
   discoveryPayload.overview = overviewDoc;
   discoveryPayload.requiredMcps = requiredMcps;
@@ -1384,9 +736,9 @@ export async function runOfflineExecution(
   const offlineSteps: Partial<ExecutionStep>[] = [
     { id: 'step-1', stage: 'context', title: 'Discovery AI: Reading Shared Context & Scanning All Documents', detail: `Scanning all task headers and workspace documents for #${task.id}: "${task.title}" (Found ${totalScanned} workspace tasks across all swim lanes & archives)...`, status: 'running' },
     { id: 'step-2', stage: 'mcp_call', title: `Executing MCP Tool (${targetServerId} / ${toolName})`, detail: `Resolving tool dependencies and executing ${toolName}() across safe roots...`, mcpToolUsed: toolName, status: 'pending' },
-    { id: 'step-3', stage: 'execution', title: 'Manager AI: Executing Puzzle Pieces & Implementation Steps', detail: `Processing Gherkin scenarios & subtasks: ${task.subtasks.map((s) => s.text).join('; ') || 'Implementing core logic'}`, status: 'pending' },
+    { id: 'step-3', stage: 'execution', title: 'Manager AI: Executing Puzzle Pieces & Implementation Steps', detail: `Processing the working brief & subtasks: ${task.subtasks.map((s) => s.text).join('; ') || 'Implementing core logic'}`, status: 'pending' },
     { id: 'step-4', stage: 'built_record', title: 'Rendering Interactive MCP App Widget', detail: 'Building visual interactive UI result and code diff preview...', status: 'pending', widgetType: getWidgetTypeForTask(task), widgetData: getWidgetDataForTask(task) },
-    { id: 'step-5', stage: 'done', title: 'Updating Dual-File AGENT_CONTEXT.md & TODO.md', detail: 'Recording Built decisions, Validation results, and marking task as completed.', status: 'pending' }
+    { id: 'step-5', stage: 'done', title: 'Recording the completion log & updating TODO.md', detail: 'Recording Built decisions, Validation results, and marking task as completed.', status: 'pending' }
   ];
 
   onStepUpdate({
@@ -1404,8 +756,8 @@ export async function runOfflineExecution(
     id: 'step-overview',
     time: new Date().toLocaleTimeString(),
     stage: 'overview',
-    title: 'Summary AI: Overview & Tool Plan Ready',
-    detail: `Overview built (Gherkin brief) — output format: ${overviewDoc.output_as.slice(0, 90)}${discoveryPayload.requiredMcps.length > 0 ? ` (MCPs: ${discoveryPayload.requiredMcps.join(', ')})` : ''}`,
+    title: 'Summary AI: Working Brief Ready',
+    detail: `Working brief written (offline: the task's own checklist)${discoveryPayload.requiredMcps.length > 0 ? ` (MCPs: ${discoveryPayload.requiredMcps.join(', ')})` : ''}`,
     status: 'success',
     overviewDocument: overviewDoc,
     discoveryPayload,
@@ -1557,7 +909,7 @@ export async function runOfflineExecution(
       buildLog: buildVerificationContent,
       completion: completionContent,
       createdFiles: sampleCreatedFiles,
-      allScenariosPass: true,
+      allCriteriaPass: true,
     };
     void runSessionRetrospective(retroInput);
   } catch (err) {

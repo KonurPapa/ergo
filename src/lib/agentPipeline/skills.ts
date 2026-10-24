@@ -1,34 +1,11 @@
 /**
- * Loads the pipeline skill documents (the byte-stable role prompts).
- * The user's on-disk copy (~/.ergo/config/skills/<name>/SKILL.md, editable) wins; the bundled
- * docs/skills/<name>/SKILL.md is the default. Legacy JSON-era copies are rejected by marker.
+ * Loads the pipeline skill documents (the byte-stable role prompts): the user's own edited copy on disk when there is
+ * one, else Ergo's built-in version (storageManager.loadSkillDoc).
  */
-import { storageManager } from '../storageManager';
+import { storageManager, BUILTIN_SKILL_DOCS } from '../storageManager';
 import { stripSkillFrontmatter } from '../llmClient';
-import summaryRaw from '../../../docs/skills/summary-agent/SKILL.md?raw';
-import managerRaw from '../../../docs/skills/manager-agent/SKILL.md?raw';
-import workerRaw from '../../../docs/skills/worker-agent/SKILL.md?raw';
-import cleanerRaw from '../../../docs/skills/cleaner-agent/SKILL.md?raw';
-import hardenerRaw from '../../../docs/skills/hardener-agent/SKILL.md?raw';
 
-export type PipelineSkillName = 'summary-agent' | 'manager-agent' | 'worker-agent' | 'cleaner-agent' | 'hardener-agent';
-
-const BUNDLED: Record<PipelineSkillName, string> = {
-  'summary-agent': summaryRaw,
-  'manager-agent': managerRaw,
-  'worker-agent': workerRaw,
-  'cleaner-agent': cleanerRaw,
-  'hardener-agent': hardenerRaw
-};
-
-/** A heading that only exists in the current generation of each skill doc; stale copies are ignored. */
-const FRESHNESS_MARKER: Record<PipelineSkillName, string> = {
-  'summary-agent': 'Requirement completeness invariant',
-  'manager-agent': 'Simple / Standalone Deliverables',
-  'worker-agent': 'Target Deliverables Only',
-  'cleaner-agent': 'Completion Protocol',
-  'hardener-agent': 'headless browser'
-};
+export type PipelineSkillName = 'manager-agent' | 'worker-agent' | 'cleaner-agent' | 'hardener-agent' | 'task-brief';
 
 export async function loadPipelineSkill(name: PipelineSkillName): Promise<string> {
   let raw: string | null = null;
@@ -37,10 +14,9 @@ export async function loadPipelineSkill(name: PipelineSkillName): Promise<string
   } catch {
     raw = null;
   }
-  if (!raw || !raw.includes(FRESHNESS_MARKER[name])) raw = BUNDLED[name];
-  return stripSkillFrontmatter(raw).trim();
+  return stripSkillFrontmatter(raw || BUILTIN_SKILL_DOCS[name]).trim();
 }
 
 export function bundledPipelineSkill(name: PipelineSkillName): string {
-  return BUNDLED[name];
+  return BUILTIN_SKILL_DOCS[name];
 }

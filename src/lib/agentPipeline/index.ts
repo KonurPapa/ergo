@@ -2,7 +2,7 @@
  * Agent Execution Pipeline orchestrator.
  *
  *   Step 1 Discovery  → compact Markdown baseline (fast model)
- *   Step 2 Summary    → Gherkin brief, goals, output, filtered MCPs, task kind → TASK_CONTEXT.md bible
+ *   Step 2 Summary    → working brief (docs/skills/task-brief), filtered MCPs, task kind → TASK_CONTEXT.md bible
  *   Step 3 Manager    → decompose → fan-out workers (clean contexts, locks, cache warming) → verify
  *   Step 4 Cleaner    → lint/format (coding only)
  *   Step 5 Hardener   → QA verdict; a fail feeds a fresh Step 3 attempt (bounded by maxQaRetries)
@@ -310,7 +310,7 @@ export async function executeTaskWithAi(
       ...(brief?.selectedMcpTools || [])
     ];
     const requiredSet = Array.from(new Set([...summary.requiredMcps, ...userSelectedTools, 'mcp-filesystem']));
-    const taskAndOutputText = `${task.title} ${task.subtasks.map((s) => s.text).join(' ')} ${summary.overviewDoc.output_as} ${summary.overviewDoc.brief || ''}`.toLowerCase();
+    const taskAndOutputText = `${task.title} ${task.subtasks.map((s) => s.text).join(' ')} ${summary.overviewDoc.raw}`.toLowerCase();
     if (requiresCliOrProcessTools(taskAndOutputText)) {
       for (const mcp of connectedMcps) {
         if (mcp.status === 'connected') {
@@ -425,8 +425,8 @@ export async function executeTaskWithAi(
           status: 'success'
         });
 
-        // If manager passed all scenarios, the straightforward task is complete
-        if (mgr.allScenariosPass) {
+        // If the manager verified every criterion, the straightforward task is complete
+        if (mgr.allCriteriaPass) {
           break;
         }
 
@@ -457,14 +457,14 @@ export async function executeTaskWithAi(
       if (hardener.verdict !== 'fail') break;
       if (attempt >= maxAttempts) break;
 
-      diagnostics = hardener.failures.map((f) => `- [${f.scenario}] ${f.diagnostics}`).join('\n') + (hardener.evidence ? `\n\nEvidence: ${hardener.evidence}` : '');
+      diagnostics = hardener.failures.map((f) => `- [${f.criterion}] ${f.diagnostics}`).join('\n') + (hardener.evidence ? `\n\nEvidence: ${hardener.evidence}` : '');
       bible.appendEvent({ actor: 'pipeline', kind: 'retry', text: `QA failed on attempt ${attempt}; re-running the manager with fresh contexts and the diagnostics above.` });
       await bible.persist();
       ctx.emit({
         id: `step-retry-${attempt}`,
         stage: 'retry',
         title: `QA Failed — Retrying Manager (attempt ${attempt + 1} of ${maxAttempts})`,
-        detail: hardener.failures.map((f) => `✗ ${f.scenario}: ${f.diagnostics.slice(0, 200)}`).join('\n'),
+        detail: hardener.failures.map((f) => `✗ ${f.criterion}: ${f.diagnostics.slice(0, 200)}`).join('\n'),
         status: 'warning'
       });
       await stepUpForRetry(attempt);
@@ -477,7 +477,7 @@ export async function executeTaskWithAi(
       usedToolCalling: mgr.usedToolCalling,
       hardener,
       qaAttempts: attempt,
-      allScenariosPass: mgr.allScenariosPass,
+      allCriteriaPass: mgr.allCriteriaPass,
       overviewDoc: summary.overviewDoc
     });
     bible.sections.metadata.status = result.updatedTask.status;
@@ -491,7 +491,7 @@ export async function executeTaskWithAi(
     console.log('%c[Ergo Agent Pipeline] ── Pipeline Complete ✅ ──', 'color: #10b981; font-weight: bold;');
     const outcome: RunOutcome = hardener
       ? hardener.verdict === 'pass' ? 'passed' : hardener.verdict === 'fail' ? 'qa_failed' : 'unverified'
-      : mgr.allScenariosPass ? 'completed' : 'failed';
+      : mgr.allCriteriaPass ? 'completed' : 'failed';
     return { ...result, updatedBrief: withRunOutcome(withOverviewDoc(result.updatedBrief), outcome, attempt - 1) };
   } catch (err: any) {
     if (isAbortError(err)) {

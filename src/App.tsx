@@ -35,15 +35,12 @@ import {
   serializeRunningJobsDoc
 } from './lib/runningJobsStorage';
 
-import { INITIAL_PROJECTS, createNewProjectData, INITIAL_MCP_SERVERS, removeRetiredMcpServers, RETIRED_MCP_SERVER_IDS } from './lib/demoData';
+import { INITIAL_PROJECTS, createNewProjectData, INITIAL_MCP_SERVERS } from './lib/demoData';
 import { GITHUB_MCP_TOOLS } from './lib/githubMcpTools';
 import {
   parseTodoMarkdown,
-  parseAgentContextMarkdown,
-  parseAgentContextWithArchive,
   serializeTodoMarkdown,
   serializeTodoMarkdownPreserving,
-  serializeAgentContextMarkdown,
   parseSwimLaneMarkdown,
   cleanAndUnescapeMarkdown
 } from './lib/parser';
@@ -51,7 +48,6 @@ import { readFilesFromDisk, writeFilesToDisk, createProjectOnDisk } from './lib/
 import { storageManager } from './lib/storageManager';
 import {
   preWarmEmbeddings,
-  migrateAgentContextToMemory,
   archiveTaskToVectorMemory,
   removeChunksByTaskId,
   clearProjectMemory,
@@ -74,6 +70,9 @@ import { CreateProjectModal } from './components/CreateProjectModal';
 import { AiCredentialsModal } from './components/AiCredentialsModal';
 import { SettingsModal } from './components/SettingsModal';
 import { BridgeDownloadButton } from './components/BridgeDownloadButton';
+import { BridgeUpdateBanner } from './components/BridgeUpdateBanner';
+import { loadMcpServers, markMcpServerToggled, saveMcpServers } from './lib/mcpConfigStore';
+import { loadPrefs } from './lib/userPrefs';
 import { FolderPickerModal } from './components/FolderPickerModal';
 import { OnboardingModal } from './components/OnboardingModal';
 import { ToastContainer, type ToastMessage } from './components/Toast';
@@ -87,7 +86,16 @@ import { startMcpRoutineUpdateChecker } from './lib/mcpClient';
 import { DEFAULT_AGENT_PIPELINE_OPTIONS, mergeAgentPipelineOptions } from './lib/agentPipeline/contracts';
 import { formatOverviewDocToMarkdown, validateRelatedTaskIds } from './lib/agentPipeline/summary';
 import { buildRelatedTasksRequest, describeRelatedSearch, findRelatedTasksSoft } from './lib/agentPipeline/context';
-import { formatRelatedCandidatesForPrompt, formatSelectedRelatedContext, resolveSavedRelatedIds, savedRelatedSelection, strictRelatedFallback } from './lib/memory/relatedTasks';
+import {
+  formatRelatedCandidatesForPrompt,
+  formatRelatedSourcesLine,
+  formatSelectedRelatedContext,
+  relatedSelectionPool,
+  resolveSavedRelatedIds,
+  savedRelatedSelection,
+  strictRelatedFallback,
+} from './lib/memory/relatedTasks';
+import { formatPriorKnowledge, prefetchPromptMemory, taskMemoryQuery } from './lib/memory/promptMemory';
 import type { RelatedTasksResponse } from './lib/memory/types';
 import { useWorkspaceMemorySync } from './hooks/useWorkspaceMemorySync';
 import { routeModelsForRun, tinyCloudModelLabelFor, tinyCloudCallConfig, describeRouting, cliModelForPin, EFFORT_LABELS, type RoutingResult } from './lib/agentPipeline/modelRouter';
@@ -107,7 +115,7 @@ import {
   markJobCompleted
 } from './lib/taskScheduler';
 import { registerWorkspaceActionBridge } from './lib/workspaceMcp';
-import { syncSkillsToWorkspace } from './lib/skillsManager';
+import { loadWorkspaceSkills } from './lib/skillsManager';
 import { bridgeClient, type BridgeStatus, getBridgeDownload } from './lib/bridgeClient';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 
@@ -180,51 +188,10 @@ function App() {
     defaultDelaySec: 5,
   });
 
-  // MCP & AI Settings State (persisted to localStorage so tool permissions are global)
-  const [mcpServers, setMcpServers] = useState<MCPServer[]>(() => {
-    // Retired bundled servers (the removed Laya engine) are dropped from the saved list, with their toggle flags.
-    try {
-      RETIRED_MCP_SERVER_IDS.forEach((id) => localStorage.removeItem('ergo_mcp_user_toggled_' + id));
-    } catch { }
-    const saved = localStorage.getItem('ergo_mcp_servers');
-    if (saved) {
-      try {
-        const parsed = removeRetiredMcpServers(JSON.parse(saved));
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return INITIAL_MCP_SERVERS.map((initServer) => {
-            const match = parsed.find((s: MCPServer) => s.id === initServer.id);
-            if (!match) return initServer;
-            const mergedTools = (match.tools && match.tools.length >= initServer.tools.length)
-              ? match.tools.map((mt: any) => {
-                const initTool = initServer.tools.find((it) => it.name === mt.name);
-                return {
-                  ...initTool,
-                  ...mt,
-                  inputSchema: mt.inputSchema || initTool?.inputSchema
-                };
-              })
-              : initServer.tools.map((initTool) => {
-                const toolMatch = match.tools?.find((t: any) => t.id === initTool.id || t.name === initTool.name);
-                return toolMatch ? { ...initTool, autoApprove: Boolean(toolMatch.autoApprove) } : initTool;
-              });
-
-            // Ensure bundled default connections (like Filesystem, Fetch, Git) default to connected if they were previously saved before being enabled by default
-            const resolvedStatus = (initServer.serverType === 'bundled_harness' && initServer.status === 'connected' && match.status === 'disconnected' && !localStorage.getItem('ergo_mcp_user_toggled_' + initServer.id))
-              ? 'connected'
-              : (match.status || initServer.status);
-
-            return {
-              ...initServer,
-              ...match,
-              status: resolvedStatus,
-              tools: mergedTools
-            };
-          }).concat(parsed.filter((s: MCPServer) => !INITIAL_MCP_SERVERS.some((init) => init.id === s.id)));
-        }
-      } catch { }
-    }
-    return INITIAL_MCP_SERVERS;
-  });
+  // MCP servers & tool permissions: the bundled defaults until the user's own are loaded from their machine
+  // (mcpConfigStore.ts), then saved back there on every change.
+  const [mcpServers, setMcpServers] = useState<MCPServer[]>(INITIAL_MCP_SERVERS);
+  const mcpServersLoadedRef = useRef(false);
 
   // User API Keys State (Loaded from config/secrets.json or fallback)
   const [userApiKeys, setUserApiKeys] = useState<UserApiKey[]>(() => {
@@ -261,10 +228,8 @@ function App() {
     return [];
   });
 
-  const [activeKeyId, setActiveKeyId] = useState<string | null>(() => {
-    const saved = localStorage.getItem('ergo_active_key_id');
-    return saved || (userApiKeys[0]?.id ?? null);
-  });
+  // Restored from the user's config/settings.json on load.
+  const [activeKeyId, setActiveKeyId] = useState<string | null>(() => userApiKeys[0]?.id ?? null);
 
   const [editingKey, setEditingKey] = useState<UserApiKey | null>(null);
 
@@ -325,14 +290,8 @@ function App() {
   // Track onboarding completion state
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState<boolean>(false);
 
-  // Autocomplete Settings state (persisted in config/settings.json and localStorage)
-  const [autocompleteSettings, setAutocompleteSettings] = useState<import('./types').AutocompleteSettings>(() => {
-    try {
-      const saved = localStorage.getItem('ergo_autocomplete_settings');
-      if (saved) return JSON.parse(saved);
-    } catch { }
-    return { enabled: true, keybinding: 'Tab' };
-  });
+  // Autocomplete Settings state (persisted in config/settings.json)
+  const [autocompleteSettings, setAutocompleteSettings] = useState<import('./types').AutocompleteSettings>({ enabled: true, keybinding: 'Tab' });
 
   // Local AI model mode (config/settings.json → localModel): which engine makes the small background decisions
   // (CLI run shape, autocomplete). 'unset' until the user picks one in onboarding or Settings (= tiny cloud model).
@@ -451,19 +410,27 @@ function App() {
         setSettingsLoaded(true);
       }
     }
-    initStorage();
+    // Settings, keys and projects come from the user's machine: read them again whenever the bridge connects after
+    // a load that ran without it (the app then showed the browser's copy or Ergo's defaults).
+    let loadedWithBridge = bridgeClient.getStatus().isConnected;
+    let wasConnected = loadedWithBridge;
+    const unsubscribeBridge = bridgeClient.subscribe((status) => {
+      if (status.isConnected && !wasConnected && !loadedWithBridge) {
+        loadedWithBridge = true;
+        void initStorage();
+      }
+      wasConnected = status.isConnected;
+    });
+    void initStorage();
 
     // Ask the local bridge to load its embedding model in the background (non-blocking, 0 API tokens), and
     // move any vector memory the old in-browser engine left in IndexedDB to the bridge (once).
     preWarmEmbeddings();
+    return unsubscribeBridge;
   }, []);
 
   // Sync settings (config/settings.json)
   useEffect(() => {
-    try {
-      localStorage.setItem('ergo_autocomplete_settings', JSON.stringify(autocompleteSettings));
-    } catch { }
-
     if (activeProjectId && settingsLoaded) {
       storageManager.saveSettings({
         version: 1,
@@ -612,19 +579,24 @@ function App() {
     localStorage.setItem('ergo_user_api_keys', JSON.stringify(userApiKeys));
   }, [userApiKeys]);
 
+  // Load the user's MCP servers and preferences whenever the bridge (re)connects; save changes once they are loaded
+  // (never before, or the bundled defaults would overwrite the user's files).
   useEffect(() => {
-    if (activeKeyId) {
-      localStorage.setItem('ergo_active_key_id', activeKeyId);
-    } else {
-      localStorage.removeItem('ergo_active_key_id');
-    }
-  }, [activeKeyId]);
-
-  // Persist MCP servers and tool permissions to localStorage
+    let wasConnected = false;
+    return bridgeClient.subscribe((status) => {
+      if (status.isConnected && !wasConnected) {
+        void loadPrefs();
+        void loadMcpServers().then((servers) => {
+          if (!servers) return;
+          mcpServersLoadedRef.current = true;
+          setMcpServers(servers);
+        });
+      }
+      wasConnected = status.isConnected;
+    });
+  }, []);
   useEffect(() => {
-    try {
-      localStorage.setItem('ergo_mcp_servers', JSON.stringify(mcpServers));
-    } catch { }
+    if (mcpServersLoadedRef.current) saveMcpServers(mcpServers);
   }, [mcpServers]);
 
   // Routine update checker for connected MCP servers (checks every 60s and on window focus)
@@ -987,39 +959,15 @@ function App() {
           markdown: activeProject.todoMarkdown || ''
         }];
 
-      const agentPath = activeProject.agentContextFilePath || (activeProject.folderPath ? `${activeProject.folderPath}/AGENT_CONTEXT.md` : '');
       const runningJobsPath = activeProject.folderPath ? `${activeProject.folderPath}/RUNNING_JOBS.json` : '';
       const allPathsToRead = [
         ...currentLanes.map((l) => l.filePath),
-        ...(agentPath ? [agentPath] : []),
         ...(runningJobsPath ? [runningJobsPath] : [])
       ];
 
       // Try reading latest live files directly from disk
       const diskFiles = await readFilesFromDisk(allPathsToRead);
       if (!isMounted) return;
-
-      // Migrate legacy AGENT_CONTEXT.md if found on disk, then permanently remove it from disk
-      if (agentPath && diskFiles[agentPath] !== null && diskFiles[agentPath] !== undefined) {
-        try {
-          const { items: legacyItems } = parseAgentContextWithArchive(diskFiles[agentPath]!);
-          if (legacyItems.length > 0) {
-            void migrateAgentContextToMemory(
-              legacyItems.map((b) => ({
-                id: String(b.sourceTaskId || b.id || b.itemNumber || '').replace(/^brief_/, ''),
-                title: b.title || '',
-                overview: b.overview || b.brief || '',
-                completion: b.completion || '',
-                projectId: activeProjectId,
-              }))
-            );
-          }
-          // Remove AGENT_CONTEXT.md from disk so it never exists on disk again
-          void storageManager.deleteFile(agentPath);
-        } catch (migErr) {
-          console.warn('[Ergo] Cleanup of legacy AGENT_CONTEXT.md:', migErr);
-        }
-      }
 
       // Parse or initialize RUNNING_JOBS.json
       let runningJobsDoc: RunningJobsDoc | null = null;
@@ -1079,10 +1027,7 @@ function App() {
         writeFilesToDisk(cleanedLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })));
       }
 
-      const activeBriefs: AgentContextItem[] =
-        runningJobsDoc && Array.isArray(runningJobsDoc.tasks) && runningJobsDoc.tasks.length > 0
-          ? runningJobsDoc.tasks
-          : parseAgentContextWithArchive(activeProject.agentContextMarkdown || '').items;
+      const activeBriefs: AgentContextItem[] = runningJobsDoc && Array.isArray(runningJobsDoc.tasks) ? runningJobsDoc.tasks : [];
 
       setTasks(allActiveTasks);
       setArchivedTasks([]);
@@ -1122,16 +1067,6 @@ function App() {
       if (!isMounted) return;
 
       if (activeBriefs.length > 0) {
-        void migrateAgentContextToMemory(
-          activeBriefs.map((b) => ({
-            id: String(b.sourceTaskId || b.id || b.itemNumber || '').replace(/^brief_/, ''),
-            title: b.title || '',
-            overview: b.overview || b.brief || '',
-            completion: b.completion || '',
-            projectId: activeProjectId,
-          }))
-        );
-
         const firstBrief = activeBriefs[0];
         const defaultId = firstBrief.sourceTaskId || firstBrief.id || firstBrief.itemNumber || null;
         setSelectedTaskId((prev) =>
@@ -1156,7 +1091,6 @@ function App() {
             ? {
               ...p,
               todoMarkdown: primaryTodoMd,
-              agentContextMarkdown: '',
               swimLanes: effectiveSwimLanes,
               runningJobsDoc: runningJobsDoc || p.runningJobsDoc,
             }
@@ -1219,24 +1153,18 @@ function App() {
                 p.id === projectId ||
                 p.folderPath === `projects/${projectId}` ||
                 p.todoFilePath === relativePath ||
-                p.agentContextFilePath === relativePath ||
                 (p.swimLanes && p.swimLanes.some((l) => l.filePath === relativePath));
 
               if (!isMatch) return p;
 
-              if (fileType === 'agent' || relativePath?.endsWith('AGENT_CONTEXT.md')) {
-                if (relativePath) void storageManager.deleteFile(relativePath);
-                return p;
-              } else {
-                const updatedLanes = (p.swimLanes || []).map((l) =>
-                  l.filePath === relativePath ? { ...l, markdown: content } : l
-                );
-                return {
-                  ...p,
-                  todoMarkdown: updatedLanes[0]?.markdown || (p.todoFilePath === relativePath ? content : p.todoMarkdown),
-                  swimLanes: updatedLanes
-                };
-              }
+              const updatedLanes = (p.swimLanes || []).map((l) =>
+                l.filePath === relativePath ? { ...l, markdown: content } : l
+              );
+              return {
+                ...p,
+                todoMarkdown: updatedLanes[0]?.markdown || (p.todoFilePath === relativePath ? content : p.todoMarkdown),
+                swimLanes: updatedLanes
+              };
             })
           );
 
@@ -1250,35 +1178,30 @@ function App() {
               (ap.swimLanes && ap.swimLanes.some((l) => l.filePath === relativePath)));
 
           if (isActiveProject) {
-            if (fileType === 'agent' || relativePath?.endsWith('AGENT_CONTEXT.md')) {
-              // Ignore AGENT_CONTEXT.md - context lives in vector memory
-              return;
-            } else {
-              const currentLanes: SwimLaneDoc[] = ap.swimLanes && ap.swimLanes.length > 0
-                ? ap.swimLanes
-                : [{
-                  id: 'lane-default',
-                  title: 'Human Workspace',
-                  filePath: ap.todoFilePath || `${ap.folderPath}/TODO.md`,
-                  markdown: ap.todoMarkdown || ''
-                }];
+            const currentLanes: SwimLaneDoc[] = ap.swimLanes && ap.swimLanes.length > 0
+              ? ap.swimLanes
+              : [{
+                id: 'lane-default',
+                title: 'Human Workspace',
+                filePath: ap.todoFilePath || `${ap.folderPath}/TODO.md`,
+                markdown: ap.todoMarkdown || ''
+              }];
 
-              const updatedLanes = currentLanes.map((l) =>
-                l.filePath === relativePath ? { ...l, markdown: content } : l
-              );
+            const updatedLanes = currentLanes.map((l) =>
+              l.filePath === relativePath ? { ...l, markdown: content } : l
+            );
 
-              let allActiveTasks: TaskItem[] = [];
-              let allArchivedTasks: TaskItem[] = [];
+            let allActiveTasks: TaskItem[] = [];
+            let allArchivedTasks: TaskItem[] = [];
 
-              for (const lane of updatedLanes) {
-                const parsed = parseSwimLaneMarkdown(lane);
-                allActiveTasks = [...allActiveTasks, ...parsed.items];
-                allArchivedTasks = [...allArchivedTasks, ...parsed.archivedItems];
-              }
-
-              setTasks(allActiveTasks);
-              setArchivedTasks(allArchivedTasks);
+            for (const lane of updatedLanes) {
+              const parsed = parseSwimLaneMarkdown(lane);
+              allActiveTasks = [...allActiveTasks, ...parsed.items];
+              allArchivedTasks = [...allArchivedTasks, ...parsed.archivedItems];
             }
+
+            setTasks(allActiveTasks);
+            setArchivedTasks(allArchivedTasks);
           }
         } catch (err) {
           console.warn('[App SSE] Error handling file change event:', err);
@@ -1717,10 +1640,6 @@ function App() {
       if (parsedTodo.headerComments) {
         setHeaderComments(parsedTodo.headerComments);
       }
-    }
-
-    if (result.agentContextMarkdown) {
-      nextBriefs = parseAgentContextMarkdown(result.agentContextMarkdown);
     }
 
     // Attach user-selected MCP tools to created/updated tasks and briefs
@@ -2204,6 +2123,8 @@ function App() {
           signal: launchController.signal,
         });
         const relatedCandidates = related.candidates || [];
+        // Notes are selectable like tasks: selection, saving and the agents' context all use this pool.
+        const relatedPool = relatedSelectionPool(relatedCandidates, related.notes || []);
         const relatedBaseline: AssembledBaselineContext = {
           query: [relatedRequest.title, ...(relatedRequest.subtasks || [])].join(' · '),
           threshold: 0,
@@ -2224,7 +2145,7 @@ function App() {
         // Stage 2 (selection): made by the overview call below, or the selection saved with a reused overview.
         let selectedRelatedTaskIds: string[] | undefined;
         if (hasValidOverview) {
-          selectedRelatedTaskIds = resolveSavedRelatedIds(currentBrief?.overviewDocument, relatedCandidates);
+          selectedRelatedTaskIds = resolveSavedRelatedIds(currentBrief?.overviewDocument, relatedPool);
         }
 
         // First run (or the task changed): generate the Overview before launching so the card fills in on start.
@@ -2248,6 +2169,10 @@ function App() {
               relatedCandidates.length > 0 || (related.notes || []).length > 0
                 ? formatRelatedCandidatesForPrompt(relatedCandidates, related.notes || [])
                 : '';
+            // Prior knowledge from memory (earlier runs' notes, completed tasks) goes to the brief writer, never
+            // straight to the manager: the brief carries what bears on the task.
+            const priorKnowledge = formatPriorKnowledge(await prefetchPromptMemory(activeProjectId, taskMemoryQuery(latestTaskFor(task))));
+            if (launchController.signal.aborted) return;
             const synced = await syncTaskOverviewWithAi(
               latestTaskFor(task),
               // Unstamped text (a draft, or a freeform brief's source text) is still useful input for the Summary.
@@ -2256,9 +2181,7 @@ function App() {
               // Auto model selection writes the overview with the tiny model (it also rates the task for the picks).
               autoModels ? tinyCloudCallConfig(aiConfig) ?? aiConfig : aiConfig,
               mcpServers,
-              serializeTodoMarkdown(tasksRef.current, headerComments, archivedTasks),
-              serializeAgentContextMarkdown(briefsRef.current, archivedBriefs),
-              { relatedCandidatesPrompt }
+              { relatedCandidatesPrompt, priorKnowledge }
             );
             if (launchController.signal.aborted) return;
             const syncedOverview = synced.overview;
@@ -2267,8 +2190,8 @@ function App() {
             selectedRelatedTaskIds = !related.success
               ? undefined
               : synced.relatedSelectionMade
-                ? validateRelatedTaskIds(synced.relatedTaskIds, relatedCandidates)
-                : strictRelatedFallback(relatedCandidates);
+                ? validateRelatedTaskIds(synced.relatedTaskIds, relatedPool)
+                : strictRelatedFallback(relatedPool);
 
             // Merge into the LATEST briefs (by String ids) and persist right away so the card fills in now.
             const latestBriefs = briefsRef.current;
@@ -2282,11 +2205,8 @@ function App() {
               title: task.title,
               status: 'in_progress',
               ...stampOverview(latestTaskFor(task), 'generated', syncedOverview, {
-                brief: syncedOverview.match(/```gherkin\s*([\s\S]*?)```/i)?.[1]?.trim() || '',
-                goals: syncedOverview,
-                output_as: '',
                 raw: syncedOverview,
-                ...(selectedRelatedTaskIds ? savedRelatedSelection(relatedCandidates, selectedRelatedTaskIds) : {}),
+                ...(selectedRelatedTaskIds ? savedRelatedSelection(relatedPool, selectedRelatedTaskIds) : {}),
                 ...(synced.taskRating ? { taskRating: synced.taskRating } : {}),
               }),
               buildAndVerification: latestBrief?.buildAndVerification || latestBrief?.built || '',
@@ -2305,7 +2225,7 @@ function App() {
           } catch (err) {
             if (launchController.signal.aborted) return;
             overviewFailed = true;
-            if (related.success) selectedRelatedTaskIds = strictRelatedFallback(relatedCandidates);
+            if (related.success) selectedRelatedTaskIds = strictRelatedFallback(relatedPool);
             console.warn('[Ergo CLI Task] Overview generation error, continuing with fallback:', err);
           }
         }
@@ -2331,28 +2251,27 @@ function App() {
           }
         }
 
-        const gherkinMatch = overviewText.match(/```gherkin\s*([\s\S]*?)```/i);
         const overviewDocument: OverviewDocument | undefined = !overviewText
           ? undefined
           : hasValidOverview && currentBrief
             ? {
                 ...overviewDocumentFor(currentBrief),
                 // The selection resolved for this run (by title, so it survives task reordering).
-                ...(selectedRelatedTaskIds ? savedRelatedSelection(relatedCandidates, selectedRelatedTaskIds) : {}),
+                ...(selectedRelatedTaskIds ? savedRelatedSelection(relatedPool, selectedRelatedTaskIds) : {}),
               }
-            : currentBrief?.overviewDocument || { brief: gherkinMatch ? gherkinMatch[1].trim() : '', goals: overviewText, output_as: '', raw: overviewText };
+            : currentBrief?.overviewDocument || { raw: overviewText };
         const overviewStep: ExecutionStep = {
           id: overviewStepId,
           taskId: task.id,
           time: new Date().toLocaleTimeString(),
           stage: 'overview',
           agentRole: 'summary',
-          title: 'Summary AI: Task Overview & Acceptance Spec',
+          title: 'Summary AI: Working Brief for the Manager',
           detail: hasValidOverview
             ? 'Reusing the saved overview from an earlier run (no new Summary call). Edit the task to regenerate it.'
             : overviewFailed || !overviewText
               ? 'Overview generation failed; the agent works from the task title and checklist.'
-              : 'Synthesized task overview, objectives, and acceptance criteria.',
+              : 'Folded the task and its related tasks into a short working brief: the manager works from it.',
           status: overviewText ? 'success' : 'warning',
           ...(overviewDocument ? { overviewDocument } : {}),
         };
@@ -2367,9 +2286,11 @@ function App() {
           };
         }
         const relatedContext =
-          selectedRelatedTaskIds && selectedRelatedTaskIds.length > 0 && relatedCandidates.length > 0
-            ? formatSelectedRelatedContext(relatedCandidates, selectedRelatedTaskIds).trim()
+          selectedRelatedTaskIds && selectedRelatedTaskIds.length > 0 && relatedPool.length > 0
+            ? formatSelectedRelatedContext(relatedPool, selectedRelatedTaskIds).trim()
             : '';
+        // A working brief already carries these tasks' facts; its prompts list them by name only.
+        const relatedSources = relatedContext ? formatRelatedSourcesLine(relatedPool, selectedRelatedTaskIds || []) : '';
         setTaskSteps([ctxStep, overviewStep]);
 
         let routingStep: ExecutionStep | null = null;
@@ -2421,6 +2342,7 @@ function App() {
           preSteps: routingStep ? [ctxStep, overviewStep, routingStep] : [ctxStep, overviewStep],
           priorBriefStatus,
           ...(relatedContext ? { relatedContext } : {}),
+          ...(relatedSources ? { relatedSources } : {}),
           qaEnabled,
           maxWorkers,
           runPlanNote,
@@ -2592,15 +2514,14 @@ function App() {
             // If Summary AI finished with an overview document, populate the live brief immediately (and persist it)
             if (stepUpdate.stage === 'overview' && stepUpdate.status === 'success' && stepUpdate.overviewDocument) {
               const generatedMarkdown = formatOverviewDocToMarkdown(stepUpdate.overviewDocument);
-              const gherkinText = stepUpdate.overviewDocument.brief || '';
               const target = findBriefFor(task);
               // The Summary step reused the saved overview: nothing new to store (and a user-written one stays as is).
               const reused = isOverviewReusable(target, latestTaskFor(task));
-              if (!reused && (generatedMarkdown || gherkinText)) {
+              if (!reused && generatedMarkdown) {
                 const latestBriefs = briefsRef.current;
                 const stamped = {
-                  ...stampOverview(latestTaskFor(task), 'generated', generatedMarkdown || gherkinText, stepUpdate.overviewDocument),
-                  brief: gherkinText || generatedMarkdown,
+                  ...stampOverview(latestTaskFor(task), 'generated', generatedMarkdown, stepUpdate.overviewDocument),
+                  brief: generatedMarkdown,
                 };
                 const merged: AgentContextItem = target
                   ? { ...target, ...stamped }
@@ -3278,7 +3199,7 @@ function App() {
       return updated;
     });
 
-    // 4. Save clean workspace without AGENT_CONTEXT.md or <!-- ARCHIVE --> blocks
+    // 4. Save the workspace without <!-- ARCHIVE --> blocks (archived tasks live in vector memory)
     syncAndSaveProject(nextActiveTasks, nextActiveBriefs, true);
 
     showToast({
@@ -3667,9 +3588,6 @@ function App() {
 
   // Register live Ergo Workspace Action Bridge for global AI MCP execution
   useEffect(() => {
-    // Initial sync of workspace skills to disk (.agents/skills/<id>/SKILL.md)
-    syncSkillsToWorkspace().catch(() => { });
-
     const unregister = registerWorkspaceActionBridge({
       getState: () => ({
         tasks: tasksRef.current || tasks,
@@ -3711,6 +3629,15 @@ function App() {
 
     return unregister;
   }, [tasks, briefs, activeProject, mcpServers, archivedTasks, archivedBriefs]);
+
+  // Workspace skills live on the user's machine: (re)load them whenever the bridge (re)connects.
+  useEffect(() => {
+    let wasConnected = false;
+    return bridgeClient.subscribe((status) => {
+      if (status.isConnected && !wasConnected) void loadWorkspaceSkills();
+      wasConnected = status.isConnected;
+    });
+  }, []);
 
   // Unarchive Task Handler (Restores task from archive back to active workspace)
   const handleUnarchiveTask = (taskId: string | number) => {
@@ -3829,8 +3756,13 @@ function App() {
     const existingOverview = existingBrief?.overview || existingBrief?.brief || '';
 
     // Related tasks: the same two-stage selection a run makes, saved with the overview so runs reuse it.
-    const related = await findRelatedTasksSoft(buildRelatedTasksRequest(activeProjectId, task, existingBrief));
+    const [related, memoryHits] = await Promise.all([
+      findRelatedTasksSoft(buildRelatedTasksRequest(activeProjectId, task, existingBrief)),
+      prefetchPromptMemory(activeProjectId, taskMemoryQuery(task)),
+    ]);
     const relatedCandidates = related.candidates || [];
+    // Notes are selectable like tasks: selection, saving and the agents' context all use this pool.
+    const relatedPool = relatedSelectionPool(relatedCandidates, related.notes || []);
     const relatedNotes = related.notes || [];
     const synced = await syncTaskOverviewWithAi(
       task,
@@ -3838,19 +3770,18 @@ function App() {
       activeProject,
       aiConfig,
       mcpServers,
-      serializeTodoMarkdown(tasks, headerComments, archivedTasks),
-      serializeAgentContextMarkdown(briefs, archivedBriefs),
       {
         relatedCandidatesPrompt:
           relatedCandidates.length > 0 || relatedNotes.length > 0 ? formatRelatedCandidatesForPrompt(relatedCandidates, relatedNotes) : '',
+        priorKnowledge: formatPriorKnowledge(memoryHits),
       }
     );
     const syncedOverview = synced.overview;
     const relatedTaskIds = !related.success
       ? undefined
       : synced.relatedSelectionMade
-        ? validateRelatedTaskIds(synced.relatedTaskIds, relatedCandidates)
-        : strictRelatedFallback(relatedCandidates);
+        ? validateRelatedTaskIds(synced.relatedTaskIds, relatedPool)
+        : strictRelatedFallback(relatedPool);
 
     const updatedBrief: AgentContextItem = {
       ...existingBrief,
@@ -3862,11 +3793,8 @@ function App() {
       status: task.status,
       // Generated on request: kept and reused by runs like a run-generated overview.
       ...stampOverview(task, 'generated', syncedOverview, {
-        brief: syncedOverview.match(/```gherkin([\s\S]*?)```/)?.[1]?.trim() || '',
-        goals: syncedOverview,
-        output_as: '',
         raw: syncedOverview,
-        ...(relatedTaskIds ? savedRelatedSelection(relatedCandidates, relatedTaskIds) : {}),
+        ...(relatedTaskIds ? savedRelatedSelection(relatedPool, relatedTaskIds) : {}),
         ...(synced.taskRating ? { taskRating: synced.taskRating } : {}),
       }),
       buildAndVerification: existingBrief?.buildAndVerification || existingBrief?.built || '',
@@ -4204,7 +4132,7 @@ function App() {
   };
 
   // Save Raw Markdown Editing (from Raw Markdown modal - Flushes immediately)
-  const handleSaveRawMarkdown = (newTodoMd: string, newAgentContextMd: string, updatedSwimLanes?: SwimLaneDoc[]) => {
+  const handleSaveRawMarkdown = (newTodoMd: string, updatedSwimLanes?: SwimLaneDoc[]) => {
     const currentLanes: SwimLaneDoc[] = updatedSwimLanes && updatedSwimLanes.length > 0
       ? updatedSwimLanes
       : (activeProject?.swimLanes && activeProject.swimLanes.length > 0
@@ -4231,13 +4159,10 @@ function App() {
       globalOffset += parsed.items.length;
     }
 
-    const parsedBriefsWithArchive = parseAgentContextWithArchive(newAgentContextMd);
-
+    // Only the task lists are edited here; the briefs (overviews, build logs, completions) stay as they are.
     setTasks(allActiveTasks);
     setArchivedTasks(allArchivedTasks);
     setHeaderComments(firstHeaderComments);
-    setBriefs(parsedBriefsWithArchive.items);
-    setArchivedBriefs(parsedBriefsWithArchive.archivedItems);
 
     setProjects((prev) =>
       prev.map((p) =>
@@ -4245,7 +4170,6 @@ function App() {
           ? {
             ...p,
             todoMarkdown: currentLanes[0]?.markdown || newTodoMd,
-            agentContextMarkdown: newAgentContextMd,
             swimLanes: currentLanes
           }
           : p
@@ -4290,18 +4214,11 @@ function App() {
     name: string,
     customFolder: string,
     description: string,
-    initialTodoContent?: string,
-    initialAgentContextContent?: string
+    initialTodoContent?: string
   ) => {
-    const newProj = createNewProjectData(
-      name,
-      customFolder,
-      description,
-      initialTodoContent,
-      initialAgentContextContent
-    );
-    // Write directory and initial markdown files directly to disk
-    await createProjectOnDisk(newProj.folderPath, newProj.todoMarkdown, newProj.agentContextMarkdown);
+    const newProj = createNewProjectData(name, customFolder, description, initialTodoContent);
+    // Write the project folder and its TODO.md directly to disk
+    await createProjectOnDisk(newProj.folderPath, newProj.todoMarkdown);
     setProjects((prev) => [...prev, newProj]);
     setActiveProjectId(newProj.id);
   };
@@ -4414,6 +4331,9 @@ function App() {
         onToggleAiPanel={handleToggleAiPanel}
         runningAiTaskCount={runningTaskIds.length}
       />
+
+      {/* The connected bridge is older than this app needs: it updates itself (or says how) */}
+      <BridgeUpdateBanner status={bridgeStatus} />
 
       {/* Disconnected Bridge Notification Banner for Hosted Web Environments */}
       {bridgeClient.isHostedWeb() && !bridgeStatus.isConnected && (
@@ -4535,7 +4455,6 @@ function App() {
             isAssistantOpen={isDraftModalOpen}
             onCloseAssistant={() => setIsDraftModalOpen(false)}
             project={activeProject}
-            agentContextMarkdown=""
             aiConfig={aiConfig}
             mcpServers={mcpServers}
             onApplyAssistantResult={handleApplyAssistantResult}
@@ -4658,9 +4577,7 @@ function App() {
         mcpServers={mcpServers}
         onToggleConnectServer={(serverId) =>
           setMcpServers((prev) => {
-            try {
-              localStorage.setItem('ergo_mcp_user_toggled_' + serverId, 'true');
-            } catch { }
+            markMcpServerToggled(serverId);
             const next = prev.map((s) => {
               if (s.id !== serverId) return s;
               // Bundled harness servers stay on; GitHub and external services can be toggled.

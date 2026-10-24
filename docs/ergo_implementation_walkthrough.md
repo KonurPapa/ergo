@@ -1,6 +1,6 @@
 # Ergo: AI Task Workspace & Dual-File Context Engine
 
-Ergo is a unified visual workspace designed for human-AI pair development and project execution. It functions as a lightweight task dashboard and Model Context Protocol (MCP) host, implementing the dual-layer documentation strategy (`TODO.md` for human scannability and `AGENT_CONTEXT.md` for verbose agent execution briefs).
+Ergo is a unified visual workspace designed for human-AI pair development and project execution. It functions as a lightweight task dashboard and Model Context Protocol (MCP) host, pairing the human task list (`TODO.md`, scannable) with a per-task working brief, build log and completion record (stored with each task in `RUNNING_JOBS.json`), backed by a local vector memory.
 
 ![Ergo Browser Demo](/home/konur/.gemini/antigravity/brain/e6551e01-cd8f-4a9d-91ce-e9b321b99efa/ergo_app_demo_1786485575542.webp)
 
@@ -10,7 +10,7 @@ Ergo is a unified visual workspace designed for human-AI pair development and pr
 
 ### 1. Dual-Layer Architecture (Bi-Directional Sync)
 - **Human View (`TODO.md`)**: Scannable, item-numbered task roadmap grouped by category headers, subtask checklists, and `human review` flags.
-- **Agent View (`AGENT_CONTEXT.md`)**: Verbose technical briefs matching item numbers, containing **Brief** (done-state & target code seams), **Built** (build records), **Validation** (test results), and **Follow-ups**.
+- **Agent View (the task's brief)**: the working brief the Summary step writes when the task first runs, plus its **Build & Verification** and **Completion** records.
 - **Real-time Synchronization**: Checking off tasks, editing briefs, drafting with AI, or modifying raw markdown instantly updates both layers in real time.
 
 ### 2. Bring-Your-Own-MCP Ecosystem (BYO-MCP)
@@ -19,7 +19,7 @@ Ergo is a unified visual workspace designed for human-AI pair development and pr
 - Granular security controls allowing users to set **Auto-Approve** vs **Ask Permission** for individual MCP tools.
 
 ### 3. AI Skill 1: `draftTasksWithAi` (`new-todo`)
-- Takes high-level feature requests or project goals and decomposes them into scannable `TODO.md` entries and technical `AGENT_CONTEXT.md` briefs.
+- Takes high-level feature requests or project goals and decomposes them into scannable `TODO.md` entries.
 - Generates subtasks and flags items requiring human verification.
 
 ### 4. AI Skill 2: `executeTaskWithAi` (`run-todo`)
@@ -30,7 +30,7 @@ Ergo is a unified visual workspace designed for human-AI pair development and pr
   - 📊 **Amplitude Analytics Conversion Funnel**
   - 💬 **Slack Interactive Message Composer**
   - 📐 **Bluebeam Revision Layer Diff Preview**
-- Automatically writes build records to `AGENT_CONTEXT.md` and marks tasks as completed in `TODO.md`.
+- Automatically saves build records on the task's brief and marks tasks as completed in `TODO.md`.
 
 ---
 
@@ -39,7 +39,7 @@ Ergo is a unified visual workspace designed for human-AI pair development and pr
 ```mermaid
 graph TD
     A[Human User] <-->|Interactive UI| B[Ergo React Workspace]
-    B <-->|Parser & Serializer| C[TODO.md / AGENT_CONTEXT.md Engine]
+    B <-->|Parser & Serializer| C[TODO.md Engine]
     B <-->|Execution Sandbox| D[AI Orchestrator Engine]
     D <-->|OAuth 2.1 & SSE| E[Connected MCP Hub]
     E --> F[GitHub Server]
@@ -53,7 +53,7 @@ graph TD
 ## 📁 Key File Map
 
 - [src/types/index.ts](file:///home/konur/Documents/Ergo/src/types/index.ts): Core TypeScript interfaces for tasks, briefs, MCP servers, tools, and execution steps.
-- [src/lib/parser.ts](file:///home/konur/Documents/Ergo/src/lib/parser.ts): Bi-directional parser and serializer for `TODO.md` and `AGENT_CONTEXT.md`.
+- [src/lib/parser.ts](file:///home/konur/Documents/Ergo/src/lib/parser.ts): Bi-directional parser and serializer for `TODO.md`.
 - [src/lib/ai.ts](file:///home/konur/Documents/Ergo/src/lib/ai.ts): AI drafting and step-by-step task execution orchestrator.
 - [src/lib/demoData.ts](file:///home/konur/Documents/Ergo/src/lib/demoData.ts): Default datasets including real-world Ergo Takeoff demo tasks.
 - [src/components/TaskPane.tsx](file:///home/konur/Documents/Ergo/src/components/TaskPane.tsx): Human view component for category-grouped tasks and search filtering.

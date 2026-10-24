@@ -14,7 +14,7 @@ Replaced the modal popup during task execution with seamless in-place execution 
   - A toggle button in the card header allows the user to switch seamlessly between "Live Logs/Steps" and "Markdown Notes".
 - **Completion Card**:
   - Shows an in-progress indicator while working, and automatically updates with the final completion summary and verification records once complete.
-  - Automatically synchronizes and persists the updated task state to `TODO.md` and `AGENT_CONTEXT.md`.
+  - Automatically synchronizes and persists the updated task state to `TODO.md` and the task briefs in `RUNNING_JOBS.json`.
 
 ### 2. Embedded CLI Terminal inside Build & Verification Card
 - When a CLI agent is configured (via `cliAgentConfig?.command`), clicking "Execute Task" spawns the PTY agent terminal **directly inside the Build & Verification card body** instead of in a separate window or popup.

@@ -170,7 +170,7 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <Play size={20} color="var(--accent-emerald)" />
             <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>
-              Agent Task Execution Sandbox (Skill: run-todo)
+              Agent Task Execution Sandbox
             </h3>
           </div>
           <button className="btn btn-secondary" style={{ padding: '0.3rem 0.5rem' }} onClick={onClose}>
@@ -354,23 +354,13 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
                 {step.baselineContext && <BaselineContextPreview baselineContext={step.baselineContext} defaultOpen={true} />}
                 <BiblePreview markdown={step.bibleMarkdown} filePath={step.bibleMarkdown ? step.bibleFilePath : undefined} />
 
-                {/* Overview document preview if available */}
-                {step.stage === 'overview' && step.status === 'success' && step.overviewDocument && (
-                  <div style={{ marginTop: '0.6rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                    {step.overviewDocument.brief && (
-                      <div style={{ padding: '0.6rem 0.75rem', background: 'rgba(56, 189, 248, 0.06)', border: '1px solid rgba(56, 189, 248, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
-                        <div style={{ fontWeight: 700, color: 'var(--accent-cyan)', marginBottom: '0.35rem', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                          🥒 Gherkin Execution Brief (Given-When-Then)
-                        </div>
-                        <pre style={{ margin: 0, padding: 0, background: 'transparent', color: 'inherit', fontFamily: 'var(--font-mono)', fontSize: '0.74rem', whiteSpace: 'pre-wrap', lineHeight: '1.45' }}>
-                          {step.overviewDocument.brief}
-                        </pre>
-                      </div>
-                    )}
-                    <div style={{ padding: '0.5rem 0.75rem', background: 'rgba(245, 158, 11, 0.06)', border: '1px solid rgba(245, 158, 11, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
-                      <div style={{ fontWeight: 700, color: 'var(--accent-amber)', marginBottom: '0.25rem', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Output As</div>
-                      <span>{step.overviewDocument.output_as}</span>
+                {/* The working brief the Summary step wrote (the manager's spec) */}
+                {step.stage === 'overview' && step.status === 'success' && step.overviewDocument?.raw && (
+                  <div style={{ marginTop: '0.6rem', padding: '0.6rem 0.75rem', background: 'rgba(56, 189, 248, 0.06)', border: '1px solid rgba(56, 189, 248, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+                    <div style={{ fontWeight: 700, color: 'var(--accent-cyan)', marginBottom: '0.35rem', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Working Brief
                     </div>
+                    <MarkdownRenderer content={step.overviewDocument.raw} />
                   </div>
                 )}
 

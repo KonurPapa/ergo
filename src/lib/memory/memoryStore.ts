@@ -584,6 +584,15 @@ export class MemoryStore {
     this.generation++;
     this.rebuildIndex();
     if (rows.length > 0) this.log(`Loaded ${rows.length} memory chunks from ${this.dir}`);
+    // Copies of task overviews an older app wrote on every project load (ids `migrated_<project>_<task>`): stale
+    // duplicates of the live workspace index, dropped once.
+    if (rows.some((r) => r.id.startsWith('migrated_'))) {
+      void this.mutate(async () => {
+        const n = this.removeWhere((r) => r.id.startsWith('migrated_'));
+        this.log(`Dropped ${n} stale overview copies (migrated_*)`);
+        return n;
+      }).catch((err) => this.log('Dropping stale overview copies failed', err));
+    }
     if (!vectorsOk) {
       // A crash between the two renames (or a hand-edited file): re-embed everything in the background.
       this.log(`vectors.f32 does not match chunks.json; re-embedding ${rows.length} chunks`);
@@ -1342,7 +1351,8 @@ export class MemoryStore {
       const score = round(best.score);
       if (source === 'workspace') {
         const list = itemRows.get(key) || [best.row];
-        const head = rows[list.find((i) => (rows[i].metadata.wsPart ?? -1) < 0) ?? list[0]].metadata;
+        const headRow = rows[list.find((i) => (rows[i].metadata.wsPart ?? -1) < 0) ?? list[0]];
+        const head = headRow.metadata;
         const itemTitle = head.taskTitle || '';
         const prefix = `${itemTitle}: `;
         const subOf = (i: number) => (rows[i].text.startsWith(prefix) ? rows[i].text.slice(prefix.length) : rows[i].text);
@@ -1364,6 +1374,9 @@ export class MemoryStore {
         if (head.status) out.status = head.status;
         if (typeof head.isDone === 'boolean') out.isDone = head.isDone;
         if (subtasks.length) out.subtasks = subtasks;
+        // The head chunk embeds "title — summary note" (planWorkspaceChunks).
+        const notePrefix = `${itemTitle} — `;
+        if (headRow.text.startsWith(notePrefix)) out.summaryNote = clip(headRow.text.slice(notePrefix.length), RELATED_SUMMARY_CHARS);
         const done = completionFor(key);
         if (done) out.completionSummary = done;
         return out;

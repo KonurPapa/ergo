@@ -24,20 +24,17 @@ This document details the step-by-step logic, data flow, context boundaries, and
     - assembles a clean, structured baseline **Markdown context document** (the start of the "Master Bible") handed directly to the Summary Agent at 0 token cost
 2. summary agent
     - ingests the baseline Markdown context from vector memory & guidelines alongside active MCP tools
-    - synthesizes the authoritative **Overview & Execution Brief** directly into the structured Markdown context document:
-        - **Gherkin scenarios (Given-When-Then structure)**:
-            - use this as the basis for the 'brief' section in the output: https://www.geeksforgeeks.org/software-testing/writing-scenarios-with-gherkin-syntax/
-            - make sure to include examples in the skill (like the above webpage has), so the AI knows how it's supposed to format the Overview
-            - the gherkin should be written in a way that is easy to understand for a human, so that they can verify that it is correct
-            - covers happy paths, alternate flows, and edge cases (with preconditions in `Given`, triggers in `When`, verifiable outcomes in `Then`/`And`, ensuring zero silent failures)
-        - **Goals checklist**: explicit numbered list of core deliverables and subtasks
-        - **Output destination (`output_as`)**: exact method, file paths, and tool destination based on available MCPs
+    - also receives the related tasks and notes the local search found, and selects the ones that explain this task
+    - writes the **working brief** (`docs/skills/task-brief`): the exact spec handed to the manager, in as few tokens as possible:
+        - **Goal / Scope / Known context / Constraints / Done when / Assumptions**, one-line bullets, every fact from the related tasks carried over with its source id
+        - **Done when** is a strict checklist: one bullet per behaviour (starting state → action → observable result, exact values from the input), including a failure or edge case where the behaviour has one
+        - tested against Gherkin-formatted criteria: no gain for the manager, 30% longer, and more invented specifics, so the brief uses plain bullets
         - **Required MCPs**: strictly filters to only the specific MCP servers/tools needed for this task (avoiding prompt bloat and tool hallucinations)
     - outputs the finalized, master **Markdown Context Document / Bible Prompt** ready for execution handoff
 3. manager executes tasks (context & state machine management)
     - **Master Blueprint & Single Source of Truth**:
         - uses the structured **Markdown Context Document / Bible (`TASK_CONTEXT.md`)** assembled in steps 1 and 2 as its single source of truth and append-only state log
-        - **Slim Manager Context**: Manager receives a slimmed context containing Gherkin acceptance criteria, deliverable goals, and output destination (omitting verbose historical task dumps and guideline excerpts, which are passed directly to worker sub-agents)
+        - **The brief is the whole spec**: the manager and every worker get the bible's metadata, task checklist, working brief and run environment — nothing else about the task. Related tasks, prior knowledge and guidelines reach them only through the brief
     - **Dual Execution Models (Solo Mode vs Multi-Agent Fan-Out)**:
         - **Direct (Solo) Execution Mode (Straightforward / Standalone Deliverables)**:
             - when the task produces a single deliverable (e.g. single HTML game, standalone script, single component, non-coding task with <= 3 subtasks, or small task flagged with `requiresHardener: false`), the Manager executes the task **directly**
@@ -50,12 +47,12 @@ This document details the step-by-step logic, data flow, context boundaries, and
         - **Multi-Agent Fan-Out Mode (Complex / Multi-File Systems)**:
             - for large or multi-file systems, decomposes the scope into discrete, verifiable puzzle pieces executed by isolated worker sub-agents in waves
             - **Local AI / Ollama Serialization**: for local Ollama instances, worker execution is strictly serialized (`maxConcurrentAgents: 1`) to prevent VRAM exhaustion and timeouts
-    - **Gherkin Puzzle Piece Decomposition (Multi-Agent Mode)**:
-        - directly references the Gherkin scenarios to decompose the full scope into discrete, verifiable "puzzle pieces":
-            - *Piece 1 (Preconditions & Dependencies)*: fulfills all `Given` clauses (reading existing files, verifying schemas, initializing states)
-            - *Piece 2 (Actions & Implementation)*: executes all `When` actions via tools (code edits, API calls, component creation, business logic)
-            - *Piece 3 (Acceptance Checks & Verifications)*: validates all `Then` and `And` outcomes against strict assertions (zero silent failures)
-            - *Piece 4 (Edge Cases & Failure Recovery)*: implements and verifies alternate flows, error boundaries, and recovery paths
+    - **Criteria Puzzle Piece Decomposition (Multi-Agent Mode)**:
+        - the brief's "Done when" bullets are numbered criteria (C1, C2, …); the manager decomposes the scope into discrete, verifiable "puzzle pieces" that reference them:
+            - *setup*: preconditions & dependencies (reading existing files, verifying schemas, initializing states)
+            - *build*: implementation via tools (code edits, API calls, component creation, business logic)
+            - *verify*: acceptance checks of the referenced criteria with evidence (read-only)
+            - *edge*: the failure and edge-case criteria (error states, boundaries, recovery)
     - **Context Engineering & Model Routing Rules** (from *The State Machine Nobody Designed*):
         - **Route at task boundaries, NOT turn boundaries**: avoid naive mid-loop routing which invalidates prompt cache and incurs expensive re-prefill penalties on return journeys
         - **Clean sub-contexts (Clean Hand-offs)**: when spawning subagents/workers, do not dump the full manager history (90k+ tokens); provide a fresh, minimal Markdown context (byte-stable prefix, explicit input/output contract, and minimal tool surface)
@@ -76,7 +73,7 @@ This document details the step-by-step logic, data flow, context boundaries, and
         - worker tool rounds are strictly bounded (max 5 rounds for single pieces, max 8 rounds for multi-worker pieces) to prevent quadratic context blowup
         - when manager spawns a subagent, the child:
             - receives an isolated, scoped markdown sub-context tailored strictly to its specific puzzle piece
-            - executes work, writes unit tests, and validates its output against the Gherkin criteria
+            - executes work, writes unit tests, and validates its output against the referenced "Done when" criteria
             - writes its condensed summary piece back to the append-only Markdown bible log
             - terminates cleanly (clean teardown)
         - **Concurrency Limit**: maximum of X agents running concurrently (configurable; strictly 1 for local Ollama)
@@ -88,7 +85,7 @@ This document details the step-by-step logic, data flow, context boundaries, and
         - writes strictly constrained to `.ergo` (`~/.ergo`) and explicitly permitted directory roots
         - unauthorized write attempts are blocked and reported with high-signal errors
     - **Accumulation & Completion Rule**:
-        - manager is **only finished** with the complete task when it has accumulated all completed pieces of the puzzle and verified that all Gherkin acceptance scenarios pass cleanly
+        - manager is **only finished** with the complete task when it has accumulated all completed pieces of the puzzle and verified that every "Done when" criterion passes cleanly
 4. cleaner (only if coding)
     - clean up the newly-written code so it is well-organized and passes lint/format rules
     - strictly capped to 4 rounds max; automatically skipped for standalone static deliverables (e.g. single HTML/MD files) without project lint scripts and tasks with 0 files modified
@@ -115,36 +112,33 @@ This document details the step-by-step logic, data flow, context boundaries, and
     - **Source**: [Document / Lane]
     - **Project**: [Project Name] ([Project Path])
 
-    ## Target Task & Subtasks
+    ## Task Checklist
     - [ ] [Subtask 1]
     - [ ] [Subtask 2]
 
-    ## Overview & Acceptance Criteria (Gherkin Scenarios)
-    ```gherkin
-    Feature: [Feature Name]
-      Scenario: [Primary Success Path]
-        Given [Preconditions and discovered context]
-        When [Action triggered]
-        Then [Expected verifiable outcome]
-        And [Additional verification]
+    ## Working Brief (the Summary step's spec)
+    **Goal:** [one sentence: the outcome the user wants, as interpreted]
 
-      Scenario: [Edge Case / Failure Mode]
-        Given [Initial state]
-        When [Edge condition occurs]
-        Then [Graceful handling with zero silent failures]
-    ```
+    **Scope:**
+    - [deliverable] [#related-task-id]
+    - Out of scope: [adjacent work to leave alone] [#id]
 
-    ## Deliverable Goals
-    1. [Deliverable 1]
-    2. [Deliverable 2]
+    **Known context:**
+    - [fact from a related task, note, prior knowledge or guideline, with its exact value] [#id]
 
-    ## Output Destination & Method
-    - **Destination**: [Target file paths / MCP write method / Notes]
+    **Constraints:**
+    - [must / must not, and why] [#id or note]
+
+    **Done when:**
+    - [starting state → action → observable result, with exact values]
+    - [a failure or edge case and its visible behaviour]
+
+    **Assumptions:**
+    - [a default chosen where the input is ambiguous, and the alternative]
+
+    ## Run Environment
     - **Required MCPs**: [Filtered MCP list]
     - **Allowed Boundaries**: [Allowed directory roots]
-
-    ## Discovered Context References
-    - **Task #[ID] ([Title])** [from `[Source]`]: [Concise summary / schema pointer]
 
     ## Execution Event Log (Append-Only)
     - [Manager / sub-agents append progress notes, test results, and failure diagnostics here]

@@ -95,13 +95,7 @@ export async function getAllowedRoots(): Promise<McpRootBoundary[]> {
     }
   } catch {}
 
-  const saved = localStorage.getItem('ergo_mcp_roots');
-  if (saved) {
-    try {
-      return JSON.parse(saved);
-    } catch {}
-  }
-
+  // Allowed folders live in the bridge's config/roots.json; without a bridge only the default exists.
   return [
     { id: 'root-default', path: '~/.ergo', name: 'Default Storage (~/.ergo)', isDefault: true }
   ];
@@ -112,7 +106,6 @@ export async function getAllowedRoots(): Promise<McpRootBoundary[]> {
  */
 export async function saveAllowedRoots(roots: McpRootBoundary[]): Promise<boolean> {
   try {
-    localStorage.setItem('ergo_mcp_roots', JSON.stringify(roots));
     const res = await apiFetch('/api/mcp/roots', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

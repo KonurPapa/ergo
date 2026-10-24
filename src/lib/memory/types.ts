@@ -147,6 +147,10 @@ export interface RelatedTaskCandidate {
   subtasks?: string[];
   /** What was built, when the task has run before (short: its completion summary). */
   completionSummary?: string;
+  /** The task's own summary note, when it has one. */
+  summaryNote?: string;
+  /** A freeform note offered for selection alongside the tasks (relatedSelectionPool); absent for tasks. */
+  kind?: 'note';
   /** The part of the candidate that matched best (title or a specific subtask). */
   matchedOn: string;
   /** Centered cosine similarity of the best-matching pair, and its z-score among all candidates. */

@@ -337,7 +337,7 @@ export const WORKSPACE_MCP_TOOLS: MCPTool[] = [
       properties: {
         taskId: { type: 'string', description: 'Task ID associated with this brief' },
         overview: { type: 'string', description: 'Overview goals and plan' },
-        brief: { type: 'string', description: 'Gherkin acceptance criteria or brief text' }
+        brief: { type: 'string', description: 'The working brief text (Goal / Scope / Known context / Constraints / Done when)' }
       },
       required: ['taskId', 'overview']
     }

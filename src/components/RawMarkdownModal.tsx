@@ -7,12 +7,10 @@ interface RawMarkdownModalProps {
   isOpen: boolean;
   onClose: () => void;
   todoMarkdown: string;
-  agentContextMarkdown?: string;
   folderPath?: string;
   todoFilePath?: string;
-  agentContextFilePath?: string;
   swimLanes?: SwimLaneDoc[];
-  onSaveMarkdown: (newTodoMd: string, newAgentContextMd: string, updatedSwimLanes?: SwimLaneDoc[]) => void;
+  onSaveMarkdown: (newTodoMd: string, updatedSwimLanes?: SwimLaneDoc[]) => void;
   onExportProject?: () => void;
 }
 
@@ -20,7 +18,6 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
   isOpen,
   onClose,
   todoMarkdown,
-  agentContextMarkdown = '',
   folderPath,
   todoFilePath,
   swimLanes,
@@ -62,7 +59,7 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
       ? laneValues[effectiveLanes[0].id]
       : todoMarkdown;
 
-    onSaveMarkdown(primaryTodoMd, agentContextMarkdown, updatedLanes);
+    onSaveMarkdown(primaryTodoMd, updatedLanes);
     onClose();
   };
 

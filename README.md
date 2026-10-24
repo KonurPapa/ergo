@@ -27,7 +27,7 @@ Ergo keeps the human in the loop:
 
 - 📋 **Dual-Layer Architecture**:
   - **Human Layer (`TODO.md`)**: Terse, clean, scannable tasks for immediate human readability.
-  - **AI Layer (`AGENT_CONTEXT.md`)**: Rich technical briefs, execution constraints, and architectural roadmaps for AI context alignment.
+  - **AI Layer (the task's working brief)**: written by each task's first run from the task, its related tasks and the project's memory — the exact spec the manager agent works from.
 - 🤖 **AI Task Drafting**: Turn high-level prompts or rough ideas into structured, prioritized subtasks and implementation plans automatically.
 - 🔌 **Connections & MCP Hub (BYO-MCP)**:
   - Connect external services (VS Code, Google Workspace, Slack, Asana, Figma, local tools) via standardized Model Context Protocol (MCP) integrations.

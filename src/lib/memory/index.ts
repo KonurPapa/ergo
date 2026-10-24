@@ -41,7 +41,6 @@ export {
 export {
   // Session retrospective
   runSessionRetrospective,
-  migrateAgentContextToMemory,
   archiveTaskToVectorMemory,
   // Types
   type Learning,

@@ -1,41 +1,32 @@
 # Ergo AI Step Logic & Workflow Architecture
 
 This document details the step-by-step logic, data flow, context boundaries, and agent handoffs for both core AI pipelines in Ergo:
-1. **The Human AI Assistant Pipeline** (`runHumanAiAssistant`) — Workspace drafting, task structuring, and context synchronization.
+1. **The Human AI Assistant Pipeline** (`runHumanAiAssistant`) — Workspace drafting and task structuring.
 2. **The Task Execution Pipeline** (`executeTaskWithAi`) — The 3-stage execution engine invoked when running a task.
 
 ---
 
 ## 1. Human AI Assistant Pipeline (`runHumanAiAssistant`)
 
-The Human AI Assistant uses a **3-agent sequential pipeline** to translate user intent into structured markdown across `TODO.md` (human view) and `AGENT_CONTEXT.md` (agent view), following the core principle: **Human-Side First**.
+The Human AI Assistant uses a **2-agent sequential pipeline** to translate user intent into the human task list (`TODO.md`), following the core principle: **Human-Side First**. It writes no overviews: a task's working brief is written by the Summary step of its first run, from the task, its related tasks and the project's memory.
 
 ```mermaid
 flowchart TD
     UserPrompt([User Prompt / Instruction]) --> SkillLoad[Load Skill Docs & MCP Runtime Summary]
     SkillLoad --> AI1[AI 1: Context & Relevance Analyzer]
-    
+
     subgraph S1 [Step 1: Analysis]
-        AI1 -->|Skims TODO & AGENT_CONTEXT| AnalysisText["Relevance & Context Output (< 200 words)"]
+        AI1 -->|Skims TODO.md| AnalysisText["Relevance & Context Output (< 200 words)"]
     end
-    
+
     AnalysisText --> AI2[AI 2: TODO.md Task Builder]
     UserPrompt --> AI2
-    
+
     subgraph S2 [Step 2: Task Scaffolding]
         AI2 -->|Enforces Task or Architect Mode| UpdatedTodo["Complete Updated TODO.md"]
     end
-    
-    UpdatedTodo --> AI3[AI 3: Context Syncer & Overview Drafter]
-    UserPrompt --> AI3
-    AnalysisText --> AI3
-    
-    subgraph S3 [Step 3: Agent Context Sync]
-        AI3 -->|Generates Done-State, In Context, Seams| UpdatedAgentContext["Complete Updated AGENT_CONTEXT.md"]
-    end
-    
+
     UpdatedTodo --> Result([Apply Changes / Sync Project])
-    UpdatedAgentContext --> Result
 ```
 
 ### Modes of Operation
@@ -48,7 +39,7 @@ flowchart TD
 - **Role:** Fast, read-only reconnaissance.
 - **Model Target:** Discovery model (e.g. `gpt-4o-mini`, `claude-3-5-haiku`, `gemini-2.5-flash`, or `llama3.2`).
 - **Inputs & Context:**
-  - Full current `TODO.md` and `AGENT_CONTEXT.md` content.
+  - Full current `TODO.md` content.
   - Active MCP connections list and allowed directory boundaries (`getAllowedRoots`).
   - Dedicated skill instructions (`skills/assistant-context-analyzer/SKILL.md`).
   - The raw user prompt.
@@ -75,25 +66,6 @@ flowchart TD
 
 ---
 
-### Step 3: AI 3 — AGENT_CONTEXT.md Syncer & Overview Drafter (`assistant-context-syncer`)
-- **Role:** Synchronizes the agent's technical overview and counterpart records.
-- **Model Target:** Primary/General model.
-- **Inputs & Context:**
-  - Current `AGENT_CONTEXT.md`.
-  - Newly generated `TODO.md` (from AI 2).
-  - User prompt + AI 1 Context Analysis.
-  - Dedicated skill instructions (`skills/assistant-context-syncer/SKILL.md`).
-- **Execution Logic:**
-  - Ensures exact 1:1 numerical and title parity (`### N. Title`) matching the new `TODO.md`.
-  - Drafts rich, structured `Overview` sections for new or modified tasks, covering:
-    - **Done-State:** Concrete completion criteria matching subtasks.
-    - **In Context:** Relationship to other tasks, dependencies, and workspace architecture.
-    - **Seams:** Specific files, APIs, and connected MCP tools involved.
-  - Preserves unmodified sections and leaves `Build & Verification` / `Completion` ready for the execution phase.
-- **Output:** The complete updated `AGENT_CONTEXT.md` document inside a fenced code block (`markdown:AGENT_CONTEXT.md`).
-
----
-
 ## 2. Task Execution Pipeline (`executeTaskWithAi`)
 
 When a user clicks **Run Task** on an individual task item (without an active CLI PTY agent), Ergo initiates the **4-stage execution pipeline**.
@@ -108,16 +80,16 @@ flowchart TD
         RelevanceJson --> FullContext["Baseline Markdown Context:\n- Target Task & Subtasks\n- Pointers & Context Snippets\n- Connected MCPs"]
     end
     
-    FullContext --> Step2[Step 2: Summary AI / summary-agent]
+    FullContext --> Step2[Step 2: Summary AI / task-brief]
     
     subgraph Synthesis [Step 2: Overview & Markdown Bible Synthesis]
-        Step2 -->|Synthesizes full context into Markdown| OverviewDoc["Master Markdown Bible Document:\n- Gherkin Scenarios (Given-When-Then)\n- Goals Numbered Checklist\n- Output Destination & Tool Method\n- Filtered Required MCPs"]
+        Step2 -->|Synthesizes full context into Markdown| OverviewDoc["Working Brief:\n- Goal / Scope / Known context\n- Constraints\n- Done when (strict checklist)\n- Filtered Required MCPs"]
     end
     
     OverviewDoc --> Step3[Step 3: Manager AI / manager-agent]
     
     subgraph Execution [Step 3: Task Execution & Puzzle Piece Assembly]
-        Step3 -->|Ingests Structured Markdown Bible| BiblePrompt["Markdown Bible Prompt (TASK_CONTEXT.md):\n- Metadata & Subtasks\n- Overview & Gherkin Scenarios\n- Discovered Context Snippets\n- Environment & Active MCPs\n- Append-Only Event Log"]
+        Step3 -->|Ingests Structured Markdown Bible| BiblePrompt["Markdown Bible Prompt (TASK_CONTEXT.md):\n- Metadata & Task Checklist\n- Working Brief (verbatim)\n- Run Environment & Active MCPs\n- Append-Only Event Log"]
         BiblePrompt --> ProviderBranch{Provider Engine}
         ProviderBranch -->|Anthropic / OpenAI / Gemini| ToolLoop[Native MCP Tool Call Loop\n(Max 8 Rounds)]
         ProviderBranch -->|Ollama with Tool Calling| ToolLoop
@@ -130,7 +102,7 @@ flowchart TD
     
     subgraph Logging [Step 4: Completion Record]
         Step4 -->|JSON Schema Prompt| FinalJson["JSON:\n{ buildAndVerification, completion, humanReview }"]
-        FinalJson --> Persist["Mark Task DONE\nAppend Records to AGENT_CONTEXT.md"]
+        FinalJson --> Persist["Mark Task DONE\nSave Build & Completion to the task brief (RUNNING_JOBS.json)"]
     end
 ```
 
@@ -152,13 +124,10 @@ flowchart TD
 
 ---
 
-### Step 2: Summary AI (`summary-agent` — Overview & Markdown Bible Synthesizer)
-- **Objective:** Synthesize all discovered context into a complete, structured **Markdown Context Document (Master Bible)** (`brief`, `goals`, `output_as`, `requiredMcps`) that serves as the single source of truth for the Manager AI.
-- **Gherkin Scenario Standard (Given-When-Then):**
-  - Following the standard in `FUTURE_FEATURES.md`, the `"brief"` section is formatted as human-verifiable **Gherkin scenarios**.
-  - Uses standard BDD keywords: `Feature:`, `Scenario:`, `Given:`, `When:`, `Then:`, `And:`, `But:`.
-  - Structured in plain English so human reviewers can immediately read and verify acceptance criteria before and during execution.
-  - Incorporates preconditions and discovered context in `Given` clauses, discrete triggers in `When` clauses, and observable verifiable outcomes in `Then`/`And` clauses (covering both happy paths and edge cases).
+### Step 2: Summary AI (`task-brief` — the Working Brief)
+- **Objective:** Fold the task, its selected related tasks and notes, prior knowledge and project guidelines into the **working brief** — the exact spec the manager works from and the spec section of the bible (`TASK_CONTEXT.md`). It also picks the required MCPs, the task kind and the Hardener decision.
+- **Format** (`docs/skills/task-brief/SKILL.md`): `Goal`, `Scope` (including what is out of scope), `Known context`, `Constraints`, `Done when`, `Assumptions` — one-line bullets, facts with their source ids, 60–350 words depending on the task.
+- **Done when is a strict checklist:** one bullet per behaviour (starting state → action → observable result, exact values from the input), including a failure or edge case where the behaviour has one. Gherkin-formatted criteria were tested and dropped: no measurable gain for the manager, 30% longer, more invented specifics.
 - **Master Markdown Bible Document Format:**
   ```markdown
   # TASK EXECUTION BIBLE: User Registration & Validation
@@ -167,43 +136,31 @@ flowchart TD
   - **Task ID**: #1
   - **Category**: Auth
   - **Status**: todo
-  - **Source Document**: TODO.md ("Todo" Lane)
+  - **Source**: TODO.md ("Todo" Lane)
   - **Project**: Default Workspace (/workspace)
 
-  ## Target Task & Subtasks
+  ## Task Checklist
   - [ ] Implement registration form UI
   - [ ] Add input validation rules
   - [ ] Wire auth API handler
 
-  ## Overview & Acceptance Criteria (Gherkin Scenarios)
-  ```gherkin
-  Feature: User Registration & Input Validation
-    Scenario: Successful registration with valid details
-      Given the user is on the registration page
-      When the user enters a valid username, email, and password
-      And the user clicks the register button
-      Then the user should be redirected to the welcome page
-      And the user should see a registration confirmation message
+  ## Working Brief (the Summary step's spec)
+  **Goal:** New users can register with a username, email and password and land on the welcome page.
 
-    Scenario: Unsuccessful registration with invalid email
-      Given the user is on the registration page
-      When the user enters an invalid email format
-      And the user clicks the register button
-      Then the user should see an error message indicating an invalid email format
-  ```
+  **Scope:**
+  - Registration form UI, validation rules, auth API handler
+  - Out of scope: email verification [#4]
 
-  ## Goals Checklist
-  1. Implement registration form UI
-  2. Add input validation rules
-  3. Wire auth API handler
+  **Known context:**
+  - User schema has username, email, password_hash [#2]
 
-  ## Output Destination & Method
-  - **Destination**: Write updated files to `src/auth/...` via Filesystem MCP, then record completion summary in `AGENT_CONTEXT.md`.
+  **Done when:**
+  - On the registration page, submitting a valid username, email and password redirects to the welcome page with a confirmation message
+  - Submitting an invalid email format shows "Invalid email format" and creates no user
+
+  ## Run Environment
   - **Required MCPs**: Filesystem MCP
   - **Allowed Boundaries**: `/workspace/.ergo`
-
-  ## Discovered Context References
-  - **Task #2 (DB Schema)** [from `AGENT_CONTEXT.md`]: User schema includes username, email, password hash.
 
   ## Execution Event Log (Append-Only)
   - [Progress notes, subagent results, and test diagnostics will be recorded here]
@@ -212,12 +169,12 @@ flowchart TD
 ---
 
 ### Step 3: Manager AI (`manager-agent` — Task Execution & Puzzle Piece Assembly)
-- **Objective:** Systematically execute the task using connected MCP tools against the structured **Markdown Bible Document (`TASK_CONTEXT.md`)**, directly referencing the Gherkin scenarios to solve every "piece" of the puzzle.
+- **Objective:** Systematically execute the task using connected MCP tools against the structured **Markdown Bible Document (`TASK_CONTEXT.md`)**, directly referencing the working brief's "Done when" criteria to solve every "piece" of the puzzle.
 - **The Markdown Bible Document**:
   - The Manager receives the scoped, structured Markdown master blueprint assembled from Discovery and Summary, and treats it as an append-only event log.
-- **Gherkin Puzzle Piece Decomposition & Accumulation Rule**:
-  - **Decomposition**: The Manager decomposes the Gherkin scenarios into discrete "puzzle pieces" (preconditions in `Given`, implementation actions in `When`, verifiable outcomes in `Then`/`And`, and edge case recovery).
-  - **Accumulation Rule**: The Manager is **only finished** with the complete task when it has accumulated all completed pieces of the puzzle and assembled them into the finished task.
+- **Criteria Puzzle Piece Decomposition & Accumulation Rule**:
+  - **Decomposition**: The Manager decomposes the brief's "Done when" criteria (C1, C2, …) into discrete "puzzle pieces" (`setup` preconditions, `build` implementation, `verify` acceptance checks, `edge` failure and edge cases).
+  - **Accumulation Rule**: The Manager is **only finished** with the complete task when it has accumulated all completed pieces of the puzzle and every criterion passes verification.
 - **Strict Filesystem Boundaries:**
   - The AI has access **ONLY** to write files within the `.ergo` directory (`~/.ergo`) or folders explicitly permitted under **Connections -> Allowed Folders**.
   - Writing to the app's codebase repository or outside approved boundaries is strictly forbidden and rejected at the MCP host gateway with HTTP 403.
@@ -254,7 +211,7 @@ flowchart TD
 ---
 
 ### Step 4: Logger AI (Completion Recording, Artifacts, & Human Review Evaluation)
-- **Objective:** Generate formal build documentation, list all created/modified files with direct IDE open links, evaluate human review requirements, and append records to `AGENT_CONTEXT.md` and `TODO.md`.
+- **Objective:** Generate formal build documentation, list all created/modified files with direct IDE open links, evaluate human review requirements, and save them on the task's brief (RUNNING_JOBS.json) and in `TODO.md`.
 - **Inputs & Context:**
   - Current Task metadata, original subtasks, and human review flags.
   - Builder AI's execution summary.
@@ -275,7 +232,7 @@ flowchart TD
     }
     ```
 - **Clickable File Links & IDE Integration:**
-  - In `AGENT_CONTEXT.md` / `BriefPane` Section 3 (Completion), all created files and code artifacts are rendered in an interactive **Completed Work & Created Files** panel.
+  - In the `BriefPane` Completion tab, all created files and code artifacts are rendered in an interactive **Completed Work & Created Files** panel.
   - Clicking **"Open in IDE"** directly opens the file in the user's IDE (VS Code, Cursor, or system editor via `POST /api/files/open`).
   - Markdown links to files (`[filename](path)`) in the completion notes can also be clicked to open directly in the user's IDE.
 - **Persistence & State Update:**
@@ -283,7 +240,7 @@ flowchart TD
   - Human review subtasks are output as `    - **human review** - <step>` with `isDone: false, isHumanReview: true`.
   - If human review steps exist, task status is set to `'partly_done'` with a dedicated **Human Review** purple badge in `TaskPane` and a verification checklist card in `BriefPane`.
   - If no human review is required, task is marked `'done'` (`isDone: true`).
-  - Updates `AGENT_CONTEXT.md` with the new `Build & Verification` and `Completion` sections (including human review and artifacts list).
+  - Updates the task's brief with the new `Build & Verification` and `Completion` sections (including human review and artifacts list).
   - Persists both files to local workspace storage and syncs the UI.
 
 ---

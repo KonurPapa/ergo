@@ -27,6 +27,7 @@ import {
 import type { CliDetectedPrompt } from '../src/types/index.ts';
 import { createMemoryStore, embedWithMemoryModel, MEMORY_NAMESPACES, AGENT_NOTE_KINDS, WORKSPACE_MAX_ITEMS, type MemoryStore, type MemoryStoreIo } from '../src/lib/memory/memoryStore.ts';
 import { CodeIndexManager } from '../src/lib/codeIndex/codeIndex.ts';
+import { bridgeInfo, requestBridgeUpdate, setActiveSessionCounter } from './selfUpdate.ts';
 import { parseScoutFiles, scoutSystemPrompt, scoutUserPrompt, SCOUT_MAX_TURNS, SCOUT_TIMEOUT_MS } from '../src/lib/codeIndex/fileScout.ts';
 import type {
   AgentNoteKind,
@@ -81,6 +82,80 @@ const CLAUDE_INSTALL_COMMAND = process.platform === 'win32'
 }
 
 let activeStoragePath = '~/.ergo';
+
+// ─── Built-in skills on disk ────────────────────────────────────────────────
+// Ergo's built-in skills ship with the web app; the bridge keeps a copy of each under <storage>/config/skills so users
+// can read and edit them. `.defaults.json` there records the hash of the default the bridge last wrote, so a copy the
+// user changed is told apart from one they never touched (which is refreshed when a newer default ships).
+
+const BUILTIN_SKILL_NAMES = [
+  'human-assistant',
+  'assistant-context-analyzer',
+  'assistant-todo-builder',
+  'task-brief',
+  'manager-agent',
+  'worker-agent',
+  'cleaner-agent',
+  'hardener-agent',
+];
+const SKILL_MANIFEST_FILE = '.defaults.json';
+
+const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
+
+async function bundledSkillDoc(skillName: string): Promise<string | null> {
+  try {
+    return await fs.readFile(path.join(process.cwd(), 'docs', 'skills', skillName, 'SKILL.md'), 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The disk copy of a skill, seeded or refreshed as needed, and whether it is the user's own edit. A copy with no
+ * record (seeded by an older bridge) that differs from the default is kept as SKILL.previous.md and replaced.
+ */
+async function syncSkillCopy(storageDir: string, skillName: string): Promise<{ content: string | null; filePath: string; edited: boolean }> {
+  const skillsDir = path.join(storageDir, 'config', 'skills');
+  const filePath = path.join(skillsDir, skillName, 'SKILL.md');
+  const manifestPath = path.join(skillsDir, SKILL_MANIFEST_FILE);
+  let manifest: Record<string, string> = {};
+  try {
+    manifest = JSON.parse(await fs.readFile(manifestPath, 'utf-8'));
+  } catch {}
+  const bundled = await bundledSkillDoc(skillName);
+  let current: string | null = null;
+  try {
+    current = await fs.readFile(filePath, 'utf-8');
+  } catch {}
+
+  const writeDefault = async () => {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, bundled!, 'utf-8');
+    manifest[skillName] = sha256(bundled!);
+    await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+  };
+  try {
+    if (current === null) {
+      if (bundled) await writeDefault();
+      return { content: bundled, filePath, edited: false };
+    }
+    if (!bundled) return { content: current, filePath, edited: true };
+    const recorded = manifest[skillName];
+    const currentHash = sha256(current);
+    if (recorded && currentHash !== recorded) return { content: current, filePath, edited: true };
+    if (currentHash !== sha256(bundled)) {
+      if (!recorded) await fs.writeFile(path.join(path.dirname(filePath), 'SKILL.previous.md'), current, 'utf-8');
+      await writeDefault();
+    } else if (!recorded) {
+      manifest[skillName] = currentHash;
+      await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+    }
+    return { content: bundled, filePath, edited: false };
+  } catch (err) {
+    console.warn(`[Ergo Storage] Could not sync skill ${skillName}:`, err);
+    return { content: current ?? bundled, filePath, edited: false };
+  }
+}
 
 function resolveStoragePath(inputPath: string = activeStoragePath): string {
   if (inputPath.startsWith('~/') || inputPath === '~') {
@@ -154,48 +229,8 @@ async function ensureStorageInitialized(storageDir: string) {
       await fs.writeFile(secretsFile, JSON.stringify(defaultSecrets, null, 2), 'utf-8');
     }
 
-    // Skills (Ensure all 6 skills exist in local filesystem: ~/.ergo and .ergo)
-    const skillNames = [
-      'human-assistant',
-      'assistant-context-analyzer',
-      'assistant-todo-builder',
-      'assistant-context-syncer',
-      'discovery-agent',
-      'summary-agent',
-      'manager-agent',
-      'worker-agent',
-      'cleaner-agent',
-      'hardener-agent'
-    ];
-
-    for (const skillName of skillNames) {
-      const docPath = path.join(process.cwd(), 'docs', 'skills', skillName, 'SKILL.md');
-      let skillContent = '';
-      try {
-        skillContent = await fs.readFile(docPath, 'utf-8');
-      } catch {}
-
-      if (skillContent) {
-        const localSkillTargets = [
-          path.join(storageDir, 'config', 'skills', skillName, 'SKILL.md'),
-          path.join(process.cwd(), '.ergo', 'config', 'skills', skillName, 'SKILL.md')
-        ];
-
-        for (const target of localSkillTargets) {
-          try {
-            await fs.access(target);
-          } catch {
-            // File missing: seed it to the local filesystem from codebase docs
-            try {
-              await fs.mkdir(path.dirname(target), { recursive: true });
-              await fs.writeFile(target, skillContent, 'utf-8');
-            } catch (seedErr) {
-              console.warn(`[Ergo Storage] Failed to seed skill ${skillName} at ${target}:`, seedErr);
-            }
-          }
-        }
-      }
-    }
+    // Built-in skills: seed missing copies and refresh unedited ones (syncSkillCopy).
+    for (const skillName of BUILTIN_SKILL_NAMES) await syncSkillCopy(storageDir, skillName);
 
     // Projects
     const projectsDir = path.join(storageDir, 'projects');
@@ -1185,7 +1220,7 @@ function broadcastFileChange(payload: {
   filePath: string;
   relativePath: string;
   projectId: string;
-  fileType: 'todo' | 'agent' | 'other';
+  fileType: 'todo' | 'other';
   content: string;
   updatedAt: string;
 }) {
@@ -1246,8 +1281,7 @@ function setupProjectWatcher(storageDir: string) {
           const pathParts = normalizedFilename.split('/');
           const projectId = pathParts[0] || 'default-workspace';
           const baseName = path.basename(normalizedFilename);
-          const fileType: 'todo' | 'agent' | 'other' =
-            baseName === 'TODO.md' ? 'todo' : baseName === 'AGENT_CONTEXT.md' ? 'agent' : 'other';
+          const fileType: 'todo' | 'other' = baseName === 'TODO.md' ? 'todo' : 'other';
 
           broadcastFileChange({
             filePath: fullPath,
@@ -1313,8 +1347,15 @@ export function ergoFileSystemPlugin(): Plugin {
           resolvedPath: storageDir,
           homeDir: os.homedir(),
           // The Ergo checkout `npm run dev` runs from, so the hosted app can show how to start the bridge again.
-          appDir: process.cwd()
+          appDir: process.cwd(),
+          // Protocol, version and update state: the web app asks an older bridge to update (bridgeProtocol.ts).
+          bridge: bridgeInfo()
         });
+      }
+
+      if (url === '/api/bridge/update' && req.method === 'POST') {
+        // Ergo Bridge (desktop) checks and downloads now, then installs once no agent session is running.
+        return sendJson(res, 200, { success: true, started: requestBridgeUpdate(), bridge: bridgeInfo() });
       }
 
       if (url === '/api/storage/config' && req.method === 'POST') {
@@ -1612,51 +1653,11 @@ export function ergoFileSystemPlugin(): Plugin {
       if (url === '/api/skills/read' && req.method === 'POST') {
         try {
           const body = await parseJsonBody(req);
-          const skillName = body.skillName || 'human-assistant';
-
-          // 1. Check user local workspace .ergo first, then storageDir ~/.ergo
-          const localFilesystemPaths = [
-            path.join(process.cwd(), '.ergo', 'config', 'skills', skillName, 'SKILL.md'),
-            path.join(storageDir, 'config', 'skills', skillName, 'SKILL.md'),
-          ];
-
-          let content: string | null = null;
-          let matchedPath: string | null = null;
-
-          for (const fp of localFilesystemPaths) {
-            try {
-              content = await fs.readFile(fp, 'utf-8');
-              matchedPath = fp;
-              break;
-            } catch {}
-          }
-
-          // 2. If missing on local filesystem, load default from codebase docs/skills/ and auto-seed to local filesystem
-          if (!content) {
-            const codebaseDocPath = path.join(process.cwd(), 'docs', 'skills', skillName, 'SKILL.md');
-            try {
-              content = await fs.readFile(codebaseDocPath, 'utf-8');
-            } catch {}
-
-            if (content) {
-              for (const target of localFilesystemPaths) {
-                try {
-                  await fs.mkdir(path.dirname(target), { recursive: true });
-                  await fs.writeFile(target, content, 'utf-8');
-                } catch (wErr) {
-                  console.warn(`[Ergo FS API] Could not auto-seed skill to ${target}:`, wErr);
-                }
-              }
-              matchedPath = localFilesystemPaths[0];
-            }
-          }
-
-          return sendJson(res, 200, {
-            success: true,
-            skillName,
-            content,
-            filePath: matchedPath
-          });
+          const skillName = String(body.skillName || 'human-assistant');
+          if (!/^[a-z0-9][a-z0-9-]{0,63}$/i.test(skillName)) return sendJson(res, 400, { error: 'invalid skillName' });
+          // `edited`: the copy is the user's own version (else the web app uses its built-in one).
+          const { content, filePath, edited } = await syncSkillCopy(storageDir, skillName);
+          return sendJson(res, 200, { success: true, skillName, content, filePath: content ? filePath : null, edited });
         } catch (err: any) {
           console.error('[Ergo FS API] Skills read error:', err);
           return sendJson(res, 500, { error: err.message });
@@ -1666,40 +1667,16 @@ export function ergoFileSystemPlugin(): Plugin {
       if (url === '/api/skills/write' && req.method === 'POST') {
         try {
           const body = await parseJsonBody(req);
-          const { skillName, content, projectFolder } = body;
-
-          if (!skillName || typeof content !== 'string') {
-            return sendJson(res, 400, { error: 'skillName and content are required' });
+          const skillName = String(body.skillName || '');
+          const content = body.content;
+          if (!/^[a-z0-9][a-z0-9-]{0,63}$/i.test(skillName) || typeof content !== 'string') {
+            return sendJson(res, 400, { error: 'skillName (letters, digits, -) and content are required' });
           }
-
-          let skillsDir = path.resolve(storageDir, 'skills');
-          if (projectFolder) {
-            skillsDir = path.resolve(storageDir, projectFolder, 'skills');
-          }
-
-          const targetSkillDir = path.join(skillsDir, skillName);
-          await fs.mkdir(targetSkillDir, { recursive: true });
-          const targetSkillMd = path.join(targetSkillDir, 'SKILL.md');
-
-          await fs.writeFile(targetSkillMd, content, 'utf-8');
-
-          // Also save directly to user's local .ergo and storage config folders
-          const configSkillTargets = [
-            path.join(process.cwd(), '.ergo', 'config', 'skills', skillName, 'SKILL.md'),
-            path.join(storageDir, 'config', 'skills', skillName, 'SKILL.md')
-          ];
-          for (const target of configSkillTargets) {
-            try {
-              await fs.mkdir(path.dirname(target), { recursive: true });
-              await fs.writeFile(target, content, 'utf-8');
-            } catch {}
-          }
-
-          return sendJson(res, 200, {
-            success: true,
-            skillName,
-            savedAt: new Date().toISOString()
-          });
+          // The user's own version: it differs from the recorded default, so reads report it as edited.
+          const target = path.join(storageDir, 'config', 'skills', skillName, 'SKILL.md');
+          await fs.mkdir(path.dirname(target), { recursive: true });
+          await fs.writeFile(target, content, 'utf-8');
+          return sendJson(res, 200, { success: true, skillName, savedAt: new Date().toISOString() });
         } catch (err: any) {
           console.error('[Ergo FS API] Skill write error:', err);
           return sendJson(res, 500, { error: err.message });
@@ -1717,9 +1694,7 @@ export function ergoFileSystemPlugin(): Plugin {
             name: string;
             folderPath: string;
             todoFilePath: string;
-            agentContextFilePath?: string;
             todoMarkdown: string;
-            agentContextMarkdown: string;
             runningJobsDoc?: any;
             swimLanes?: Array<{ id: string; title: string; filePath: string; markdown: string }>;
           }> = [];
@@ -1730,7 +1705,6 @@ export function ergoFileSystemPlugin(): Plugin {
               const projectFiles = await fs.readdir(projectDir, { withFileTypes: true });
 
               let todoContent = '';
-              let agentContent = '';
               const swimLanes: Array<{ id: string; title: string; filePath: string; markdown: string }> = [];
 
               for (const pf of projectFiles) {
@@ -1739,37 +1713,33 @@ export function ergoFileSystemPlugin(): Plugin {
                   const relPath = `projects/${entry.name}/${pf.name}`;
                   try {
                     const content = await fs.readFile(fp, 'utf-8');
-                    if (pf.name === 'AGENT_CONTEXT.md') {
-                      agentContent = content;
-                    } else {
-                      if (pf.name === 'TODO.md') {
-                        todoContent = content;
-                      }
-
-                      // Check for embedded title metadata in comments or headings
-                      let title = '';
-                      const titleCommentMatch = content.match(/<!--\s*(?:Swimlane Title|Title):\s*(.*?)\s*-->/i);
-                      if (titleCommentMatch && titleCommentMatch[1]) {
-                        title = titleCommentMatch[1].trim();
-                      } else {
-                        const h1Match = content.match(/^#\s+(?:.*?\s+)?(.*?)(?:\s+Tasks)?\s*$/m);
-                        const h2Match = content.match(/^##\s+(.*?)(?:\s+Tasks)?\s*$/m);
-                        if (h1Match && h1Match[1] && pf.name !== 'TODO.md') {
-                          title = h1Match[1].trim();
-                        } else if (h2Match && h2Match[1] && pf.name !== 'TODO.md') {
-                          title = h2Match[1].trim();
-                        } else {
-                          title = pf.name === 'TODO.md' ? 'Human Workspace' : pf.name.replace(/\.md$/i, '').replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-                        }
-                      }
-
-                      swimLanes.push({
-                        id: `lane-${pf.name.replace(/\.md$/i, '').toLowerCase()}`,
-                        title: title || (pf.name === 'TODO.md' ? 'Human Workspace' : pf.name.replace(/\.md$/i, '')),
-                        filePath: relPath,
-                        markdown: content
-                      });
+                    if (pf.name === 'TODO.md') {
+                      todoContent = content;
                     }
+
+                    // Check for embedded title metadata in comments or headings
+                    let title = '';
+                    const titleCommentMatch = content.match(/<!--\s*(?:Swimlane Title|Title):\s*(.*?)\s*-->/i);
+                    if (titleCommentMatch && titleCommentMatch[1]) {
+                      title = titleCommentMatch[1].trim();
+                    } else {
+                      const h1Match = content.match(/^#\s+(?:.*?\s+)?(.*?)(?:\s+Tasks)?\s*$/m);
+                      const h2Match = content.match(/^##\s+(.*?)(?:\s+Tasks)?\s*$/m);
+                      if (h1Match && h1Match[1] && pf.name !== 'TODO.md') {
+                        title = h1Match[1].trim();
+                      } else if (h2Match && h2Match[1] && pf.name !== 'TODO.md') {
+                        title = h2Match[1].trim();
+                      } else {
+                        title = pf.name === 'TODO.md' ? 'Human Workspace' : pf.name.replace(/\.md$/i, '').replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+                      }
+                    }
+
+                    swimLanes.push({
+                      id: `lane-${pf.name.replace(/\.md$/i, '').toLowerCase()}`,
+                      title: title || (pf.name === 'TODO.md' ? 'Human Workspace' : pf.name.replace(/\.md$/i, '')),
+                      filePath: relPath,
+                      markdown: content
+                    });
                   } catch {}
                 }
               }
@@ -1814,7 +1784,6 @@ export function ergoFileSystemPlugin(): Plugin {
                 folderPath: `projects/${entry.name}`,
                 todoFilePath: `projects/${entry.name}/TODO.md`,
                 todoMarkdown: todoContent,
-                agentContextMarkdown: agentContent || '',
                 runningJobsDoc,
                 swimLanes
               });
@@ -4420,6 +4389,8 @@ interface PtySessionState {
 }
 
 const activePtySessions = new Map<string, PtySessionState>();
+// A bridge update waits until no agent is running (selfUpdate.ts).
+setActiveSessionCounter(() => [...activePtySessions.values()].filter((s) => s.isActive).length);
 /** WebSockets attached to an id that has no live process yet (App may still be launching it). */
 const ptyKeyWatchers = new Map<string, Set<any>>();
 /** SSE clients of /api/pty/events. */
