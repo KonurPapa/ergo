@@ -13,6 +13,7 @@
  *  - Clean hand-offs: workers receive only the shared prefix + their piece contract.
  */
 import type { SteeringQueue } from './steeringQueue';
+import type { TaskReferenceContext } from '../taskReferences';
 import {
   type AIProviderConfig,
   type AIProviderId,
@@ -266,6 +267,8 @@ export interface PipelineContext extends PipelineCallbacks {
   emit: (step: Omit<ExecutionStep, 'time' | 'taskId'> & Partial<Pick<ExecutionStep, 'time' | 'taskId'>>) => void;
   /** The prompt box's mid-run messages for this run's agent loops (see steeringQueue.ts). */
   steering?: SteeringQueue;
+  /** The task's `/skill` and `@file` commands, resolved at run start (taskReferences.ts). */
+  references?: TaskReferenceContext;
 }
 
 /** Resolved provider and credentials for an individual execution agent role. */

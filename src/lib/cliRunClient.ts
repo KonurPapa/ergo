@@ -25,6 +25,8 @@ export interface SpawnAgentRequest {
   spawnId: string;
   cols?: number;
   rows?: number;
+  /** List Ergo's workspace tools on the agent's ergo-memory server (claude, codex; bridge protocol 4). */
+  workspaceTools?: boolean;
 }
 
 export interface SpawnAgentResponse {
@@ -64,6 +66,8 @@ export type CliAgentEvent =
       verdict?: 'PASS' | 'FAIL';
     } & CliAgentEventBase)
   | ({ type: 'exit'; code: number } & CliAgentEventBase)
+  /** The agent called one of Ergo's workspace tools (protocol 4): the app that owns the run claims and runs it. */
+  | ({ type: 'workspace-call'; callId: string; tool: string; args: Record<string, unknown> } & CliAgentEventBase)
   | ({ type: 'policy'; permissionLevel: PermissionLevel; applied: PolicyApplied; detail?: string; /** Outcome of a switch that was queued behind an open prompt. */ deferred?: boolean } & CliAgentEventBase);
 
 export interface CliAgentEventBase {
@@ -130,6 +134,17 @@ export function spawnAgentSession(req: SpawnAgentRequest): Promise<SpawnAgentRes
   return postJson<SpawnAgentResponse>('/api/pty/spawn', req).then(
     (r) => r ?? { success: false, error: 'Bridge unreachable' }
   );
+}
+
+/** Claims a relayed workspace-tool call; false when another Ergo window took it (or it timed out). */
+export async function claimWorkspaceCall(callId: string): Promise<boolean> {
+  const r = await postJson<{ success: boolean }>('/api/pty/workspace-claim', { callId });
+  return Boolean(r?.success);
+}
+
+/** Sends a claimed workspace-tool call's result back to the agent. */
+export async function sendWorkspaceCallResult(callId: string, result: { success: boolean; data?: unknown; error?: string }): Promise<void> {
+  await postJson('/api/pty/workspace-result', { callId, ...result });
 }
 
 /** Type into an agent's terminal (an answer to a prompt, or raw keys from a view). */

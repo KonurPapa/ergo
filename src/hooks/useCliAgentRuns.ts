@@ -45,6 +45,8 @@ import {
   sendAgentInput,
   spawnAgentSession,
   subscribeAgentEvents,
+  claimWorkspaceCall,
+  sendWorkspaceCallResult,
   type BridgeAgentSessionInfo,
   type CliAgentEvent,
 } from '../lib/cliRunClient';
@@ -82,6 +84,8 @@ import { familyForTarget } from '../lib/modelCatalog/availability';
 import { recordSteeringMessage } from '../lib/agentPipeline/steeringLog';
 import type { TaskMessageOptions, TaskMessageResult } from '../lib/taskMessages';
 import { QUESTION_SIGNAL_PROTOCOL } from '../lib/bridgeProtocol';
+import { bridgeSupportsTaskReferences, type TaskReferenceContext } from '../lib/taskReferences';
+import { executeWorkspaceToolAction } from '../lib/workspaceMcp';
 
 // ─── Public types ─────────────────────────────────────────────────────────────────────
 
@@ -127,6 +131,10 @@ export interface LaunchCliRunParams {
   relatedContext?: string;
   /** One-line index of those related tasks: shown instead of the block when the overview is a working brief. */
   relatedSources?: string;
+  /** The project's learned rules for this task (formatProjectRules): every agent of the run gets them. */
+  projectRules?: string;
+  /** The task's `/skill` and `@file` commands, resolved by App (taskReferences.ts): the manager prompt shows them. */
+  references?: TaskReferenceContext;
   /**
    * Per-run override of the QA verifier. Defaults to the task's "QA verification" switch (brief.qaVerification, off
    * unless set). Persisted with the run, so a restored run keeps it.
@@ -479,6 +487,8 @@ interface PersistedRunState {
   relatedContext?: string;
   /** Their one-line index (from launch), shown instead of the block when the overview is a working brief. */
   relatedSources?: string;
+  /** The project's learned rules at launch: the run's later agents (workers, QA, a resumed manager) get the same. */
+  projectRules?: string;
   /** The run's TASK_CONTEXT.md under the storage root (cliBible.ts): the brief as handed over, the log, the prompt. */
   bibleFilePath?: string;
   /** The manager's launch prompt, exactly as sent (kept for the bible). */
@@ -489,6 +499,10 @@ interface PersistedRunState {
   codeSearchPath?: string;
   /** Files the file scout found at launch (repository-relative), shown to the manager. */
   likelyFiles?: string[];
+  /** The task's `/skill` and `@file` commands as resolved at launch (a resumed manager sees the same). */
+  references?: TaskReferenceContext;
+  /** An invoked skill uses Ergo's workspace tools and this CLI can get them: the manager's MCP server lists them. */
+  workspaceTools?: boolean;
   startedAt: string;
   cliName: string;
   managerSessionId: string;
@@ -798,6 +812,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
           runId: run.runId,
           cliName: run.cliName,
           relatedSources: run.relatedSources,
+          projectRules: run.projectRules,
           managerPrompt: run.managerPrompt,
           steps: d.taskExecutionStepsRef.current[run.taskKey] || [],
         });
@@ -847,8 +862,10 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     ...(memoryHits && memoryHits.length > 0 ? { memoryHits } : {}),
     ...(run.relatedContext ? { relatedContext: run.relatedContext } : {}),
     ...(run.relatedSources ? { relatedSources: run.relatedSources } : {}),
+    ...(run.projectRules ? { projectRules: run.projectRules } : {}),
     ...(run.codeSearch ? { codeSearchAvailable: true, ...(run.codeSearchPath ? { codeSearchPath: run.codeSearchPath } : {}) } : {}),
     ...(run.likelyFiles?.length ? { likelyFiles: run.likelyFiles } : {}),
+    ...(run.references ? { references: run.references, workspaceTools: Boolean(run.workspaceTools) } : {}),
     // Managers ask through question.md only when the bridge reports it (protocol 3); else the old way.
     ...((bridgeClient.getStatus().bridgeInfo?.protocol ?? 0) >= QUESTION_SIGNAL_PROTOCOL ? { questionFile: true } : {}),
   });
@@ -995,6 +1012,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       spawnId,
       cols: 120,
       rows: 40,
+      // The manager applies the invoked skills; only it gets the workspace tools.
+      ...(role === 'manager' && run.workspaceTools ? { workspaceTools: true } : {}),
     });
 
     if (!res.success) {
@@ -1856,7 +1875,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       detail: `${s.detail}\n\n▶ Resumed by user${userMessage ? `: "${truncate(userMessage, 400)}"` : ''}.`,
     }));
     if (userMessage) {
-      recordSteeringMessage({ taskId: String(run.taskId), runId: run.runId, role: 'manager', text: userMessage, phase: 'mid-run' });
+      recordSteeringMessage({ taskId: String(run.taskId), runId: run.runId, role: 'manager', text: userMessage, phase: 'mid-run', projectId: run.projectId, taskTitle: run.taskTitle });
     }
 
     // Workers that reported while the run was stopped: their hand-off goes into the manager's resume message.
@@ -2060,7 +2079,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       target.ptySessionId,
       message,
       () => {
-        recordSteeringMessage({ taskId: String(run.taskId), runId: run.runId, role, text: message, phase });
+        recordSteeringMessage({ taskId: String(run.taskId), runId: run.runId, role, text: message, phase, projectId: run.projectId, taskTitle: run.taskTitle });
         if (queued) noteOnStep(run, stepId, `↳ Your queued message reached ${target.label}.`);
         opts.onDelivered?.();
       },
@@ -2286,7 +2305,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     // A follow-up uses the task's QA switch as it is now (the user may have changed it since the run).
     if (!isForeignRun(run)) run.qaEnabled = latestBrief(run)?.qaVerification === true;
     const record = () =>
-      recordSteeringMessage({ taskId: String(run.taskId), runId: run.runId, role: 'manager', text: message, phase: 'post-run' });
+      recordSteeringMessage({ taskId: String(run.taskId), runId: run.runId, role: 'manager', text: message, phase: 'post-run', projectId: run.projectId, taskTitle: run.taskTitle });
     if (managerAlive) {
       // Working again (a held-back message is only typed into an agent whose run is live).
       setSessionStatus(run.managerSessionId, 'running');
@@ -2818,7 +2837,31 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       case 'exit':
         void enqueue(queueKeyForEvent(ev), () => handleExit(ev));
         return;
+      case 'workspace-call':
+        void handleWorkspaceCall(ev);
+        return;
     }
+  };
+
+  /**
+   * A manager called one of Ergo's workspace tools (an invoked skill needs them). Only the window that owns the run
+   * answers: it claims the call (another window may have the run too), runs it on the open project, and replies.
+   */
+  const handleWorkspaceCall = async (ev: Extract<CliAgentEvent, { type: 'workspace-call' }>) => {
+    const s = findSession(ev.sessionId);
+    const run = s && sessionMatchesEvent(s, ev) ? runForSession(s) : runById(ev.runId);
+    if (!run || !run.workspaceTools || run.finalized) return;
+    if (!(await claimWorkspaceCall(ev.callId))) return;
+    const d = depsRef.current;
+    const result =
+      run.projectId && run.projectId !== d.projectId
+        ? { success: false, error: `Ergo has another project open. Open "${run.taskTitle}"'s project in Ergo and try again.` }
+        : await executeWorkspaceToolAction(ev.tool, ev.args || {}).catch((err: unknown) => ({
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+          }));
+    await sendWorkspaceCallResult(ev.callId, { success: result.success, ...('data' in result ? { data: result.data } : {}), ...(result.error ? { error: result.error } : {}) });
+    noteOnStep(run, run.managerStepId, `↳ Workspace: ${ev.tool}${result.success ? '' : ` failed — ${result.error || 'unknown error'}`}`);
   };
 
   // ── Restore / resync ──
@@ -3235,6 +3278,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       priorBriefStatus,
       relatedContext,
       relatedSources,
+      projectRules,
+      references,
       qaEnabled,
       maxWorkers,
       runPlanNote,
@@ -3302,6 +3347,13 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         finalized: false,
         ...(relatedContext && relatedContext.trim() ? { relatedContext: relatedContext.trim() } : {}),
         ...(relatedSources && relatedSources.trim() ? { relatedSources: relatedSources.trim() } : {}),
+        ...(projectRules && projectRules.trim() ? { projectRules: projectRules.trim() } : {}),
+        ...(references ? { references } : {}),
+        // Claude Code and Codex reach the ergo-memory server per agent (its URL names the session); Gemini and
+        // Antigravity share one config entry, so they run skills without the workspace tools.
+        ...(references?.skills.some((s) => s.usesWorkspaceTools) && bridgeSupportsTaskReferences() && /^(claude|codex)$/.test(baseCommandName(launch.cmd))
+          ? { workspaceTools: true }
+          : {}),
       });
       run.launch = launch;
       // Persisted (models only, no keys): a restored run or a follow-up reuses them instead of routing again.

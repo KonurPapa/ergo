@@ -1,0 +1,664 @@
+{
+  "route": "ergoprod",
+  "rep": "1",
+  "writes": [
+    {
+      "i": 0,
+      "p": "ledgerly",
+      "ms": 4075,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "added",
+          "text": "Use pnpm for all package management in this repo. Never run npm install, and never create or commit a package-lock.json."
+        },
+        {
+          "op": "added",
+          "text": "Store monetary amounts as integer cents, never floats. Convert with toCents and format with formatCents from src/lib/money.ts."
+        }
+      ]
+    },
+    {
+      "i": 1,
+      "p": "ledgerly",
+      "ms": 2998,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "added",
+          "text": "Do not add new UI libraries. Build UI with the project's own components in src/ui (Select, Dialog, Button) and never install headless UI packages such as @headlessui/react."
+        }
+      ]
+    },
+    {
+      "i": 2,
+      "p": "inkwell",
+      "ms": 2725,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "added",
+          "text": "New blog posts must have `draft: true` in frontmatter until the user reviews them; never set `draft: false` yourself."
+        },
+        {
+          "op": "added",
+          "text": "Post images go in public/images/<post-slug>/ and must be .webp format; do not place post images under src/assets."
+        }
+      ]
+    },
+    {
+      "i": 3,
+      "p": "ledgerly",
+      "ms": 2545,
+      "calls": 1,
+      "ops": []
+    },
+    {
+      "i": 4,
+      "p": "ledgerly",
+      "ms": 3476,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "added",
+          "text": "Place unit tests next to the file they test, e.g. src/domain/budget.test.ts. Never create __tests__ folders."
+        }
+      ]
+    },
+    {
+      "i": 5,
+      "p": "ledgerly",
+      "ms": 2865,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "added",
+          "text": "Never hand-edit files in src/api/generated. They are generated from openapi.yaml. To change the API, edit openapi.yaml and run pnpm gen:api."
+        }
+      ]
+    },
+    {
+      "i": 6,
+      "p": "inkwell",
+      "ms": 2951,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "added",
+          "text": "Use npm, not pnpm, in this project (package-lock.json is present): install packages with `npm install <pkg>` and never create or keep pnpm-lock.yaml."
+        }
+      ]
+    },
+    {
+      "i": 7,
+      "p": "ledgerly",
+      "ms": 3021,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "added",
+          "text": "Keep business logic out of components: put calculations in src/domain and expose them to components through a hook in src/hooks."
+        }
+      ]
+    },
+    {
+      "i": 8,
+      "p": "ledgerly",
+      "ms": 3716,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "added",
+          "text": "Store dates in UTC and convert them through src/lib/dates.ts (date-fns-tz, user's timezone) for display and comparisons. Never compare dates using local new Date() values."
+        }
+      ]
+    },
+    {
+      "i": 9,
+      "p": "ledgerly",
+      "ms": 4101,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "added",
+          "text": "Default the app currency to GBP (UK product). Use British English for all UI copy, e.g. 'colour', 'categorise', 'organisation'."
+        }
+      ]
+    },
+    {
+      "i": 10,
+      "p": "inkwell",
+      "ms": 2734,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "added",
+          "text": "Never use emojis in post content, including headings; keep headings plain text."
+        }
+      ]
+    },
+    {
+      "i": 11,
+      "p": "ledgerly",
+      "ms": 2994,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "added",
+          "text": "Before saying a task is done, run `pnpm lint` and `pnpm typecheck` and fix any failures, since CI fails on lint."
+        }
+      ]
+    },
+    {
+      "i": 12,
+      "p": "ledgerly",
+      "ms": 0,
+      "calls": 0,
+      "ops": [],
+      "skipped": "trivial"
+    },
+    {
+      "i": 13,
+      "p": "ledgerly",
+      "ms": 2907,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "added",
+          "text": "Never commit or push changes in this repo unless the user explicitly asks. Leave all work uncommitted so the user can review the diff."
+        }
+      ]
+    },
+    {
+      "i": 14,
+      "p": "inkwell",
+      "ms": 2464,
+      "calls": 1,
+      "ops": []
+    },
+    {
+      "i": 15,
+      "p": "ledgerly",
+      "ms": 3949,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "updated",
+          "text": "Store monetary amounts as integer cents, never floats. Convert only with toCents and format only with formatCents from src/lib/money.ts; never use toFixed or *100 math on amounts."
+        }
+      ]
+    },
+    {
+      "i": 16,
+      "p": "ledgerly",
+      "ms": 3817,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "confirmed",
+          "text": "Default the app currency to GBP (UK product). Use British English for all UI copy, e.g. 'colour', 'categorise', 'organisation'."
+        }
+      ]
+    },
+    {
+      "i": 17,
+      "p": "ledgerly",
+      "ms": 4211,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "updated",
+          "text": "Never add UI libraries such as @headlessui/react; build UI from src/ui components (Select, Dialog, Button) and never use window.confirm or alert."
+        }
+      ]
+    },
+    {
+      "i": 18,
+      "p": "inkwell",
+      "ms": 2314,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "confirmed",
+          "text": "Post images go in public/images/<post-slug>/ and must be .webp format; do not place post images under src/assets."
+        }
+      ]
+    },
+    {
+      "i": 19,
+      "p": "ledgerly",
+      "ms": 4637,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "updated",
+          "text": "Use bun for all package management in this repo: bun install and bun run <script>. Never run npm or pnpm, and never create or commit package-lock.json or pnpm-lock.yaml."
+        },
+        {
+          "op": "updated",
+          "text": "Before saying a task is done, run `bun run lint` and `bun run typecheck` and fix any failures, since CI fails on lint."
+        },
+        {
+          "op": "updated",
+          "text": "Never hand-edit files in src/api/generated. They are generated from openapi.yaml. To change the API, edit openapi.yaml and run `bun run gen:api`."
+        }
+      ]
+    },
+    {
+      "i": 20,
+      "p": "ledgerly",
+      "ms": 4204,
+      "calls": 1,
+      "ops": []
+    },
+    {
+      "i": 21,
+      "p": "ledgerly",
+      "ms": 2678,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "updated",
+          "text": "Commit each finished task as one commit with a conventional commit message (feat:, fix:, etc.). Never push to a remote unless the user explicitly asks."
+        }
+      ]
+    },
+    {
+      "i": 22,
+      "p": "ledgerly",
+      "ms": 3997,
+      "calls": 1,
+      "ops": [
+        {
+          "op": "confirmed",
+          "text": "Use bun for all package management in this repo: bun install and bun run <script>. Never run npm or pnpm, and never create or commit package-lock.json or pnpm-lock.yaml."
+        },
+        {
+          "op": "confirmed",
+          "text": "Never hand-edit files in src/api/generated. They are generated from openapi.yaml. To change the API, edit openapi.yaml and run `bun run gen:api`."
+        }
+      ]
+    }
+  ],
+  "store": {
+    "ledgerly": [
+      {
+        "id": "insight:ledgerly:mvplk8kx3enz2j",
+        "text": "Use bun for all package management in this repo: bun install and bun run <script>. Never run npm or pnpm, and never create or commit package-lock.json or pnpm-lock.yaml.",
+        "scope": "always",
+        "confirms": 3
+      },
+      {
+        "id": "insight:ledgerly:mvpll160fnu988",
+        "text": "Commit each finished task as one commit with a conventional commit message (feat:, fix:, etc.). Never push to a remote unless the user explicitly asks.",
+        "scope": "always",
+        "confirms": 2
+      },
+      {
+        "id": "insight:ledgerly:mvplkyxarsn00c",
+        "text": "Before saying a task is done, run `bun run lint` and `bun run typecheck` and fix any failures, since CI fails on lint.",
+        "scope": "always",
+        "confirms": 2
+      },
+      {
+        "id": "insight:ledgerly:mvplkjv6dvckuv",
+        "text": "Never hand-edit files in src/api/generated. They are generated from openapi.yaml. To change the API, edit openapi.yaml and run `bun run gen:api`.",
+        "scope": "topical",
+        "confirms": 3
+      },
+      {
+        "id": "insight:ledgerly:mvplkawed8wimc",
+        "text": "Never add UI libraries such as @headlessui/react; build UI from src/ui components (Select, Dialog, Button) and never use window.confirm or alert.",
+        "scope": "topical",
+        "confirms": 2
+      },
+      {
+        "id": "insight:ledgerly:mvplk8kxauhwzo",
+        "text": "Store monetary amounts as integer cents, never floats. Convert only with toCents and format only with formatCents from src/lib/money.ts; never use toFixed or *100 math on amounts.",
+        "scope": "topical",
+        "confirms": 2
+      },
+      {
+        "id": "insight:ledgerly:mvplkui127g636",
+        "text": "Default the app currency to GBP (UK product). Use British English for all UI copy, e.g. 'colour', 'categorise', 'organisation'.",
+        "scope": "topical",
+        "confirms": 2
+      },
+      {
+        "id": "insight:ledgerly:mvplkrc3vsvlys",
+        "text": "Store dates in UTC and convert them through src/lib/dates.ts (date-fns-tz, user's timezone) for display and comparisons. Never compare dates using local new Date() values.",
+        "scope": "topical",
+        "confirms": 1
+      },
+      {
+        "id": "insight:ledgerly:mvplkoh4h3wprk",
+        "text": "Keep business logic out of components: put calculations in src/domain and expose them to components through a hook in src/hooks.",
+        "scope": "topical",
+        "confirms": 1
+      },
+      {
+        "id": "insight:ledgerly:mvplkhnhhoyh24",
+        "text": "Place unit tests next to the file they test, e.g. src/domain/budget.test.ts. Never create __tests__ folders.",
+        "scope": "topical",
+        "confirms": 1
+      }
+    ],
+    "inkwell": [
+      {
+        "id": "insight:inkwell:mvplkm538bwvgz",
+        "text": "Use npm, not pnpm, in this project (package-lock.json is present): install packages with `npm install <pkg>` and never create or keep pnpm-lock.yaml.",
+        "scope": "always",
+        "confirms": 1
+      },
+      {
+        "id": "insight:inkwell:mvplkczxgjr0e8",
+        "text": "Post images go in public/images/<post-slug>/ and must be .webp format; do not place post images under src/assets.",
+        "scope": "topical",
+        "confirms": 2
+      },
+      {
+        "id": "insight:inkwell:mvplkwm5kjh1a3",
+        "text": "Never use emojis in post content, including headings; keep headings plain text.",
+        "scope": "topical",
+        "confirms": 1
+      },
+      {
+        "id": "insight:inkwell:mvplkczxz7lr9g",
+        "text": "New blog posts must have `draft: true` in frontmatter until the user reviews them; never set `draft: false` yourself.",
+        "scope": "topical",
+        "confirms": 1
+      }
+    ]
+  },
+  "probes": [
+    {
+      "title": "Recurring transactions",
+      "p": "ledgerly",
+      "hits": [
+        {
+          "id": "insight:ledgerly:mvplk8kx3enz2j",
+          "text": "Use bun for all package management in this repo: bun install and bun run <script>. Never run npm or pnpm, and never create or commit package-lock.json or pnpm-lock.yaml."
+        },
+        {
+          "id": "insight:ledgerly:mvpll160fnu988",
+          "text": "Commit each finished task as one commit with a conventional commit message (feat:, fix:, etc.). Never push to a remote unless the user explicitly asks."
+        },
+        {
+          "id": "insight:ledgerly:mvplkyxarsn00c",
+          "text": "Before saying a task is done, run `bun run lint` and `bun run typecheck` and fix any failures, since CI fails on lint."
+        },
+        {
+          "id": "insight:ledgerly:mvplkjv6dvckuv",
+          "text": "Never hand-edit files in src/api/generated. They are generated from openapi.yaml. To change the API, edit openapi.yaml and run `bun run gen:api`."
+        },
+        {
+          "id": "insight:ledgerly:mvplkawed8wimc",
+          "text": "Never add UI libraries such as @headlessui/react; build UI from src/ui components (Select, Dialog, Button) and never use window.confirm or alert."
+        },
+        {
+          "id": "insight:ledgerly:mvplk8kxauhwzo",
+          "text": "Store monetary amounts as integer cents, never floats. Convert only with toCents and format only with formatCents from src/lib/money.ts; never use toFixed or *100 math on amounts."
+        },
+        {
+          "id": "insight:ledgerly:mvplkui127g636",
+          "text": "Default the app currency to GBP (UK product). Use British English for all UI copy, e.g. 'colour', 'categorise', 'organisation'."
+        },
+        {
+          "id": "insight:ledgerly:mvplkrc3vsvlys",
+          "text": "Store dates in UTC and convert them through src/lib/dates.ts (date-fns-tz, user's timezone) for display and comparisons. Never compare dates using local new Date() values."
+        },
+        {
+          "id": "insight:ledgerly:mvplkoh4h3wprk",
+          "text": "Keep business logic out of components: put calculations in src/domain and expose them to components through a hook in src/hooks."
+        },
+        {
+          "id": "insight:ledgerly:mvplkhnhhoyh24",
+          "text": "Place unit tests next to the file they test, e.g. src/domain/budget.test.ts. Never create __tests__ folders."
+        }
+      ]
+    },
+    {
+      "title": "Overspend warning banner on the dashboard",
+      "p": "ledgerly",
+      "hits": [
+        {
+          "id": "insight:ledgerly:mvplk8kx3enz2j",
+          "text": "Use bun for all package management in this repo: bun install and bun run <script>. Never run npm or pnpm, and never create or commit package-lock.json or pnpm-lock.yaml."
+        },
+        {
+          "id": "insight:ledgerly:mvpll160fnu988",
+          "text": "Commit each finished task as one commit with a conventional commit message (feat:, fix:, etc.). Never push to a remote unless the user explicitly asks."
+        },
+        {
+          "id": "insight:ledgerly:mvplkyxarsn00c",
+          "text": "Before saying a task is done, run `bun run lint` and `bun run typecheck` and fix any failures, since CI fails on lint."
+        },
+        {
+          "id": "insight:ledgerly:mvplkjv6dvckuv",
+          "text": "Never hand-edit files in src/api/generated. They are generated from openapi.yaml. To change the API, edit openapi.yaml and run `bun run gen:api`."
+        },
+        {
+          "id": "insight:ledgerly:mvplkawed8wimc",
+          "text": "Never add UI libraries such as @headlessui/react; build UI from src/ui components (Select, Dialog, Button) and never use window.confirm or alert."
+        },
+        {
+          "id": "insight:ledgerly:mvplk8kxauhwzo",
+          "text": "Store monetary amounts as integer cents, never floats. Convert only with toCents and format only with formatCents from src/lib/money.ts; never use toFixed or *100 math on amounts."
+        },
+        {
+          "id": "insight:ledgerly:mvplkui127g636",
+          "text": "Default the app currency to GBP (UK product). Use British English for all UI copy, e.g. 'colour', 'categorise', 'organisation'."
+        },
+        {
+          "id": "insight:ledgerly:mvplkrc3vsvlys",
+          "text": "Store dates in UTC and convert them through src/lib/dates.ts (date-fns-tz, user's timezone) for display and comparisons. Never compare dates using local new Date() values."
+        },
+        {
+          "id": "insight:ledgerly:mvplkoh4h3wprk",
+          "text": "Keep business logic out of components: put calculations in src/domain and expose them to components through a hook in src/hooks."
+        },
+        {
+          "id": "insight:ledgerly:mvplkhnhhoyh24",
+          "text": "Place unit tests next to the file they test, e.g. src/domain/budget.test.ts. Never create __tests__ folders."
+        }
+      ]
+    },
+    {
+      "title": "Savings goals page",
+      "p": "ledgerly",
+      "hits": [
+        {
+          "id": "insight:ledgerly:mvplk8kx3enz2j",
+          "text": "Use bun for all package management in this repo: bun install and bun run <script>. Never run npm or pnpm, and never create or commit package-lock.json or pnpm-lock.yaml."
+        },
+        {
+          "id": "insight:ledgerly:mvpll160fnu988",
+          "text": "Commit each finished task as one commit with a conventional commit message (feat:, fix:, etc.). Never push to a remote unless the user explicitly asks."
+        },
+        {
+          "id": "insight:ledgerly:mvplkyxarsn00c",
+          "text": "Before saying a task is done, run `bun run lint` and `bun run typecheck` and fix any failures, since CI fails on lint."
+        },
+        {
+          "id": "insight:ledgerly:mvplkjv6dvckuv",
+          "text": "Never hand-edit files in src/api/generated. They are generated from openapi.yaml. To change the API, edit openapi.yaml and run `bun run gen:api`."
+        },
+        {
+          "id": "insight:ledgerly:mvplkawed8wimc",
+          "text": "Never add UI libraries such as @headlessui/react; build UI from src/ui components (Select, Dialog, Button) and never use window.confirm or alert."
+        },
+        {
+          "id": "insight:ledgerly:mvplk8kxauhwzo",
+          "text": "Store monetary amounts as integer cents, never floats. Convert only with toCents and format only with formatCents from src/lib/money.ts; never use toFixed or *100 math on amounts."
+        },
+        {
+          "id": "insight:ledgerly:mvplkui127g636",
+          "text": "Default the app currency to GBP (UK product). Use British English for all UI copy, e.g. 'colour', 'categorise', 'organisation'."
+        },
+        {
+          "id": "insight:ledgerly:mvplkrc3vsvlys",
+          "text": "Store dates in UTC and convert them through src/lib/dates.ts (date-fns-tz, user's timezone) for display and comparisons. Never compare dates using local new Date() values."
+        },
+        {
+          "id": "insight:ledgerly:mvplkoh4h3wprk",
+          "text": "Keep business logic out of components: put calculations in src/domain and expose them to components through a hook in src/hooks."
+        },
+        {
+          "id": "insight:ledgerly:mvplkhnhhoyh24",
+          "text": "Place unit tests next to the file they test, e.g. src/domain/budget.test.ts. Never create __tests__ folders."
+        }
+      ]
+    },
+    {
+      "title": "Monthly totals off by a penny",
+      "p": "ledgerly",
+      "hits": [
+        {
+          "id": "insight:ledgerly:mvplk8kx3enz2j",
+          "text": "Use bun for all package management in this repo: bun install and bun run <script>. Never run npm or pnpm, and never create or commit package-lock.json or pnpm-lock.yaml."
+        },
+        {
+          "id": "insight:ledgerly:mvpll160fnu988",
+          "text": "Commit each finished task as one commit with a conventional commit message (feat:, fix:, etc.). Never push to a remote unless the user explicitly asks."
+        },
+        {
+          "id": "insight:ledgerly:mvplkyxarsn00c",
+          "text": "Before saying a task is done, run `bun run lint` and `bun run typecheck` and fix any failures, since CI fails on lint."
+        },
+        {
+          "id": "insight:ledgerly:mvplkjv6dvckuv",
+          "text": "Never hand-edit files in src/api/generated. They are generated from openapi.yaml. To change the API, edit openapi.yaml and run `bun run gen:api`."
+        },
+        {
+          "id": "insight:ledgerly:mvplkawed8wimc",
+          "text": "Never add UI libraries such as @headlessui/react; build UI from src/ui components (Select, Dialog, Button) and never use window.confirm or alert."
+        },
+        {
+          "id": "insight:ledgerly:mvplk8kxauhwzo",
+          "text": "Store monetary amounts as integer cents, never floats. Convert only with toCents and format only with formatCents from src/lib/money.ts; never use toFixed or *100 math on amounts."
+        },
+        {
+          "id": "insight:ledgerly:mvplkui127g636",
+          "text": "Default the app currency to GBP (UK product). Use British English for all UI copy, e.g. 'colour', 'categorise', 'organisation'."
+        },
+        {
+          "id": "insight:ledgerly:mvplkrc3vsvlys",
+          "text": "Store dates in UTC and convert them through src/lib/dates.ts (date-fns-tz, user's timezone) for display and comparisons. Never compare dates using local new Date() values."
+        },
+        {
+          "id": "insight:ledgerly:mvplkoh4h3wprk",
+          "text": "Keep business logic out of components: put calculations in src/domain and expose them to components through a hook in src/hooks."
+        },
+        {
+          "id": "insight:ledgerly:mvplkhnhhoyh24",
+          "text": "Place unit tests next to the file they test, e.g. src/domain/budget.test.ts. Never create __tests__ folders."
+        }
+      ]
+    },
+    {
+      "title": "Upgrade react-router to v7",
+      "p": "ledgerly",
+      "hits": [
+        {
+          "id": "insight:ledgerly:mvplk8kx3enz2j",
+          "text": "Use bun for all package management in this repo: bun install and bun run <script>. Never run npm or pnpm, and never create or commit package-lock.json or pnpm-lock.yaml."
+        },
+        {
+          "id": "insight:ledgerly:mvpll160fnu988",
+          "text": "Commit each finished task as one commit with a conventional commit message (feat:, fix:, etc.). Never push to a remote unless the user explicitly asks."
+        },
+        {
+          "id": "insight:ledgerly:mvplkyxarsn00c",
+          "text": "Before saying a task is done, run `bun run lint` and `bun run typecheck` and fix any failures, since CI fails on lint."
+        },
+        {
+          "id": "insight:ledgerly:mvplkjv6dvckuv",
+          "text": "Never hand-edit files in src/api/generated. They are generated from openapi.yaml. To change the API, edit openapi.yaml and run `bun run gen:api`."
+        },
+        {
+          "id": "insight:ledgerly:mvplkawed8wimc",
+          "text": "Never add UI libraries such as @headlessui/react; build UI from src/ui components (Select, Dialog, Button) and never use window.confirm or alert."
+        },
+        {
+          "id": "insight:ledgerly:mvplk8kxauhwzo",
+          "text": "Store monetary amounts as integer cents, never floats. Convert only with toCents and format only with formatCents from src/lib/money.ts; never use toFixed or *100 math on amounts."
+        },
+        {
+          "id": "insight:ledgerly:mvplkui127g636",
+          "text": "Default the app currency to GBP (UK product). Use British English for all UI copy, e.g. 'colour', 'categorise', 'organisation'."
+        },
+        {
+          "id": "insight:ledgerly:mvplkrc3vsvlys",
+          "text": "Store dates in UTC and convert them through src/lib/dates.ts (date-fns-tz, user's timezone) for display and comparisons. Never compare dates using local new Date() values."
+        },
+        {
+          "id": "insight:ledgerly:mvplkoh4h3wprk",
+          "text": "Keep business logic out of components: put calculations in src/domain and expose them to components through a hook in src/hooks."
+        },
+        {
+          "id": "insight:ledgerly:mvplkhnhhoyh24",
+          "text": "Place unit tests next to the file they test, e.g. src/domain/budget.test.ts. Never create __tests__ folders."
+        }
+      ]
+    },
+    {
+      "title": "Post: 'Moving to Astro 5'",
+      "p": "inkwell",
+      "hits": [
+        {
+          "id": "insight:inkwell:mvplkm538bwvgz",
+          "text": "Use npm, not pnpm, in this project (package-lock.json is present): install packages with `npm install <pkg>` and never create or keep pnpm-lock.yaml."
+        },
+        {
+          "id": "insight:inkwell:mvplkczxgjr0e8",
+          "text": "Post images go in public/images/<post-slug>/ and must be .webp format; do not place post images under src/assets."
+        },
+        {
+          "id": "insight:inkwell:mvplkwm5kjh1a3",
+          "text": "Never use emojis in post content, including headings; keep headings plain text."
+        },
+        {
+          "id": "insight:inkwell:mvplkczxz7lr9g",
+          "text": "New blog posts must have `draft: true` in frontmatter until the user reviews them; never set `draft: false` yourself."
+        }
+      ]
+    },
+    {
+      "title": "Add an RSS feed",
+      "p": "inkwell",
+      "hits": [
+        {
+          "id": "insight:inkwell:mvplkm538bwvgz",
+          "text": "Use npm, not pnpm, in this project (package-lock.json is present): install packages with `npm install <pkg>` and never create or keep pnpm-lock.yaml."
+        },
+        {
+          "id": "insight:inkwell:mvplkczxgjr0e8",
+          "text": "Post images go in public/images/<post-slug>/ and must be .webp format; do not place post images under src/assets."
+        },
+        {
+          "id": "insight:inkwell:mvplkwm5kjh1a3",
+          "text": "Never use emojis in post content, including headings; keep headings plain text."
+        },
+        {
+          "id": "insight:inkwell:mvplkczxz7lr9g",
+          "text": "New blog posts must have `draft: true` in frontmatter until the user reviews them; never set `draft: false` yourself."
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "calls": 22,
+    "cost": 0.011714409999999998,
+    "inTok": 41688,
+    "outTok": 5955
+  },
+  "ruleBlockChars": [
+    1709,
+    1709,
+    1709,
+    1709,
+    1709,
+    708,
+    708
+  ]
+}

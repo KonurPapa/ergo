@@ -394,7 +394,7 @@ export async function syncTaskOverviewWithAi(
   project: ProjectData,
   aiConfig: AIProviderConfig,
   connectedMcps: MCPServer[],
-  options: { relatedCandidatesPrompt?: string; priorKnowledge?: string } = {}
+  options: { relatedCandidatesPrompt?: string; priorKnowledge?: string; referencesNote?: string; projectRules?: string } = {}
 ): Promise<{ overview: string; relatedTaskIds: string[]; relatedSelectionMade: boolean; taskRating?: TaskRating }> {
   if (aiConfig.provider !== 'none' && aiConfig.provider !== 'mock' && (aiConfig.apiKey || aiConfig.provider === 'ollama')) {
     try {
@@ -406,6 +406,8 @@ export async function syncTaskOverviewWithAi(
         currentOverview,
         relatedCandidatesPrompt: options.relatedCandidatesPrompt,
         priorKnowledge: options.priorKnowledge,
+        referencesNote: options.referencesNote,
+        projectRules: options.projectRules,
       });
       const response = await callAiEngine(user, system, aiConfig, 'general', 'text');
       // The selection line goes first: it may sit after a code fence the model wrapped the brief in.

@@ -11,6 +11,8 @@ export interface BridgeHost {
   getUpdate(): BridgeUpdateState;
   /** Ask the app to check for (and download) an update now; it installs once no agent session is running. */
   requestUpdate(): void;
+  /** The OS file dialog (Electron's, from the main process): chosen absolute paths, [] when cancelled. */
+  pickFiles?(opts: { defaultPath?: string }): Promise<string[]>;
 }
 
 let host: BridgeHost | null = null;
@@ -44,4 +46,9 @@ export function requestBridgeUpdate(): boolean {
   if (!host) return false;
   host.requestUpdate();
   return true;
+}
+
+/** The desktop app's own file dialog; null when this bridge has none (it runs from a checkout: bridge/plugins.ts falls back to the OS's dialog commands). */
+export function hostFilePicker(): BridgeHost['pickFiles'] | null {
+  return host?.pickFiles ? host.pickFiles.bind(host) : null;
 }

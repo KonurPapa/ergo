@@ -1,0 +1,1251 @@
+{
+  "route": "mem0",
+  "rep": "2",
+  "writes": [
+    {
+      "i": 0,
+      "p": "ledgerly",
+      "ms": 8752,
+      "calls": 1,
+      "cost": 0.001051,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "User's repo uses pnpm as its package manager. User instructed that package-lock.json be deleted and that npm install never be run in this repo."
+        },
+        {
+          "op": "ADD",
+          "text": "User requires monetary amounts to be stored as integer cents, never floats, and wants the helpers in src/lib/money.ts (toCents and formatCents) used for money handling."
+        },
+        {
+          "op": "ADD",
+          "text": "Assistant completed the task 'Add CSV import for bank statements' by adding a CSV importer in src/import/csv.ts using papaparse, with tests in src/__tests__/csv.test.ts. It installed papaparse with npm install, which conflicts with User's pnpm-only rule."
+        },
+        {
+          "op": "ADD",
+          "text": "The CSV import parses amounts with parseFloat, which conflicts with User's requirement to store amounts as integer cents. Amount parsing needs to be changed to use toCents from src/lib/money.ts."
+        }
+      ]
+    },
+    {
+      "i": 1,
+      "p": "ledgerly",
+      "ms": 7302,
+      "calls": 1,
+      "cost": 0.0011675700000000004,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "User does not want new UI libraries added to the project and wants existing custom components in src/ui (Select, Dialog, Button) used instead, as stated when requesting a rewrite of the transaction category picker."
+        },
+        {
+          "op": "ADD",
+          "text": "Assistant added a CategoryPicker to the transaction row using the @headlessui/react Listbox component and installed @headlessui/react with pnpm, which User then asked to be rewritten to use src/ui/Select with @headlessui/react removed."
+        }
+      ]
+    },
+    {
+      "i": 2,
+      "p": "inkwell",
+      "ms": 7251,
+      "calls": 1,
+      "cost": 0.0009601699999999998,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "User requires all new blog posts to have `draft: true` in the frontmatter until the user has reviewed them personally."
+        },
+        {
+          "op": "ADD",
+          "text": "User's blog convention is that post images must be in .webp format and stored in public/images/<post-slug>/."
+        },
+        {
+          "op": "ADD",
+          "text": "The assistant created the blog post 'Why I switched to Neovim' at src/content/posts/neovim.md with `draft: false` and placed its hero image hero.png under src/assets, which conflicts with the user's later draft and image-location rules."
+        }
+      ]
+    },
+    {
+      "i": 3,
+      "p": "ledgerly",
+      "ms": 7523,
+      "calls": 1,
+      "cost": 0.0012925699999999998,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "Assistant added a line chart of monthly totals on the Reports page using recharts, which was already a dependency, for the 'Monthly totals chart' task in User's project."
+        },
+        {
+          "op": "ADD",
+          "text": "User requested that the monthly totals chart on the Reports page be changed from a line chart to a bar chart, with the legend moved to the bottom."
+        }
+      ]
+    },
+    {
+      "i": 4,
+      "p": "ledgerly",
+      "ms": 6803,
+      "calls": 1,
+      "cost": 0.0013194699999999997,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "Assistant completed the task 'Unit tests for budget calculations' by adding src/__tests__/budget.test.ts using vitest, with 14 test cases for budget calculations."
+        },
+        {
+          "op": "ADD",
+          "text": "User stated that the repo does not use a __tests__ folder and that tests must live next to the file they test (e.g., src/domain/budget.test.ts), and asked that the budget tests be moved there."
+        }
+      ]
+    },
+    {
+      "i": 5,
+      "p": "ledgerly",
+      "ms": 6747,
+      "calls": 1,
+      "cost": 0.00135797,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "User's project has generated API client code in src/api/generated, produced from openapi.yaml by running `pnpm gen:api`. User instructed that this generated directory must never be hand-edited. New endpoints should be added to openapi.yaml and regenerated."
+        },
+        {
+          "op": "ADD",
+          "text": "Assistant completed the task 'Accounts page loads balances from the API' by hand-editing src/api/generated/client.ts to add getBalances() and using it in AccountsPage, which conflicts with User's rule against editing generated API code."
+        }
+      ]
+    },
+    {
+      "i": 6,
+      "p": "inkwell",
+      "ms": 3368,
+      "calls": 1,
+      "cost": 0.0006696699999999998,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "User requires the project to use npm rather than pnpm because it has a package-lock.json; the assistant had used pnpm to add @astrojs/sitemap for the 'Add tag pages' task, and the user asked for the install to be redone with npm and pnpm-lock.yaml deleted"
+        },
+        {
+          "op": "ADD",
+          "text": "The assistant finished the task 'Add tag pages' by adding /tags/[tag] pages and installing @astrojs/sitemap, which the user then said must be redone with npm instead of pnpm"
+        }
+      ]
+    },
+    {
+      "i": 7,
+      "p": "ledgerly",
+      "ms": 9502,
+      "calls": 1,
+      "cost": 0.0016375699999999997,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "User requires business logic to stay out of components: budget calculations belong in src/domain and should be exposed to components through a hook in src/hooks. User stated this after the budget progress bars computed spent versus limit inside the BudgetCard component."
+        },
+        {
+          "op": "ADD",
+          "text": "Assistant completed the task 'Budget progress bars' by adding progress bars and computing spent divided by limit inside the BudgetCard component, which User then asked to be moved into src/domain."
+        },
+        {
+          "op": "ADD",
+          "text": "User requested that progress bars for over-budget amounts on budget cards be shown in red as part of the 'Budget progress bars' task."
+        }
+      ]
+    },
+    {
+      "i": 8,
+      "p": "ledgerly",
+      "ms": 6565,
+      "calls": 1,
+      "cost": 0.0012869700000000001,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "User requires that dates be stored in UTC and that all date display and comparisons go through src/lib/dates.ts, which uses date-fns-tz to convert to the user's timezone."
+        },
+        {
+          "op": "ADD",
+          "text": "Assistant completed the task 'Transaction date filter' by adding a date range filter that compared new Date() values in local time. User reported the filter was off by one day for them, which conflicts with the UTC storage and src/lib/dates.ts rule."
+        }
+      ]
+    },
+    {
+      "i": 9,
+      "p": "ledgerly",
+      "ms": 8611,
+      "calls": 1,
+      "cost": 0.0015000699999999992,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "User is building a UK product, so the currency selector added in the 'Settings: currency selector' task should default to GBP instead of USD."
+        },
+        {
+          "op": "ADD",
+          "text": "User requires all UI copy to use British English spelling, such as 'colour', 'categorise', and 'organisation', rather than American spellings like 'Color theme' and 'Organize categories' used in the settings labels."
+        }
+      ]
+    },
+    {
+      "i": 10,
+      "p": "inkwell",
+      "ms": 8012,
+      "calls": 1,
+      "cost": 0.0012246700000000006,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "User requires that blog post content never contain emojis, and that headings be kept plain text. This applies to all posts from now on, and was stated after the assistant's 'Year in review' post used emojis in its headings."
+        },
+        {
+          "op": "ADD",
+          "text": "On October 26, 2026, the assistant wrote a 'Year in review' blog post for the user with emoji headings (🎉 Highlights, 🚀 Next year), which the user then rejected in favor of plain headings."
+        }
+      ]
+    },
+    {
+      "i": 11,
+      "p": "ledgerly",
+      "ms": 6729,
+      "calls": 1,
+      "cost": 0.0013183699999999993,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "User requires that `pnpm lint` and `pnpm typecheck` both be run before any task is reported as done. This was stated on 2026-10-26 after CI failed on lint for the 'Export transactions to CSV' task, which had only been checked with typecheck."
+        },
+        {
+          "op": "ADD",
+          "text": "Assistant completed the task 'Export transactions to CSV' by adding CSV export of transactions and reported that pnpm typecheck passed. CI later failed on lint, as the user reported on 2026-10-26."
+        }
+      ]
+    },
+    {
+      "i": 12,
+      "p": "ledgerly",
+      "ms": 5981,
+      "calls": 1,
+      "cost": 0.0012885699999999993,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "Assistant completed the task 'Payee autocomplete' by adding payee autocomplete built on the existing src/ui/Combobox component with a usePayees hook in src/hooks, and User approved it as 'looks good'."
+        }
+      ]
+    },
+    {
+      "i": 13,
+      "p": "ledgerly",
+      "ms": 8392,
+      "calls": 1,
+      "cost": 0.001508869999999999,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "User requires that nothing be committed or pushed to git and that all changes be left uncommitted so User can review the diff personally. User stated this on 2026-10-26 after the assistant committed split transactions work as 'wip' and pushed it to main."
+        },
+        {
+          "op": "ADD",
+          "text": "Assistant completed the task 'Split transactions' by implementing split transactions, committing the work as 'wip', and pushing it to main on 2026-10-26, before User asked for all changes to be left uncommitted."
+        }
+      ]
+    },
+    {
+      "i": 14,
+      "p": "inkwell",
+      "ms": 5886,
+      "calls": 1,
+      "cost": 0.0010608699999999985,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "User now lives in Lisbon, and as of October 26, 2026 asked that the second paragraph of their About page (src/pages/about.astro) state that they live in Lisbon."
+        }
+      ]
+    },
+    {
+      "i": 15,
+      "p": "ledgerly",
+      "ms": 7686,
+      "calls": 1,
+      "cost": 0.0014079700000000014,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "User rejected the 'Fix rounding in budget rollover' approach, which used Math.round(amount * 100) / 100 and toFixed(2) for display. User stated that money must be integer cents end to end, with no toFixed or *100 math on amounts, and that toCents and formatCents from src/lib/money.ts should be used instead."
+        }
+      ]
+    },
+    {
+      "i": 16,
+      "p": "ledgerly",
+      "ms": 5914,
+      "calls": 1,
+      "cost": 0.0012199700000000008,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "On 2026-10-26, the assistant completed the 'Dashboard welcome copy' task with the welcome text 'Organize your finances'. User corrected it to 'organise' and said British spelling should be used everywhere, having raised this before."
+        }
+      ]
+    },
+    {
+      "i": 17,
+      "p": "ledgerly",
+      "ms": 7198,
+      "calls": 1,
+      "cost": 0.0013679699999999996,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "Assistant completed the task 'Delete account dialog' on 2026-10-26 by adding an account deletion confirmation using window.confirm()."
+        },
+        {
+          "op": "ADD",
+          "text": "User asked that the account deletion confirmation use the Dialog component from src/ui instead of window.confirm(), continuing their rule to use existing src/ui components rather than alternatives."
+        }
+      ]
+    },
+    {
+      "i": 18,
+      "p": "inkwell",
+      "ms": 7237,
+      "calls": 1,
+      "cost": 0.001337370000000001,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "The assistant wrote the blog post 'Static sites in 2026' on October 26, 2026 with `draft: true` in its frontmatter, as the user requires until they review it, and placed its cover image at public/images/static-sites/cover.png."
+        },
+        {
+          "op": "ADD",
+          "text": "On October 26, 2026, the user asked that the cover image for the 'Static sites in 2026' post (public/images/static-sites/cover.png) be converted to .webp format, as the blog's image convention requires."
+        }
+      ]
+    },
+    {
+      "i": 19,
+      "p": "ledgerly",
+      "ms": 7718,
+      "calls": 1,
+      "cost": 0.0014081700000000003,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "User stated that as of October 26, 2026, the repo uses bun only: dependencies are installed with `bun install` and scripts run with `bun run <script>`. pnpm is removed from the repo, replacing the earlier pnpm-only rule."
+        },
+        {
+          "op": "ADD",
+          "text": "Assistant completed the task 'Migrate from pnpm to bun' on October 26, 2026 by switching the package scripts to bun, removing pnpm-lock.yaml, and adding bun.lockb."
+        }
+      ]
+    },
+    {
+      "i": 20,
+      "p": "ledgerly",
+      "ms": 6154,
+      "calls": 1,
+      "cost": 0.00125517,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "On 2026-10-26, User asked that merchant logos be cached in IndexedDB because the logos, which the assistant had fetched from a logo API at render time for the 'Merchant logos' task, broke when offline."
+        },
+        {
+          "op": "ADD",
+          "text": "On 2026-10-26, User asked that an initial-letter avatar be shown as the fallback for merchant logos when a logo is unavailable, as part of the 'Merchant logos' task."
+        }
+      ]
+    },
+    {
+      "i": 21,
+      "p": "ledgerly",
+      "ms": 9336,
+      "calls": 1,
+      "cost": 0.0016647699999999994,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "User now allows committing changes to git, with one commit per task using conventional commit messages such as 'feat:' and 'fix:'. This replaces the earlier rule that changes be left uncommitted. Pushing to the remote is still prohibited. Stated on 2026-10-26."
+        },
+        {
+          "op": "ADD",
+          "text": "Assistant completed the task 'Import OFX files' on 2026-10-26 by adding OFX import. Running bun run typecheck and bun run lint both passed, and the changes were left uncommitted at that point."
+        }
+      ]
+    },
+    {
+      "i": 22,
+      "p": "ledgerly",
+      "ms": 9801,
+      "calls": 1,
+      "cost": 0.0017749700000000007,
+      "ops": [
+        {
+          "op": "ADD",
+          "text": "As of October 26, 2026, pnpm no longer exists in the project. User instructed that the API client generation script is now run with `bun run gen:api` instead of `pnpm gen:api`."
+        },
+        {
+          "op": "ADD",
+          "text": "User reiterated on October 26, 2026 that src/api/generated must never be hand-edited, after the assistant hand-edited src/api/generated/client.ts for the Categories endpoint when the pnpm gen:api step failed."
+        },
+        {
+          "op": "ADD",
+          "text": "Assistant completed the task 'Categories endpoint' on October 26, 2026 by adding categories to openapi.yaml. Running pnpm gen:api failed because pnpm was not found, so src/api/generated/client.ts was hand-edited instead."
+        }
+      ]
+    }
+  ],
+  "store": {
+    "ledgerly": [
+      {
+        "id": "87071f12-4d90-41d3-8d90-a27bdf2098cc",
+        "text": "User's repo uses pnpm as its package manager. User instructed that package-lock.json be deleted and that npm install never be run in this repo."
+      },
+      {
+        "id": "dc6a6552-c132-498f-9ddd-c0906aa14f07",
+        "text": "User requires monetary amounts to be stored as integer cents, never floats, and wants the helpers in src/lib/money.ts (toCents and formatCents) used for money handling."
+      },
+      {
+        "id": "7e7ef692-95c9-4dec-ac51-d3764cee0896",
+        "text": "Assistant completed the task 'Add CSV import for bank statements' by adding a CSV importer in src/import/csv.ts using papaparse, with tests in src/__tests__/csv.test.ts. It installed papaparse with npm install, which conflicts with User's pnpm-only rule."
+      },
+      {
+        "id": "64e1ab33-8455-49e9-a3bd-f675a495fdbd",
+        "text": "The CSV import parses amounts with parseFloat, which conflicts with User's requirement to store amounts as integer cents. Amount parsing needs to be changed to use toCents from src/lib/money.ts."
+      },
+      {
+        "id": "fecfd7e7-9832-4b42-b4a7-c205837cfd48",
+        "text": "User does not want new UI libraries added to the project and wants existing custom components in src/ui (Select, Dialog, Button) used instead, as stated when requesting a rewrite of the transaction category picker."
+      },
+      {
+        "id": "cde85b22-a1ac-4014-a723-dba1883d20d3",
+        "text": "Assistant added a CategoryPicker to the transaction row using the @headlessui/react Listbox component and installed @headlessui/react with pnpm, which User then asked to be rewritten to use src/ui/Select with @headlessui/react removed."
+      },
+      {
+        "id": "f72d58b8-da1d-4dda-b9fa-f677e12af5a2",
+        "text": "Assistant added a line chart of monthly totals on the Reports page using recharts, which was already a dependency, for the 'Monthly totals chart' task in User's project."
+      },
+      {
+        "id": "7e18aa75-3b7b-4a84-83af-a53868a1f1eb",
+        "text": "User requested that the monthly totals chart on the Reports page be changed from a line chart to a bar chart, with the legend moved to the bottom."
+      },
+      {
+        "id": "2ae0c643-2eb9-4b88-a80c-3735d70b4fa9",
+        "text": "Assistant completed the task 'Unit tests for budget calculations' by adding src/__tests__/budget.test.ts using vitest, with 14 test cases for budget calculations."
+      },
+      {
+        "id": "f7ff391b-4ce8-44f0-aa8f-08cbd3b73f5e",
+        "text": "User stated that the repo does not use a __tests__ folder and that tests must live next to the file they test (e.g., src/domain/budget.test.ts), and asked that the budget tests be moved there."
+      },
+      {
+        "id": "ee745dc4-3d92-40b0-9a85-0d5f9e6b659d",
+        "text": "User's project has generated API client code in src/api/generated, produced from openapi.yaml by running `pnpm gen:api`. User instructed that this generated directory must never be hand-edited. New endpoints should be added to openapi.yaml and regenerated."
+      },
+      {
+        "id": "5c062940-aa8d-41a0-920f-65a2de32dd1d",
+        "text": "Assistant completed the task 'Accounts page loads balances from the API' by hand-editing src/api/generated/client.ts to add getBalances() and using it in AccountsPage, which conflicts with User's rule against editing generated API code."
+      },
+      {
+        "id": "668df011-2362-499c-8d87-3362ac4d4b46",
+        "text": "User requires business logic to stay out of components: budget calculations belong in src/domain and should be exposed to components through a hook in src/hooks. User stated this after the budget progress bars computed spent versus limit inside the BudgetCard component."
+      },
+      {
+        "id": "861d2fd7-4df3-42b4-8529-59b08f5f0d9d",
+        "text": "Assistant completed the task 'Budget progress bars' by adding progress bars and computing spent divided by limit inside the BudgetCard component, which User then asked to be moved into src/domain."
+      },
+      {
+        "id": "fe74bb84-8319-4a62-bd2f-8473e28e953d",
+        "text": "User requested that progress bars for over-budget amounts on budget cards be shown in red as part of the 'Budget progress bars' task."
+      },
+      {
+        "id": "ed21df26-be51-442f-8484-ea8d020b6a08",
+        "text": "User requires that dates be stored in UTC and that all date display and comparisons go through src/lib/dates.ts, which uses date-fns-tz to convert to the user's timezone."
+      },
+      {
+        "id": "56d4f015-6ff8-4183-9f94-46dc5b442dea",
+        "text": "Assistant completed the task 'Transaction date filter' by adding a date range filter that compared new Date() values in local time. User reported the filter was off by one day for them, which conflicts with the UTC storage and src/lib/dates.ts rule."
+      },
+      {
+        "id": "ebeb0ae6-5aa5-49aa-b78c-9ad9be902757",
+        "text": "User is building a UK product, so the currency selector added in the 'Settings: currency selector' task should default to GBP instead of USD."
+      },
+      {
+        "id": "bf62fdec-65dd-4fbd-8a8b-58851902e8b9",
+        "text": "User requires all UI copy to use British English spelling, such as 'colour', 'categorise', and 'organisation', rather than American spellings like 'Color theme' and 'Organize categories' used in the settings labels."
+      },
+      {
+        "id": "01d859af-4120-4fb7-9a6a-830442c839c2",
+        "text": "User requires that `pnpm lint` and `pnpm typecheck` both be run before any task is reported as done. This was stated on 2026-10-26 after CI failed on lint for the 'Export transactions to CSV' task, which had only been checked with typecheck."
+      },
+      {
+        "id": "60bc2026-f5c6-4fac-87c2-ea35ac13aaa8",
+        "text": "Assistant completed the task 'Export transactions to CSV' by adding CSV export of transactions and reported that pnpm typecheck passed. CI later failed on lint, as the user reported on 2026-10-26."
+      },
+      {
+        "id": "cc1c6297-5c53-423e-8d86-e6d6ca0adc0a",
+        "text": "Assistant completed the task 'Payee autocomplete' by adding payee autocomplete built on the existing src/ui/Combobox component with a usePayees hook in src/hooks, and User approved it as 'looks good'."
+      },
+      {
+        "id": "8938feb7-a73d-4ee4-9a13-8adaad6d13db",
+        "text": "User requires that nothing be committed or pushed to git and that all changes be left uncommitted so User can review the diff personally. User stated this on 2026-10-26 after the assistant committed split transactions work as 'wip' and pushed it to main."
+      },
+      {
+        "id": "62419a4b-4237-4fb3-9dd6-23c9e141c493",
+        "text": "Assistant completed the task 'Split transactions' by implementing split transactions, committing the work as 'wip', and pushing it to main on 2026-10-26, before User asked for all changes to be left uncommitted."
+      },
+      {
+        "id": "f2bf9d5d-10a9-476e-b36c-67d6c964f548",
+        "text": "User rejected the 'Fix rounding in budget rollover' approach, which used Math.round(amount * 100) / 100 and toFixed(2) for display. User stated that money must be integer cents end to end, with no toFixed or *100 math on amounts, and that toCents and formatCents from src/lib/money.ts should be used instead."
+      },
+      {
+        "id": "f264651b-0078-4ae1-81d4-36ef8d47a0ec",
+        "text": "On 2026-10-26, the assistant completed the 'Dashboard welcome copy' task with the welcome text 'Organize your finances'. User corrected it to 'organise' and said British spelling should be used everywhere, having raised this before."
+      },
+      {
+        "id": "892befe9-67e4-4cef-9cec-f433cb1ad3bd",
+        "text": "Assistant completed the task 'Delete account dialog' on 2026-10-26 by adding an account deletion confirmation using window.confirm()."
+      },
+      {
+        "id": "7eb85a81-1723-4d5c-ab4d-52bb152b98e0",
+        "text": "User asked that the account deletion confirmation use the Dialog component from src/ui instead of window.confirm(), continuing their rule to use existing src/ui components rather than alternatives."
+      },
+      {
+        "id": "b51aa07c-f3db-4ac0-9bb1-d41b54366193",
+        "text": "User stated that as of October 26, 2026, the repo uses bun only: dependencies are installed with `bun install` and scripts run with `bun run <script>`. pnpm is removed from the repo, replacing the earlier pnpm-only rule."
+      },
+      {
+        "id": "d1816bd2-026a-43b7-80fc-4db45a4493e7",
+        "text": "Assistant completed the task 'Migrate from pnpm to bun' on October 26, 2026 by switching the package scripts to bun, removing pnpm-lock.yaml, and adding bun.lockb."
+      },
+      {
+        "id": "00df2282-ccd0-4177-836f-3746e015f7ad",
+        "text": "On 2026-10-26, User asked that merchant logos be cached in IndexedDB because the logos, which the assistant had fetched from a logo API at render time for the 'Merchant logos' task, broke when offline."
+      },
+      {
+        "id": "d131f9ba-fd16-4958-8f98-66fcf632e585",
+        "text": "On 2026-10-26, User asked that an initial-letter avatar be shown as the fallback for merchant logos when a logo is unavailable, as part of the 'Merchant logos' task."
+      },
+      {
+        "id": "469611e1-698d-459e-bcd4-b57dfb28bc09",
+        "text": "User now allows committing changes to git, with one commit per task using conventional commit messages such as 'feat:' and 'fix:'. This replaces the earlier rule that changes be left uncommitted. Pushing to the remote is still prohibited. Stated on 2026-10-26."
+      },
+      {
+        "id": "15882de1-a868-429a-a79b-7877c9591059",
+        "text": "Assistant completed the task 'Import OFX files' on 2026-10-26 by adding OFX import. Running bun run typecheck and bun run lint both passed, and the changes were left uncommitted at that point."
+      },
+      {
+        "id": "caf0a741-47ed-4c58-be71-009af43ee43a",
+        "text": "As of October 26, 2026, pnpm no longer exists in the project. User instructed that the API client generation script is now run with `bun run gen:api` instead of `pnpm gen:api`."
+      },
+      {
+        "id": "8e976666-6c45-4d39-be1f-fafea670469b",
+        "text": "User reiterated on October 26, 2026 that src/api/generated must never be hand-edited, after the assistant hand-edited src/api/generated/client.ts for the Categories endpoint when the pnpm gen:api step failed."
+      },
+      {
+        "id": "5c663451-9dd9-46b4-b5bc-0244fd6a53fd",
+        "text": "Assistant completed the task 'Categories endpoint' on October 26, 2026 by adding categories to openapi.yaml. Running pnpm gen:api failed because pnpm was not found, so src/api/generated/client.ts was hand-edited instead."
+      }
+    ],
+    "inkwell": [
+      {
+        "id": "07b3bdc5-4dd8-4813-87cb-103c078859bf",
+        "text": "User requires all new blog posts to have `draft: true` in the frontmatter until the user has reviewed them personally."
+      },
+      {
+        "id": "f67064ac-c531-48f2-bba6-3159042500c0",
+        "text": "User's blog convention is that post images must be in .webp format and stored in public/images/<post-slug>/."
+      },
+      {
+        "id": "38079da3-bc42-4127-b2d7-0e32031defd0",
+        "text": "The assistant created the blog post 'Why I switched to Neovim' at src/content/posts/neovim.md with `draft: false` and placed its hero image hero.png under src/assets, which conflicts with the user's later draft and image-location rules."
+      },
+      {
+        "id": "e4b63c3a-1a0b-4fc0-a373-84cf21a3ceb6",
+        "text": "User requires the project to use npm rather than pnpm because it has a package-lock.json; the assistant had used pnpm to add @astrojs/sitemap for the 'Add tag pages' task, and the user asked for the install to be redone with npm and pnpm-lock.yaml deleted"
+      },
+      {
+        "id": "771cd5e5-03a4-4c9b-8533-2aa5c36bf8e5",
+        "text": "The assistant finished the task 'Add tag pages' by adding /tags/[tag] pages and installing @astrojs/sitemap, which the user then said must be redone with npm instead of pnpm"
+      },
+      {
+        "id": "b783d9a3-48eb-4efb-b7c5-bc5267bb5550",
+        "text": "User requires that blog post content never contain emojis, and that headings be kept plain text. This applies to all posts from now on, and was stated after the assistant's 'Year in review' post used emojis in its headings."
+      },
+      {
+        "id": "5aa0fd98-c3a1-46f9-9bdb-4a8ce6837e33",
+        "text": "On October 26, 2026, the assistant wrote a 'Year in review' blog post for the user with emoji headings (🎉 Highlights, 🚀 Next year), which the user then rejected in favor of plain headings."
+      },
+      {
+        "id": "106d7c9c-33fd-4f0b-b643-c8f4dbebfbbc",
+        "text": "User now lives in Lisbon, and as of October 26, 2026 asked that the second paragraph of their About page (src/pages/about.astro) state that they live in Lisbon."
+      },
+      {
+        "id": "b24c4101-7eb1-433c-9edb-0b140d74e06e",
+        "text": "The assistant wrote the blog post 'Static sites in 2026' on October 26, 2026 with `draft: true` in its frontmatter, as the user requires until they review it, and placed its cover image at public/images/static-sites/cover.png."
+      },
+      {
+        "id": "d06b1c0d-854e-4267-9bbc-5eea8e5cd788",
+        "text": "On October 26, 2026, the user asked that the cover image for the 'Static sites in 2026' post (public/images/static-sites/cover.png) be converted to .webp format, as the blog's image convention requires."
+      }
+    ]
+  },
+  "probes": [
+    {
+      "title": "Recurring transactions",
+      "p": "ledgerly",
+      "ms": 69,
+      "hits": [
+        {
+          "id": "fecfd7e7-9832-4b42-b4a7-c205837cfd48",
+          "text": "User does not want new UI libraries added to the project and wants existing custom components in src/ui (Select, Dialog, Button) used instead, as stated when requesting a rewrite of the transaction category picker.",
+          "score": 0.21342155150308723
+        },
+        {
+          "id": "2ae0c643-2eb9-4b88-a80c-3735d70b4fa9",
+          "text": "Assistant completed the task 'Unit tests for budget calculations' by adding src/__tests__/budget.test.ts using vitest, with 14 test cases for budget calculations.",
+          "score": 0.20987062926381334
+        },
+        {
+          "id": "7e7ef692-95c9-4dec-ac51-d3764cee0896",
+          "text": "Assistant completed the task 'Add CSV import for bank statements' by adding a CSV importer in src/import/csv.ts using papaparse, with tests in src/__tests__/csv.test.ts. It installed papaparse with npm install, which conflicts with User's pnpm-only rule.",
+          "score": 0.15868013443695067
+        },
+        {
+          "id": "f72d58b8-da1d-4dda-b9fa-f677e12af5a2",
+          "text": "Assistant added a line chart of monthly totals on the Reports page using recharts, which was already a dependency, for the 'Monthly totals chart' task in User's project.",
+          "score": 0.13201214007960438
+        },
+        {
+          "id": "56d4f015-6ff8-4183-9f94-46dc5b442dea",
+          "text": "Assistant completed the task 'Transaction date filter' by adding a date range filter that compared new Date() values in local time. User reported the filter was off by one day for them, which conflicts with the UTC storage and src/lib/dates.ts rule.",
+          "score": 0.08508064609728862
+        },
+        {
+          "id": "7e18aa75-3b7b-4a84-83af-a53868a1f1eb",
+          "text": "User requested that the monthly totals chart on the Reports page be changed from a line chart to a bar chart, with the legend moved to the bottom.",
+          "score": 0.08426228587853762
+        },
+        {
+          "id": "62419a4b-4237-4fb3-9dd6-23c9e141c493",
+          "text": "Assistant completed the task 'Split transactions' by implementing split transactions, committing the work as 'wip', and pushing it to main on 2026-10-26, before User asked for all changes to be left uncommitted.",
+          "score": 0.07414446891629324
+        },
+        {
+          "id": "f2bf9d5d-10a9-476e-b36c-67d6c964f548",
+          "text": "User rejected the 'Fix rounding in budget rollover' approach, which used Math.round(amount * 100) / 100 and toFixed(2) for display. User stated that money must be integer cents end to end, with no toFixed or *100 math on amounts, and that toCents and formatCents from src/lib/money.ts should be used instead.",
+          "score": 0.06306537621005806
+        }
+      ]
+    },
+    {
+      "title": "Overspend warning banner on the dashboard",
+      "p": "ledgerly",
+      "ms": 126,
+      "hits": [
+        {
+          "id": "fe74bb84-8319-4a62-bd2f-8473e28e953d",
+          "text": "User requested that progress bars for over-budget amounts on budget cards be shown in red as part of the 'Budget progress bars' task.",
+          "score": 0.3374859647196208
+        },
+        {
+          "id": "668df011-2362-499c-8d87-3362ac4d4b46",
+          "text": "User requires business logic to stay out of components: budget calculations belong in src/domain and should be exposed to components through a hook in src/hooks. User stated this after the budget progress bars computed spent versus limit inside the BudgetCard component.",
+          "score": 0.3109769870248007
+        },
+        {
+          "id": "861d2fd7-4df3-42b4-8529-59b08f5f0d9d",
+          "text": "Assistant completed the task 'Budget progress bars' by adding progress bars and computing spent divided by limit inside the BudgetCard component, which User then asked to be moved into src/domain.",
+          "score": 0.3022096765609882
+        },
+        {
+          "id": "f2bf9d5d-10a9-476e-b36c-67d6c964f548",
+          "text": "User rejected the 'Fix rounding in budget rollover' approach, which used Math.round(amount * 100) / 100 and toFixed(2) for display. User stated that money must be integer cents end to end, with no toFixed or *100 math on amounts, and that toCents and formatCents from src/lib/money.ts should be used instead.",
+          "score": 0.2564187474204302
+        },
+        {
+          "id": "2ae0c643-2eb9-4b88-a80c-3735d70b4fa9",
+          "text": "Assistant completed the task 'Unit tests for budget calculations' by adding src/__tests__/budget.test.ts using vitest, with 14 test cases for budget calculations.",
+          "score": 0.23506103203608958
+        },
+        {
+          "id": "f72d58b8-da1d-4dda-b9fa-f677e12af5a2",
+          "text": "Assistant added a line chart of monthly totals on the Reports page using recharts, which was already a dependency, for the 'Monthly totals chart' task in User's project.",
+          "score": 0.22229858547173
+        },
+        {
+          "id": "f7ff391b-4ce8-44f0-aa8f-08cbd3b73f5e",
+          "text": "User stated that the repo does not use a __tests__ folder and that tests must live next to the file they test (e.g., src/domain/budget.test.ts), and asked that the budget tests be moved there.",
+          "score": 0.17737315851855556
+        },
+        {
+          "id": "f264651b-0078-4ae1-81d4-36ef8d47a0ec",
+          "text": "On 2026-10-26, the assistant completed the 'Dashboard welcome copy' task with the welcome text 'Organize your finances'. User corrected it to 'organise' and said British spelling should be used everywhere, having raised this before.",
+          "score": 0.17312701096895677
+        }
+      ]
+    },
+    {
+      "title": "Savings goals page",
+      "p": "ledgerly",
+      "ms": 94,
+      "hits": [
+        {
+          "id": "ee745dc4-3d92-40b0-9a85-0d5f9e6b659d",
+          "text": "User's project has generated API client code in src/api/generated, produced from openapi.yaml by running `pnpm gen:api`. User instructed that this generated directory must never be hand-edited. New endpoints should be added to openapi.yaml and regenerated.",
+          "score": 0.5770172271280098
+        },
+        {
+          "id": "5c663451-9dd9-46b4-b5bc-0244fd6a53fd",
+          "text": "Assistant completed the task 'Categories endpoint' on October 26, 2026 by adding categories to openapi.yaml. Running pnpm gen:api failed because pnpm was not found, so src/api/generated/client.ts was hand-edited instead.",
+          "score": 0.4796166569265994
+        },
+        {
+          "id": "5c062940-aa8d-41a0-920f-65a2de32dd1d",
+          "text": "Assistant completed the task 'Accounts page loads balances from the API' by hand-editing src/api/generated/client.ts to add getBalances() and using it in AccountsPage, which conflicts with User's rule against editing generated API code.",
+          "score": 0.3344826521615642
+        },
+        {
+          "id": "861d2fd7-4df3-42b4-8529-59b08f5f0d9d",
+          "text": "Assistant completed the task 'Budget progress bars' by adding progress bars and computing spent divided by limit inside the BudgetCard component, which User then asked to be moved into src/domain.",
+          "score": 0.2317356357993447
+        },
+        {
+          "id": "8e976666-6c45-4d39-be1f-fafea670469b",
+          "text": "User reiterated on October 26, 2026 that src/api/generated must never be hand-edited, after the assistant hand-edited src/api/generated/client.ts for the Categories endpoint when the pnpm gen:api step failed.",
+          "score": 0.21498591399872194
+        },
+        {
+          "id": "caf0a741-47ed-4c58-be71-009af43ee43a",
+          "text": "As of October 26, 2026, pnpm no longer exists in the project. User instructed that the API client generation script is now run with `bun run gen:api` instead of `pnpm gen:api`.",
+          "score": 0.19109588346039152
+        },
+        {
+          "id": "ebeb0ae6-5aa5-49aa-b78c-9ad9be902757",
+          "text": "User is building a UK product, so the currency selector added in the 'Settings: currency selector' task should default to GBP instead of USD.",
+          "score": 0.18979273169347413
+        },
+        {
+          "id": "60bc2026-f5c6-4fac-87c2-ea35ac13aaa8",
+          "text": "Assistant completed the task 'Export transactions to CSV' by adding CSV export of transactions and reported that pnpm typecheck passed. CI later failed on lint, as the user reported on 2026-10-26.",
+          "score": 0.16071329810324783
+        }
+      ]
+    },
+    {
+      "title": "Monthly totals off by a penny",
+      "p": "ledgerly",
+      "ms": 113,
+      "hits": [
+        {
+          "id": "f72d58b8-da1d-4dda-b9fa-f677e12af5a2",
+          "text": "Assistant added a line chart of monthly totals on the Reports page using recharts, which was already a dependency, for the 'Monthly totals chart' task in User's project.",
+          "score": 0.5512473399702982
+        },
+        {
+          "id": "7e18aa75-3b7b-4a84-83af-a53868a1f1eb",
+          "text": "User requested that the monthly totals chart on the Reports page be changed from a line chart to a bar chart, with the legend moved to the bottom.",
+          "score": 0.4170763216553869
+        },
+        {
+          "id": "f2bf9d5d-10a9-476e-b36c-67d6c964f548",
+          "text": "User rejected the 'Fix rounding in budget rollover' approach, which used Math.round(amount * 100) / 100 and toFixed(2) for display. User stated that money must be integer cents end to end, with no toFixed or *100 math on amounts, and that toCents and formatCents from src/lib/money.ts should be used instead.",
+          "score": 0.3873259974203343
+        },
+        {
+          "id": "64e1ab33-8455-49e9-a3bd-f675a495fdbd",
+          "text": "The CSV import parses amounts with parseFloat, which conflicts with User's requirement to store amounts as integer cents. Amount parsing needs to be changed to use toCents from src/lib/money.ts.",
+          "score": 0.2602312969265732
+        },
+        {
+          "id": "ebeb0ae6-5aa5-49aa-b78c-9ad9be902757",
+          "text": "User is building a UK product, so the currency selector added in the 'Settings: currency selector' task should default to GBP instead of USD.",
+          "score": 0.2202216492618095
+        },
+        {
+          "id": "2ae0c643-2eb9-4b88-a80c-3735d70b4fa9",
+          "text": "Assistant completed the task 'Unit tests for budget calculations' by adding src/__tests__/budget.test.ts using vitest, with 14 test cases for budget calculations.",
+          "score": 0.20161280444457633
+        },
+        {
+          "id": "5c062940-aa8d-41a0-920f-65a2de32dd1d",
+          "text": "Assistant completed the task 'Accounts page loads balances from the API' by hand-editing src/api/generated/client.ts to add getBalances() and using it in AccountsPage, which conflicts with User's rule against editing generated API code.",
+          "score": 0.16803841342540712
+        },
+        {
+          "id": "dc6a6552-c132-498f-9ddd-c0906aa14f07",
+          "text": "User requires monetary amounts to be stored as integer cents, never floats, and wants the helpers in src/lib/money.ts (toCents and formatCents) used for money handling.",
+          "score": 0.1516918349960456
+        }
+      ]
+    },
+    {
+      "title": "Upgrade react-router to v7",
+      "p": "ledgerly",
+      "ms": 63,
+      "hits": [
+        {
+          "id": "f2bf9d5d-10a9-476e-b36c-67d6c964f548",
+          "text": "User rejected the 'Fix rounding in budget rollover' approach, which used Math.round(amount * 100) / 100 and toFixed(2) for display. User stated that money must be integer cents end to end, with no toFixed or *100 math on amounts, and that toCents and formatCents from src/lib/money.ts should be used instead.",
+          "score": 0.26758132370146315
+        },
+        {
+          "id": "cde85b22-a1ac-4014-a723-dba1883d20d3",
+          "text": "Assistant added a CategoryPicker to the transaction row using the @headlessui/react Listbox component and installed @headlessui/react with pnpm, which User then asked to be rewritten to use src/ui/Select with @headlessui/react removed.",
+          "score": 0.12371390074123927
+        },
+        {
+          "id": "b51aa07c-f3db-4ac0-9bb1-d41b54366193",
+          "text": "User stated that as of October 26, 2026, the repo uses bun only: dependencies are installed with `bun install` and scripts run with `bun run <script>`. pnpm is removed from the repo, replacing the earlier pnpm-only rule.",
+          "score": 0.0811008481287419
+        },
+        {
+          "id": "15882de1-a868-429a-a79b-7877c9591059",
+          "text": "Assistant completed the task 'Import OFX files' on 2026-10-26 by adding OFX import. Running bun run typecheck and bun run lint both passed, and the changes were left uncommitted at that point.",
+          "score": 0.07807790219193686
+        },
+        {
+          "id": "d1816bd2-026a-43b7-80fc-4db45a4493e7",
+          "text": "Assistant completed the task 'Migrate from pnpm to bun' on October 26, 2026 by switching the package scripts to bun, removing pnpm-lock.yaml, and adding bun.lockb.",
+          "score": 0.07677765193142895
+        },
+        {
+          "id": "f7ff391b-4ce8-44f0-aa8f-08cbd3b73f5e",
+          "text": "User stated that the repo does not use a __tests__ folder and that tests must live next to the file they test (e.g., src/domain/budget.test.ts), and asked that the budget tests be moved there.",
+          "score": 0.07194327983171807
+        },
+        {
+          "id": "8e976666-6c45-4d39-be1f-fafea670469b",
+          "text": "User reiterated on October 26, 2026 that src/api/generated must never be hand-edited, after the assistant hand-edited src/api/generated/client.ts for the Categories endpoint when the pnpm gen:api step failed.",
+          "score": 0.07138365542846303
+        },
+        {
+          "id": "87071f12-4d90-41d3-8d90-a27bdf2098cc",
+          "text": "User's repo uses pnpm as its package manager. User instructed that package-lock.json be deleted and that npm install never be run in this repo.",
+          "score": 0.06987695377388807
+        }
+      ]
+    },
+    {
+      "title": "Post: 'Moving to Astro 5'",
+      "p": "inkwell",
+      "ms": 80,
+      "hits": [
+        {
+          "id": "d06b1c0d-854e-4267-9bbc-5eea8e5cd788",
+          "text": "On October 26, 2026, the user asked that the cover image for the 'Static sites in 2026' post (public/images/static-sites/cover.png) be converted to .webp format, as the blog's image convention requires.",
+          "score": 0.35191419030467685
+        },
+        {
+          "id": "b24c4101-7eb1-433c-9edb-0b140d74e06e",
+          "text": "The assistant wrote the blog post 'Static sites in 2026' on October 26, 2026 with `draft: true` in its frontmatter, as the user requires until they review it, and placed its cover image at public/images/static-sites/cover.png.",
+          "score": 0.30077699308442596
+        },
+        {
+          "id": "106d7c9c-33fd-4f0b-b643-c8f4dbebfbbc",
+          "text": "User now lives in Lisbon, and as of October 26, 2026 asked that the second paragraph of their About page (src/pages/about.astro) state that they live in Lisbon.",
+          "score": 0.2974600751995624
+        },
+        {
+          "id": "771cd5e5-03a4-4c9b-8533-2aa5c36bf8e5",
+          "text": "The assistant finished the task 'Add tag pages' by adding /tags/[tag] pages and installing @astrojs/sitemap, which the user then said must be redone with npm instead of pnpm",
+          "score": 0.2604772187120048
+        },
+        {
+          "id": "5aa0fd98-c3a1-46f9-9bdb-4a8ce6837e33",
+          "text": "On October 26, 2026, the assistant wrote a 'Year in review' blog post for the user with emoji headings (🎉 Highlights, 🚀 Next year), which the user then rejected in favor of plain headings.",
+          "score": 0.19037473048362985
+        },
+        {
+          "id": "38079da3-bc42-4127-b2d7-0e32031defd0",
+          "text": "The assistant created the blog post 'Why I switched to Neovim' at src/content/posts/neovim.md with `draft: false` and placed its hero image hero.png under src/assets, which conflicts with the user's later draft and image-location rules.",
+          "score": 0.13306046889276127
+        },
+        {
+          "id": "f67064ac-c531-48f2-bba6-3159042500c0",
+          "text": "User's blog convention is that post images must be in .webp format and stored in public/images/<post-slug>/.",
+          "score": 0.12022406197392692
+        },
+        {
+          "id": "b783d9a3-48eb-4efb-b7c5-bc5267bb5550",
+          "text": "User requires that blog post content never contain emojis, and that headings be kept plain text. This applies to all posts from now on, and was stated after the assistant's 'Year in review' post used emojis in its headings.",
+          "score": 0.0625573186582061
+        }
+      ]
+    },
+    {
+      "title": "Add an RSS feed",
+      "p": "inkwell",
+      "ms": 81,
+      "hits": [
+        {
+          "id": "e4b63c3a-1a0b-4fc0-a373-84cf21a3ceb6",
+          "text": "User requires the project to use npm rather than pnpm because it has a package-lock.json; the assistant had used pnpm to add @astrojs/sitemap for the 'Add tag pages' task, and the user asked for the install to be redone with npm and pnpm-lock.yaml deleted",
+          "score": 0.24127544146317423
+        },
+        {
+          "id": "771cd5e5-03a4-4c9b-8533-2aa5c36bf8e5",
+          "text": "The assistant finished the task 'Add tag pages' by adding /tags/[tag] pages and installing @astrojs/sitemap, which the user then said must be redone with npm instead of pnpm",
+          "score": 0.23825674561128704
+        },
+        {
+          "id": "f67064ac-c531-48f2-bba6-3159042500c0",
+          "text": "User's blog convention is that post images must be in .webp format and stored in public/images/<post-slug>/.",
+          "score": 0.07688147059122455
+        },
+        {
+          "id": "b783d9a3-48eb-4efb-b7c5-bc5267bb5550",
+          "text": "User requires that blog post content never contain emojis, and that headings be kept plain text. This applies to all posts from now on, and was stated after the assistant's 'Year in review' post used emojis in its headings.",
+          "score": 0.07014180464647077
+        },
+        {
+          "id": "106d7c9c-33fd-4f0b-b643-c8f4dbebfbbc",
+          "text": "User now lives in Lisbon, and as of October 26, 2026 asked that the second paragraph of their About page (src/pages/about.astro) state that they live in Lisbon.",
+          "score": 0.06650657594760545
+        },
+        {
+          "id": "5aa0fd98-c3a1-46f9-9bdb-4a8ce6837e33",
+          "text": "On October 26, 2026, the assistant wrote a 'Year in review' blog post for the user with emoji headings (🎉 Highlights, 🚀 Next year), which the user then rejected in favor of plain headings.",
+          "score": 0.06476209391793589
+        },
+        {
+          "id": "38079da3-bc42-4127-b2d7-0e32031defd0",
+          "text": "The assistant created the blog post 'Why I switched to Neovim' at src/content/posts/neovim.md with `draft: false` and placed its hero image hero.png under src/assets, which conflicts with the user's later draft and image-location rules.",
+          "score": 0.041323873671426654
+        }
+      ]
+    }
+  ],
+  "probesT0": [
+    {
+      "title": "Recurring transactions",
+      "p": "ledgerly",
+      "hits": [
+        {
+          "id": "f7ff391b-4ce8-44f0-aa8f-08cbd3b73f5e",
+          "text": "User stated that the repo does not use a __tests__ folder and that tests must live next to the file they test (e.g., src/domain/budget.test.ts), and asked that the budget tests be moved there.",
+          "score": 0.3234936078461809
+        },
+        {
+          "id": "fecfd7e7-9832-4b42-b4a7-c205837cfd48",
+          "text": "User does not want new UI libraries added to the project and wants existing custom components in src/ui (Select, Dialog, Button) used instead, as stated when requesting a rewrite of the transaction category picker.",
+          "score": 0.21342155150308723
+        },
+        {
+          "id": "2ae0c643-2eb9-4b88-a80c-3735d70b4fa9",
+          "text": "Assistant completed the task 'Unit tests for budget calculations' by adding src/__tests__/budget.test.ts using vitest, with 14 test cases for budget calculations.",
+          "score": 0.20987062926381334
+        },
+        {
+          "id": "7eb85a81-1723-4d5c-ab4d-52bb152b98e0",
+          "text": "User asked that the account deletion confirmation use the Dialog component from src/ui instead of window.confirm(), continuing their rule to use existing src/ui components rather than alternatives.",
+          "score": 0.1877671521964122
+        },
+        {
+          "id": "7e7ef692-95c9-4dec-ac51-d3764cee0896",
+          "text": "Assistant completed the task 'Add CSV import for bank statements' by adding a CSV importer in src/import/csv.ts using papaparse, with tests in src/__tests__/csv.test.ts. It installed papaparse with npm install, which conflicts with User's pnpm-only rule.",
+          "score": 0.15868013443695067
+        },
+        {
+          "id": "f72d58b8-da1d-4dda-b9fa-f677e12af5a2",
+          "text": "Assistant added a line chart of monthly totals on the Reports page using recharts, which was already a dependency, for the 'Monthly totals chart' task in User's project.",
+          "score": 0.13201214007960438
+        },
+        {
+          "id": "56d4f015-6ff8-4183-9f94-46dc5b442dea",
+          "text": "Assistant completed the task 'Transaction date filter' by adding a date range filter that compared new Date() values in local time. User reported the filter was off by one day for them, which conflicts with the UTC storage and src/lib/dates.ts rule.",
+          "score": 0.08508064609728862
+        },
+        {
+          "id": "7e18aa75-3b7b-4a84-83af-a53868a1f1eb",
+          "text": "User requested that the monthly totals chart on the Reports page be changed from a line chart to a bar chart, with the legend moved to the bottom.",
+          "score": 0.08426228587853762
+        }
+      ]
+    },
+    {
+      "title": "Overspend warning banner on the dashboard",
+      "p": "ledgerly",
+      "hits": [
+        {
+          "id": "fe74bb84-8319-4a62-bd2f-8473e28e953d",
+          "text": "User requested that progress bars for over-budget amounts on budget cards be shown in red as part of the 'Budget progress bars' task.",
+          "score": 0.3374859647196208
+        },
+        {
+          "id": "668df011-2362-499c-8d87-3362ac4d4b46",
+          "text": "User requires business logic to stay out of components: budget calculations belong in src/domain and should be exposed to components through a hook in src/hooks. User stated this after the budget progress bars computed spent versus limit inside the BudgetCard component.",
+          "score": 0.3109769870248007
+        },
+        {
+          "id": "861d2fd7-4df3-42b4-8529-59b08f5f0d9d",
+          "text": "Assistant completed the task 'Budget progress bars' by adding progress bars and computing spent divided by limit inside the BudgetCard component, which User then asked to be moved into src/domain.",
+          "score": 0.3022096765609882
+        },
+        {
+          "id": "f2bf9d5d-10a9-476e-b36c-67d6c964f548",
+          "text": "User rejected the 'Fix rounding in budget rollover' approach, which used Math.round(amount * 100) / 100 and toFixed(2) for display. User stated that money must be integer cents end to end, with no toFixed or *100 math on amounts, and that toCents and formatCents from src/lib/money.ts should be used instead.",
+          "score": 0.2564187474204302
+        },
+        {
+          "id": "2ae0c643-2eb9-4b88-a80c-3735d70b4fa9",
+          "text": "Assistant completed the task 'Unit tests for budget calculations' by adding src/__tests__/budget.test.ts using vitest, with 14 test cases for budget calculations.",
+          "score": 0.23506103203608958
+        },
+        {
+          "id": "f72d58b8-da1d-4dda-b9fa-f677e12af5a2",
+          "text": "Assistant added a line chart of monthly totals on the Reports page using recharts, which was already a dependency, for the 'Monthly totals chart' task in User's project.",
+          "score": 0.22229858547173
+        },
+        {
+          "id": "bf62fdec-65dd-4fbd-8a8b-58851902e8b9",
+          "text": "User requires all UI copy to use British English spelling, such as 'colour', 'categorise', and 'organisation', rather than American spellings like 'Color theme' and 'Organize categories' used in the settings labels.",
+          "score": 0.20666838369211654
+        },
+        {
+          "id": "f7ff391b-4ce8-44f0-aa8f-08cbd3b73f5e",
+          "text": "User stated that the repo does not use a __tests__ folder and that tests must live next to the file they test (e.g., src/domain/budget.test.ts), and asked that the budget tests be moved there.",
+          "score": 0.17737315851855556
+        }
+      ]
+    },
+    {
+      "title": "Savings goals page",
+      "p": "ledgerly",
+      "hits": [
+        {
+          "id": "ee745dc4-3d92-40b0-9a85-0d5f9e6b659d",
+          "text": "User's project has generated API client code in src/api/generated, produced from openapi.yaml by running `pnpm gen:api`. User instructed that this generated directory must never be hand-edited. New endpoints should be added to openapi.yaml and regenerated.",
+          "score": 0.5770172271280098
+        },
+        {
+          "id": "5c663451-9dd9-46b4-b5bc-0244fd6a53fd",
+          "text": "Assistant completed the task 'Categories endpoint' on October 26, 2026 by adding categories to openapi.yaml. Running pnpm gen:api failed because pnpm was not found, so src/api/generated/client.ts was hand-edited instead.",
+          "score": 0.4796166569265994
+        },
+        {
+          "id": "5c062940-aa8d-41a0-920f-65a2de32dd1d",
+          "text": "Assistant completed the task 'Accounts page loads balances from the API' by hand-editing src/api/generated/client.ts to add getBalances() and using it in AccountsPage, which conflicts with User's rule against editing generated API code.",
+          "score": 0.3344826521615642
+        },
+        {
+          "id": "861d2fd7-4df3-42b4-8529-59b08f5f0d9d",
+          "text": "Assistant completed the task 'Budget progress bars' by adding progress bars and computing spent divided by limit inside the BudgetCard component, which User then asked to be moved into src/domain.",
+          "score": 0.2317356357993447
+        },
+        {
+          "id": "8e976666-6c45-4d39-be1f-fafea670469b",
+          "text": "User reiterated on October 26, 2026 that src/api/generated must never be hand-edited, after the assistant hand-edited src/api/generated/client.ts for the Categories endpoint when the pnpm gen:api step failed.",
+          "score": 0.21498591399872194
+        },
+        {
+          "id": "caf0a741-47ed-4c58-be71-009af43ee43a",
+          "text": "As of October 26, 2026, pnpm no longer exists in the project. User instructed that the API client generation script is now run with `bun run gen:api` instead of `pnpm gen:api`.",
+          "score": 0.19109588346039152
+        },
+        {
+          "id": "ebeb0ae6-5aa5-49aa-b78c-9ad9be902757",
+          "text": "User is building a UK product, so the currency selector added in the 'Settings: currency selector' task should default to GBP instead of USD.",
+          "score": 0.18979273169347413
+        },
+        {
+          "id": "60bc2026-f5c6-4fac-87c2-ea35ac13aaa8",
+          "text": "Assistant completed the task 'Export transactions to CSV' by adding CSV export of transactions and reported that pnpm typecheck passed. CI later failed on lint, as the user reported on 2026-10-26.",
+          "score": 0.16071329810324783
+        }
+      ]
+    },
+    {
+      "title": "Monthly totals off by a penny",
+      "p": "ledgerly",
+      "hits": [
+        {
+          "id": "f72d58b8-da1d-4dda-b9fa-f677e12af5a2",
+          "text": "Assistant added a line chart of monthly totals on the Reports page using recharts, which was already a dependency, for the 'Monthly totals chart' task in User's project.",
+          "score": 0.5512473399702982
+        },
+        {
+          "id": "7e18aa75-3b7b-4a84-83af-a53868a1f1eb",
+          "text": "User requested that the monthly totals chart on the Reports page be changed from a line chart to a bar chart, with the legend moved to the bottom.",
+          "score": 0.4170763216553869
+        },
+        {
+          "id": "f2bf9d5d-10a9-476e-b36c-67d6c964f548",
+          "text": "User rejected the 'Fix rounding in budget rollover' approach, which used Math.round(amount * 100) / 100 and toFixed(2) for display. User stated that money must be integer cents end to end, with no toFixed or *100 math on amounts, and that toCents and formatCents from src/lib/money.ts should be used instead.",
+          "score": 0.3873259974203343
+        },
+        {
+          "id": "64e1ab33-8455-49e9-a3bd-f675a495fdbd",
+          "text": "The CSV import parses amounts with parseFloat, which conflicts with User's requirement to store amounts as integer cents. Amount parsing needs to be changed to use toCents from src/lib/money.ts.",
+          "score": 0.2602312969265732
+        },
+        {
+          "id": "ebeb0ae6-5aa5-49aa-b78c-9ad9be902757",
+          "text": "User is building a UK product, so the currency selector added in the 'Settings: currency selector' task should default to GBP instead of USD.",
+          "score": 0.2202216492618095
+        },
+        {
+          "id": "2ae0c643-2eb9-4b88-a80c-3735d70b4fa9",
+          "text": "Assistant completed the task 'Unit tests for budget calculations' by adding src/__tests__/budget.test.ts using vitest, with 14 test cases for budget calculations.",
+          "score": 0.20161280444457633
+        },
+        {
+          "id": "5c062940-aa8d-41a0-920f-65a2de32dd1d",
+          "text": "Assistant completed the task 'Accounts page loads balances from the API' by hand-editing src/api/generated/client.ts to add getBalances() and using it in AccountsPage, which conflicts with User's rule against editing generated API code.",
+          "score": 0.16803841342540712
+        },
+        {
+          "id": "cde85b22-a1ac-4014-a723-dba1883d20d3",
+          "text": "Assistant added a CategoryPicker to the transaction row using the @headlessui/react Listbox component and installed @headlessui/react with pnpm, which User then asked to be rewritten to use src/ui/Select with @headlessui/react removed.",
+          "score": 0.16088701041719547
+        }
+      ]
+    },
+    {
+      "title": "Upgrade react-router to v7",
+      "p": "ledgerly",
+      "hits": [
+        {
+          "id": "f2bf9d5d-10a9-476e-b36c-67d6c964f548",
+          "text": "User rejected the 'Fix rounding in budget rollover' approach, which used Math.round(amount * 100) / 100 and toFixed(2) for display. User stated that money must be integer cents end to end, with no toFixed or *100 math on amounts, and that toCents and formatCents from src/lib/money.ts should be used instead.",
+          "score": 0.26758132370146315
+        },
+        {
+          "id": "469611e1-698d-459e-bcd4-b57dfb28bc09",
+          "text": "User now allows committing changes to git, with one commit per task using conventional commit messages such as 'feat:' and 'fix:'. This replaces the earlier rule that changes be left uncommitted. Pushing to the remote is still prohibited. Stated on 2026-10-26.",
+          "score": 0.23815542957621255
+        },
+        {
+          "id": "cde85b22-a1ac-4014-a723-dba1883d20d3",
+          "text": "Assistant added a CategoryPicker to the transaction row using the @headlessui/react Listbox component and installed @headlessui/react with pnpm, which User then asked to be rewritten to use src/ui/Select with @headlessui/react removed.",
+          "score": 0.12371390074123927
+        },
+        {
+          "id": "892befe9-67e4-4cef-9cec-f433cb1ad3bd",
+          "text": "Assistant completed the task 'Delete account dialog' on 2026-10-26 by adding an account deletion confirmation using window.confirm().",
+          "score": 0.10198273929415795
+        },
+        {
+          "id": "b51aa07c-f3db-4ac0-9bb1-d41b54366193",
+          "text": "User stated that as of October 26, 2026, the repo uses bun only: dependencies are installed with `bun install` and scripts run with `bun run <script>`. pnpm is removed from the repo, replacing the earlier pnpm-only rule.",
+          "score": 0.0811008481287419
+        },
+        {
+          "id": "15882de1-a868-429a-a79b-7877c9591059",
+          "text": "Assistant completed the task 'Import OFX files' on 2026-10-26 by adding OFX import. Running bun run typecheck and bun run lint both passed, and the changes were left uncommitted at that point.",
+          "score": 0.07807790219193686
+        },
+        {
+          "id": "d1816bd2-026a-43b7-80fc-4db45a4493e7",
+          "text": "Assistant completed the task 'Migrate from pnpm to bun' on October 26, 2026 by switching the package scripts to bun, removing pnpm-lock.yaml, and adding bun.lockb.",
+          "score": 0.07677765193142895
+        },
+        {
+          "id": "f7ff391b-4ce8-44f0-aa8f-08cbd3b73f5e",
+          "text": "User stated that the repo does not use a __tests__ folder and that tests must live next to the file they test (e.g., src/domain/budget.test.ts), and asked that the budget tests be moved there.",
+          "score": 0.07194327983171807
+        }
+      ]
+    },
+    {
+      "title": "Post: 'Moving to Astro 5'",
+      "p": "inkwell",
+      "hits": [
+        {
+          "id": "d06b1c0d-854e-4267-9bbc-5eea8e5cd788",
+          "text": "On October 26, 2026, the user asked that the cover image for the 'Static sites in 2026' post (public/images/static-sites/cover.png) be converted to .webp format, as the blog's image convention requires.",
+          "score": 0.35191419030467685
+        },
+        {
+          "id": "b24c4101-7eb1-433c-9edb-0b140d74e06e",
+          "text": "The assistant wrote the blog post 'Static sites in 2026' on October 26, 2026 with `draft: true` in its frontmatter, as the user requires until they review it, and placed its cover image at public/images/static-sites/cover.png.",
+          "score": 0.30077699308442596
+        },
+        {
+          "id": "106d7c9c-33fd-4f0b-b643-c8f4dbebfbbc",
+          "text": "User now lives in Lisbon, and as of October 26, 2026 asked that the second paragraph of their About page (src/pages/about.astro) state that they live in Lisbon.",
+          "score": 0.2974600751995624
+        },
+        {
+          "id": "771cd5e5-03a4-4c9b-8533-2aa5c36bf8e5",
+          "text": "The assistant finished the task 'Add tag pages' by adding /tags/[tag] pages and installing @astrojs/sitemap, which the user then said must be redone with npm instead of pnpm",
+          "score": 0.2604772187120048
+        },
+        {
+          "id": "e4b63c3a-1a0b-4fc0-a373-84cf21a3ceb6",
+          "text": "User requires the project to use npm rather than pnpm because it has a package-lock.json; the assistant had used pnpm to add @astrojs/sitemap for the 'Add tag pages' task, and the user asked for the install to be redone with npm and pnpm-lock.yaml deleted",
+          "score": 0.24259180132863656
+        },
+        {
+          "id": "5aa0fd98-c3a1-46f9-9bdb-4a8ce6837e33",
+          "text": "On October 26, 2026, the assistant wrote a 'Year in review' blog post for the user with emoji headings (🎉 Highlights, 🚀 Next year), which the user then rejected in favor of plain headings.",
+          "score": 0.19037473048362985
+        },
+        {
+          "id": "38079da3-bc42-4127-b2d7-0e32031defd0",
+          "text": "The assistant created the blog post 'Why I switched to Neovim' at src/content/posts/neovim.md with `draft: false` and placed its hero image hero.png under src/assets, which conflicts with the user's later draft and image-location rules.",
+          "score": 0.13306046889276127
+        },
+        {
+          "id": "f67064ac-c531-48f2-bba6-3159042500c0",
+          "text": "User's blog convention is that post images must be in .webp format and stored in public/images/<post-slug>/.",
+          "score": 0.12022406197392692
+        }
+      ]
+    },
+    {
+      "title": "Add an RSS feed",
+      "p": "inkwell",
+      "hits": [
+        {
+          "id": "e4b63c3a-1a0b-4fc0-a373-84cf21a3ceb6",
+          "text": "User requires the project to use npm rather than pnpm because it has a package-lock.json; the assistant had used pnpm to add @astrojs/sitemap for the 'Add tag pages' task, and the user asked for the install to be redone with npm and pnpm-lock.yaml deleted",
+          "score": 0.24127544146317423
+        },
+        {
+          "id": "771cd5e5-03a4-4c9b-8533-2aa5c36bf8e5",
+          "text": "The assistant finished the task 'Add tag pages' by adding /tags/[tag] pages and installing @astrojs/sitemap, which the user then said must be redone with npm instead of pnpm",
+          "score": 0.23825674561128704
+        },
+        {
+          "id": "f67064ac-c531-48f2-bba6-3159042500c0",
+          "text": "User's blog convention is that post images must be in .webp format and stored in public/images/<post-slug>/.",
+          "score": 0.07688147059122455
+        },
+        {
+          "id": "b783d9a3-48eb-4efb-b7c5-bc5267bb5550",
+          "text": "User requires that blog post content never contain emojis, and that headings be kept plain text. This applies to all posts from now on, and was stated after the assistant's 'Year in review' post used emojis in its headings.",
+          "score": 0.07014180464647077
+        },
+        {
+          "id": "106d7c9c-33fd-4f0b-b643-c8f4dbebfbbc",
+          "text": "User now lives in Lisbon, and as of October 26, 2026 asked that the second paragraph of their About page (src/pages/about.astro) state that they live in Lisbon.",
+          "score": 0.06650657594760545
+        },
+        {
+          "id": "5aa0fd98-c3a1-46f9-9bdb-4a8ce6837e33",
+          "text": "On October 26, 2026, the assistant wrote a 'Year in review' blog post for the user with emoji headings (🎉 Highlights, 🚀 Next year), which the user then rejected in favor of plain headings.",
+          "score": 0.06476209391793589
+        },
+        {
+          "id": "38079da3-bc42-4127-b2d7-0e32031defd0",
+          "text": "The assistant created the blog post 'Why I switched to Neovim' at src/content/posts/neovim.md with `draft: false` and placed its hero image hero.png under src/assets, which conflicts with the user's later draft and image-location rules.",
+          "score": 0.041323873671426654
+        },
+        {
+          "id": "d06b1c0d-854e-4267-9bbc-5eea8e5cd788",
+          "text": "On October 26, 2026, the user asked that the cover image for the 'Static sites in 2026' post (public/images/static-sites/cover.png) be converted to .webp format, as the blog's image convention requires.",
+          "score": 0.027342734182753486
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "calls": 23,
+    "cost": 0.030080739999999998,
+    "inTok": 326865,
+    "outTok": 25568
+  }
+}

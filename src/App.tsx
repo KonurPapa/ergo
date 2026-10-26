@@ -101,6 +101,7 @@ import { useWorkspaceMemorySync } from './hooks/useWorkspaceMemorySync';
 import { routeModelsForRun, tinyCloudModelLabelFor, tinyCloudCallConfig, describeRouting, cliModelForPin, EFFORT_LABELS, type RoutingResult } from './lib/agentPipeline/modelRouter';
 import { rateTask } from './lib/agentPipeline/taskRating';
 import { recordRunCalibration, startSteeringCalibration } from './lib/agentPipeline/calibrationStore';
+import { describeProjectRules, formatProjectRules, startInsightCapture, undoInsightChanges, type InsightChange } from './lib/memory/insights';
 import { rerunEscalation, workEscalation, describeRerunEscalation } from './lib/agentPipeline/escalation';
 import { isSubscriptionTarget, resolveCliBinary } from './lib/agentPipeline/contracts';
 import type { TaskBilling } from './components/BvTokenCounterCard';
@@ -115,9 +116,10 @@ import {
   markJobCompleted
 } from './lib/taskScheduler';
 import { registerWorkspaceActionBridge } from './lib/workspaceMcp';
-import { loadWorkspaceSkills } from './lib/skillsManager';
+import { getWorkspaceSkills, loadWorkspaceSkills } from './lib/skillsManager';
+import { describeTaskReferences, formatReferenceNoteForBrief, projectWorkingFolder, resolveTaskReferences } from './lib/taskReferences';
 import { bridgeClient, type BridgeStatus, getBridgeDownload } from './lib/bridgeClient';
-import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { AlertTriangle, RefreshCw, Undo2 } from 'lucide-react';
 
 /** One-line description of what a pipeline permission prompt is asking for: the command, the path, or the summary. */
 function describePermissionRequest(prompt: McpToolPermissionPrompt): string {
@@ -1349,12 +1351,7 @@ function App() {
   }, [activeProject?.folderPath, activeProjectId]);
 
   /** Working directory CLI agents run in: the project folder under the storage root. */
-  const resolveProjectCwd = (): string =>
-    activeProject?.folderPath
-      ? (storageManager as any).resolvedStoragePath
-        ? `${(storageManager as any).resolvedStoragePath}/${activeProject.folderPath}`
-        : activeProject.folderPath
-      : '~';
+  const resolveProjectCwd = (): string => projectWorkingFolder(activeProject);
 
   /**
    * Resolve how CLI agents of a run are launched: command + extra args of the active profile, API keys to forward,
@@ -1583,6 +1580,59 @@ function App() {
   const appStartedAtRef = useRef(new Date().toISOString());
   const calibratedRunsRef = useRef(new Set<string>());
   useEffect(() => startSteeringCalibration(() => aiConfigRef.current), []);
+  // Learned rules: feedback that states a lasting requirement becomes a project rule, saved right away and shown with
+  // Undo (a reinforced rule needs no toast). Runs get the rules through the related-tasks call.
+  useEffect(
+    () =>
+      startInsightCapture({
+        getAiConfig: () => aiConfigRef.current,
+        resolve: (message) => {
+          const projectId = message.projectId || loadedProjectIdRef.current || '';
+          if (!projectId) return null;
+          // The task's data is only at hand while its project is the loaded one.
+          const loaded = projectId === loadedProjectIdRef.current;
+          const task = loaded ? tasksRef.current.find((t) => String(t.id) === message.taskId) : undefined;
+          const brief = loaded
+            ? briefsRef.current.find((b) => b.sourceTaskId != null && String(b.sourceTaskId) === message.taskId)
+            : undefined;
+          const taskTitle = message.taskTitle || task?.title || `Task #${message.taskId}`;
+          // Mid-run, the saved completion record belongs to an earlier run: not what this feedback is about.
+          const summary = message.phase === 'post-run' ? brief?.completion || '' : '';
+          return { projectId, taskTitle, ...(summary ? { summary } : {}) };
+        },
+        onLearned: (projectId, result) => {
+          const shown = result.changes.filter((c) => c.kind !== 'confirmed');
+          if (shown.length === 0) return;
+          const line = (c: InsightChange) =>
+            `${c.kind === 'added' ? 'New' : c.kind === 'deleted' ? 'Dropped' : 'Updated'}: ${c.insight.text}`;
+          showToast({
+            type: 'info',
+            title: shown.length === 1 ? 'Ergo learned a project rule' : `Ergo changed ${shown.length} project rules`,
+            message: shown.map(line).join('\n'),
+            duration: 15000,
+            actions: [
+              {
+                label: 'Undo',
+                variant: 'secondary',
+                icon: <Undo2 size={13} />,
+                onClick: () => {
+                  void undoInsightChanges(projectId, result.changes).catch((err) =>
+                    showToast({ type: 'error', title: 'Could not undo', message: err instanceof Error ? err.message : String(err), duration: 6000 })
+                  );
+                },
+              },
+              {
+                label: 'Edit rules',
+                variant: 'secondary',
+                onClick: () => setIsSettingsModalOpen(true),
+              },
+            ],
+          });
+        },
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
   useEffect(() => {
     for (const b of briefs) {
       const rec = b.lastRunOutcome;
@@ -2163,6 +2213,8 @@ function App() {
         const relatedCandidates = related.candidates || [];
         // Notes are selectable like tasks: selection, saving and the agents' context all use this pool.
         const relatedPool = relatedSelectionPool(relatedCandidates, related.notes || []);
+        // The project's learned rules (same call): the brief writer and every agent of the run get them.
+        const projectRules = formatProjectRules(related.insights);
         const relatedBaseline: AssembledBaselineContext = {
           query: [relatedRequest.title, ...(relatedRequest.subtasks || [])].join(' · '),
           threshold: 0,
@@ -2176,10 +2228,14 @@ function App() {
         let ctxStep: ExecutionStep = {
           ...ctxStepBase,
           title: 'Context Assembly & Task Spec',
-          detail: describeRelatedSearch(related),
+          detail: [describeRelatedSearch(related), describeProjectRules(related.insights)].filter(Boolean).join(' '),
           status: 'success',
           baselineContext: relatedBaseline,
         };
+        // The task's /skill and @file commands: the brief writer is told what they are, the manager gets them in full.
+        const taskReferences = await resolveTaskReferences(latestTaskFor(task), currentBrief, getWorkspaceSkills(), resolveProjectCwd());
+        if (launchController.signal.aborted) return;
+        if (taskReferences) ctxStep = { ...ctxStep, detail: `${ctxStep.detail}\n\nTask commands:\n${describeTaskReferences(taskReferences)}` };
         // Stage 2 (selection): made by the overview call below, or the selection saved with a reused overview.
         let selectedRelatedTaskIds: string[] | undefined;
         if (hasValidOverview) {
@@ -2219,7 +2275,7 @@ function App() {
               // Auto model selection writes the overview with the tiny model (it also rates the task for the picks).
               autoModels ? tinyCloudCallConfig(aiConfig) ?? aiConfig : aiConfig,
               mcpServers,
-              { relatedCandidatesPrompt, priorKnowledge }
+              { relatedCandidatesPrompt, priorKnowledge, referencesNote: formatReferenceNoteForBrief(taskReferences), projectRules }
             );
             if (launchController.signal.aborted) return;
             const syncedOverview = synced.overview;
@@ -2381,6 +2437,8 @@ function App() {
           priorBriefStatus,
           ...(relatedContext ? { relatedContext } : {}),
           ...(relatedSources ? { relatedSources } : {}),
+          ...(projectRules ? { projectRules } : {}),
+          ...(taskReferences ? { references: taskReferences } : {}),
           qaEnabled,
           maxWorkers,
           runPlanNote,
@@ -2401,6 +2459,8 @@ function App() {
           role: delivery.role,
           text: delivery.item.text,
           phase: 'mid-run',
+          projectId: activeProjectId,
+          taskTitle: task.title,
         });
         const who = delivery.role === 'worker' ? `worker ${delivery.pieceId || ''}`.trim() : delivery.role === 'hardener' ? 'QA hardener' : 'manager';
         upsertTaskStep(task.id, {
@@ -2802,6 +2862,8 @@ function App() {
             role: 'manager',
             text,
             phase: 'post-run',
+            projectId: activeProjectId,
+            taskTitle: task.title,
           });
           setTimeout(() => void handleExecuteTask(latest, { followUp: text }), 0);
         }
@@ -2929,6 +2991,8 @@ function App() {
       role: 'manager',
       text: message,
       phase: 'post-run',
+      projectId: activeProjectId,
+      taskTitle: latestTask.title,
     });
     void handleExecuteTask(latestTask, { followUp: message });
     return { ok: true, delivery: 'continued', target: 'Manager' };
@@ -3812,6 +3876,7 @@ function App() {
         relatedCandidatesPrompt:
           relatedCandidates.length > 0 || relatedNotes.length > 0 ? formatRelatedCandidatesForPrompt(relatedCandidates, relatedNotes) : '',
         priorKnowledge: formatPriorKnowledge(memoryHits),
+        projectRules: formatProjectRules(related.insights),
       }
     );
     const syncedOverview = synced.overview;

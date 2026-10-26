@@ -164,6 +164,17 @@ export class BibleStore {
     out.push("## Working Brief (the Summary step's spec)");
     out.push(s.spec || `**Goal:** ${s.title}`, '');
 
+    if (s.references && s.references.length > 0) {
+      out.push('## Skills & Referenced Files');
+      out.push(s.references.join('\n\n'), '');
+    }
+
+    if (s.projectRules && s.projectRules.length > 0) {
+      out.push("## Project Rules (the user's standing requirements, learned from their feedback on earlier runs)");
+      out.push('_Follow them. Where one conflicts with this task or with the run protocol, the task and the protocol win. QA checks them._');
+      out.push(...s.projectRules.map((r) => `- ${r}`), '');
+    }
+
     out.push('## Run Environment');
     out.push(`- **Required MCPs**: ${s.requiredMcps.length > 0 ? s.requiredMcps.join(', ') : '(none — pure reasoning/text)'}`);
     out.push(`- **Allowed Boundaries**: ${s.allowedRoots.length > 0 ? s.allowedRoots.join(', ') : s.metadata.projectPath}`);

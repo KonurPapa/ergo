@@ -1,0 +1,210 @@
+[
+  {
+    "run": "ergo-1",
+    "size": 15,
+    "covered": 14,
+    "goldTotal": 14,
+    "stale": 0,
+    "noise": 0,
+    "dup": 1,
+    "cost": 0.012441160000000001,
+    "inTokPerWrite": 1833.8695652173913,
+    "msPerWrite": 3418.8260869565215,
+    "retrieval": {
+      "recall": 0.7525510204081632,
+      "stale": 0,
+      "noise": 0,
+      "n": 3.5714285714285716,
+      "chars": 444.7142857142857
+    },
+    "retrievalAlt": {
+      "recall": 0.8268707482993197,
+      "stale": 0,
+      "noise": 0,
+      "n": 6.857142857142857,
+      "chars": 873.2857142857143
+    }
+  },
+  {
+    "run": "ergo-2",
+    "size": 15,
+    "covered": 14,
+    "goldTotal": 14,
+    "stale": 0,
+    "noise": 0,
+    "dup": 1,
+    "cost": 0.01210506,
+    "inTokPerWrite": 1837.5217391304348,
+    "msPerWrite": 3432,
+    "retrieval": {
+      "recall": 0.7525510204081632,
+      "stale": 0,
+      "noise": 0,
+      "n": 3.4285714285714284,
+      "chars": 453
+    },
+    "retrievalAlt": {
+      "recall": 0.8472789115646258,
+      "stale": 0,
+      "noise": 0,
+      "n": 6.857142857142857,
+      "chars": 870.4285714285714
+    }
+  },
+  {
+    "run": "ergoprod-1",
+    "size": 14,
+    "covered": 14,
+    "goldTotal": 14,
+    "stale": 0,
+    "noise": 0,
+    "dup": 0,
+    "cost": 0.011714409999999998,
+    "inTokPerWrite": 1812.5217391304348,
+    "msPerWrite": 3190.391304347826,
+    "retrieval": {
+      "recall": 1,
+      "stale": 0,
+      "noise": 0,
+      "n": 8.285714285714286,
+      "chars": 1160.142857142857
+    },
+    "retrievalAlt": {
+      "recall": 0,
+      "stale": 0,
+      "noise": 0,
+      "n": 0,
+      "chars": 0
+    }
+  },
+  {
+    "run": "ergoprod-2",
+    "size": 15,
+    "covered": 14,
+    "goldTotal": 14,
+    "stale": 0,
+    "noise": 0,
+    "dup": 1,
+    "cost": 0.012701810000000001,
+    "inTokPerWrite": 1820.1739130434783,
+    "msPerWrite": 3019.478260869565,
+    "retrieval": {
+      "recall": 1,
+      "stale": 0,
+      "noise": 0,
+      "n": 9,
+      "chars": 1188.7142857142858
+    },
+    "retrievalAlt": {
+      "recall": 0,
+      "stale": 0,
+      "noise": 0,
+      "n": 0,
+      "chars": 0
+    }
+  },
+  {
+    "run": "mem0-1",
+    "size": 49,
+    "covered": 14,
+    "goldTotal": 14,
+    "stale": 9,
+    "noise": 14,
+    "dup": 13,
+    "cost": 0.030737040000000007,
+    "inTokPerWrite": 14234.95652173913,
+    "msPerWrite": 7503.347826086957,
+    "retrieval": {
+      "recall": 0.341156462585034,
+      "stale": 1.1428571428571428,
+      "noise": 3,
+      "n": 7.571428571428571,
+      "chars": 1472.7142857142858
+    },
+    "retrievalAlt": {
+      "recall": 0.5018707482993198,
+      "stale": 1,
+      "noise": 2.857142857142857,
+      "n": 8,
+      "chars": 1567.2857142857142
+    }
+  },
+  {
+    "run": "mem0-2",
+    "size": 47,
+    "covered": 14,
+    "goldTotal": 14,
+    "stale": 8,
+    "noise": 15,
+    "dup": 15,
+    "cost": 0.030080739999999998,
+    "inTokPerWrite": 14211.521739130434,
+    "msPerWrite": 7324.695652173913,
+    "retrieval": {
+      "recall": 0.5702380952380952,
+      "stale": 1,
+      "noise": 2.857142857142857,
+      "n": 7.857142857142857,
+      "chars": 1578.857142857143
+    },
+    "retrievalAlt": {
+      "recall": 0.6535714285714286,
+      "stale": 0.8571428571428571,
+      "noise": 2.857142857142857,
+      "n": 8,
+      "chars": 1606.857142857143
+    }
+  },
+  {
+    "run": "mem0custom-1",
+    "size": 21,
+    "covered": 13,
+    "goldTotal": 14,
+    "stale": 4,
+    "noise": 0,
+    "dup": 5,
+    "cost": 0.024696010000000004,
+    "inTokPerWrite": 14176.130434782608,
+    "msPerWrite": 4771.913043478261,
+    "retrieval": {
+      "recall": 0.6277210884353741,
+      "stale": 1.1428571428571428,
+      "noise": 0,
+      "n": 6,
+      "chars": 810.2857142857143
+    },
+    "retrievalAlt": {
+      "recall": 0.7017006802721087,
+      "stale": 1.1428571428571428,
+      "noise": 0,
+      "n": 7.142857142857143,
+      "chars": 931.1428571428571
+    }
+  },
+  {
+    "run": "mem0custom-2",
+    "size": 20,
+    "covered": 13,
+    "goldTotal": 14,
+    "stale": 4,
+    "noise": 0,
+    "dup": 4,
+    "cost": 0.024149619999999997,
+    "inTokPerWrite": 14158.08695652174,
+    "msPerWrite": 4847.04347826087,
+    "retrieval": {
+      "recall": 0.5894557823129253,
+      "stale": 0.7142857142857143,
+      "noise": 0,
+      "n": 5.428571428571429,
+      "chars": 653.4285714285714
+    },
+    "retrievalAlt": {
+      "recall": 0.6812925170068027,
+      "stale": 1.1428571428571428,
+      "noise": 0,
+      "n": 6.857142857142857,
+      "chars": 828
+    }
+  }
+]

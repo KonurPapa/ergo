@@ -11,14 +11,29 @@ import type { BridgeUpdateState } from '../../src/lib/bridgeProtocol.ts';
 // The updater runs in the main process (main.ts); it sends its state here so the bridge can report it to the web app,
 // and asks how many agent sessions are running before it installs.
 let update: BridgeUpdateState = { status: 'idle' };
+// The file dialog belongs to the main process too: each request waits for its answer by id.
+let pickSeq = 0;
+const pendingPicks = new Map<number, { resolve: (paths: string[]) => void; reject: (err: Error) => void }>();
 setBridgeHost({
   version: process.env.ERGO_BRIDGE_VERSION || 'unknown',
   getUpdate: () => update,
   requestUpdate: () => process.parentPort.postMessage({ type: 'check-update' }),
+  pickFiles: ({ defaultPath }) =>
+    new Promise((resolve, reject) => {
+      const id = ++pickSeq;
+      pendingPicks.set(id, { resolve, reject });
+      process.parentPort.postMessage({ type: 'pick-files', id, defaultPath });
+    }),
 });
 process.parentPort.on('message', (event) => {
-  const message = event.data as { type?: string; state?: BridgeUpdateState };
+  const message = event.data as { type?: string; state?: BridgeUpdateState; id?: number; paths?: string[]; error?: string };
   if (message.type === 'update-state' && message.state) update = message.state;
+  if (message.type === 'pick-files-result' && typeof message.id === 'number') {
+    const pending = pendingPicks.get(message.id);
+    pendingPicks.delete(message.id);
+    if (message.error) pending?.reject(new Error(message.error));
+    else pending?.resolve(Array.isArray(message.paths) ? message.paths : []);
+  }
   if (message.type === 'busy-query') process.parentPort.postMessage({ type: 'busy', sessions: activeSessionCount() });
 });
 

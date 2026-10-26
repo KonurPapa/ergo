@@ -19,6 +19,8 @@ export interface CliBibleInput {
   runId: string;
   cliName: string;
   relatedSources?: string;
+  /** The project's learned rules the run's agents got (formatProjectRules). */
+  projectRules?: string;
   managerPrompt?: string;
   steps: ExecutionStep[];
 }
@@ -54,6 +56,8 @@ export function renderCliBible(input: CliBibleInput): string {
     out.push('## Working Brief', '_None: the manager worked from the task title and checklist._', '');
   }
   if (input.relatedSources?.trim()) out.push('## Brief Sources', input.relatedSources.trim(), '');
+  const rules = (input.projectRules || '').split('\n').filter((l) => l.startsWith('- '));
+  if (rules.length > 0) out.push('## Project Rules (learned from your feedback; edit them in Workspace Settings)', ...rules, '');
 
   out.push('## Execution Event Log');
   if (input.steps.length === 0) out.push('- _(no events yet)_');

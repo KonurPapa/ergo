@@ -3,7 +3,8 @@
  *
  * The prompt box calls recordSteeringMessage for each message it delivers. Model calibration (#3) reads these to
  * learn when a model wasn't good enough ("that's wrong, try again", "use a stronger model") or more than needed
- * ("switch to a cheaper model"); ordinary steering notes carry no signal.
+ * ("switch to a cheaper model"); ordinary steering notes carry no signal. Learned rules (memory/insights.ts) read them
+ * too: feedback that states a lasting requirement becomes a project rule.
  */
 import type { AgentRole } from '../../types';
 
@@ -17,6 +18,9 @@ export interface SteeringMessage {
   /** mid-run: the agent was working · post-run: the run had finished and the message continued it. */
   phase: 'mid-run' | 'post-run';
   at: string;
+  /** The task's project and title (learned rules are per project; the run may outlive a project switch). */
+  projectId?: string;
+  taskTitle?: string;
 }
 
 type Listener = (message: SteeringMessage) => void;

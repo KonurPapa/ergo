@@ -1328,18 +1328,18 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
             </>
           ) : (
             <>
-              {/* Main Task Action Button: Working... / Queued / Resume Task / Rerun Task / Run Task */}
+              {/* Main Task Action Button: Working... / Queued / Resume / Rerun / Run */}
               <button
                 type="button"
                 className={`execute-task-btn ${isWorking
-                    ? 'is-working'
-                    : isQueued
-                      ? 'is-queued'
-                      : isStoppedPartway
-                        ? 'is-resume'
-                        : hasRunBefore
-                          ? 'is-rerun'
-                          : ''
+                  ? 'is-working'
+                  : isQueued
+                    ? 'is-queued'
+                    : isStoppedPartway
+                      ? 'is-resume'
+                      : hasRunBefore
+                        ? 'is-rerun'
+                        : ''
                   }`}
                 onClick={() => {
                   setIsTaskCollapsed(false);
@@ -1371,17 +1371,17 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                 ) : isStoppedPartway ? (
                   <>
                     <Play size={12} />
-                    <span>Resume Task</span>
+                    <span>Resume</span>
                   </>
                 ) : hasRunBefore ? (
                   <>
                     <RotateCcw size={12} />
-                    <span>Rerun Task</span>
+                    <span>Rerun</span>
                   </>
                 ) : (
                   <>
                     <Play size={12} />
-                    <span>Run Task</span>
+                    <span>Run</span>
                   </>
                 )}
               </button>

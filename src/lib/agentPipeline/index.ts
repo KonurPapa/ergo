@@ -46,6 +46,8 @@ import { buildRunOutcomeRecord, describeRerunEscalation, rerunEscalation, workEs
 import { isOverviewReusable, overviewTaskFingerprint } from '../overviewUtils';
 import type { SteeringQueue } from './steeringQueue';
 import { pipelineRunKey, rememberPipelineRun } from './runRegistry';
+import { describeTaskReferences, formatReferenceSections, projectWorkingFolder, resolveTaskReferences } from '../taskReferences';
+import { getWorkspaceSkills } from '../skillsManager';
 
 export interface HardenerEvaluation {
   shouldRun: boolean;
@@ -228,6 +230,10 @@ export async function executeTaskWithAi(
 
   try {
     ctx.allowedRoots = await getAllowedRoots();
+    ctx.references = await resolveTaskReferences(task, brief, getWorkspaceSkills(), projectWorkingFolder(project));
+    if (ctx.references) {
+      ctx.emit({ id: 'step-task-commands', stage: 'context', title: 'Task Commands', detail: describeTaskReferences(ctx.references), status: 'success' });
+    }
 
     console.log('%c[Ergo Agent Pipeline] ── Run started ──', 'color: #38bdf8; font-weight: bold; font-size: 13px;');
     console.log(`Task #${task.id} "${task.title}" · run ${runId} · dir ${runDir} · options`, resolvedOptions);
@@ -290,7 +296,9 @@ export async function executeTaskWithAi(
       emitRouting(workRouting, 'success', escalationNote ? `\n${escalationNote}` : '');
     }
 
-    // Bible + tools (fixed for the whole run — task-boundary decisions)
+    // Bible + tools (fixed for the whole run — task-boundary decisions). In-app agents always have the workspace tools.
+    if (ctx.references) summary.sections.references = formatReferenceSections(ctx.references, { workspaceTools: true });
+    if (baseline.projectRules.length > 0) summary.sections.projectRules = baseline.projectRules.map((r) => r.text);
     bible = new BibleStore(summary.sections, runDir);
     const locks = new FileLockRegistry(runDir);
     const isResumed = task.status === 'partly_done' || brief?.status === 'partly_done' || Boolean(brief?.buildAndVerification && brief.buildAndVerification.trim().length > 0);

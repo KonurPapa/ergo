@@ -3,7 +3,7 @@
  * can reach this computer without anyone opening a terminal. The bridge runs in a utility process (bridge-process.ts)
  * that is restarted whenever it exits.
  */
-import { app, Menu, Notification, Tray, nativeImage, shell, utilityProcess, type UtilityProcess } from 'electron';
+import { app, dialog, Menu, Notification, Tray, nativeImage, shell, utilityProcess, type UtilityProcess } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -108,13 +108,23 @@ function startBridge() {
   bridge = child;
   child.stdout?.on('data', (chunk) => log(String(chunk)));
   child.stderr?.on('data', (chunk) => log(String(chunk)));
-  child.on('message', (message: { type?: string; port?: number; message?: string; sessions?: number }) => {
+  child.on('message', (message: { type?: string; port?: number; message?: string; sessions?: number; id?: number; defaultPath?: string }) => {
     if (message.type === 'listening' && message.port) {
       child.postMessage({ type: 'update-state', state: update });
       bridgeReady(message.port);
     }
     // The web app found this bridge out of date (POST /api/bridge/update).
     if (message.type === 'check-update') checkForUpdates();
+    // The `@` file dropdown's "Browse…" (POST /api/files/pick).
+    if (message.type === 'pick-files' && typeof message.id === 'number') {
+      const id = message.id;
+      // A tray app's dialog would open behind the browser.
+      app.focus({ steal: true });
+      dialog
+        .showOpenDialog({ title: 'Reference files in this task', defaultPath: message.defaultPath, properties: ['openFile', 'multiSelections'] })
+        .then((r) => child.postMessage({ type: 'pick-files-result', id, paths: r.canceled ? [] : r.filePaths }))
+        .catch((err) => child.postMessage({ type: 'pick-files-result', id, error: err instanceof Error ? err.message : String(err) }));
+    }
     if (message.type === 'busy' && pendingBusyQuery) {
       const resolve = pendingBusyQuery;
       pendingBusyQuery = null;

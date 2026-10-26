@@ -5,7 +5,7 @@ import {
   type AgentContextItem,
   type SwimLaneDoc,
   type McpToolExecutionResult
-} from '../types';
+} from '../types/index.ts';
 
 /**
  * Interface for live React workspace context callbacks

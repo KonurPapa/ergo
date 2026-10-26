@@ -13,8 +13,16 @@
  *  2 — version handshake + self-update (/api/bridge/update), skill copies report `edited`.
  *  3 — a run's manager may write question.md (a `question` signal): the web app shows it as a question card.
  *      Optional: with an older bridge the web app tells managers to ask the old way.
+ *  4 — task commands: /api/files/search|pick|refs (the `@` file dropdown) and the workspace-tool relay for CLI agents
+ *      (spawn `workspaceTools`, `workspace-call` events, /api/pty/workspace-claim|result). Optional: with an older
+ *      bridge `@` lists no files and CLI agents run skills without the workspace tools (taskReferences.ts).
+ *  5 — learned rules: /api/memory/insights/list|apply, and /api/memory/related returns the task's `insights`.
+ *      Optional: with an older bridge nothing is learned and runs get no rules (insights.ts).
  */
-export const BRIDGE_PROTOCOL = 3;
+export const BRIDGE_PROTOCOL = 5;
+
+/** First protocol whose bridge stores learned rules (namespace `insights`). */
+export const INSIGHTS_PROTOCOL = 5;
 
 /** First protocol whose bridge reports a manager's question.md as a `question` signal. */
 export const QUESTION_SIGNAL_PROTOCOL = 3;

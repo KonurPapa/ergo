@@ -12,6 +12,7 @@ import { buildOfflineTaskBrief } from './taskBrief';
 import { type BaselineContext } from './context';
 import { runToolLoop } from './providerLoop';
 import { loadPipelineSkill } from './skills';
+import { formatReferenceNoteForBrief } from '../taskReferences';
 import { isOverviewReusable, overviewDocumentFor } from '../overviewUtils';
 import {
   RELATED_INTERPRETATION_GUIDANCE,
@@ -189,8 +190,9 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
     const relatedGuidance = baseline.relatedCandidates.length > 0 || baseline.relatedNotes.length > 0
       ? `\n${RELATED_INTERPRETATION_GUIDANCE} Put the selected ids in "relatedTaskIds".\n`
       : '';
+    const referencesNote = formatReferenceNoteForBrief(ctx.references);
     const userMessage =
-      `${baseline.baselineMarkdown}\n\n## Connected MCP Servers (choose only what this task needs)\n${serverLines.length > 0 ? serverLines.join('\n') : '- (none connected)'}\n${relatedGuidance}\n\n` +
+      `${baseline.baselineMarkdown}\n\n${referencesNote ? `## Task Commands\n${referencesNote}\n\n` : ''}## Connected MCP Servers (choose only what this task needs)\n${serverLines.length > 0 ? serverLines.join('\n') : '- (none connected)'}\n${relatedGuidance}\n\n` +
       'Write the working brief JSON now.';
 
     try {

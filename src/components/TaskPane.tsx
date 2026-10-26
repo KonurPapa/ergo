@@ -34,6 +34,10 @@ import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { canJoin } from '@tiptap/pm/transform';
 import { MARKDOWN_WRAPPER_PAIRS } from '../lib/markdownEditorUtils';
+import { createTaskCommandExtension, insertFileReferences, insertSkillCommand, type TaskCommandHandlers, type TaskCommandState } from '../lib/taskCommandExtension';
+import { TaskCommandMenu, type TaskCommandMenuHandle } from './TaskCommandMenu';
+import { getWorkspaceSkills, subscribeWorkspaceSkills } from '../lib/skillsManager';
+import { projectWorkingFolder, skillsBySlug } from '../lib/taskReferences';
 
 const CustomListItem = ListItem.extend({
   content: 'block+',
@@ -1407,6 +1411,20 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   const projectRef = useRef(project);
   projectRef.current = project;
 
+  // Task commands: `@` references a file, `/` runs a skill when the task executes (taskReferences.ts).
+  const [taskCommand, setTaskCommand] = useState<TaskCommandState | null>(null);
+  const [workspaceSkills, setWorkspaceSkills] = useState(() => getWorkspaceSkills());
+  useEffect(() => subscribeWorkspaceSkills(setWorkspaceSkills), []);
+  const skillSlugs = useMemo(() => new Set(skillsBySlug(workspaceSkills).keys()), [workspaceSkills]);
+  const commandMenuRef = useRef<TaskCommandMenuHandle>(null);
+  const taskCommandHandlersRef = useRef<TaskCommandHandlers>({
+    onChange: setTaskCommand,
+    onKey: (key) => commandMenuRef.current?.onKey(key) ?? false,
+    skillSlugs: () => skillSlugs,
+  });
+  taskCommandHandlersRef.current.skillSlugs = () => skillSlugs;
+  const [TaskCommandExtension] = useState(() => createTaskCommandExtension(`taskCommands_${lane.id}`, taskCommandHandlersRef));
+
   // Active ghost suggestion state
   const activeSuggestionRef = useRef<{
     pos: number;
@@ -2006,6 +2024,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       TaskCheckboxDecorationExtension,
       AutoSurroundExtension,
       TaskAutocompleteExtension,
+      TaskCommandExtension,
       MarkdownHoverSyntaxExtension,
       HeaderColorExtension,
     ],
@@ -2426,6 +2445,11 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
     }
   }, [editor, project]);
 
+  // Skills added, renamed or toggled: re-highlight the /skill words.
+  useEffect(() => {
+    if (editor && !editor.isDestroyed) editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false));
+  }, [editor, skillSlugs]);
+
   const laneDoneCount = laneTasks.filter((t) => t.isDone).length;
 
   return (
@@ -2742,6 +2766,20 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         accept="image/*"
         multiple
         style={{ display: 'none' }}
+      />
+
+      <TaskCommandMenu
+        ref={commandMenuRef}
+        command={taskCommand}
+        root={projectWorkingFolder(project)}
+        skills={workspaceSkills}
+        onPickSkill={(slug) => {
+          if (editor && taskCommand) insertSkillCommand(editor.view, taskCommand, slug);
+        }}
+        onPickFiles={(paths) => {
+          if (editor && taskCommand) insertFileReferences(editor.view, taskCommand, paths);
+        }}
+        onClose={() => setTaskCommand(null)}
       />
 
       {/* Freeform Selection "Run" & Style Controls Floating Tooltip */}

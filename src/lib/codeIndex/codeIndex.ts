@@ -53,7 +53,7 @@ const RESCAN_INTERVAL_MS = 10 * 60_000;
 
 /** Source files. Docs and data (md, json, yaml) are left out: they crowded real code out of the results. */
 const CODE_EXT = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|pyi|css|scss|sass|less|html|htm|vue|svelte|astro|java|kt|kts|scala|go|rs|rb|php|cs|fs|swift|m|mm|c|h|cc|cpp|cxx|hpp|hh|sql|sh|bash|zsh|ps1|lua|dart|ex|exs|erl|hrl|clj|cljs|r|jl|gradle|tf|proto|graphql|gql|prisma|zig|nim|elm|hs|ml|mli|sol)$/i;
-const SKIP_DIR = /(^|\/)(node_modules|\.git|dist|build|out|\.next|\.nuxt|\.output|coverage|vendor|target|__pycache__|\.venv|venv|env|\.ergo|\.cache|\.turbo|\.svelte-kit|\.parcel-cache|\.gradle|Pods|DerivedData|bower_components)(\/|$)/;
+export const SKIP_DIR = /(^|\/)(node_modules|\.git|dist|build|out|\.next|\.nuxt|\.output|coverage|vendor|target|__pycache__|\.venv|venv|env|\.ergo|\.cache|\.turbo|\.svelte-kit|\.parcel-cache|\.gradle|Pods|DerivedData|bower_components)(\/|$)/;
 const SKIP_FILE = /(\.min\.(js|css)|\.map|\.bundle\.js|\.chunk\.js|-lock\.\w+|\.lock)$/i;
 
 // ─── Types ────────────────────────────────────────────────────────────────────

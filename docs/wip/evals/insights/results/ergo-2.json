@@ -1,0 +1,912 @@
+{
+  "route": "ergo",
+  "rep": "2",
+  "writes": [
+    {
+      "i": 0,
+      "p": "ledgerly",
+      "ms": 3756,
+      "calls": 1,
+      "cost": 0.00039024999999999997,
+      "ops": [
+        {
+          "op": "ADD",
+          "id": "L1",
+          "text": "Use pnpm in this repo; never run npm install and delete any package-lock.json.",
+          "scope": "always"
+        },
+        {
+          "op": "ADD",
+          "id": "L2",
+          "text": "Store all monetary amounts as integer cents, never floats; convert with toCents and format with formatCents from src/lib/money.ts.",
+          "scope": "topical"
+        }
+      ]
+    },
+    {
+      "i": 1,
+      "p": "ledgerly",
+      "ms": 3488,
+      "calls": 1,
+      "cost": 0.0005573900000000001,
+      "ops": [
+        {
+          "op": "ADD",
+          "id": "L3",
+          "text": "Do not add UI libraries such as headlessui; build UI with the existing components in src/ui (Select, Dialog, Button).",
+          "scope": "topical"
+        }
+      ]
+    },
+    {
+      "i": 2,
+      "p": "inkwell",
+      "ms": 4126,
+      "calls": 1,
+      "cost": 0.00037992000000000017,
+      "ops": [
+        {
+          "op": "ADD",
+          "id": "L4",
+          "text": "Set `draft: true` in the frontmatter of every new post until the user reviews it.",
+          "scope": "topical"
+        },
+        {
+          "op": "ADD",
+          "id": "L5",
+          "text": "Place post images in public/images/<post-slug>/ and save them as .webp, never under src/assets.",
+          "scope": "topical"
+        }
+      ]
+    },
+    {
+      "i": 3,
+      "p": "ledgerly",
+      "ms": 2680,
+      "calls": 1,
+      "cost": 0.00039948999999999996,
+      "ops": []
+    },
+    {
+      "i": 4,
+      "p": "ledgerly",
+      "ms": 3275,
+      "calls": 1,
+      "cost": 0.00032748999999999994,
+      "ops": [
+        {
+          "op": "ADD",
+          "id": "L6",
+          "text": "Place unit test files next to the source file they test, e.g. src/domain/budget.test.ts; never create a __tests__ folder.",
+          "scope": "topical"
+        }
+      ]
+    },
+    {
+      "i": 5,
+      "p": "ledgerly",
+      "ms": 3487,
+      "calls": 1,
+      "cost": 0.0006319900000000002,
+      "ops": [
+        {
+          "op": "ADD",
+          "id": "L7",
+          "text": "Never hand-edit files in src/api/generated; add endpoints to openapi.yaml and regenerate them with `pnpm gen:api`.",
+          "scope": "topical"
+        }
+      ]
+    },
+    {
+      "i": 6,
+      "p": "inkwell",
+      "ms": 3521,
+      "calls": 1,
+      "cost": 0.00047179000000000014,
+      "ops": [
+        {
+          "op": "ADD",
+          "id": "L8",
+          "text": "Use npm for all package installs in this project (package-lock.json is present); never run pnpm or create pnpm-lock.yaml.",
+          "scope": "always"
+        }
+      ]
+    },
+    {
+      "i": 7,
+      "p": "ledgerly",
+      "ms": 3702,
+      "calls": 1,
+      "cost": 0.0005764900000000002,
+      "ops": [
+        {
+          "op": "ADD",
+          "id": "L9",
+          "text": "Keep business logic out of components: put calculations in src/domain and expose them to components through hooks in src/hooks.",
+          "scope": "topical"
+        }
+      ]
+    },
+    {
+      "i": 8,
+      "p": "ledgerly",
+      "ms": 3762,
+      "calls": 1,
+      "cost": 0.0006122900000000006,
+      "ops": [
+        {
+          "op": "ADD",
+          "id": "L10",
+          "text": "Store dates in UTC and format or compare them through src/lib/dates.ts (date-fns-tz, user timezone); never compare raw local new Date() values.",
+          "scope": "topical"
+        }
+      ]
+    },
+    {
+      "i": 9,
+      "p": "ledgerly",
+      "ms": 4556,
+      "calls": 1,
+      "cost": 0.0005890900000000004,
+      "ops": [
+        {
+          "op": "ADD",
+          "id": "L11",
+          "text": "Write all UI copy in British English (colour, categorise, organisation); this is a UK product.",
+          "scope": "topical"
+        },
+        {
+          "op": "ADD",
+          "id": "L12",
+          "text": "Default currency is GBP, not USD; use GBP as the default for any new money-related setting or display.",
+          "scope": "topical"
+        }
+      ]
+    },
+    {
+      "i": 10,
+      "p": "inkwell",
+      "ms": 3246,
+      "calls": 1,
+      "cost": 0.0003323900000000001,
+      "ops": [
+        {
+          "op": "ADD",
+          "id": "L13",
+          "text": "Never use emojis in post content, including headings; keep headings plain text.",
+          "scope": "topical"
+        }
+      ]
+    },
+    {
+      "i": 11,
+      "p": "ledgerly",
+      "ms": 3014,
+      "calls": 1,
+      "cost": 0.0005415899999999998,
+      "ops": [
+        {
+          "op": "ADD",
+          "id": "L14",
+          "text": "Before saying any task is done, run `pnpm lint` and `pnpm typecheck` and fix failures; CI runs lint too, so a passing typecheck alone is not enough.",
+          "scope": "always"
+        }
+      ]
+    },
+    {
+      "i": 12,
+      "p": "ledgerly",
+      "ms": 2275,
+      "calls": 1,
+      "cost": 0.00048258999999999976,
+      "ops": []
+    },
+    {
+      "i": 13,
+      "p": "ledgerly",
+      "ms": 3902,
+      "calls": 1,
+      "cost": 0.0006690899999999998,
+      "ops": [
+        {
+          "op": "ADD",
+          "id": "L15",
+          "text": "Never commit or push changes; leave all work uncommitted in the working tree so the user can review the diff.",
+          "scope": "always"
+        }
+      ]
+    },
+    {
+      "i": 14,
+      "p": "inkwell",
+      "ms": 2732,
+      "calls": 1,
+      "cost": 0.00026449000000000004,
+      "ops": []
+    },
+    {
+      "i": 15,
+      "p": "ledgerly",
+      "ms": 4219,
+      "calls": 1,
+      "cost": 0.0007416899999999997,
+      "ops": [
+        {
+          "op": "UPDATE",
+          "id": "L2",
+          "text": "Store all monetary amounts as integer cents, never floats; never use toFixed or *100 / Math.round math on amounts; use toCents and formatCents from src/lib/money.ts.",
+          "prev": "Store all monetary amounts as integer cents, never floats; convert with toCents and format with formatCents from src/lib/money.ts."
+        }
+      ]
+    },
+    {
+      "i": 16,
+      "p": "ledgerly",
+      "ms": 3688,
+      "calls": 1,
+      "cost": 0.0006410900000000004,
+      "ops": [
+        {
+          "op": "UPDATE",
+          "id": "L11",
+          "text": "Use British English spelling everywhere in this project (UI copy, comments, docs, identifiers where practical), e.g. organise, colour, categorise; this is a UK product.",
+          "prev": "Write all UI copy in British English (colour, categorise, organisation); this is a UK product."
+        }
+      ]
+    },
+    {
+      "i": 17,
+      "p": "ledgerly",
+      "ms": 3390,
+      "calls": 1,
+      "cost": 0.00041589000000000036,
+      "ops": [
+        {
+          "op": "CONFIRM",
+          "id": "L3",
+          "text": "Do not add UI libraries such as headlessui; build UI with the existing components in src/ui (Select, Dialog, Button)."
+        }
+      ]
+    },
+    {
+      "i": 18,
+      "p": "inkwell",
+      "ms": 2797,
+      "calls": 1,
+      "cost": 0.0002862899999999998,
+      "ops": [
+        {
+          "op": "CONFIRM",
+          "id": "L5",
+          "text": "Place post images in public/images/<post-slug>/ and save them as .webp, never under src/assets."
+        }
+      ]
+    },
+    {
+      "i": 19,
+      "p": "ledgerly",
+      "ms": 4651,
+      "calls": 1,
+      "cost": 0.0009032899999999993,
+      "ops": [
+        {
+          "op": "UPDATE",
+          "id": "L1",
+          "text": "Use bun only in this repo: `bun install` and `bun run <script>`; never use pnpm or npm, and never create pnpm-lock.yaml or package-lock.json.",
+          "prev": "Use pnpm in this repo; never run npm install and delete any package-lock.json."
+        },
+        {
+          "op": "UPDATE",
+          "id": "L7",
+          "text": "Never hand-edit files in src/api/generated; add endpoints to openapi.yaml and regenerate them with `bun run gen:api`.",
+          "prev": "Never hand-edit files in src/api/generated; add endpoints to openapi.yaml and regenerate them with `pnpm gen:api`."
+        },
+        {
+          "op": "UPDATE",
+          "id": "L14",
+          "text": "Before saying any task is done, run `bun run lint` and `bun run typecheck` and fix failures; CI runs lint too, so a passing typecheck alone is not enough.",
+          "prev": "Before saying any task is done, run `pnpm lint` and `pnpm typecheck` and fix failures; CI runs lint too, so a passing typecheck alone is not enough."
+        }
+      ]
+    },
+    {
+      "i": 20,
+      "p": "ledgerly",
+      "ms": 2902,
+      "calls": 1,
+      "cost": 0.0006075899999999999,
+      "ops": []
+    },
+    {
+      "i": 21,
+      "p": "ledgerly",
+      "ms": 2861,
+      "calls": 1,
+      "cost": 0.0006639899999999997,
+      "ops": [
+        {
+          "op": "UPDATE",
+          "id": "L15",
+          "text": "Commit each finished task as one commit using a conventional commit message (feat:, fix:, etc.); never push to any remote.",
+          "prev": "Never commit or push changes; leave all work uncommitted in the working tree so the user can review the diff."
+        }
+      ]
+    },
+    {
+      "i": 22,
+      "p": "ledgerly",
+      "ms": 2906,
+      "calls": 1,
+      "cost": 0.0006188900000000004,
+      "ops": [
+        {
+          "op": "CONFIRM",
+          "id": "L1",
+          "text": "Use bun only in this repo: `bun install` and `bun run <script>`; never use pnpm or npm, and never create pnpm-lock.yaml or package-lock.json."
+        },
+        {
+          "op": "CONFIRM",
+          "id": "L7",
+          "text": "Never hand-edit files in src/api/generated; add endpoints to openapi.yaml and regenerate them with `bun run gen:api`."
+        }
+      ]
+    }
+  ],
+  "store": {
+    "ledgerly": [
+      {
+        "id": "L1",
+        "text": "Use bun only in this repo: `bun install` and `bun run <script>`; never use pnpm or npm, and never create pnpm-lock.yaml or package-lock.json.",
+        "scope": "always",
+        "confirms": 3
+      },
+      {
+        "id": "L2",
+        "text": "Store all monetary amounts as integer cents, never floats; never use toFixed or *100 / Math.round math on amounts; use toCents and formatCents from src/lib/money.ts.",
+        "scope": "topical",
+        "confirms": 2
+      },
+      {
+        "id": "L3",
+        "text": "Do not add UI libraries such as headlessui; build UI with the existing components in src/ui (Select, Dialog, Button).",
+        "scope": "topical",
+        "confirms": 2
+      },
+      {
+        "id": "L6",
+        "text": "Place unit test files next to the source file they test, e.g. src/domain/budget.test.ts; never create a __tests__ folder.",
+        "scope": "topical",
+        "confirms": 1
+      },
+      {
+        "id": "L7",
+        "text": "Never hand-edit files in src/api/generated; add endpoints to openapi.yaml and regenerate them with `bun run gen:api`.",
+        "scope": "topical",
+        "confirms": 3
+      },
+      {
+        "id": "L9",
+        "text": "Keep business logic out of components: put calculations in src/domain and expose them to components through hooks in src/hooks.",
+        "scope": "topical",
+        "confirms": 1
+      },
+      {
+        "id": "L10",
+        "text": "Store dates in UTC and format or compare them through src/lib/dates.ts (date-fns-tz, user timezone); never compare raw local new Date() values.",
+        "scope": "topical",
+        "confirms": 1
+      },
+      {
+        "id": "L11",
+        "text": "Use British English spelling everywhere in this project (UI copy, comments, docs, identifiers where practical), e.g. organise, colour, categorise; this is a UK product.",
+        "scope": "topical",
+        "confirms": 2
+      },
+      {
+        "id": "L12",
+        "text": "Default currency is GBP, not USD; use GBP as the default for any new money-related setting or display.",
+        "scope": "topical",
+        "confirms": 1
+      },
+      {
+        "id": "L14",
+        "text": "Before saying any task is done, run `bun run lint` and `bun run typecheck` and fix failures; CI runs lint too, so a passing typecheck alone is not enough.",
+        "scope": "always",
+        "confirms": 2
+      },
+      {
+        "id": "L15",
+        "text": "Commit each finished task as one commit using a conventional commit message (feat:, fix:, etc.); never push to any remote.",
+        "scope": "always",
+        "confirms": 2
+      }
+    ],
+    "inkwell": [
+      {
+        "id": "L4",
+        "text": "Set `draft: true` in the frontmatter of every new post until the user reviews it.",
+        "scope": "topical",
+        "confirms": 1
+      },
+      {
+        "id": "L5",
+        "text": "Place post images in public/images/<post-slug>/ and save them as .webp, never under src/assets.",
+        "scope": "topical",
+        "confirms": 2
+      },
+      {
+        "id": "L8",
+        "text": "Use npm for all package installs in this project (package-lock.json is present); never run pnpm or create pnpm-lock.yaml.",
+        "scope": "always",
+        "confirms": 1
+      },
+      {
+        "id": "L13",
+        "text": "Never use emojis in post content, including headings; keep headings plain text.",
+        "scope": "topical",
+        "confirms": 1
+      }
+    ]
+  },
+  "probes": [
+    {
+      "title": "Recurring transactions",
+      "p": "ledgerly",
+      "ms": 12,
+      "hits": [
+        {
+          "id": "L1",
+          "text": "Use bun only in this repo: `bun install` and `bun run <script>`; never use pnpm or npm, and never create pnpm-lock.yaml or package-lock.json.",
+          "score": -0.028613593670172414
+        },
+        {
+          "id": "L14",
+          "text": "Before saying any task is done, run `bun run lint` and `bun run typecheck` and fix failures; CI runs lint too, so a passing typecheck alone is not enough.",
+          "score": 0.056541237405276216
+        },
+        {
+          "id": "L15",
+          "text": "Commit each finished task as one commit using a conventional commit message (feat:, fix:, etc.); never push to any remote.",
+          "score": 0.12337023447260118
+        }
+      ]
+    },
+    {
+      "title": "Overspend warning banner on the dashboard",
+      "p": "ledgerly",
+      "ms": 12,
+      "hits": [
+        {
+          "id": "L1",
+          "text": "Use bun only in this repo: `bun install` and `bun run <script>`; never use pnpm or npm, and never create pnpm-lock.yaml or package-lock.json.",
+          "score": -0.008860602384693132
+        },
+        {
+          "id": "L14",
+          "text": "Before saying any task is done, run `bun run lint` and `bun run typecheck` and fix failures; CI runs lint too, so a passing typecheck alone is not enough.",
+          "score": 0.04226424976396609
+        },
+        {
+          "id": "L15",
+          "text": "Commit each finished task as one commit using a conventional commit message (feat:, fix:, etc.); never push to any remote.",
+          "score": 0.137345234658858
+        },
+        {
+          "id": "L2",
+          "text": "Store all monetary amounts as integer cents, never floats; never use toFixed or *100 / Math.round math on amounts; use toCents and formatCents from src/lib/money.ts.",
+          "score": 0.20772631224340413
+        }
+      ]
+    },
+    {
+      "title": "Savings goals page",
+      "p": "ledgerly",
+      "ms": 15,
+      "hits": [
+        {
+          "id": "L1",
+          "text": "Use bun only in this repo: `bun install` and `bun run <script>`; never use pnpm or npm, and never create pnpm-lock.yaml or package-lock.json.",
+          "score": 0.13057465077659525
+        },
+        {
+          "id": "L14",
+          "text": "Before saying any task is done, run `bun run lint` and `bun run typecheck` and fix failures; CI runs lint too, so a passing typecheck alone is not enough.",
+          "score": 0.02685463746920218
+        },
+        {
+          "id": "L15",
+          "text": "Commit each finished task as one commit using a conventional commit message (feat:, fix:, etc.); never push to any remote.",
+          "score": 0.22956315036911676
+        },
+        {
+          "id": "L7",
+          "text": "Never hand-edit files in src/api/generated; add endpoints to openapi.yaml and regenerate them with `bun run gen:api`.",
+          "score": 0.5460097289454121
+        }
+      ]
+    },
+    {
+      "title": "Monthly totals off by a penny",
+      "p": "ledgerly",
+      "ms": 14,
+      "hits": [
+        {
+          "id": "L1",
+          "text": "Use bun only in this repo: `bun install` and `bun run <script>`; never use pnpm or npm, and never create pnpm-lock.yaml or package-lock.json.",
+          "score": 0.060958751949691886
+        },
+        {
+          "id": "L14",
+          "text": "Before saying any task is done, run `bun run lint` and `bun run typecheck` and fix failures; CI runs lint too, so a passing typecheck alone is not enough.",
+          "score": 0.0955109375858483
+        },
+        {
+          "id": "L15",
+          "text": "Commit each finished task as one commit using a conventional commit message (feat:, fix:, etc.); never push to any remote.",
+          "score": -0.012089535416300668
+        },
+        {
+          "id": "L2",
+          "text": "Store all monetary amounts as integer cents, never floats; never use toFixed or *100 / Math.round math on amounts; use toCents and formatCents from src/lib/money.ts.",
+          "score": 0.4488212866241031
+        },
+        {
+          "id": "L12",
+          "text": "Default currency is GBP, not USD; use GBP as the default for any new money-related setting or display.",
+          "score": 0.23743574259036093
+        },
+        {
+          "id": "L6",
+          "text": "Place unit test files next to the source file they test, e.g. src/domain/budget.test.ts; never create a __tests__ folder.",
+          "score": 0.23026902479072267
+        }
+      ]
+    },
+    {
+      "title": "Upgrade react-router to v7",
+      "p": "ledgerly",
+      "ms": 12,
+      "hits": [
+        {
+          "id": "L1",
+          "text": "Use bun only in this repo: `bun install` and `bun run <script>`; never use pnpm or npm, and never create pnpm-lock.yaml or package-lock.json.",
+          "score": 0.13785584223777442
+        },
+        {
+          "id": "L14",
+          "text": "Before saying any task is done, run `bun run lint` and `bun run typecheck` and fix failures; CI runs lint too, so a passing typecheck alone is not enough.",
+          "score": 0.09481039801914035
+        },
+        {
+          "id": "L15",
+          "text": "Commit each finished task as one commit using a conventional commit message (feat:, fix:, etc.); never push to any remote.",
+          "score": 0.02712190681064978
+        }
+      ]
+    },
+    {
+      "title": "Post: 'Moving to Astro 5'",
+      "p": "inkwell",
+      "ms": 14,
+      "hits": [
+        {
+          "id": "L8",
+          "text": "Use npm for all package installs in this project (package-lock.json is present); never run pnpm or create pnpm-lock.yaml.",
+          "score": 0.02255027332316186
+        },
+        {
+          "id": "L5",
+          "text": "Place post images in public/images/<post-slug>/ and save them as .webp, never under src/assets.",
+          "score": 0.30117596163474636
+        },
+        {
+          "id": "L13",
+          "text": "Never use emojis in post content, including headings; keep headings plain text.",
+          "score": 0.23066762820521386
+        }
+      ]
+    },
+    {
+      "title": "Add an RSS feed",
+      "p": "inkwell",
+      "ms": 9,
+      "hits": [
+        {
+          "id": "L8",
+          "text": "Use npm for all package installs in this project (package-lock.json is present); never run pnpm or create pnpm-lock.yaml.",
+          "score": 0.13105859763505096
+        }
+      ]
+    }
+  ],
+  "probesSim": [
+    {
+      "title": "Recurring transactions",
+      "p": "ledgerly",
+      "hits": [
+        {
+          "id": "L2",
+          "text": "Store all monetary amounts as integer cents, never floats; never use toFixed or *100 / Math.round math on amounts; use toCents and formatCents from src/lib/money.ts.",
+          "score": 0.19766198087837825
+        },
+        {
+          "id": "L9",
+          "text": "Keep business logic out of components: put calculations in src/domain and expose them to components through hooks in src/hooks.",
+          "score": 0.16004001022309128
+        },
+        {
+          "id": "L15",
+          "text": "Commit each finished task as one commit using a conventional commit message (feat:, fix:, etc.); never push to any remote.",
+          "score": 0.12337023447260118
+        },
+        {
+          "id": "L10",
+          "text": "Store dates in UTC and format or compare them through src/lib/dates.ts (date-fns-tz, user timezone); never compare raw local new Date() values.",
+          "score": 0.1212609313681918
+        },
+        {
+          "id": "L6",
+          "text": "Place unit test files next to the source file they test, e.g. src/domain/budget.test.ts; never create a __tests__ folder.",
+          "score": 0.0841564007802853
+        },
+        {
+          "id": "L12",
+          "text": "Default currency is GBP, not USD; use GBP as the default for any new money-related setting or display.",
+          "score": 0.07736148989018196
+        },
+        {
+          "id": "L14",
+          "text": "Before saying any task is done, run `bun run lint` and `bun run typecheck` and fix failures; CI runs lint too, so a passing typecheck alone is not enough.",
+          "score": 0.056541237405276216
+        },
+        {
+          "id": "L7",
+          "text": "Never hand-edit files in src/api/generated; add endpoints to openapi.yaml and regenerate them with `bun run gen:api`.",
+          "score": 0.056439976524484015
+        }
+      ]
+    },
+    {
+      "title": "Overspend warning banner on the dashboard",
+      "p": "ledgerly",
+      "hits": [
+        {
+          "id": "L2",
+          "text": "Store all monetary amounts as integer cents, never floats; never use toFixed or *100 / Math.round math on amounts; use toCents and formatCents from src/lib/money.ts.",
+          "score": 0.20772631224340413
+        },
+        {
+          "id": "L6",
+          "text": "Place unit test files next to the source file they test, e.g. src/domain/budget.test.ts; never create a __tests__ folder.",
+          "score": 0.14878346051075775
+        },
+        {
+          "id": "L12",
+          "text": "Default currency is GBP, not USD; use GBP as the default for any new money-related setting or display.",
+          "score": 0.1433665821506662
+        },
+        {
+          "id": "L15",
+          "text": "Commit each finished task as one commit using a conventional commit message (feat:, fix:, etc.); never push to any remote.",
+          "score": 0.137345234658858
+        },
+        {
+          "id": "L9",
+          "text": "Keep business logic out of components: put calculations in src/domain and expose them to components through hooks in src/hooks.",
+          "score": 0.08558947368235884
+        },
+        {
+          "id": "L3",
+          "text": "Do not add UI libraries such as headlessui; build UI with the existing components in src/ui (Select, Dialog, Button).",
+          "score": 0.06351823019284536
+        },
+        {
+          "id": "L14",
+          "text": "Before saying any task is done, run `bun run lint` and `bun run typecheck` and fix failures; CI runs lint too, so a passing typecheck alone is not enough.",
+          "score": 0.04226424976396609
+        },
+        {
+          "id": "L11",
+          "text": "Use British English spelling everywhere in this project (UI copy, comments, docs, identifiers where practical), e.g. organise, colour, categorise; this is a UK product.",
+          "score": 0.007522174122109985
+        }
+      ]
+    },
+    {
+      "title": "Savings goals page",
+      "p": "ledgerly",
+      "hits": [
+        {
+          "id": "L7",
+          "text": "Never hand-edit files in src/api/generated; add endpoints to openapi.yaml and regenerate them with `bun run gen:api`.",
+          "score": 0.5460097289454121
+        },
+        {
+          "id": "L15",
+          "text": "Commit each finished task as one commit using a conventional commit message (feat:, fix:, etc.); never push to any remote.",
+          "score": 0.22956315036911676
+        },
+        {
+          "id": "L9",
+          "text": "Keep business logic out of components: put calculations in src/domain and expose them to components through hooks in src/hooks.",
+          "score": 0.15134925228676782
+        },
+        {
+          "id": "L1",
+          "text": "Use bun only in this repo: `bun install` and `bun run <script>`; never use pnpm or npm, and never create pnpm-lock.yaml or package-lock.json.",
+          "score": 0.13057465077659525
+        },
+        {
+          "id": "L3",
+          "text": "Do not add UI libraries such as headlessui; build UI with the existing components in src/ui (Select, Dialog, Button).",
+          "score": 0.10453711131763789
+        },
+        {
+          "id": "L2",
+          "text": "Store all monetary amounts as integer cents, never floats; never use toFixed or *100 / Math.round math on amounts; use toCents and formatCents from src/lib/money.ts.",
+          "score": 0.09082865787432115
+        },
+        {
+          "id": "L11",
+          "text": "Use British English spelling everywhere in this project (UI copy, comments, docs, identifiers where practical), e.g. organise, colour, categorise; this is a UK product.",
+          "score": 0.0896189680227157
+        },
+        {
+          "id": "L12",
+          "text": "Default currency is GBP, not USD; use GBP as the default for any new money-related setting or display.",
+          "score": 0.08308526178896458
+        }
+      ]
+    },
+    {
+      "title": "Monthly totals off by a penny",
+      "p": "ledgerly",
+      "hits": [
+        {
+          "id": "L2",
+          "text": "Store all monetary amounts as integer cents, never floats; never use toFixed or *100 / Math.round math on amounts; use toCents and formatCents from src/lib/money.ts.",
+          "score": 0.4488212866241031
+        },
+        {
+          "id": "L12",
+          "text": "Default currency is GBP, not USD; use GBP as the default for any new money-related setting or display.",
+          "score": 0.23743574259036093
+        },
+        {
+          "id": "L6",
+          "text": "Place unit test files next to the source file they test, e.g. src/domain/budget.test.ts; never create a __tests__ folder.",
+          "score": 0.23026902479072267
+        },
+        {
+          "id": "L9",
+          "text": "Keep business logic out of components: put calculations in src/domain and expose them to components through hooks in src/hooks.",
+          "score": 0.09818455108215748
+        },
+        {
+          "id": "L14",
+          "text": "Before saying any task is done, run `bun run lint` and `bun run typecheck` and fix failures; CI runs lint too, so a passing typecheck alone is not enough.",
+          "score": 0.0955109375858483
+        },
+        {
+          "id": "L1",
+          "text": "Use bun only in this repo: `bun install` and `bun run <script>`; never use pnpm or npm, and never create pnpm-lock.yaml or package-lock.json.",
+          "score": 0.060958751949691886
+        },
+        {
+          "id": "L3",
+          "text": "Do not add UI libraries such as headlessui; build UI with the existing components in src/ui (Select, Dialog, Button).",
+          "score": 0.035292543883823815
+        },
+        {
+          "id": "L10",
+          "text": "Store dates in UTC and format or compare them through src/lib/dates.ts (date-fns-tz, user timezone); never compare raw local new Date() values.",
+          "score": 0.032630737610450294
+        }
+      ]
+    },
+    {
+      "title": "Upgrade react-router to v7",
+      "p": "ledgerly",
+      "hits": [
+        {
+          "id": "L10",
+          "text": "Store dates in UTC and format or compare them through src/lib/dates.ts (date-fns-tz, user timezone); never compare raw local new Date() values.",
+          "score": 0.14019165178332524
+        },
+        {
+          "id": "L1",
+          "text": "Use bun only in this repo: `bun install` and `bun run <script>`; never use pnpm or npm, and never create pnpm-lock.yaml or package-lock.json.",
+          "score": 0.13785584223777442
+        },
+        {
+          "id": "L9",
+          "text": "Keep business logic out of components: put calculations in src/domain and expose them to components through hooks in src/hooks.",
+          "score": 0.1131739483143382
+        },
+        {
+          "id": "L14",
+          "text": "Before saying any task is done, run `bun run lint` and `bun run typecheck` and fix failures; CI runs lint too, so a passing typecheck alone is not enough.",
+          "score": 0.09481039801914035
+        },
+        {
+          "id": "L7",
+          "text": "Never hand-edit files in src/api/generated; add endpoints to openapi.yaml and regenerate them with `bun run gen:api`.",
+          "score": 0.0802792547546641
+        },
+        {
+          "id": "L6",
+          "text": "Place unit test files next to the source file they test, e.g. src/domain/budget.test.ts; never create a __tests__ folder.",
+          "score": 0.05832822565683623
+        },
+        {
+          "id": "L2",
+          "text": "Store all monetary amounts as integer cents, never floats; never use toFixed or *100 / Math.round math on amounts; use toCents and formatCents from src/lib/money.ts.",
+          "score": 0.03325589434387482
+        },
+        {
+          "id": "L3",
+          "text": "Do not add UI libraries such as headlessui; build UI with the existing components in src/ui (Select, Dialog, Button).",
+          "score": 0.030178188073426163
+        }
+      ]
+    },
+    {
+      "title": "Post: 'Moving to Astro 5'",
+      "p": "inkwell",
+      "hits": [
+        {
+          "id": "L5",
+          "text": "Place post images in public/images/<post-slug>/ and save them as .webp, never under src/assets.",
+          "score": 0.30117596163474636
+        },
+        {
+          "id": "L13",
+          "text": "Never use emojis in post content, including headings; keep headings plain text.",
+          "score": 0.23066762820521386
+        },
+        {
+          "id": "L4",
+          "text": "Set `draft: true` in the frontmatter of every new post until the user reviews it.",
+          "score": 0.17465500424709968
+        },
+        {
+          "id": "L8",
+          "text": "Use npm for all package installs in this project (package-lock.json is present); never run pnpm or create pnpm-lock.yaml.",
+          "score": 0.02255027332316186
+        }
+      ]
+    },
+    {
+      "title": "Add an RSS feed",
+      "p": "inkwell",
+      "hits": [
+        {
+          "id": "L5",
+          "text": "Place post images in public/images/<post-slug>/ and save them as .webp, never under src/assets.",
+          "score": 0.1601582883728353
+        },
+        {
+          "id": "L13",
+          "text": "Never use emojis in post content, including headings; keep headings plain text.",
+          "score": 0.15550216922156224
+        },
+        {
+          "id": "L8",
+          "text": "Use npm for all package installs in this project (package-lock.json is present); never run pnpm or create pnpm-lock.yaml.",
+          "score": 0.13105859763505096
+        },
+        {
+          "id": "L4",
+          "text": "Set `draft: true` in the frontmatter of every new post until the user reviews it.",
+          "score": 0.03626715049028286
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "calls": 23,
+    "cost": 0.01210506,
+    "inTok": 42263,
+    "outTok": 5691
+  }
+}

@@ -26,12 +26,16 @@ import {
 } from '../src/lib/cliPromptParser.ts';
 import type { CliDetectedPrompt } from '../src/types/index.ts';
 import { createMemoryStore, embedWithMemoryModel, MEMORY_NAMESPACES, AGENT_NOTE_KINDS, WORKSPACE_MAX_ITEMS, type MemoryStore, type MemoryStoreIo } from '../src/lib/memory/memoryStore.ts';
-import { CodeIndexManager } from '../src/lib/codeIndex/codeIndex.ts';
-import { bridgeInfo, requestBridgeUpdate, setActiveSessionCounter } from './selfUpdate.ts';
+import { CodeIndexManager, SKIP_DIR } from '../src/lib/codeIndex/codeIndex.ts';
+import { rankPaths } from '../src/lib/pathRank.ts';
+import { WORKSPACE_MCP_TOOLS } from '../src/lib/workspaceMcp.ts';
+import { bridgeInfo, hostFilePicker, requestBridgeUpdate, setActiveSessionCounter } from './selfUpdate.ts';
 import { parseScoutFiles, scoutSystemPrompt, scoutUserPrompt, SCOUT_MAX_TURNS, SCOUT_TIMEOUT_MS } from '../src/lib/codeIndex/fileScout.ts';
 import type {
   AgentNoteKind,
   ChunkMetadata,
+  InsightOp,
+  InsightSource,
   MemoryChunkDTO,
   MemoryNamespace,
   MemorySearchRequest,
@@ -1301,6 +1305,138 @@ function setupProjectWatcher(storageDir: string) {
   }
 }
 
+// ── Task references: the `@` file dropdown and the files a task references ──
+
+const FILE_LIST_TTL_MS = 20_000;
+const FILE_LIST_MAX = 50_000;
+const fileListCache = new Map<string, { at: number; paths: string[]; truncated: boolean }>();
+
+function expandHome(p: string): string {
+  return p === '~' || p.startsWith('~/') || p.startsWith('~\\') ? path.join(os.homedir(), p.slice(1)) : p;
+}
+
+/** Files (and the folders holding them, with a trailing "/") under root: git's view when it is a repository, else a bounded walk. */
+async function listFolderPaths(root: string): Promise<{ paths: string[]; truncated: boolean }> {
+  const cached = fileListCache.get(root);
+  if (cached && Date.now() - cached.at < FILE_LIST_TTL_MS) return cached;
+  const gitOut = await new Promise<string | null>((resolve) => {
+    execFile('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root, maxBuffer: 64 * 1024 * 1024, timeout: 15_000 }, (err, stdout) =>
+      resolve(err ? null : stdout)
+    );
+  });
+  let files: string[] = [];
+  let truncated = false;
+  if (gitOut !== null) {
+    files = gitOut.split('\0').filter(Boolean);
+  } else {
+    const walk = async (dir: string, depth: number) => {
+      if (depth > 12 || files.length >= FILE_LIST_MAX) return;
+      let entries: fsSync.Dirent[];
+      try {
+        entries = await fs.readdir(path.join(root, dir), { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        if (files.length >= FILE_LIST_MAX) {
+          truncated = true;
+          return;
+        }
+        const rel = dir ? `${dir}/${e.name}` : e.name;
+        if (e.isDirectory()) {
+          if (!e.name.startsWith('.') && !SKIP_DIR.test(`${rel}/`)) await walk(rel, depth + 1);
+        } else if (e.isFile()) {
+          files.push(rel);
+        }
+      }
+    };
+    await walk('', 0);
+  }
+  if (files.length > FILE_LIST_MAX) {
+    files = files.slice(0, FILE_LIST_MAX);
+    truncated = true;
+  }
+  const dirs = new Set<string>();
+  for (const f of files) {
+    for (let i = f.indexOf('/'); i !== -1; i = f.indexOf('/', i + 1)) dirs.add(f.slice(0, i + 1));
+  }
+  const entry = { at: Date.now(), paths: [...dirs, ...files], truncated };
+  fileListCache.set(root, entry);
+  return entry;
+}
+
+/** Files whose text is never copied into an agent's prompt, even when the task references them. */
+const SECRET_FILE_RE = /(^|[\\/])(\.(ssh|gnupg|aws|kube|docker)[\\/]|\.env(\.[^\\/]*)?$|\.netrc$|\.npmrc$|\.pypirc$|id_(rsa|dsa|ecdsa|ed25519)|credentials|secrets?\.json$)|\.(pem|key|p12|pfx|keystore|jks)$/i;
+/** An outside file's text is included up to this size. */
+const REF_INLINE_MAX_BYTES = 24_000;
+
+async function resolveFileRef(root: string, ref: string) {
+  const target = path.resolve(root, expandHome(ref.trim()));
+  const rel = path.relative(root, target);
+  const inside = rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  const out: Record<string, unknown> = { ref, absPath: target, ...(inside ? { relPath: rel.split(path.sep).join('/') || '.' } : {}) };
+  let st: fsSync.Stats;
+  try {
+    st = await fs.stat(target);
+  } catch {
+    return { ...out, exists: false };
+  }
+  Object.assign(out, { exists: true, isDirectory: st.isDirectory(), size: st.size });
+  if (inside) return out;
+  out.outside = true;
+  if (st.isDirectory()) return { ...out, note: 'a folder; read what you need from it' };
+  if (SECRET_FILE_RE.test(target)) return { ...out, note: 'looks like a credentials file, so Ergo did not copy it into this prompt' };
+  if (st.size > REF_INLINE_MAX_BYTES) return { ...out, note: `${Math.round(st.size / 1024)} KB, too large to include; read it yourself if you can` };
+  const buf = await fs.readFile(target).catch(() => null);
+  if (!buf) return { ...out, note: 'Ergo could not read it' };
+  if (buf.subarray(0, 8_000).includes(0)) return { ...out, note: 'a binary file' };
+  return { ...out, content: buf.toString('utf-8') };
+}
+
+/** The OS's own file dialog, for a bridge without a desktop host (run from a checkout). Paths chosen; [] when cancelled. */
+async function pickFilesWithOsDialog(defaultPath: string): Promise<string[]> {
+  const runDialog = (cmd: string, args: string[], env: Record<string, string> = {}) =>
+    new Promise<{ code: number | null; stdout: string; missing: boolean }>((resolve) => {
+      const child = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'ignore'] });
+      let stdout = '';
+      child.stdout?.on('data', (c) => (stdout += String(c)));
+      child.on('error', (err: any) => resolve({ code: null, stdout: '', missing: err?.code === 'ENOENT' }));
+      child.on('close', (code) => resolve({ code, stdout, missing: false }));
+    });
+  const lines = (s: string) => s.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (process.platform === 'darwin') {
+    const script = [
+      'set d to system attribute "ERGO_PICK_DIR"',
+      'try',
+      'set fs to choose file with prompt "Reference files in this task" default location (POSIX file d) with multiple selections allowed',
+      'on error number -128',
+      'return ""',
+      'end try',
+      'set out to ""',
+      'repeat with f in fs',
+      'set out to out & POSIX path of f & linefeed',
+      'end repeat',
+      'return out',
+    ];
+    const r = await runDialog('osascript', script.flatMap((l) => ['-e', l]), { ERGO_PICK_DIR: defaultPath });
+    return lines(r.stdout);
+  }
+  if (process.platform === 'win32') {
+    const ps =
+      'Add-Type -AssemblyName System.Windows.Forms; $o = New-Object System.Windows.Forms.Form -Property @{TopMost=$true}; ' +
+      '$d = New-Object System.Windows.Forms.OpenFileDialog; $d.Multiselect = $true; $d.Title = "Reference files in this task"; ' +
+      '$d.InitialDirectory = $env:ERGO_PICK_DIR; if ($d.ShowDialog($o) -eq "OK") { $d.FileNames -join "`n" }';
+    const r = await runDialog('powershell.exe', ['-NoProfile', '-STA', '-Command', ps], { ERGO_PICK_DIR: defaultPath });
+    return lines(r.stdout);
+  }
+  const start = defaultPath.endsWith('/') ? defaultPath : `${defaultPath}/`;
+  const zenity = await runDialog('zenity', ['--file-selection', '--multiple', '--separator=\n', '--title=Reference files in this task', `--filename=${start}`]);
+  if (!zenity.missing) return zenity.code === 0 ? lines(zenity.stdout) : [];
+  const kdialog = await runDialog('kdialog', ['--getopenfilename', defaultPath, '--multiple', '--separate-output', '--title', 'Reference files in this task']);
+  if (!kdialog.missing) return kdialog.code === 0 ? lines(kdialog.stdout) : [];
+  throw new Error('No file dialog is available on this computer (install zenity or kdialog).');
+}
+
 /** Files in <storage>/config that /api/config/read|write may touch (model-calibration: Auto mode's learning table). */
 const CONFIG_FILE_TYPES = new Set(['settings', 'secrets', 'model-calibration']);
 
@@ -1839,6 +1975,54 @@ export function ergoFileSystemPlugin(): Plugin {
       // ─────────────────────────────────────────────────────────────
       // File Open in IDE / System Opener Endpoint
       // ─────────────────────────────────────────────────────────────
+
+      if (url === '/api/files/search' && req.method === 'POST') {
+        // The `@` dropdown: files and folders under the task's working folder that match what is typed.
+        let body: any = {};
+        try {
+          body = await parseJsonBody(req);
+        } catch {}
+        // The same folder an agent launched with this cwd works in.
+        const root = typeof body.root === 'string' && body.root.trim() ? resolvePtyCwd(body.root.trim()) : '';
+        const query = typeof body.query === 'string' ? body.query.trim().slice(0, 300) : '';
+        const limit = Math.max(1, Math.min(100, Math.floor(Number(body.limit) || 40)));
+        if (!root || !path.isAbsolute(root)) return sendJson(res, 400, { success: false, error: 'root (absolute) is required.' });
+        const st = await fs.stat(root).catch(() => null);
+        if (!st?.isDirectory()) return sendJson(res, 200, { success: false, error: `Folder not found: ${root}` });
+        const listed = await listFolderPaths(root);
+        return sendJson(res, 200, { success: true, root, paths: rankPaths(listed.paths, query, limit), truncated: listed.truncated });
+      }
+
+      if (url === '/api/files/pick' && req.method === 'POST') {
+        // The `@` dropdown's "Browse…": the computer's own file dialog, for files anywhere.
+        let body: any = {};
+        try {
+          body = await parseJsonBody(req);
+        } catch {}
+        let defaultPath = typeof body.defaultPath === 'string' ? path.resolve(expandHome(body.defaultPath.trim() || '~')) : os.homedir();
+        if (!(await fs.stat(defaultPath).catch(() => null))?.isDirectory()) defaultPath = os.homedir();
+        try {
+          const picker = hostFilePicker();
+          const paths = picker ? await picker({ defaultPath }) : await pickFilesWithOsDialog(defaultPath);
+          return sendJson(res, 200, { success: true, paths: paths.filter((p) => path.isAbsolute(p)) });
+        } catch (err: any) {
+          return sendJson(res, 200, { success: false, error: err?.message || String(err) });
+        }
+      }
+
+      if (url === '/api/files/refs' && req.method === 'POST') {
+        // A task's @ references at run start: where each one is, and the text of small files outside the working folder.
+        let body: any = {};
+        try {
+          body = await parseJsonBody(req);
+        } catch {}
+        // The same folder an agent launched with this cwd works in.
+        const root = typeof body.root === 'string' && body.root.trim() ? resolvePtyCwd(body.root.trim()) : '';
+        const refs: string[] = Array.isArray(body.refs) ? body.refs.filter((r: unknown) => typeof r === 'string' && r.trim()).slice(0, 30) : [];
+        if (!root) return sendJson(res, 400, { success: false, error: 'root is required.' });
+        const files = await Promise.all(refs.map((ref) => resolveFileRef(root, ref)));
+        return sendJson(res, 200, { success: true, files });
+      }
 
       if (url === '/api/files/open' && req.method === 'POST') {
         try {
@@ -4348,6 +4532,8 @@ interface PtySessionState {
   runId?: string;
   /** `<cwd>/.ergo/runs/<runId>` */
   runDir?: string;
+  /** Ergo's workspace tools are on this agent's ergo-memory MCP server (PtySpawnOptions.workspaceTools). */
+  workspaceTools?: boolean;
   /** Level the session runs under now (changed by /api/pty/policy). */
   permissionLevel?: BridgePermission;
   /** Level the CLI was launched with (its flags). */
@@ -5033,6 +5219,8 @@ interface PtySpawnOptions {
   runId?: string;
   runDir?: string;
   permissionLevel?: BridgePermission;
+  /** The run invoked a skill that uses Ergo's workspace tools: its ergo-memory MCP server lists them (relayed to the app). */
+  workspaceTools?: boolean;
   /** The WebSocket that asked for the launch (legacy WS spawn). */
   subscriber?: any;
 }
@@ -5151,7 +5339,7 @@ function spawnPtySession(pty: any, opts: PtySpawnOptions): PtySessionState {
   // entry (gemini, agy). Fails soft.
   if (opts.role) {
     getMemoryStore().warm(); // the agent's first signal / memory call should not wait for the model
-    registerMemoryMcp({ cmd, args, cwd, projectId: opts.projectId, taskId: opts.taskId, runId: opts.runId, sessionId: sessionKey });
+    registerMemoryMcp({ cmd, args, cwd, projectId: opts.projectId, taskId: opts.taskId, runId: opts.runId, sessionId: sessionKey, workspaceTools: opts.workspaceTools });
   }
   // If running Claude CLI, sync API key approval and workspace trust into ~/.claude.json
   if (cmd.toLowerCase().includes('claude')) {
@@ -5224,6 +5412,7 @@ function spawnPtySession(pty: any, opts: PtySpawnOptions): PtySessionState {
     pieceId: opts.pieceId,
     runId: opts.runId,
     runDir: opts.runDir,
+    workspaceTools: opts.workspaceTools === true,
     permissionLevel: opts.permissionLevel,
     launchPermissionLevel: opts.permissionLevel,
     echoedText: args.join('\n'),
@@ -5497,6 +5686,7 @@ export function ergoPtyPlugin(): Plugin {
               runId,
               runDir,
               permissionLevel: asPermission(body.permissionLevel),
+              workspaceTools: body.workspaceTools === true,
             });
             broadcastAgentEvent(session, { type: 'spawned', label: session.label || role, ...(pieceId ? { pieceId } : {}) });
             return sendJson(res, 200, { success: true, sessionId, cwd, ...(runDir ? { runDir } : {}) });
@@ -5504,6 +5694,19 @@ export function ergoPtyPlugin(): Plugin {
             console.error(`[Ergo PTY] Spawn error for [${sessionId}]:`, err);
             return sendJson(res, 500, { success: false, error: err?.message || String(err) });
           }
+        }
+
+        if ((url === '/api/pty/workspace-claim' || url === '/api/pty/workspace-result') && req.method === 'POST') {
+          let body: any;
+          try {
+            body = await parseJsonBody(req);
+          } catch {
+            return sendJson(res, 400, { success: false, error: 'Invalid JSON body.' });
+          }
+          const callId = typeof body?.callId === 'string' ? body.callId : '';
+          if (!callId) return sendJson(res, 400, { success: false, error: 'callId is required.' });
+          const ok = url === '/api/pty/workspace-claim' ? claimWorkspaceCall(callId) : settleWorkspaceCall(callId, body);
+          return sendJson(res, 200, { success: ok });
         }
 
         if (url === '/api/pty/input' && req.method === 'POST') {
@@ -5838,7 +6041,9 @@ export function ergoPtyPlugin(): Plugin {
 // Ergo memory (vector store on disk) — src/lib/memory/memoryStore.ts
 // REST (App):  POST /api/memory/search | add | upsert-doc | update | remove | import | embed
 //                   /api/memory/workspace-sync (live index of the human workspace, namespace `workspace`)
-//                   /api/memory/related (stage-1 related tasks: centered multi-vector search over that index)
+//                   /api/memory/related (stage-1 related tasks: centered multi-vector search over that index, plus the
+//                   project's learned rules for the task)
+//                   /api/memory/insights/list | apply (learned rules, namespace `insights`)
 //              GET  /api/memory/chunks | count | has | status
 // MCP (agents): POST /api/mcp/ergo-memory — stateless streamable-HTTP JSON-RPC with memory_search / memory_get /
 //              memory_save. CLI agents call it from localhost without an Origin header (allowed by the bridge guard).
@@ -6104,6 +6309,51 @@ function sanitizeRelatedRequest(body: any): RelatedTasksRequest | null {
   };
 }
 
+function sanitizeInsightOp(o: any): InsightOp | null {
+  const id = optString(o?.id, 300);
+  const text = typeof o?.text === 'string' ? o.text.slice(0, 2_000) : undefined;
+  const scope = o?.scope === 'always' || o?.scope === 'topical' ? o.scope : undefined;
+  switch (o?.op) {
+    case 'add':
+      return text ? { op: 'add', text, ...(scope ? { scope } : {}) } : null;
+    case 'update':
+      return id && (text !== undefined || scope) ? { op: 'update', id, ...(text !== undefined ? { text } : {}), ...(scope ? { scope } : {}) } : null;
+    case 'delete':
+    case 'confirm':
+    case 'unconfirm':
+      return id ? { op: o.op, id } : null;
+    case 'put': {
+      const ins = o?.insight;
+      const insId = optString(ins?.id, 300);
+      if (!insId || typeof ins?.text !== 'string') return null;
+      return {
+        op: 'put',
+        insight: {
+          id: insId,
+          text: ins.text.slice(0, 2_000),
+          scope: ins.scope === 'always' ? 'always' : 'topical',
+          confirms: typeof ins.confirms === 'number' ? ins.confirms : 1,
+          origin: ins.origin === 'user' ? 'user' : 'learned',
+          ...(typeof ins.createdAt === 'number' ? { createdAt: ins.createdAt } : {}),
+          ...(optString(ins.taskId, 300) ? { taskId: optString(ins.taskId, 300) } : {}),
+          ...(optString(ins.taskTitle, 400) ? { taskTitle: optString(ins.taskTitle, 400) } : {}),
+        },
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+function sanitizeInsightSource(s: any): InsightSource {
+  return {
+    origin: s?.origin === 'user' ? 'user' : 'learned',
+    ...(optString(s?.taskId, 300) ? { taskId: optString(s.taskId, 300) } : {}),
+    ...(optString(s?.taskTitle, 400) ? { taskTitle: optString(s.taskTitle, 400) } : {}),
+    ...(optString(s?.runId, 200) ? { runId: optString(s.runId, 200) } : {}),
+  };
+}
+
 // ── CLI registration of the memory MCP server ──
 
 /** `http://127.0.0.1:<port>` (or `http://[::1]:<port>`) — the bridge as local processes reach it; set on listen. */
@@ -6248,7 +6498,7 @@ function registerAgyMcp(url: string) {
  * Gives a task-agent launch Ergo's memory MCP server. claude / codex: flags inserted before the positional prompt
  * (the last arg); gemini: `<cwd>/.gemini/settings.json`; agy: `~/.gemini/antigravity/mcp_config.json`. Fails soft.
  */
-function registerMemoryMcp(o: { cmd: string; args: string[]; cwd: string; projectId?: string; taskId: string | number; runId?: string; sessionId: string }) {
+function registerMemoryMcp(o: { cmd: string; args: string[]; cwd: string; projectId?: string; taskId: string | number; runId?: string; sessionId: string; workspaceTools?: boolean }) {
   if (!bridgeLocalOrigin) return;
   try {
     const base = path.basename(o.cmd || '').toLowerCase().replace(/\.(cmd|exe)$/, '');
@@ -6262,7 +6512,7 @@ function registerMemoryMcp(o: { cmd: string; args: string[]; cwd: string; projec
         at,
         0,
         `--mcp-config=${config}`,
-        `--allowedTools=${MEMORY_TOOL_NAMES.map((t) => `mcp__${MEMORY_MCP_NAME}__${t}`).join(',')}`
+        `--allowedTools=${[...MEMORY_TOOL_NAMES, ...(o.workspaceTools ? WORKSPACE_AUTO_APPROVED_TOOLS : [])].map((t) => `mcp__${MEMORY_MCP_NAME}__${t}`).join(',')}`
       );
     } else if (base === 'codex') {
       if (o.args.some((a) => a.includes('mcp_servers.ergo_memory'))) return;
@@ -6563,6 +6813,76 @@ const MEMORY_MCP_TOOLS = [
   },
 ];
 
+// ── Ergo workspace tools for CLI agents (relayed to the web app) ──
+//
+// A run whose task invokes a skill that calls workspace_* tools spawns its agents with workspaceTools: their
+// ergo-memory server then lists those tools too. The board they act on lives in the web app, so a call goes out on the
+// agent event stream as a `workspace-call` event; the app that owns the run claims it (one app, even with several tabs
+// open), runs it against the open project, and posts the result back.
+
+const WORKSPACE_CALL_TIMEOUT_MS = 60_000;
+const WORKSPACE_TOOL_NAMES = new Set(WORKSPACE_MCP_TOOLS.map((t) => t.name));
+/** Pre-approved for Claude Code: everything but the destructive ones, which it asks about on screen. */
+const WORKSPACE_AUTO_APPROVED_TOOLS = WORKSPACE_MCP_TOOLS.filter((t) => t.autoApprove !== false).map((t) => t.name);
+const WORKSPACE_MCP_TOOL_DEFS = WORKSPACE_MCP_TOOLS.map((t) => ({
+  name: t.name,
+  description: `[Ergo workspace] ${t.description}`,
+  inputSchema: t.inputSchema || { type: 'object', properties: {} },
+  annotations: {
+    readOnlyHint: t.name.startsWith('workspace_list') || t.name.startsWith('workspace_read'),
+    destructiveHint: t.name.includes('delete'),
+    openWorldHint: false,
+  },
+}));
+
+interface PendingWorkspaceCall {
+  sessionId: string;
+  claimed: boolean;
+  resolve: (out: { text: string; isError?: boolean }) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+const pendingWorkspaceCalls = new Map<string, PendingWorkspaceCall>();
+
+function workspaceToolsFor(sessionId: string | undefined): PtySessionState | null {
+  const session = sessionId ? activePtySessions.get(sessionId) : undefined;
+  return session && session.workspaceTools && session.isActive ? session : null;
+}
+
+function relayWorkspaceCall(session: PtySessionState, tool: string, args: unknown): Promise<{ text: string; isError?: boolean }> {
+  const callId = randomBytes(9).toString('base64url');
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingWorkspaceCalls.delete(callId);
+      resolve({ text: 'Ergo did not answer: the Ergo app that started this run is not open. Leave this step undone and say so in your completion record.', isError: true });
+    }, WORKSPACE_CALL_TIMEOUT_MS);
+    timer.unref?.();
+    pendingWorkspaceCalls.set(callId, { sessionId: session.id, claimed: false, resolve, timer });
+    broadcastAgentEvent(session, { type: 'workspace-call', callId, tool, args: args && typeof args === 'object' ? args : {} });
+  });
+}
+
+/** The app claims a call before running it; only the first claim wins. */
+function claimWorkspaceCall(callId: string): boolean {
+  const call = pendingWorkspaceCalls.get(callId);
+  if (!call || call.claimed) return false;
+  call.claimed = true;
+  return true;
+}
+
+function settleWorkspaceCall(callId: string, result: { success?: unknown; data?: unknown; error?: unknown }): boolean {
+  const call = pendingWorkspaceCalls.get(callId);
+  if (!call) return false;
+  pendingWorkspaceCalls.delete(callId);
+  clearTimeout(call.timer);
+  if (result.success === true) {
+    const data = result.data === undefined ? { success: true } : result.data;
+    call.resolve({ text: typeof data === 'string' ? data : JSON.stringify(data, null, 2).slice(0, 20_000) });
+  } else {
+    call.resolve({ text: `Ergo workspace error: ${typeof result.error === 'string' && result.error ? result.error : 'the action failed.'}`, isError: true });
+  }
+  return true;
+}
+
 function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'note';
 }
@@ -6570,6 +6890,12 @@ function slugify(s: string): string {
 async function callMemoryTool(name: string, args: any, base: MemoryCallContext): Promise<{ text: string; isError?: boolean }> {
   const store = getMemoryStore();
   args = args && typeof args === 'object' ? args : {};
+
+  if (WORKSPACE_TOOL_NAMES.has(name)) {
+    const session = workspaceToolsFor(base.sessionId);
+    if (!session) return { text: 'Ergo workspace tools are not enabled for this agent.', isError: true };
+    return relayWorkspaceCall(session, name, args);
+  }
 
   if (name === 'code_search') {
     const query = typeof args.query === 'string' ? args.query.trim().slice(0, 2_000) : '';
@@ -6671,7 +6997,7 @@ async function handleMemoryMcpMessage(msg: any, ctx: MemoryCallContext): Promise
     case 'ping':
       return reply({});
     case 'tools/list':
-      return reply({ tools: MEMORY_MCP_TOOLS });
+      return reply({ tools: workspaceToolsFor(ctx.sessionId) ? [...MEMORY_MCP_TOOLS, ...WORKSPACE_MCP_TOOL_DEFS] : MEMORY_MCP_TOOLS });
     case 'tools/call': {
       const toolName = String(params.name || '');
       try {
@@ -6898,7 +7224,29 @@ export function ergoMemoryPlugin(): Plugin {
           if (url === '/api/memory/related') {
             const related = sanitizeRelatedRequest(body);
             if (!related) return sendJson(res, 400, { success: false, error: 'projectId is required.' });
-            return sendJson(res, 200, await store.relatedTasks(related));
+            // The project's learned rules ride along (protocol 5): one call gives the run all of its memory context.
+            const ruleQuery = [related.title, ...(related.subtasks || []), related.text || ''].filter(Boolean).join('\n');
+            const [result, insights] = await Promise.all([
+              store.relatedTasks(related),
+              store.insightsForTask(related.projectId, ruleQuery).catch((err) => {
+                console.warn('[Ergo Memory] Learned rules for the related-tasks call failed:', err);
+                return [];
+              }),
+            ]);
+            return sendJson(res, 200, { ...result, insights });
+          }
+          if (url === '/api/memory/insights/list') {
+            const projectId = optString(body?.projectId);
+            if (!projectId) return sendJson(res, 400, { success: false, error: 'projectId is required.' });
+            return sendJson(res, 200, { success: true, insights: await store.listInsights(projectId) });
+          }
+          if (url === '/api/memory/insights/apply') {
+            const projectId = optString(body?.projectId);
+            if (!projectId || !Array.isArray(body?.ops) || body.ops.length > 50) {
+              return sendJson(res, 400, { success: false, error: 'projectId and ops (at most 50) are required.' });
+            }
+            const ops = body.ops.map(sanitizeInsightOp).filter(Boolean) as InsightOp[];
+            return sendJson(res, 200, await store.applyInsightOps(projectId, ops, sanitizeInsightSource(body.source)));
           }
           if (url === '/api/memory/embed') {
             if (!Array.isArray(body?.texts) || body.texts.length > 256) {

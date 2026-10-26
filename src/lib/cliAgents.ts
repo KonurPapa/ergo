@@ -2,6 +2,7 @@ import type { AIProviderId, CliAgentPreset, CliAgentConfig, UserApiKey, TaskItem
 import { hasUsableOverview } from './overviewUtils';
 import { isTaskBrief } from './agentPipeline/taskBrief';
 import { COMPLETION_RECORD_FORMAT, COMPLETION_RECORD_RULES, QUESTION_RULES } from './humanFacingOutput';
+import { formatReferenceSections, type TaskReferenceContext } from './taskReferences';
 
 export const CLI_AGENT_PRESETS: CliAgentPreset[] = [
   {
@@ -233,6 +234,15 @@ export interface CliRunPromptContext {
    * question card. Otherwise they use their CLI's own question tool or a plain reply.
    */
   questionFile?: boolean;
+  /** The task's `/skill` and `@file` commands (taskReferences.ts): the manager prompt shows the skills and files. */
+  references?: TaskReferenceContext;
+  /** The manager's ergo-memory server lists Ergo's workspace tools (an invoked skill uses them). */
+  workspaceTools?: boolean;
+  /**
+   * The project's learned rules for this task (formatProjectRules, a few hundred tokens): every agent of the run gets
+   * them as a PROJECT RULES section, and QA checks them.
+   */
+  projectRules?: string;
 }
 
 export interface CliWorkerPiece {
@@ -437,6 +447,12 @@ export function buildQuestionAnswerMessage(question: string, answer: string): st
  * Prompt for the manager agent of a CLI task run: the task itself plus Ergo's run protocol
  * (optional delegation via delegate.json, final completion record in completion.md).
  */
+/** The PROJECT RULES section (learned rules), or nothing. */
+function buildProjectRulesSection(ctx: Pick<CliRunPromptContext, 'projectRules'>): string[] {
+  const rules = (ctx.projectRules || '').trim();
+  return rules ? [rules] : [];
+}
+
 export function buildManagerCliPrompt(task: TaskItem, brief: AgentContextItem | undefined, ctx: CliRunPromptContext): string {
   const sections = buildTaskContentSections(task, brief);
   const delegateFile = runFile(ctx, 'delegate.json');
@@ -446,6 +462,8 @@ export function buildManagerCliPrompt(task: TaskItem, brief: AgentContextItem | 
   const keyedToBrief = isTaskBrief(usableOverview(brief));
 
   sections.push(...buildRelatedSection(ctx, brief));
+  sections.push(...formatReferenceSections(ctx.references, { workspaceTools: Boolean(ctx.workspaceTools) }));
+  sections.push(...buildProjectRulesSection(ctx));
 
   sections.push(
     `YOUR ROLE:\n` +
@@ -559,6 +577,7 @@ export function buildWorkerCliPrompt(
   }
 
   sections.push(...buildRelatedSection(ctx, brief));
+  sections.push(...buildProjectRulesSection(ctx));
 
   sections.push(
     `RULES:\n` +
@@ -606,6 +625,7 @@ export function buildQaCliPrompt(
   sections.push(...buildCodeSearchSection(ctx, false));
 
   sections.push(...buildTaskContentSections(task, brief, 'TASK UNDER REVIEW'));
+  sections.push(...buildProjectRulesSection(ctx));
 
   const completion = (ctx.completionMarkdown || '').trim();
   const completionSource = memoryOn(ctx)
@@ -631,7 +651,7 @@ export function buildQaCliPrompt(
     `HOW TO VERIFY:\n` +
     `1. Inspect the changed files listed in the completion record (and anything else the task touches) and compare them with the task requirements.\n` +
     `2. Run the project's relevant checks that exist — tests, build, type-check, lint — and note the exact commands and results. Running them may create build output; that's fine, but do not change source files.\n` +
-    `3. Check every ${keyedToBrief ? '"Done when" item and Constraint in the working brief and every ' : ''}checklist item, and whether each claim in the completion record is true (files really exist and contain what is claimed, commands really pass).\n` +
+    `3. Check every ${keyedToBrief ? '"Done when" item and Constraint in the working brief and every ' : ''}checklist item, ${ctx.projectRules?.trim() ? 'every PROJECT RULE that applies to the change, ' : ''}and whether each claim in the completion record is true (files really exist and contain what is claimed, commands really pass).\n` +
     `4. Be strict but fair: FAIL only for real problems (a requirement not met, a broken build/test, a bug, a false claim, missing files). Style nits alone are not a failure; mention them as notes.\n` +
     `Work autonomously; do not ask the user questions.`
   );
@@ -828,6 +848,7 @@ export function buildContinuationPrompt(
   if (files.length) sections.push(`FILES CREATED OR CHANGED SO FAR:\n${files.map((f) => `- ${f}`).join('\n')}`);
   sections.push(`THE USER'S FOLLOW-UP (what to do now):\n${String(prior.userMessage || '').trim().slice(0, MAX_FOLLOW_UP_CHARS)}`);
   sections.push(...buildRelatedSection(ctx));
+  sections.push(...buildProjectRulesSection(ctx));
   sections.push(
     `YOUR ROLE:\n` +
     `You are the MANAGER agent continuing an Ergo task run (run id ${ctx.runId}). The earlier work is already in the repository: ` +

@@ -990,6 +990,10 @@ export interface BibleSections {
   subtasks: Array<{ text: string; isDone: boolean; isHumanReview?: boolean }>;
   /** The Summary step's working brief, verbatim: the manager's whole spec. */
   spec: string;
+  /** The invoked skills and referenced files (formatReferenceSections), fixed at run start. */
+  references?: string[];
+  /** The project's learned rules (insights.ts), fixed at run start: every agent of the run reads them here. */
+  projectRules?: string[];
   requiredMcps: string[];
   allowedRoots: string[];
 }

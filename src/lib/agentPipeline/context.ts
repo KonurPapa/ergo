@@ -10,7 +10,8 @@
 import { hasUsableOverview } from '../overviewUtils';
 import { searchMemory, type SearchResult } from '../memory';
 import { findRelatedTasks, formatRelatedCandidatesForPrompt } from '../memory/relatedTasks';
-import type { RelatedNoteCandidate, RelatedTaskCandidate, RelatedTasksRequest, RelatedTasksResponse } from '../memory/types';
+import { describeProjectRules } from '../memory/insights';
+import type { ProjectInsight, RelatedNoteCandidate, RelatedTaskCandidate, RelatedTasksRequest, RelatedTasksResponse } from '../memory/types';
 import { callMcpTool } from '../mcpClient';
 import { type AgentContextItem, type AssembledBaselineContext, type ExecutionStep, type TaskItem } from '../../types';
 import { bridgeClient } from '../bridgeClient';
@@ -35,6 +36,8 @@ export interface BaselineContext {
   relatedNotes: RelatedNoteCandidate[];
   /** The related-task search ran (false: the memory bridge was unreachable, so no selection is possible). */
   relatedSearchOk: boolean;
+  /** The project's learned rules for this task (same bridge call): in the brief writer's input and the bible. */
+  projectRules: ProjectInsight[];
   /** The context step as emitted, so the Summary step can re-emit it with its related-task selection. */
   contextStep: Pick<ExecutionStep, 'title' | 'detail' | 'time'> & { baselineContext: AssembledBaselineContext };
 }
@@ -174,7 +177,8 @@ function buildBaselineMarkdown(
   guidelines: GuidelineDoc[],
   memoryHits: SearchResult[],
   relatedCandidates: RelatedTaskCandidate[],
-  relatedNotes: RelatedNoteCandidate[]
+  relatedNotes: RelatedNoteCandidate[],
+  projectRules: ProjectInsight[]
 ): string {
   const { task, brief, project } = ctx;
   const out: string[] = [];
@@ -257,6 +261,13 @@ function buildBaselineMarkdown(
     out.push('');
   }
 
+  // Learned rules: the brief reflects the ones that bear on the task; the bible carries the list verbatim.
+  if (projectRules.length > 0) {
+    out.push('## Project Rules (learned from the user\'s feedback on earlier runs)');
+    out.push('_Reflect the rules that bear on this task in Constraints or Done when; every agent also gets this list verbatim._');
+    out.push(...projectRules.map((r) => `- ${r.text}`), '');
+  }
+
   // Stage 1 related-task candidates; the Summary agent picks the useful ones (stage 2, "relatedTaskIds").
   if (relatedCandidates.length > 0 || relatedNotes.length > 0) {
     out.push('## Candidate Related Tasks (choose the useful ones)');
@@ -319,6 +330,7 @@ export async function assembleTaskContext(ctx: PipelineContext): Promise<Baselin
   ]);
   const relatedCandidates = related.candidates || [];
   const relatedNotes = related.notes || [];
+  const projectRules = related.insights || [];
 
   throwIfAborted(ctx.signal);
 
@@ -327,7 +339,7 @@ export async function assembleTaskContext(ctx: PipelineContext): Promise<Baselin
   throwIfAborted(ctx.signal);
 
   // 3. Assemble baseline markdown
-  const baselineMarkdown = buildBaselineMarkdown(ctx, guidelines, memoryHits, relatedCandidates, relatedNotes);
+  const baselineMarkdown = buildBaselineMarkdown(ctx, guidelines, memoryHits, relatedCandidates, relatedNotes, projectRules);
 
   console.log('%c[Ergo Agent Pipeline] ── Step 1: Zero-Token Context Assembly (Vector DB + Guidelines) ──', 'color: #38bdf8; font-weight: bold; font-size: 13px;');
   console.log(baselineMarkdown);
@@ -357,6 +369,7 @@ export async function assembleTaskContext(ctx: PipelineContext): Promise<Baselin
     title: 'Vector Memory: Baseline Context Assembled',
     detail:
       `${describeRelatedSearch(related)} ` +
+      (projectRules.length > 0 ? `${describeProjectRules(projectRules)} ` : '') +
       (memoryHits.length > 0
         ? `Retrieved ${memoryHits.length} relevant memory hit(s) from local vector DB (cutoff ≥ ${(MEMORY_SEARCH_THRESHOLD * 100).toFixed(0)}%, 0 tokens). `
         : `No prior memory hits above ${(MEMORY_SEARCH_THRESHOLD * 100).toFixed(0)}% threshold. `) +
@@ -372,5 +385,5 @@ export async function assembleTaskContext(ctx: PipelineContext): Promise<Baselin
     usage: emptyUsage()
   });
 
-  return { baselineMarkdown, guidelines, memoryHits, relatedCandidates, relatedNotes, relatedSearchOk: Boolean(related.success), contextStep };
+  return { baselineMarkdown, guidelines, memoryHits, relatedCandidates, relatedNotes, relatedSearchOk: Boolean(related.success), projectRules, contextStep };
 }

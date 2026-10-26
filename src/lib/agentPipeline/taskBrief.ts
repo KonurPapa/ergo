@@ -27,6 +27,10 @@ export interface TaskBriefPromptInput {
   relatedCandidatesPrompt?: string;
   /** This project's memory relevant to the task (formatPriorKnowledge): earlier runs' notes, completed tasks. */
   priorKnowledge?: string;
+  /** What the task's `/skill` and `@file` commands are (formatReferenceNoteForBrief); empty when it has none. */
+  referencesNote?: string;
+  /** The project's learned rules for this task (formatProjectRules); empty when it has none. */
+  projectRules?: string;
 }
 
 export function buildTaskBriefPrompts(input: TaskBriefPromptInput): { system: string; user: string } {
@@ -54,12 +58,17 @@ export function buildTaskBriefPrompts(input: TaskBriefPromptInput): { system: st
     `CATEGORY: ${task.category || 'General'} · STATUS: ${task.isDone ? 'done' : task.status || 'not_started'}`,
     ...(task.summaryNote?.trim() ? [`SUMMARY NOTE:\n${task.summaryNote.trim()}`] : []),
     `SUBTASKS:\n${subtasks || '(none)'}`,
+    ...(input.referencesNote?.trim() ? [`TASK COMMANDS (/name invokes a skill, @path references a file):\n${input.referencesNote.trim()}`] : []),
     ...(input.currentOverview?.trim()
       ? [`CURRENT OVERVIEW (an earlier draft or the user's notes; keep what is still right):\n${input.currentOverview.trim()}`]
       : []),
     ...(related ? [`CANDIDATE RELATED TASKS (choose the useful ones; ids in brackets):\n${related}`] : []),
     ...(input.priorKnowledge?.trim()
       ? [`PRIOR KNOWLEDGE (this project's memory: earlier runs' notes, completed tasks; many are only loosely related):\n${input.priorKnowledge.trim()}`]
+      : []),
+    // The agents get the rules verbatim too; the brief only has to reflect the ones that bear on this task.
+    ...(input.projectRules?.trim()
+      ? [`${input.projectRules.trim()}\n(Reflect the rules that bear on this task in Constraints or Done when; the agents also get this list verbatim.)`]
       : []),
   ].join('\n\n');
 

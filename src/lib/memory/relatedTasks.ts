@@ -50,6 +50,8 @@ export async function findRelatedTasks(req: RelatedTasksRequest): Promise<Relate
       candidates: Array.isArray(json.candidates) ? json.candidates : [],
       notes: Array.isArray(json.notes) ? json.notes : [],
       searched: Number(json.searched) || 0,
+      // The project's learned rules (bridge protocol ≥ 5).
+      ...(Array.isArray(json.insights) ? { insights: json.insights } : {}),
     };
   } catch (err) {
     console.warn('[RelatedTasks] related search failed:', err instanceof Error ? err.message : err);

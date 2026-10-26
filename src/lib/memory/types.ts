@@ -14,11 +14,14 @@
  *   - `agent-notes` — the AI's own working memory: run notes (completion records, worker / QA reports, delegation
  *                     plans), notes agents save mid-task, and CLI artifacts (e.g. Claude Code todo lists).
  *                     Searchable by agents, hidden from the archive UI.
+ *   - `insights`    — the project's learned rules: the user's standing requirements, distilled from their feedback on
+ *                     runs (insights.ts). Kept small and current (reconciled on every write), shown and edited in the
+ *                     Learned Rules panel, and handed to every run whole. Hidden from the archive UI and agent searches.
  */
-export type MemoryNamespace = 'learnings' | 'tasks' | 'code-map' | 'agent-notes' | 'workspace';
+export type MemoryNamespace = 'learnings' | 'tasks' | 'code-map' | 'agent-notes' | 'workspace' | 'insights';
 
-/** Namespaces the archive UI never lists (AI-only memory). */
-export const HIDDEN_MEMORY_NAMESPACES: readonly MemoryNamespace[] = ['agent-notes', 'workspace'];
+/** Namespaces the archive UI never lists (AI-only memory, or memory with its own UI). */
+export const HIDDEN_MEMORY_NAMESPACES: readonly MemoryNamespace[] = ['agent-notes', 'workspace', 'insights'];
 
 /** What an `agent-notes` chunk is. */
 export type AgentNoteKind = 'completion' | 'worker' | 'qa' | 'plan' | 'note' | 'artifact';
@@ -59,6 +62,18 @@ export interface ChunkMetadata {
   /** Task status / done flag (refreshed on sync without re-embedding). */
   status?: string;
   isDone?: boolean;
+  // ── `insights` namespace only ──
+  /** always: applies to nearly every task (package manager, verification, git); topical: only to related work. */
+  insightScope?: InsightScope;
+  /** How many times the user's feedback stated or reinforced the rule. */
+  insightConfirms?: number;
+  /** learned: distilled from feedback · user: written or edited by the user (the distiller may still refine it). */
+  insightOrigin?: 'learned' | 'user';
+  /** The task / run whose feedback last changed the rule (not `taskId`: purging a task's memory must keep its rules). */
+  insightTaskId?: string;
+  insightTaskTitle?: string;
+  insightRunId?: string;
+  insightUpdatedAt?: number;
 }
 
 /** A chunk as the bridge returns it (the full embedding stays on the bridge). */
@@ -172,6 +187,69 @@ export interface RelatedTasksResponse {
   notes: RelatedNoteCandidate[];
   /** How many workspace items were searched. */
   searched: number;
+  /**
+   * The project's learned rules for this task (bridge protocol ≥ 5; absent from older bridges): all of them while the
+   * list is small, else every `always` rule plus the topical ones nearest the task.
+   */
+  insights?: ProjectInsight[];
+}
+
+// ─── Learned rules (namespace `insights`) ──────────────────────────────────────
+
+export type InsightScope = 'always' | 'topical';
+
+export interface ProjectInsight {
+  id: string;
+  text: string;
+  scope: InsightScope;
+  confirms: number;
+  origin: 'learned' | 'user';
+  createdAt: number;
+  updatedAt: number;
+  /** The task whose feedback last changed it. */
+  taskId?: string;
+  taskTitle?: string;
+}
+
+/**
+ * One change to a project's rule list. The distiller emits add / update / delete / confirm; `put` writes an exact
+ * rule (id included) with no duplicate check — undo uses it to bring back a deleted or changed rule.
+ */
+export type InsightOp =
+  | { op: 'add'; text: string; scope?: InsightScope }
+  | { op: 'update'; id: string; text?: string; scope?: InsightScope }
+  | { op: 'delete'; id: string }
+  | { op: 'confirm'; id: string }
+  | { op: 'unconfirm'; id: string }
+  | { op: 'put'; insight: Pick<ProjectInsight, 'id' | 'text' | 'scope' | 'confirms' | 'origin'> & Partial<Pick<ProjectInsight, 'createdAt' | 'taskId' | 'taskTitle'>> };
+
+/** Where a change came from: the feedback's task / run, or the user editing the list. */
+export interface InsightSource {
+  origin: 'learned' | 'user';
+  taskId?: string;
+  taskTitle?: string;
+  runId?: string;
+}
+
+/** What an op did (`add` that hit the duplicate guard reports as `confirm`), plus the op that reverts it. */
+export interface InsightChange {
+  kind: 'added' | 'updated' | 'deleted' | 'confirmed' | 'restored';
+  insight: ProjectInsight;
+  /** The rule before an update / delete. */
+  previous?: ProjectInsight;
+  undo: InsightOp;
+}
+
+export interface InsightApplyRequest {
+  projectId: string;
+  ops: InsightOp[];
+  source: InsightSource;
+}
+
+export interface InsightApplyResponse {
+  success: boolean;
+  changes: InsightChange[];
+  insights: ProjectInsight[];
 }
 
 /**

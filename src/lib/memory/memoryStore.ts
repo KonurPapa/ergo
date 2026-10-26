@@ -19,9 +19,15 @@ import {
   HIDDEN_MEMORY_NAMESPACES,
   type AgentNoteKind,
   type ChunkMetadata,
+  type InsightApplyResponse,
+  type InsightChange,
+  type InsightOp,
+  type InsightScope,
+  type InsightSource,
   type MemoryChunkDTO,
   type MemoryNamespace,
   type MemorySearchRequest,
+  type ProjectInsight,
   type RelatedNoteCandidate,
   type RelatedTaskCandidate,
   type RelatedTasksRequest,
@@ -33,7 +39,7 @@ import {
 
 export const MEMORY_EMBEDDING_DIM = 384;
 export const MEMORY_MODEL_ID = 'Xenova/all-MiniLM-L6-v2';
-export const MEMORY_NAMESPACES: readonly MemoryNamespace[] = ['learnings', 'tasks', 'code-map', 'agent-notes', 'workspace'];
+export const MEMORY_NAMESPACES: readonly MemoryNamespace[] = ['learnings', 'tasks', 'code-map', 'agent-notes', 'workspace', 'insights'];
 export const AGENT_NOTE_KINDS: readonly AgentNoteKind[] = ['completion', 'worker', 'qa', 'plan', 'note', 'artifact'];
 
 const DIM = MEMORY_EMBEDDING_DIM;
@@ -919,7 +925,8 @@ export class MemoryStore {
       }
       if ('projectId' in req && req.projectId) {
         const p = String(req.projectId);
-        return this.removeWhere((r) => r.metadata.projectId != null && String(r.metadata.projectId) === p);
+        // Learned rules are the user's own, managed in their panel: clearing a project's memory keeps them.
+        return this.removeWhere((r) => r.namespace !== 'insights' && r.metadata.projectId != null && String(r.metadata.projectId) === p);
       }
       if ('namespace' in req && req.namespace) {
         const ns = req.namespace;
@@ -999,8 +1006,9 @@ export class MemoryStore {
         : null;
     // `workspace` (the live index of the human's task list, one chunk per subtask) is only searched when named: it
     // would crowd run reports and learnings out of agents' `includeHidden` searches. Related tasks use relatedTasks().
+    // `insights` (learned rules) reach every run whole through the related-tasks call, so searches skip them too.
     const hidden: Set<string> | null = !nsSet
-      ? new Set<string>(req.includeHidden ? ['workspace'] : HIDDEN_MEMORY_NAMESPACES)
+      ? new Set<string>(req.includeHidden ? ['workspace', 'insights'] : HIDDEN_MEMORY_NAMESPACES)
       : null;
     const projectId = req.projectId || null;
     const excludeTask = req.excludeTaskId !== undefined && req.excludeTaskId !== null && req.excludeTaskId !== '' ? String(req.excludeTaskId) : null;
@@ -1424,6 +1432,169 @@ export class MemoryStore {
     return { success: true, candidates, notes, searched: cache.itemCount };
   }
 
+  // ── Learned rules (namespace `insights`) ──
+
+  /** The project's rules: `always` first, then the most confirmed, then the newest. */
+  async listInsights(projectId: string): Promise<ProjectInsight[]> {
+    await this.ensureLoaded();
+    return this.insightRows(projectId)
+      .map((i) => insightOf(this.rows[i]))
+      .sort(compareInsights);
+  }
+
+  /**
+   * Applies changes to a project's rule list, in order. The distiller's `add` is checked against the project's rules
+   * first (zero tokens): a rule within INSIGHT_DUP_SIMILARITY of an existing one confirms it instead. Ops naming a
+   * rule the project doesn't have are skipped. Every change carries the op that reverts it (the app's Undo).
+   */
+  applyInsightOps(projectId: string, ops: InsightOp[], source: InsightSource): Promise<InsightApplyResponse> {
+    return this.mutate(async () => {
+      const changes: InsightChange[] = [];
+      const now = Date.now();
+      const sourceMeta: ChunkMetadata = {
+        insightOrigin: source.origin,
+        insightUpdatedAt: now,
+        ...(source.taskId ? { insightTaskId: source.taskId } : {}),
+        ...(source.taskTitle ? { insightTaskTitle: source.taskTitle } : {}),
+        ...(source.runId ? { insightRunId: source.runId } : {}),
+      };
+      const find = (id: string): number | undefined => {
+        const i = this.index.get(id);
+        return i !== undefined && isInsightOf(this.rows[i], projectId) ? i : undefined;
+      };
+      const replaceRow = (i: number, row: Row, vector?: Float32Array) => {
+        this.rows[i] = row;
+        if (vector) this.vectors.set(vector, i * DIM);
+        this.markDirty();
+      };
+
+      for (const op of ops) {
+        if (op.op === 'add') {
+          const text = cleanInsightText(op.text);
+          if (!text) continue;
+          const [v] = await embedTexts([text]);
+          let best = -1;
+          let bestSim = -Infinity;
+          for (const i of this.insightRows(projectId)) {
+            let dot = 0;
+            const off = i * DIM;
+            for (let d = 0; d < DIM; d++) dot += v[d] * this.vectors[off + d];
+            if (dot > bestSim) [best, bestSim] = [i, dot];
+          }
+          if (best >= 0 && bestSim >= INSIGHT_DUP_SIMILARITY) {
+            const row = this.rows[best];
+            replaceRow(best, { ...row, metadata: { ...row.metadata, insightConfirms: confirmsOf(row) + 1 } });
+            changes.push({ kind: 'confirmed', insight: insightOf(this.rows[best]), undo: { op: 'unconfirm', id: row.id } });
+            continue;
+          }
+          if (this.insightRows(projectId).length >= INSIGHTS_PER_PROJECT_MAX) continue;
+          const id = `insight:${projectId}:${now.toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+          const metadata: ChunkMetadata = { projectId, insightScope: scopeOf(op.scope), insightConfirms: 1, ...sourceMeta };
+          this.putRow({ id, namespace: 'insights', text, metadata, createdAt: now, hash: textHash(text), taskKey: null }, v);
+          this.markDirty();
+          changes.push({ kind: 'added', insight: insightOf(this.rows[this.index.get(id)!]), undo: { op: 'delete', id } });
+        } else if (op.op === 'update' || op.op === 'confirm' || op.op === 'unconfirm') {
+          const i = find(op.id);
+          if (i === undefined) continue;
+          const row = this.rows[i];
+          const previous = insightOf(row);
+          if (op.op === 'confirm' || op.op === 'unconfirm') {
+            const confirms = Math.max(1, confirmsOf(row) + (op.op === 'confirm' ? 1 : -1));
+            replaceRow(i, { ...row, metadata: { ...row.metadata, insightConfirms: confirms } });
+            if (op.op === 'confirm') changes.push({ kind: 'confirmed', insight: insightOf(this.rows[i]), undo: { op: 'unconfirm', id: row.id } });
+            continue;
+          }
+          const text = op.text === undefined ? row.text : cleanInsightText(op.text);
+          if (!text) continue;
+          const scope = op.scope ? scopeOf(op.scope) : previous.scope;
+          if (text === row.text && scope === previous.scope) continue;
+          const vector = text !== row.text ? (await embedTexts([text]))[0] : undefined;
+          // Feedback that refines a rule also reinforces it; the user's own edit doesn't count as feedback.
+          const confirms = confirmsOf(row) + (source.origin === 'learned' ? 1 : 0);
+          const j = find(op.id);
+          if (j === undefined) continue;
+          replaceRow(
+            j,
+            { ...row, text, hash: textHash(text), metadata: { ...row.metadata, ...sourceMeta, insightScope: scope, insightConfirms: confirms } },
+            vector
+          );
+          changes.push({ kind: 'updated', insight: insightOf(this.rows[j]), previous, undo: { op: 'put', insight: previous } });
+        } else if (op.op === 'delete') {
+          const i = find(op.id);
+          if (i === undefined) continue;
+          const previous = insightOf(this.rows[i]);
+          this.removeWhere((r) => r.id === op.id);
+          changes.push({ kind: 'deleted', insight: previous, previous, undo: { op: 'put', insight: previous } });
+        } else if (op.op === 'put') {
+          const ins = op.insight;
+          const text = cleanInsightText(ins?.text);
+          const id = typeof ins?.id === 'string' ? ins.id : '';
+          // Only this project's ids: a put must not take over another project's (or another namespace's) row.
+          if (!text || !id.startsWith(`insight:${projectId}:`)) continue;
+          const existing = this.index.get(id);
+          const previous = existing !== undefined && isInsightOf(this.rows[existing], projectId) ? insightOf(this.rows[existing]) : undefined;
+          if (existing !== undefined && !previous) continue;
+          const [v] = previous?.text === text ? [this.vectorOf(existing!)] : await embedTexts([text]);
+          const metadata: ChunkMetadata = {
+            projectId,
+            insightScope: scopeOf(ins.scope),
+            insightConfirms: Math.max(1, Math.floor(Number(ins.confirms) || 1)),
+            insightOrigin: ins.origin === 'user' ? 'user' : 'learned',
+            insightUpdatedAt: now,
+            ...(ins.taskId ? { insightTaskId: ins.taskId } : {}),
+            ...(ins.taskTitle ? { insightTaskTitle: ins.taskTitle } : {}),
+          };
+          const createdAt = typeof ins.createdAt === 'number' && Number.isFinite(ins.createdAt) ? ins.createdAt : now;
+          this.putRow({ id, namespace: 'insights', text, metadata, createdAt, hash: textHash(text), taskKey: null }, v);
+          this.markDirty();
+          changes.push({
+            kind: 'restored',
+            insight: insightOf(this.rows[this.index.get(id)!]),
+            ...(previous ? { previous } : {}),
+            undo: previous ? { op: 'put', insight: previous } : { op: 'delete', id },
+          });
+        }
+      }
+      const insights = this.insightRows(projectId).map((i) => insightOf(this.rows[i])).sort(compareInsights);
+      return { success: true, changes, insights };
+    });
+  }
+
+  /**
+   * The rules a task's run gets: the whole list while it is small (INSIGHTS_WHOLE_LIST_MAX — tested: recall 1.0 at
+   * ~300 tokens), else every `always` rule plus the topical rules nearest the task, with no similarity floor (MiniLM
+   * scores short task titles 0.1–0.2 against the rules they need).
+   */
+  async insightsForTask(projectId: string, query: string): Promise<ProjectInsight[]> {
+    await this.ensureLoaded();
+    const rows = this.insightRows(projectId);
+    if (rows.length <= INSIGHTS_WHOLE_LIST_MAX) return rows.map((i) => insightOf(this.rows[i])).sort(compareInsights);
+    const always = rows
+      .filter((i) => scopeOf(this.rows[i].metadata.insightScope) === 'always')
+      .map((i) => insightOf(this.rows[i]))
+      .sort(compareInsights)
+      .slice(0, INSIGHTS_ALWAYS_MAX);
+    const q = query.trim() ? (await embedTexts([query], true))[0] : null;
+    const topical = this.insightRows(projectId)
+      .filter((i) => scopeOf(this.rows[i].metadata.insightScope) !== 'always')
+      .map((i) => {
+        let dot = 0;
+        if (q) for (let d = 0, off = i * DIM; d < DIM; d++) dot += q[d] * this.vectors[off + d];
+        return { insight: insightOf(this.rows[i]), score: dot };
+      })
+      .sort((a, b) => b.score - a.score || compareInsights(a.insight, b.insight))
+      .slice(0, INSIGHTS_TOPICAL_MAX)
+      .map((x) => x.insight);
+    return [...always, ...topical];
+  }
+
+  /** Row indexes of a project's rules. */
+  private insightRows(projectId: string): number[] {
+    const out: number[] = [];
+    for (let i = 0; i < this.rows.length; i++) if (isInsightOf(this.rows[i], projectId)) out.push(i);
+    return out;
+  }
+
   /** Embeddings for arbitrary texts (REST /api/memory/embed). */
   embed(texts: string[]): Promise<Float32Array[]> {
     return embedTexts(texts, true);
@@ -1438,6 +1609,58 @@ export class MemoryStore {
   status() {
     return { ready: this.loaded, modelLoaded: pipelineLoaded, chunkCount: this.rows.length, storePath: this.dir };
   }
+}
+
+// ─── Learned rules (namespace `insights`) ─────────────────────────────────────────────────────────────────────
+//
+// One row per rule (`insight:<projectId>:<id>`), embedded as its text. The app's distiller (insights.ts) sends
+// add / update / delete / confirm ops after the user's feedback on a run; reconciling on every write keeps the list
+// small and free of duplicates or superseded rules, so no clean-up pass is ever needed before a run reads it.
+// Evaluation (docs/wip/evals/insights): 15 rules for 23 follow-ups, 0 stale, 0 noise; Mem0 kept 20–48 with stale ones.
+
+/** A new rule this close (cosine) to one of the project's rules is that rule restated: it confirms it instead. */
+const INSIGHT_DUP_SIMILARITY = 0.9;
+/** Up to this many rules, a run gets the project's whole list. */
+export const INSIGHTS_WHOLE_LIST_MAX = 25;
+/** Beyond it: at most this many `always` rules (most confirmed) plus this many topical rules (nearest the task). */
+const INSIGHTS_ALWAYS_MAX = 8;
+const INSIGHTS_TOPICAL_MAX = 6;
+const INSIGHTS_PER_PROJECT_MAX = 200;
+export const INSIGHT_TEXT_MAX = 400;
+
+function isInsightOf(row: Row, projectId: string): boolean {
+  return row.namespace === 'insights' && row.metadata.projectId === projectId;
+}
+
+function scopeOf(scope: unknown): InsightScope {
+  return scope === 'always' ? 'always' : 'topical';
+}
+
+function confirmsOf(row: Row): number {
+  return Math.max(1, Math.floor(Number(row.metadata.insightConfirms) || 1));
+}
+
+function cleanInsightText(text: unknown): string {
+  return String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, INSIGHT_TEXT_MAX);
+}
+
+function insightOf(row: Row): ProjectInsight {
+  const m = row.metadata;
+  return {
+    id: row.id,
+    text: row.text,
+    scope: scopeOf(m.insightScope),
+    confirms: confirmsOf(row),
+    origin: m.insightOrigin === 'user' ? 'user' : 'learned',
+    createdAt: row.createdAt,
+    updatedAt: typeof m.insightUpdatedAt === 'number' ? m.insightUpdatedAt : row.createdAt,
+    ...(m.insightTaskId ? { taskId: String(m.insightTaskId) } : {}),
+    ...(m.insightTaskTitle ? { taskTitle: String(m.insightTaskTitle) } : {}),
+  };
+}
+
+function compareInsights(a: ProjectInsight, b: ProjectInsight): number {
+  return (a.scope === 'always' ? 0 : 1) - (b.scope === 'always' ? 0 : 1) || b.confirms - a.confirms || b.updatedAt - a.updatedAt;
 }
 
 export function createMemoryStore(opts: MemoryStoreOptions): MemoryStore {

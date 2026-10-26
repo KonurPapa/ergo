@@ -1,0 +1,1535 @@
+{
+  "ergo-1.json:ledgerly": {
+    "L1": {
+      "id": "L1",
+      "gold": [
+        "G1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L2": {
+      "id": "L2",
+      "gold": [
+        "G2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L3": {
+      "id": "L3",
+      "gold": [
+        "G5"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L6": {
+      "id": "L6",
+      "gold": [
+        "G3"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L7": {
+      "id": "L7",
+      "gold": [
+        "G4"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L9": {
+      "id": "L9",
+      "gold": [
+        "G10"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L10": {
+      "id": "L10",
+      "gold": [
+        "G6"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L11": {
+      "id": "L11",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L12": {
+      "id": "L12",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L14": {
+      "id": "L14",
+      "gold": [
+        "G7"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L15": {
+      "id": "L15",
+      "gold": [
+        "G8"
+      ],
+      "stale": false,
+      "noise": false
+    }
+  },
+  "ergo-1.json:inkwell": {
+    "L4": {
+      "id": "L4",
+      "gold": [
+        "H2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L5": {
+      "id": "L5",
+      "gold": [
+        "H3"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L8": {
+      "id": "L8",
+      "gold": [
+        "H1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L13": {
+      "id": "L13",
+      "gold": [
+        "H4"
+      ],
+      "stale": false,
+      "noise": false
+    }
+  },
+  "ergo-2.json:ledgerly": {
+    "L1": {
+      "id": "L1",
+      "gold": [
+        "G1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L2": {
+      "id": "L2",
+      "gold": [
+        "G2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L3": {
+      "id": "L3",
+      "gold": [
+        "G5"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L6": {
+      "id": "L6",
+      "gold": [
+        "G3"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L7": {
+      "id": "L7",
+      "gold": [
+        "G4"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L9": {
+      "id": "L9",
+      "gold": [
+        "G10"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L10": {
+      "id": "L10",
+      "gold": [
+        "G6"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L11": {
+      "id": "L11",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L12": {
+      "id": "L12",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L14": {
+      "id": "L14",
+      "gold": [
+        "G7"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L15": {
+      "id": "L15",
+      "gold": [
+        "G8"
+      ],
+      "stale": false,
+      "noise": false
+    }
+  },
+  "ergo-2.json:inkwell": {
+    "L4": {
+      "id": "L4",
+      "gold": [
+        "H2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L5": {
+      "id": "L5",
+      "gold": [
+        "H3"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L8": {
+      "id": "L8",
+      "gold": [
+        "H1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "L13": {
+      "id": "L13",
+      "gold": [
+        "H4"
+      ],
+      "stale": false,
+      "noise": false
+    }
+  },
+  "mem0-1.json:ledgerly": {
+    "a0dd5636-57fd-454e-9154-d3ab87b81694": {
+      "id": "a0dd5636-57fd-454e-9154-d3ab87b81694",
+      "gold": [
+        "G1"
+      ],
+      "stale": true,
+      "noise": false
+    },
+    "df5ab678-8452-423c-812d-b60560ebc9cd": {
+      "id": "df5ab678-8452-423c-812d-b60560ebc9cd",
+      "gold": [
+        "G2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "4f6463b5-a913-4d6f-a4b2-3bad8576f584": {
+      "id": "4f6463b5-a913-4d6f-a4b2-3bad8576f584",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "cd6c095c-bff6-425c-953c-93ab30539728": {
+      "id": "cd6c095c-bff6-425c-953c-93ab30539728",
+      "gold": [
+        "G2"
+      ],
+      "stale": true,
+      "noise": false
+    },
+    "80846eee-438c-4ae6-b7a4-a818e12f5b9f": {
+      "id": "80846eee-438c-4ae6-b7a4-a818e12f5b9f",
+      "gold": [
+        "G5"
+      ],
+      "stale": true,
+      "noise": false
+    },
+    "b4859272-8e4e-4b50-b717-dac28929d1d6": {
+      "id": "b4859272-8e4e-4b50-b717-dac28929d1d6",
+      "gold": [
+        "G5"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "d1ca79c0-5908-4f52-bdf0-dd69cbb7fc5b": {
+      "id": "d1ca79c0-5908-4f52-bdf0-dd69cbb7fc5b",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "335db332-db7a-44e9-92cf-151253af00b7": {
+      "id": "335db332-db7a-44e9-92cf-151253af00b7",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "273c90f0-ae42-4760-a8da-62f31d8899c3": {
+      "id": "273c90f0-ae42-4760-a8da-62f31d8899c3",
+      "gold": [
+        "G3"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "0c2f833d-e460-4fb3-a6bc-3be592a33be0": {
+      "id": "0c2f833d-e460-4fb3-a6bc-3be592a33be0",
+      "gold": [
+        "G3"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "46831cf6-0800-449a-8cec-e303756d4319": {
+      "id": "46831cf6-0800-449a-8cec-e303756d4319",
+      "gold": [
+        "G4"
+      ],
+      "stale": true,
+      "noise": false
+    },
+    "2d0998f8-4696-435c-885d-292dc164865a": {
+      "id": "2d0998f8-4696-435c-885d-292dc164865a",
+      "gold": [
+        "G4"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "fb357781-b19e-4c2a-ba4c-8dec7bedc654": {
+      "id": "fb357781-b19e-4c2a-ba4c-8dec7bedc654",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "094f44bb-de95-48de-93f7-c804813102e8": {
+      "id": "094f44bb-de95-48de-93f7-c804813102e8",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "ea42f66e-39a9-42b3-ab70-e47b5551058c": {
+      "id": "ea42f66e-39a9-42b3-ab70-e47b5551058c",
+      "gold": [
+        "G10"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "3f7d65f0-223a-4828-82f8-32775c4eb0a7": {
+      "id": "3f7d65f0-223a-4828-82f8-32775c4eb0a7",
+      "gold": [
+        "G6"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "5151fb6b-21cf-4e2d-affc-527797076ebd": {
+      "id": "5151fb6b-21cf-4e2d-affc-527797076ebd",
+      "gold": [
+        "G6"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "a92143d5-62f7-47c7-85c7-b78f0f942eda": {
+      "id": "a92143d5-62f7-47c7-85c7-b78f0f942eda",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "bc774e14-8184-4643-acb4-15c7f088088a": {
+      "id": "bc774e14-8184-4643-acb4-15c7f088088a",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "c7f0f55e-c3b7-4c4c-92dc-f2fdb4ec8199": {
+      "id": "c7f0f55e-c3b7-4c4c-92dc-f2fdb4ec8199",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "a34f08aa-b155-497e-a5ca-b07602181dcf": {
+      "id": "a34f08aa-b155-497e-a5ca-b07602181dcf",
+      "gold": [
+        "G7"
+      ],
+      "stale": true,
+      "noise": false
+    },
+    "c040836c-10b5-456a-8f0b-b21571e908da": {
+      "id": "c040836c-10b5-456a-8f0b-b21571e908da",
+      "gold": [
+        "G7"
+      ],
+      "stale": true,
+      "noise": false
+    },
+    "c8ed6c3a-a953-469d-b308-8bef9df88d30": {
+      "id": "c8ed6c3a-a953-469d-b308-8bef9df88d30",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "ef84f9ea-4d90-4e6d-9502-7f62b3268f22": {
+      "id": "ef84f9ea-4d90-4e6d-9502-7f62b3268f22",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "542608e1-85d5-4de0-82b0-9c817d7c6956": {
+      "id": "542608e1-85d5-4de0-82b0-9c817d7c6956",
+      "gold": [],
+      "stale": true,
+      "noise": false
+    },
+    "31c5bab4-8022-464c-9a92-02fc4b2f77a0": {
+      "id": "31c5bab4-8022-464c-9a92-02fc4b2f77a0",
+      "gold": [],
+      "stale": true,
+      "noise": false
+    },
+    "2e38b457-93bf-4ea0-a3f5-7e236ffbf64b": {
+      "id": "2e38b457-93bf-4ea0-a3f5-7e236ffbf64b",
+      "gold": [
+        "G2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "953f5f3c-d7e8-4e61-9d57-aa71abc0eb96": {
+      "id": "953f5f3c-d7e8-4e61-9d57-aa71abc0eb96",
+      "gold": [
+        "G2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "87b1e446-070d-4b7e-abfc-0f964d5939e1": {
+      "id": "87b1e446-070d-4b7e-abfc-0f964d5939e1",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "c9ded1a9-9cd7-4774-aee5-9e96a17d71be": {
+      "id": "c9ded1a9-9cd7-4774-aee5-9e96a17d71be",
+      "gold": [
+        "G5"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "7506aa80-baa9-4003-9fc7-a73b86268100": {
+      "id": "7506aa80-baa9-4003-9fc7-a73b86268100",
+      "gold": [
+        "G5"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "0248cd4c-c889-4a5a-8477-e1768468dc9f": {
+      "id": "0248cd4c-c889-4a5a-8477-e1768468dc9f",
+      "gold": [
+        "G1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "1712aa86-dfc2-418f-8318-6abb5b2ddf31": {
+      "id": "1712aa86-dfc2-418f-8318-6abb5b2ddf31",
+      "gold": [
+        "G1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "3575043a-4ec7-4c3a-9548-64ddf00fab74": {
+      "id": "3575043a-4ec7-4c3a-9548-64ddf00fab74",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "52fc7fea-4c44-4d67-97fd-c259d5fdc33b": {
+      "id": "52fc7fea-4c44-4d67-97fd-c259d5fdc33b",
+      "gold": [
+        "G8"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "5ee9b075-6035-487f-8fda-83e9a3182502": {
+      "id": "5ee9b075-6035-487f-8fda-83e9a3182502",
+      "gold": [
+        "G7"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "78a2ca53-7a9d-4f88-aea4-d8f98474dc05": {
+      "id": "78a2ca53-7a9d-4f88-aea4-d8f98474dc05",
+      "gold": [
+        "G4",
+        "G1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "53fff526-759e-4b4b-b1c1-3b41e31c4d83": {
+      "id": "53fff526-759e-4b4b-b1c1-3b41e31c4d83",
+      "gold": [
+        "G4"
+      ],
+      "stale": true,
+      "noise": false
+    }
+  },
+  "mem0-1.json:inkwell": {
+    "279c220f-7006-424a-9948-1a5f3822b1a4": {
+      "id": "279c220f-7006-424a-9948-1a5f3822b1a4",
+      "gold": [
+        "H2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "0f8b08c0-6ad1-49f3-95cb-b2acb6450bdf": {
+      "id": "0f8b08c0-6ad1-49f3-95cb-b2acb6450bdf",
+      "gold": [
+        "H3"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "1da5f0fc-e93c-46a9-9ffe-f22f6e7ac899": {
+      "id": "1da5f0fc-e93c-46a9-9ffe-f22f6e7ac899",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "a713197b-9f34-4dd6-9da8-cf01da65761c": {
+      "id": "a713197b-9f34-4dd6-9da8-cf01da65761c",
+      "gold": [
+        "H1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "7387cea5-cd2f-473b-b041-547ee28f19d7": {
+      "id": "7387cea5-cd2f-473b-b041-547ee28f19d7",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "1e7e47b8-d6a4-45a5-a671-5622b523307f": {
+      "id": "1e7e47b8-d6a4-45a5-a671-5622b523307f",
+      "gold": [
+        "H4"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "133f137f-42df-42af-9f06-b99864e4e18b": {
+      "id": "133f137f-42df-42af-9f06-b99864e4e18b",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "2ff67c89-bd96-444f-adda-a5761fc47483": {
+      "id": "2ff67c89-bd96-444f-adda-a5761fc47483",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "e6a732cc-aff2-48f9-93f6-37919d6d390c": {
+      "id": "e6a732cc-aff2-48f9-93f6-37919d6d390c",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "d1f6eea1-10bd-4964-a021-0d2680308eb7": {
+      "id": "d1f6eea1-10bd-4964-a021-0d2680308eb7",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "fe3285dc-acf4-4e52-b55e-7cac1eb3d93f": {
+      "id": "fe3285dc-acf4-4e52-b55e-7cac1eb3d93f",
+      "gold": [
+        "H3"
+      ],
+      "stale": false,
+      "noise": false
+    }
+  },
+  "mem0-2.json:ledgerly": {
+    "87071f12-4d90-41d3-8d90-a27bdf2098cc": {
+      "id": "87071f12-4d90-41d3-8d90-a27bdf2098cc",
+      "gold": [],
+      "stale": true,
+      "noise": false
+    },
+    "dc6a6552-c132-498f-9ddd-c0906aa14f07": {
+      "id": "dc6a6552-c132-498f-9ddd-c0906aa14f07",
+      "gold": [
+        "G2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "7e7ef692-95c9-4dec-ac51-d3764cee0896": {
+      "id": "7e7ef692-95c9-4dec-ac51-d3764cee0896",
+      "gold": [],
+      "stale": true,
+      "noise": true
+    },
+    "64e1ab33-8455-49e9-a3bd-f675a495fdbd": {
+      "id": "64e1ab33-8455-49e9-a3bd-f675a495fdbd",
+      "gold": [
+        "G2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "fecfd7e7-9832-4b42-b4a7-c205837cfd48": {
+      "id": "fecfd7e7-9832-4b42-b4a7-c205837cfd48",
+      "gold": [
+        "G5"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "cde85b22-a1ac-4014-a723-dba1883d20d3": {
+      "id": "cde85b22-a1ac-4014-a723-dba1883d20d3",
+      "gold": [
+        "G5"
+      ],
+      "stale": true,
+      "noise": false
+    },
+    "f72d58b8-da1d-4dda-b9fa-f677e12af5a2": {
+      "id": "f72d58b8-da1d-4dda-b9fa-f677e12af5a2",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "7e18aa75-3b7b-4a84-83af-a53868a1f1eb": {
+      "id": "7e18aa75-3b7b-4a84-83af-a53868a1f1eb",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "2ae0c643-2eb9-4b88-a80c-3735d70b4fa9": {
+      "id": "2ae0c643-2eb9-4b88-a80c-3735d70b4fa9",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "f7ff391b-4ce8-44f0-aa8f-08cbd3b73f5e": {
+      "id": "f7ff391b-4ce8-44f0-aa8f-08cbd3b73f5e",
+      "gold": [
+        "G3"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "ee745dc4-3d92-40b0-9a85-0d5f9e6b659d": {
+      "id": "ee745dc4-3d92-40b0-9a85-0d5f9e6b659d",
+      "gold": [
+        "G4"
+      ],
+      "stale": true,
+      "noise": false
+    },
+    "5c062940-aa8d-41a0-920f-65a2de32dd1d": {
+      "id": "5c062940-aa8d-41a0-920f-65a2de32dd1d",
+      "gold": [
+        "G4"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "668df011-2362-499c-8d87-3362ac4d4b46": {
+      "id": "668df011-2362-499c-8d87-3362ac4d4b46",
+      "gold": [
+        "G10"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "861d2fd7-4df3-42b4-8529-59b08f5f0d9d": {
+      "id": "861d2fd7-4df3-42b4-8529-59b08f5f0d9d",
+      "gold": [
+        "G10"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "fe74bb84-8319-4a62-bd2f-8473e28e953d": {
+      "id": "fe74bb84-8319-4a62-bd2f-8473e28e953d",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "ed21df26-be51-442f-8484-ea8d020b6a08": {
+      "id": "ed21df26-be51-442f-8484-ea8d020b6a08",
+      "gold": [
+        "G6"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "56d4f015-6ff8-4183-9f94-46dc5b442dea": {
+      "id": "56d4f015-6ff8-4183-9f94-46dc5b442dea",
+      "gold": [
+        "G6"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "ebeb0ae6-5aa5-49aa-b78c-9ad9be902757": {
+      "id": "ebeb0ae6-5aa5-49aa-b78c-9ad9be902757",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "bf62fdec-65dd-4fbd-8a8b-58851902e8b9": {
+      "id": "bf62fdec-65dd-4fbd-8a8b-58851902e8b9",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "01d859af-4120-4fb7-9a6a-830442c839c2": {
+      "id": "01d859af-4120-4fb7-9a6a-830442c839c2",
+      "gold": [
+        "G7"
+      ],
+      "stale": true,
+      "noise": false
+    },
+    "60bc2026-f5c6-4fac-87c2-ea35ac13aaa8": {
+      "id": "60bc2026-f5c6-4fac-87c2-ea35ac13aaa8",
+      "gold": [
+        "G7"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "cc1c6297-5c53-423e-8d86-e6d6ca0adc0a": {
+      "id": "cc1c6297-5c53-423e-8d86-e6d6ca0adc0a",
+      "gold": [
+        "G5",
+        "G10"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "8938feb7-a73d-4ee4-9a13-8adaad6d13db": {
+      "id": "8938feb7-a73d-4ee4-9a13-8adaad6d13db",
+      "gold": [],
+      "stale": true,
+      "noise": false
+    },
+    "62419a4b-4237-4fb3-9dd6-23c9e141c493": {
+      "id": "62419a4b-4237-4fb3-9dd6-23c9e141c493",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "f2bf9d5d-10a9-476e-b36c-67d6c964f548": {
+      "id": "f2bf9d5d-10a9-476e-b36c-67d6c964f548",
+      "gold": [
+        "G2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "f264651b-0078-4ae1-81d4-36ef8d47a0ec": {
+      "id": "f264651b-0078-4ae1-81d4-36ef8d47a0ec",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "892befe9-67e4-4cef-9cec-f433cb1ad3bd": {
+      "id": "892befe9-67e4-4cef-9cec-f433cb1ad3bd",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "7eb85a81-1723-4d5c-ab4d-52bb152b98e0": {
+      "id": "7eb85a81-1723-4d5c-ab4d-52bb152b98e0",
+      "gold": [
+        "G5"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "b51aa07c-f3db-4ac0-9bb1-d41b54366193": {
+      "id": "b51aa07c-f3db-4ac0-9bb1-d41b54366193",
+      "gold": [
+        "G1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "d1816bd2-026a-43b7-80fc-4db45a4493e7": {
+      "id": "d1816bd2-026a-43b7-80fc-4db45a4493e7",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "00df2282-ccd0-4177-836f-3746e015f7ad": {
+      "id": "00df2282-ccd0-4177-836f-3746e015f7ad",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "d131f9ba-fd16-4958-8f98-66fcf632e585": {
+      "id": "d131f9ba-fd16-4958-8f98-66fcf632e585",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "469611e1-698d-459e-bcd4-b57dfb28bc09": {
+      "id": "469611e1-698d-459e-bcd4-b57dfb28bc09",
+      "gold": [
+        "G8"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "15882de1-a868-429a-a79b-7877c9591059": {
+      "id": "15882de1-a868-429a-a79b-7877c9591059",
+      "gold": [
+        "G7"
+      ],
+      "stale": false,
+      "noise": true
+    },
+    "caf0a741-47ed-4c58-be71-009af43ee43a": {
+      "id": "caf0a741-47ed-4c58-be71-009af43ee43a",
+      "gold": [
+        "G1",
+        "G4"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "8e976666-6c45-4d39-be1f-fafea670469b": {
+      "id": "8e976666-6c45-4d39-be1f-fafea670469b",
+      "gold": [
+        "G4"
+      ],
+      "stale": true,
+      "noise": false
+    },
+    "5c663451-9dd9-46b4-b5bc-0244fd6a53fd": {
+      "id": "5c663451-9dd9-46b4-b5bc-0244fd6a53fd",
+      "gold": [],
+      "stale": true,
+      "noise": true
+    }
+  },
+  "mem0-2.json:inkwell": {
+    "07b3bdc5-4dd8-4813-87cb-103c078859bf": {
+      "id": "07b3bdc5-4dd8-4813-87cb-103c078859bf",
+      "gold": [
+        "H2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "f67064ac-c531-48f2-bba6-3159042500c0": {
+      "id": "f67064ac-c531-48f2-bba6-3159042500c0",
+      "gold": [
+        "H3"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "38079da3-bc42-4127-b2d7-0e32031defd0": {
+      "id": "38079da3-bc42-4127-b2d7-0e32031defd0",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "e4b63c3a-1a0b-4fc0-a373-84cf21a3ceb6": {
+      "id": "e4b63c3a-1a0b-4fc0-a373-84cf21a3ceb6",
+      "gold": [
+        "H1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "771cd5e5-03a4-4c9b-8533-2aa5c36bf8e5": {
+      "id": "771cd5e5-03a4-4c9b-8533-2aa5c36bf8e5",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "b783d9a3-48eb-4efb-b7c5-bc5267bb5550": {
+      "id": "b783d9a3-48eb-4efb-b7c5-bc5267bb5550",
+      "gold": [
+        "H4"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "5aa0fd98-c3a1-46f9-9bdb-4a8ce6837e33": {
+      "id": "5aa0fd98-c3a1-46f9-9bdb-4a8ce6837e33",
+      "gold": [
+        "H4"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "106d7c9c-33fd-4f0b-b643-c8f4dbebfbbc": {
+      "id": "106d7c9c-33fd-4f0b-b643-c8f4dbebfbbc",
+      "gold": [],
+      "stale": false,
+      "noise": true
+    },
+    "b24c4101-7eb1-433c-9edb-0b140d74e06e": {
+      "id": "b24c4101-7eb1-433c-9edb-0b140d74e06e",
+      "gold": [
+        "H2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "d06b1c0d-854e-4267-9bbc-5eea8e5cd788": {
+      "id": "d06b1c0d-854e-4267-9bbc-5eea8e5cd788",
+      "gold": [
+        "H3"
+      ],
+      "stale": false,
+      "noise": false
+    }
+  },
+  "mem0custom-1.json:ledgerly": {
+    "10c4ac97-eed7-464b-a885-6d2e6d138dd9": {
+      "id": "10c4ac97-eed7-464b-a885-6d2e6d138dd9",
+      "gold": [],
+      "stale": true,
+      "noise": false
+    },
+    "84d12291-f412-41ac-85a1-da0349afc9d2": {
+      "id": "84d12291-f412-41ac-85a1-da0349afc9d2",
+      "gold": [
+        "G2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "1c28b3d3-e755-4be0-8572-62e3eb2165aa": {
+      "id": "1c28b3d3-e755-4be0-8572-62e3eb2165aa",
+      "gold": [
+        "G5"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "efc5b28b-1465-4d41-ac98-779de01c0c63": {
+      "id": "efc5b28b-1465-4d41-ac98-779de01c0c63",
+      "gold": [
+        "G3"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "3ef27105-9d76-4c6d-ac19-d93bf0b3e4b1": {
+      "id": "3ef27105-9d76-4c6d-ac19-d93bf0b3e4b1",
+      "gold": [
+        "G4"
+      ],
+      "stale": true,
+      "noise": false
+    },
+    "2b19759a-c095-479b-a3e5-5e053659144b": {
+      "id": "2b19759a-c095-479b-a3e5-5e053659144b",
+      "gold": [
+        "G10"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "960a99de-16cb-423a-b703-dec061f82c13": {
+      "id": "960a99de-16cb-423a-b703-dec061f82c13",
+      "gold": [
+        "G6"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "fd98c749-84de-43ac-9943-172d66df0b86": {
+      "id": "fd98c749-84de-43ac-9943-172d66df0b86",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "158dec97-e9ce-4c82-ada7-55fb71b9cf48": {
+      "id": "158dec97-e9ce-4c82-ada7-55fb71b9cf48",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "fdc6aad1-806c-4aad-9861-c05d4384edd1": {
+      "id": "fdc6aad1-806c-4aad-9861-c05d4384edd1",
+      "gold": [
+        "G7"
+      ],
+      "stale": true,
+      "noise": false
+    },
+    "d9de04c3-56b9-4386-b1cc-f6449ddc0969": {
+      "id": "d9de04c3-56b9-4386-b1cc-f6449ddc0969",
+      "gold": [],
+      "stale": true,
+      "noise": false
+    },
+    "bdd69954-36ca-441c-a978-8974d701483b": {
+      "id": "bdd69954-36ca-441c-a978-8974d701483b",
+      "gold": [
+        "G2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "c5b681e3-0e70-45f8-bc11-dac92fb0aa0b": {
+      "id": "c5b681e3-0e70-45f8-bc11-dac92fb0aa0b",
+      "gold": [
+        "G5"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "b655a34b-a56e-4941-93f4-eece36a64d3c": {
+      "id": "b655a34b-a56e-4941-93f4-eece36a64d3c",
+      "gold": [
+        "G1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "dac8a578-339a-478b-9454-200db2b33412": {
+      "id": "dac8a578-339a-478b-9454-200db2b33412",
+      "gold": [
+        "G8"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "2a54d222-3337-42ad-b09a-923934708f38": {
+      "id": "2a54d222-3337-42ad-b09a-923934708f38",
+      "gold": [
+        "G4",
+        "G1"
+      ],
+      "stale": false,
+      "noise": false
+    }
+  },
+  "mem0custom-1.json:inkwell": {
+    "2083b722-94c4-4456-814d-5993e1cdb647": {
+      "id": "2083b722-94c4-4456-814d-5993e1cdb647",
+      "gold": [
+        "H2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "34f54776-e77d-4132-8def-8ae9cf3fd6f7": {
+      "id": "34f54776-e77d-4132-8def-8ae9cf3fd6f7",
+      "gold": [
+        "H3"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "f3a9b7c8-743a-45b2-bca1-0fc9b5798634": {
+      "id": "f3a9b7c8-743a-45b2-bca1-0fc9b5798634",
+      "gold": [
+        "H1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "50cc563a-2e6b-4926-8aaa-7b22dd9aef71": {
+      "id": "50cc563a-2e6b-4926-8aaa-7b22dd9aef71",
+      "gold": [
+        "H1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "c1070c18-d20a-4975-9e29-00f527fb62f1": {
+      "id": "c1070c18-d20a-4975-9e29-00f527fb62f1",
+      "gold": [
+        "H4"
+      ],
+      "stale": false,
+      "noise": false
+    }
+  },
+  "mem0custom-2.json:ledgerly": {
+    "4bbb4b96-9bb7-42e6-8ee2-dcf9d8f630f7": {
+      "id": "4bbb4b96-9bb7-42e6-8ee2-dcf9d8f630f7",
+      "gold": [],
+      "stale": true,
+      "noise": false
+    },
+    "db78ffdb-690f-4340-a9d0-762ab91cfde9": {
+      "id": "db78ffdb-690f-4340-a9d0-762ab91cfde9",
+      "gold": [
+        "G2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "7f4898be-fb27-4468-8348-a5a49057b141": {
+      "id": "7f4898be-fb27-4468-8348-a5a49057b141",
+      "gold": [
+        "G5"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "3f5ec154-65ac-4155-8ee8-de1aec0b9772": {
+      "id": "3f5ec154-65ac-4155-8ee8-de1aec0b9772",
+      "gold": [
+        "G3"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "f1563eaf-b299-4fda-a284-6af98380faf9": {
+      "id": "f1563eaf-b299-4fda-a284-6af98380faf9",
+      "gold": [
+        "G4"
+      ],
+      "stale": true,
+      "noise": false
+    },
+    "8ca168a2-e51b-4f49-a086-7a3cf7aef704": {
+      "id": "8ca168a2-e51b-4f49-a086-7a3cf7aef704",
+      "gold": [
+        "G10"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "17d873d8-6bf9-4f88-9597-c4dbb9f9d113": {
+      "id": "17d873d8-6bf9-4f88-9597-c4dbb9f9d113",
+      "gold": [
+        "G6"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "78b74a5b-636a-4727-9c1b-ba0129f99db4": {
+      "id": "78b74a5b-636a-4727-9c1b-ba0129f99db4",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "d348dd5d-5a2d-4f5f-8f3e-859334679f42": {
+      "id": "d348dd5d-5a2d-4f5f-8f3e-859334679f42",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "ad86341f-76a5-4e19-b224-598643b47b28": {
+      "id": "ad86341f-76a5-4e19-b224-598643b47b28",
+      "gold": [
+        "G7"
+      ],
+      "stale": true,
+      "noise": false
+    },
+    "f9283efe-a43c-4af4-ab0d-c67ee4ec3db1": {
+      "id": "f9283efe-a43c-4af4-ab0d-c67ee4ec3db1",
+      "gold": [],
+      "stale": true,
+      "noise": false
+    },
+    "47c5c1fe-9920-4836-bdf4-a15601a1e900": {
+      "id": "47c5c1fe-9920-4836-bdf4-a15601a1e900",
+      "gold": [
+        "G2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "2f5f24f5-ae99-49da-923d-15dba22ec7b1": {
+      "id": "2f5f24f5-ae99-49da-923d-15dba22ec7b1",
+      "gold": [
+        "G5"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "2b1d1dc8-5e16-4b6b-b7fa-5c8fe76fca16": {
+      "id": "2b1d1dc8-5e16-4b6b-b7fa-5c8fe76fca16",
+      "gold": [
+        "G1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "b3416983-5b17-453c-a0f8-82599e613094": {
+      "id": "b3416983-5b17-453c-a0f8-82599e613094",
+      "gold": [
+        "G8"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "4e4267b5-d21d-428d-be57-66bf9e325a8d": {
+      "id": "4e4267b5-d21d-428d-be57-66bf9e325a8d",
+      "gold": [
+        "G4",
+        "G1"
+      ],
+      "stale": false,
+      "noise": false
+    }
+  },
+  "mem0custom-2.json:inkwell": {
+    "a2bfea08-2c50-4174-bed6-32e444084d59": {
+      "id": "a2bfea08-2c50-4174-bed6-32e444084d59",
+      "gold": [
+        "H2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "aff0c19c-f46d-4d56-889b-d171cfb76e50": {
+      "id": "aff0c19c-f46d-4d56-889b-d171cfb76e50",
+      "gold": [
+        "H3"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "a56bd12c-d41d-4090-bdea-00afcf1e33d5": {
+      "id": "a56bd12c-d41d-4090-bdea-00afcf1e33d5",
+      "gold": [
+        "H1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "daf25104-f7ac-469a-8764-7f8195fd9647": {
+      "id": "daf25104-f7ac-469a-8764-7f8195fd9647",
+      "gold": [
+        "H4"
+      ],
+      "stale": false,
+      "noise": false
+    }
+  },
+  "ergoprod-1.json:ledgerly": {
+    "mvplk8kx3enz2j": {
+      "id": "mvplk8kx3enz2j",
+      "gold": [
+        "G1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "mvpll160fnu988": {
+      "id": "mvpll160fnu988",
+      "gold": [
+        "G8"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "mvplkyxarsn00c": {
+      "id": "mvplkyxarsn00c",
+      "gold": [
+        "G7"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "mvplkjv6dvckuv": {
+      "id": "mvplkjv6dvckuv",
+      "gold": [
+        "G4"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "mvplkawed8wimc": {
+      "id": "mvplkawed8wimc",
+      "gold": [
+        "G5"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "mvplk8kxauhwzo": {
+      "id": "mvplk8kxauhwzo",
+      "gold": [
+        "G2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "mvplkui127g636": {
+      "id": "mvplkui127g636",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "mvplkrc3vsvlys": {
+      "id": "mvplkrc3vsvlys",
+      "gold": [
+        "G6"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "mvplkoh4h3wprk": {
+      "id": "mvplkoh4h3wprk",
+      "gold": [
+        "G10"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "mvplkhnhhoyh24": {
+      "id": "mvplkhnhhoyh24",
+      "gold": [
+        "G3"
+      ],
+      "stale": false,
+      "noise": false
+    }
+  },
+  "ergoprod-1.json:inkwell": {
+    "insight:inkwell:mvplkm538bwvgz": {
+      "id": "insight:inkwell:mvplkm538bwvgz",
+      "gold": [
+        "H1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "insight:inkwell:mvplkczxgjr0e8": {
+      "id": "insight:inkwell:mvplkczxgjr0e8",
+      "gold": [
+        "H3"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "insight:inkwell:mvplkwm5kjh1a3": {
+      "id": "insight:inkwell:mvplkwm5kjh1a3",
+      "gold": [
+        "H4"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "insight:inkwell:mvplkczxz7lr9g": {
+      "id": "insight:inkwell:mvplkczxz7lr9g",
+      "gold": [
+        "H2"
+      ],
+      "stale": false,
+      "noise": false
+    }
+  },
+  "ergoprod-2.json:ledgerly": {
+    "insight:ledgerly:mvplk7n901kjri": {
+      "id": "insight:ledgerly:mvplk7n901kjri",
+      "gold": [
+        "G1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "insight:ledgerly:mvplkznuuisios": {
+      "id": "insight:ledgerly:mvplkznuuisios",
+      "gold": [
+        "G8"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "insight:ledgerly:mvplkxf23g50bu": {
+      "id": "insight:ledgerly:mvplkxf23g50bu",
+      "gold": [
+        "G7"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "insight:ledgerly:mvplkistqmajvw": {
+      "id": "insight:ledgerly:mvplkistqmajvw",
+      "gold": [
+        "G4"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "insight:ledgerly:mvplksqhr6xfs8": {
+      "id": "insight:ledgerly:mvplksqhr6xfs8",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "insight:ledgerly:mvplk7n9l6gst6": {
+      "id": "insight:ledgerly:mvplk7n9l6gst6",
+      "gold": [
+        "G2"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "insight:ledgerly:mvplk9yzvepewk": {
+      "id": "insight:ledgerly:mvplk9yzvepewk",
+      "gold": [
+        "G5"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "insight:ledgerly:mvplksqhkf6ow9": {
+      "id": "insight:ledgerly:mvplksqhkf6ow9",
+      "gold": [
+        "G9"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "insight:ledgerly:mvplkpy8ezqu4p": {
+      "id": "insight:ledgerly:mvplkpy8ezqu4p",
+      "gold": [
+        "G6"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "insight:ledgerly:mvplknbkbtyosg": {
+      "id": "insight:ledgerly:mvplknbkbtyosg",
+      "gold": [
+        "G10"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "insight:ledgerly:mvplkg8lxie6qp": {
+      "id": "insight:ledgerly:mvplkg8lxie6qp",
+      "gold": [
+        "G3"
+      ],
+      "stale": false,
+      "noise": false
+    }
+  },
+  "ergoprod-2.json:inkwell": {
+    "insight:inkwell:mvplkl8ltbhqg0": {
+      "id": "insight:inkwell:mvplkl8ltbhqg0",
+      "gold": [
+        "H1"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "insight:inkwell:mvplkc3fu09us3": {
+      "id": "insight:inkwell:mvplkc3fu09us3",
+      "gold": [
+        "H3"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "insight:inkwell:mvplkuwkzvkd23": {
+      "id": "insight:inkwell:mvplkuwkzvkd23",
+      "gold": [
+        "H4"
+      ],
+      "stale": false,
+      "noise": false
+    },
+    "insight:inkwell:mvplkc3frg6941": {
+      "id": "insight:inkwell:mvplkc3frg6941",
+      "gold": [
+        "H2"
+      ],
+      "stale": false,
+      "noise": false
+    }
+  }
+}

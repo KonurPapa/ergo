@@ -41,6 +41,7 @@ import { bridgeClient, type BridgeStatus, BRIDGE_LAUNCH_URL, getBridgeDownload }
 import { BridgeDownloadButton } from './BridgeDownloadButton';
 import { useBeta } from '../context/BetaContext';
 import { LocalModelSettingsSection, useLocalModelInstall, type LocalModelMode } from './LocalModelSetup';
+import { LearnedRulesSection } from './LearnedRulesSection';
 import { getModelCatalog, formatCatalogAge, snapshotDate, usesArtificialAnalysis } from '../lib/modelCatalog/catalog';
 import type { ModelCatalog } from '../lib/modelCatalog/types';
 import { BUILTIN_STRENGTHS_AS_OF } from '../lib/modelCatalog/builtinStrengths';
@@ -1222,6 +1223,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Section: Learned rules (the user's feedback on runs, distilled per project) */}
+          <LearnedRulesSection projectId={activeProject.id} projectName={activeProject.name || activeProject.id} />
 
           {/* Section: Local AI model (Qwen 2.5 Coder 0.5B) — also for people who skipped it in onboarding */}
           <div
