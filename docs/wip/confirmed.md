@@ -208,18 +208,18 @@ The existing restore path then picks the run up when project A is loaded again:
 - An in-memory run goes through line 1631 (`run.deferredFinalize && !run.finalized` → finalizeRun(run, deferred)).
 - A persisted run goes through line 1641/1658, which uses state.deferredFinalize.
 
-On that second call, briefAtStart.completionRunId is not yet this run's id, so the full log is written to A. Workers and QA were already cancelled and killed in the first pass, so repeating that is harmless.
+On that second call, briefAtStart.completionRunId is not yet this run's id, so the full log is written to A. Workers and verifier were already cancelled and killed in the first pass, so repeating that is harmless.
 
 Do not call run.resolveDone() in this branch. The deferred finalize resolves it later, the same way the top-of-function deferral path does.
 
-### C10 [medium] (completion) src/hooks/useCliAgentRuns.ts:1402 — Manager exit finalizes the run while the QA verifier or workers are still running
-SCENARIO: Example with a one-shot CLI: gemini with a positional prompt, or aider --message. The manager writes completion.md and exits. The bridge's final poll emits 'complete' before 'exit', so handleSignal calls launchQa. 2.5 s later the exit handler runs finalizeRun({reason:'exit'}) without checking run.qaActive or running workers. finalizeRun then cancels the QA step ('Run ended before QA reported'), kills the QA PTY and marks the task done; status is not partly_done because exitCode is 0. The completion log has no QA verdict even though QA was enabled. The same happens after delegate.json: the workers just launched are cancelled and killed 2.5 s later, and the completion log says only 'agent exited'.
+### C10 [medium] (completion) src/hooks/useCliAgentRuns.ts:1402 — Manager exit finalizes the run while the verifier or workers are still running
+SCENARIO: Example with a one-shot CLI: gemini with a positional prompt, or aider --message. The manager writes completion.md and exits. The bridge's final poll emits 'complete' before 'exit', so handleSignal calls launchVerifier. 2.5 s later the exit handler runs finalizeRun({reason:'exit'}) without checking run.verifierActive or running workers. finalizeRun then cancels the verifier step ('Run ended before verifier reported'), kills the verifier PTY and marks the task done; status is not partly_done because exitCode is 0. The completion log has no verifier verdict even though verifier was enabled. The same happens after delegate.json: the workers just launched are cancelled and killed 2.5 s later, and the completion log says only 'agent exited'.
 CORRECTED FIX: 1) src/hooks/useCliAgentRuns.ts, in the deferred exit handler (around line 1401), replace the manager `else` branch with:
 
         } else {
           const workersOpen = currentRoundWorkers(run).some((w) => w.status === 'queued' || w.status === 'running');
-          if (run.qaActive || workersOpen) {
-            // The run finalizes when QA reports (qa-verdict, QA exit, or the QA-FAIL fallback when the manager is gone) or when the workers finish.
+          if (run.verifierActive || workersOpen) {
+            // The run finalizes when verifier reports (qa-verdict, verifier exit, or the verifier-FAIL fallback when the manager is gone) or when the workers finish.
             run.managerExitCode = ev.code;
             saveRunState(run);
             return;
@@ -239,7 +239,7 @@ Add `managerExitCode?: number | null;` to RunState (near line 336).
 
 finishWorker calls reportWorkersToManager with `void`, outside the task queue. If that matters, wrap the call in `void enqueue(run.taskKey, () => finalizeRun(...))`.
 
-3) Optional, for consistency in reconcile (line 1599): make the manager-gone finalize also skip when `run.qaActive` is set, since the QA-gone check just above already covers a dead QA.
+3) Optional, for consistency in reconcile (line 1599): make the manager-gone finalize also skip when `run.verifierActive` is set, since the verifier-gone check just above already covers a dead verifier.
 
 ### C11 [medium] (completion) src/App.tsx:1734 — Stop during launch preparation leaves the task stuck as executing when the task had an earlier CLI run
 SCENARIO: Example: a task already ran once in this session, or a run was restored for it, so runsRef holds a finalized RunState. The user re-runs it and presses Stop while handleExecuteTask is still in syncTaskOverviewWithAi or prepareCliLaunch/routeModelsForRun. stopCliRun returns 'finalized' rather than 'none', so handleTerminateAgent returns at line 1736. It skips setExecutingTaskId(null), the cancellation of running steps and the status reset. handleExecuteTask sees the aborted controller and returns silently (lines 2014, 2043, 2048, 2072). executingTaskId stays set, and the Summary step stays 'running' when Stop hit during synthesis. The card shows 'working' indefinitely, and pressing Stop again takes the same early return.
@@ -251,7 +251,7 @@ with
 The rest of the block stays the same. With an aborted preparing launch, the function now falls through to the existing cleanup. That cleanup clears executingTaskId, cancels the running Summary step, cancels in-progress jobs and resets the task status.
 
 ### C12 [medium] (per-agent) src/hooks/useCliAgentRuns.ts:1742 — Agent runs and PTY sessions are keyed by task id only, so the same task id in two projects collides (silent kill, wrong agents shown)
-SCENARIO: Task ids are sequential per project (App.tsx:2777), so project A and project B both have a task 3. Task 3 is running in project A. The user switches to project B, which the run code supports (deferredFinalize, projectId on the run), and runs B's task 3. launchCliRun then does four things. (1) runsRef.get('3') returns A's run, and line 1742 marks it finalized with no completion log, so A's task stays in progress forever. (2) killAgentSessions({taskId: 3}) at line 1759 kills A's manager, workers and QA on the bridge, because the bridge matches only String(taskId). (3) B's agents reuse the same PTY keys ('3::manager' from agentSessionId at cliRunClient.ts:210). (4) Even without launching anything, terminalSessions is never filtered by project: after the switch, B's task-3 card (BriefPane sessionsByTask, line 2474) shows A's task-3 manager and worker tabs and terminals as 'Working', and its Stop button kills A's run.
+SCENARIO: Task ids are sequential per project (App.tsx:2777), so project A and project B both have a task 3. Task 3 is running in project A. The user switches to project B, which the run code supports (deferredFinalize, projectId on the run), and runs B's task 3. launchCliRun then does four things. (1) runsRef.get('3') returns A's run, and line 1742 marks it finalized with no completion log, so A's task stays in progress forever. (2) killAgentSessions({taskId: 3}) at line 1759 kills A's manager, workers and verifier on the bridge, because the bridge matches only String(taskId). (3) B's agents reuse the same PTY keys ('3::manager' from agentSessionId at cliRunClient.ts:210). (4) Even without launching anything, terminalSessions is never filtered by project: after the switch, B's task-3 card (BriefPane sessionsByTask, line 2474) shows A's task-3 manager and worker tabs and terminals as 'Working', and its Stop button kills A's run.
 CORRECTED FIX: Give runs and sessions an identity scoped to the project, and kill by session id instead of by task id.
 
 1. **cliRunClient.ts**
@@ -273,8 +273,8 @@ CORRECTED FIX: Give runs and sessions an identity scoped to the project, and kil
    - Add `const projectSessions = useMemo(() => terminalSessions.filter((s) => !s.projectId || s.projectId === activeProjectId), [terminalSessions, activeProjectId])`.
    - Use `projectSessions` instead of `terminalSessions` in `runningTaskIds` (line 3828), the BriefPane prop (line 4064) and the lookup at line 2460.
 
-### C13 [medium] (per-agent) src/hooks/useCliAgentRuns.ts:552 — Worker and QA prompts take task and brief content from the open project, which may be a different one
-SCENARIO: A run of project A's task 2 is in progress when the user switches to project B, which also has a task 2. The manager then writes delegate.json, or completion.md with QA enabled. startWorker (line 755) and launchQa (line 826) build prompts from latestTask(run) and latestBrief(run). Those look up tasksRef and briefsRef, which now hold project B, by id or title only and find B's task 2. The workers get B's task description, and the QA verifier checks A's code against B's acceptance criteria and Gherkin. Its verdict and any fix loop are then based on the wrong task.
+### C13 [medium] (per-agent) src/hooks/useCliAgentRuns.ts:552 — Worker and verifier prompts take task and brief content from the open project, which may be a different one
+SCENARIO: A run of project A's task 2 is in progress when the user switches to project B, which also has a task 2. The manager then writes delegate.json, or completion.md with verifier enabled. startWorker (line 755) and launchVerifier (line 826) build prompts from latestTask(run) and latestBrief(run). Those look up tasksRef and briefsRef, which now hold project B, by id or title only and find B's task 2. The workers get B's task description, and the verifier checks A's code against B's acceptance criteria and Gherkin. Its verdict and any fix loop are then based on the wrong task.
 CORRECTED FIX: In src/hooks/useCliAgentRuns.ts:
 
 1) Add `briefSnapshot?: AgentContextItem;` to `PersistedRunState` (around line 323, next to `taskSnapshot`).
@@ -301,8 +301,8 @@ const latestBrief = (run: RunState): AgentContextItem | undefined => {
 ```
 `finalizeRun` returns early for foreign runs before it calls `latestBrief`, so its `completionRunId` check still reads the live brief.
 
-### C14 [medium] (per-agent) src/components/AgentSessionTabs.tsx:118 — Follow-live ends a delegated run on the last worker or QA with a false 'ran last' reason, hiding the manager that is still running
-SCENARIO: In a run with workers W1 and W2 and no QA, the workers finish and are killed (status 'done'). The manager integrates their work and writes completion.md, and finalizeRun sets the manager to status 'done' while leaving it alive so the user can keep steering it. pickLiveAgent then finds no prompt, no waiting manager and nothing running. It falls back to ordered[ordered.length-1], and since ordering is by role rather than by time, that is Worker W2. After 800 ms the Notes view switches from the manager to W2's dead terminal with the banner 'Now showing Worker W2 — Worker W2 ran last', even though the manager ran last. The same happens after a Stop. With QA enabled it always lands on the QA terminal.
+### C14 [medium] (per-agent) src/components/AgentSessionTabs.tsx:118 — Follow-live ends a delegated run on the last worker or verifier with a false 'ran last' reason, hiding the manager that is still running
+SCENARIO: In a run with workers W1 and W2 and no verifier, the workers finish and are killed (status 'done'). The manager integrates their work and writes completion.md, and finalizeRun sets the manager to status 'done' while leaving it alive so the user can keep steering it. pickLiveAgent then finds no prompt, no waiting manager and nothing running. It falls back to ordered[ordered.length-1], and since ordering is by role rather than by time, that is Worker W2. After 800 ms the Notes view switches from the manager to W2's dead terminal with the banner 'Now showing Worker W2 — Worker W2 ran last', even though the manager ran last. The same happens after a Stop. With verifier enabled it always lands on the verifier terminal.
 CORRECTED FIX: In src/components/AgentSessionTabs.tsx, replace lines 118-119:
 
   if (manager?.session.isActive) return { session: manager, reason: 'the Manager is still open' };
@@ -414,7 +414,7 @@ CORRECTED FIX: In src/lib/agentPipeline/toolExecutor.ts, isReadOnlyCommand (arou
 The cost is that commands like grep 'a\|b' will ask for approval instead of being auto-allowed, which keeps the "errs on the side of asking" contract. The alternative, making all three scanners skip the escaped character outside single quotes (in stripQuoted, only match a quote that has no unescaped backslash before it), takes more code and is easier to get wrong.
 
 ### C19 [medium] (security) src/hooks/useCliAgentRuns.ts:667 — Hand-off messages typed into the manager end with Enter and can approve an open approval menu in non-bypass modes
-SCENARIO: typeIntoAgent sends the message text and then '\r' 150 ms later, without checking the manager's pendingPrompt. It is called from reportWorkersToManager (line 732), the empty or invalid delegate.json path (line 1245) and the QA FAIL path (line 1319). Example: manager in Ask/acceptEdits mode writes an invalid delegate.json and goes on to a tool call, so Claude shows 'Do you want to proceed? ❯ 1. Yes 2. No'. Ergo then types 'Ergo: no valid workers… .ergo/runs/17-mg3x…/delegate.json…' followed by '\r'. The digits in the runId or worker count select a menu option, and the final Enter picks the highlighted 'Yes'. The command is approved without the user, in a mode where nothing should be auto-answered. Codex and Gemini menus have y/a/n hotkeys that the message's letters also hit.
+SCENARIO: typeIntoAgent sends the message text and then '\r' 150 ms later, without checking the manager's pendingPrompt. It is called from reportWorkersToManager (line 732), the empty or invalid delegate.json path (line 1245) and the verifier FAIL path (line 1319). Example: manager in Ask/acceptEdits mode writes an invalid delegate.json and goes on to a tool call, so Claude shows 'Do you want to proceed? ❯ 1. Yes 2. No'. Ergo then types 'Ergo: no valid workers… .ergo/runs/17-mg3x…/delegate.json…' followed by '\r'. The digits in the runId or worker count select a menu option, and the final Enter picks the highlighted 'Yes'. The command is approved without the user, in a mode where nothing should be auto-answered. Codex and Gemini menus have y/a/n hotkeys that the message's letters also hit.
 CORRECTED FIX: The fix has two parts. Part 1 is required. Part 2 is an optional backstop for the ~600 ms detection lag, during which a new prompt is not yet in `pendingPrompt`.
 
 **Part 1: defer hand-offs while a prompt is open** (src/hooks/useCliAgentRuns.ts)

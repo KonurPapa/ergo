@@ -1,10 +1,10 @@
 /**
- * Learned rules — the Workspace Settings section where the user sees and steers what Ergo learned from their feedback
- * (memory/insights.ts): edit, delete, add their own, choose whether a rule applies to every task. The last change can
+ * Learned rules — the Archives & Learnings tab where the user sees and steers what Ergo learned from their feedback
+ * (memory/insights.ts): edit, delete, choose whether a rule applies to every task. The last change can
  * be undone. Every run of the project gets these rules.
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { BookOpenCheck, Check, Pencil, Plus, Trash2, Undo2, X } from 'lucide-react';
+import { Check, Pencil, Trash2, Undo2, X } from 'lucide-react';
 import {
   applyInsightOps,
   insightsSupported,
@@ -18,13 +18,12 @@ import {
 
 const smallBtn: React.CSSProperties = { fontSize: '0.75rem', padding: '0.2rem 0.45rem', display: 'flex', alignItems: 'center', gap: '0.3rem' };
 
-export const LearnedRulesSection: React.FC<{ projectId: string; projectName: string }> = ({ projectId, projectName }) => {
+export const LearnedRulesSection: React.FC<{ projectId: string }> = ({ projectId }) => {
   const supported = insightsSupported();
   const [rules, setRules] = useState<ProjectInsight[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
-  const [newRule, setNewRule] = useState('');
   const [lastChange, setLastChange] = useState<{ label: string; changes: InsightChange[] } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -80,35 +79,11 @@ export const LearnedRulesSection: React.FC<{ projectId: string; projectName: str
     if (text && text !== rule.text) void apply([{ op: 'update', id: rule.id, text }], 'Rule edited.');
   };
 
-  const addRule = () => {
-    const text = newRule.trim();
-    if (!text) return;
-    setNewRule('');
-    void apply([{ op: 'add', text, scope: 'topical' }], 'Rule added.');
-  };
-
   return (
-    <div
-      style={{
-        background: 'rgba(16, 185, 129, 0.025)',
-        border: '1px solid rgba(16, 185, 129, 0.2)',
-        borderRadius: '8px',
-        padding: '1rem',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
-        <BookOpenCheck size={16} color="var(--accent-emerald)" />
-        <span style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--text-bright)' }}>Learned Rules</span>
-        {rules && (
-          <span style={{ fontSize: '0.68rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
-            {rules.length} for "{projectName}"
-          </span>
-        )}
-      </div>
-      <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem', lineHeight: '1.4' }}>
-        When you correct a run, Ergo saves what should apply to future tasks in this project as a rule, and every run gets
-        these rules. "Every task" rules (package manager, checks to run, git habits) always apply; topical ones guide related
-        work. Clearing the project's memory keeps them.
+    <div>
+      <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0 0 0.75rem', lineHeight: 1.45 }}>
+        When you correct the AI, it saves what should apply to future tasks here, and every run follows these rules. "Every
+        task" rules always apply; topical ones guide related work.
       </p>
 
       {!supported ? (
@@ -119,7 +94,7 @@ export const LearnedRulesSection: React.FC<{ projectId: string; projectName: str
           {rules === null && !error && <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Loading…</p>}
           {rules && rules.length === 0 && (
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic', marginBottom: '0.6rem' }}>
-              Nothing learned yet. Rules appear here after you send a run feedback such as "we use pnpm, never npm".
+              Nothing learned yet. Rules appear here when you correct a run (for example "we use pnpm, never npm"), or add your own with New Knowledge.
             </p>
           )}
           {rules && rules.length > 0 && (
@@ -211,23 +186,6 @@ export const LearnedRulesSection: React.FC<{ projectId: string; projectName: str
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: '0.4rem' }}>
-            <input
-              className="input-text"
-              placeholder="Add a rule, e.g. Run npm test before saying a task is done."
-              value={newRule}
-              onChange={(e) => setNewRule(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') addRule();
-              }}
-              style={{ flex: 1, fontSize: '0.8rem' }}
-              maxLength={400}
-            />
-            <button type="button" className="btn btn-secondary" style={smallBtn} disabled={busy || !newRule.trim()} onClick={addRule}>
-              <Plus size={12} />
-              <span>Add</span>
-            </button>
-          </div>
         </>
       )}
     </div>

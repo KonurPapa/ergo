@@ -37,7 +37,7 @@ This document details the step-by-step logic, data flow, context boundaries, and
         - **The brief is the whole spec**: the manager and every worker get the bible's metadata, task checklist, working brief and run environment — nothing else about the task. Related tasks, prior knowledge and guidelines reach them only through the brief
     - **Dual Execution Models (Solo Mode vs Multi-Agent Fan-Out)**:
         - **Direct (Solo) Execution Mode (Straightforward / Standalone Deliverables)**:
-            - when the task produces a single deliverable (e.g. single HTML game, standalone script, single component, non-coding task with <= 3 subtasks, or small task flagged with `requiresHardener: false`), the Manager executes the task **directly**
+            - when the task produces a single deliverable (e.g. single HTML game, standalone script, single component, non-coding task with <= 3 subtasks, or small task flagged with `requiresVerifier: false`), the Manager executes the task **directly**
             - completely bypasses Step A decomposition LLM calls, skips spawning worker sub-agents, and eliminates redundant Step D verification loops
             - the Manager writes the deliverable cleanly and verifies its own work via commands/evidence in a single, strictly bounded tool loop (max 5 rounds)
             - drops token usage by ~90% (from ~139k tokens down to ~8k–15k tokens) for straightforward tasks
@@ -67,7 +67,7 @@ This document details the step-by-step logic, data flow, context boundaries, and
             - **Text-Based Tool Call Parsing**: falls back to parsing `<tool_call>`, fenced JSON blocks, and raw JSON emitted in message content when local models omit native `message.tool_calls`
             - **Conversational Reminder Nudges**: on round 1 with mutating tools, nudges models to call `write_file` if they initially output conversational acknowledgments
             - **Tool Response Format**: native Ollama `/api/chat` requires `tool_name` on tool responses to preserve conversation coherence across turns
-            - **File vs Directory Tracking**: directory creation is decoupled from file creation tracking so empty folders never fool the pipeline into running downstream lint/QA passes
+            - **File vs Directory Tracking**: directory creation is decoupled from file creation tracking so empty folders never fool the pipeline into running downstream lint/verifier passes
     - **Subagent & Worker Execution Pattern (Multi-Agent Fan-Out)**:
         - markdown bible contains all metadata necessary for the manager to spin up and coordinate multiple worker agents
         - worker tool rounds are strictly bounded (max 5 rounds for single pieces, max 8 rounds for multi-worker pieces) to prevent quadratic context blowup
@@ -89,13 +89,13 @@ This document details the step-by-step logic, data flow, context boundaries, and
 4. cleaner (only if coding)
     - clean up the newly-written code so it is well-organized and passes lint/format rules
     - strictly capped to 4 rounds max; automatically skipped for standalone static deliverables (e.g. single HTML/MD files) without project lint scripts and tasks with 0 files modified
-5. hardener
-    - QA procedure & eval harness (how to know the task is completed)
+5. verifier
+    - Verifier procedure & eval harness (how to know the task is completed)
     - strictly capped (max 6 rounds) to prevent runaway token expenditure
     - **Web / UI Deliverables**: prioritizes verifying in a **headless browser (e.g. Playwright)** via `run_command` to inspect canvas, DOM nodes, event handlers, and console logs
-    - **Standalone / Straightforward Deliverables**: straightforward single-deliverable tasks verified by the manager cleanly skip Hardener (saving ~10k tokens), even across retry attempts
-    - **Manager Verification Retry Policy**: if Hardener is skipped for a standalone deliverable, but Manager execution failed verification (e.g. deliverable missing on disk), the pipeline retries the Manager with failure diagnostics instead of aborting the run
-    - QA failure records the failure diagnostics into the append-only Markdown bible log and triggers a retry from step 3
+    - **Standalone / Straightforward Deliverables**: straightforward single-deliverable tasks verified by the manager cleanly skip Verifier (saving ~10k tokens), even across retry attempts
+    - **Manager Verification Retry Policy**: if Verifier is skipped for a standalone deliverable, but Manager execution failed verification (e.g. deliverable missing on disk), the pipeline retries the Manager with failure diagnostics instead of aborting the run
+    - Verifier failure records the failure diagnostics into the append-only Markdown bible log and triggers a retry from step 3
     - any repeat causes subagent context to be cleanly torn down and re-instantiated with fresh context containing the failure diagnosis
 
 

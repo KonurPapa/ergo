@@ -11,7 +11,7 @@ Besides the agents that do the actual work, Ergo runs several small jobs: sugges
 | Job | When it runs | Model | If that isn't available |
 |---|---|---|---|
 | **Autocomplete** | While you type a task | Qwen, if local mode is on | Small cloud model, then no suggestion |
-| **Run plan** — split the work across workers? run the QA checker? | Just before a CLI task run starts | Qwen, if local mode is on | Small cloud model, then built-in rules |
+| **Run plan** — split the work across workers? run the verifier checker? | Just before a CLI task run starts | Qwen, if local mode is on | Small cloud model, then built-in rules |
 | **Task overview + rating** | Before a run (Auto model selection) | Small cloud model | Your profile's model |
 | **Task overview** | Before a run (Manual model selection) | Your profile's Summary model | — |
 | **Related tasks** — first pass | Before a run | MiniLM (vector search) | — |
@@ -33,7 +33,7 @@ Qwen was measured on every job before it was given any (details in `docs/wip/eva
 | Job | Qwen 0.5B | Small cloud model (Claude Haiku) | Verdict |
 |---|---|---|---|
 | Split the work or not | 90% correct | 82% | Qwen |
-| QA checker needed | 83% | 92% | Qwen (close; it's free) |
+| verifier checker needed | 83% | 92% | Qwen (close; it's free) |
 | Autocomplete | usable, ~100 ms | usable, slower | Qwen |
 | Task kind (coding, writing…) | 48% | 100% | Cloud |
 | Which MCP tools a task needs | ≤60% | 88% | Cloud |

@@ -19,7 +19,7 @@ When you run a task in Ergo, several AI helpers work on it, one after another. *
 : One of the helpers that work on a task:
   - The **manager** reads the task, makes a plan, and splits the work into pieces.
   - **Workers** each do one piece of the plan.
-  - The **QA checker** (quality assurance) independently tests the finished work and either passes it or sends it back with problems to fix. It's **off by default**, because most models check their own work well and many tasks are done in one go. Turn it on for a task with **QA verification** in the task's ⋯ menu.
+  - The **Verifier checker** (quality assurance) independently tests the finished work and either passes it or sends it back with problems to fix. It's **off by default**, because most models check their own work well and many tasks are done in one go. Turn it on for a task with **Verification** in the task's ⋯ menu.
   - **Bookkeeping** helpers write the task overview and the completion log.
 
 **Effort** (or **reasoning effort**)
@@ -63,7 +63,7 @@ A big but routine task needs a model that can keep track of a lot. It doesn't ne
 
 For coding tasks at the default *Medium* setting:
 
-| Task | Manager | Workers | QA checker |
+| Task | Manager | Workers | verifier checker |
 |---|---|---|---|
 | Trivial (complexity 1) | Standard | Light | Standard |
 | Typical (complexity 2–3) | Standard | Standard | Standard |
@@ -72,7 +72,7 @@ For coding tasks at the default *Medium* setting:
 
 The thinking effort follows the reasoning rating: routine work gets *Low*, ordinary work *Medium*, tricky work *High* or *Extra High*. Workers think one step less than the manager, because they follow the manager's plan.
 
-**Safety floors for coding.** The manager and the QA checker never use the light tier on coding tasks. A weak plan or a weak check can sink the whole task. Workers never use it on anything above complexity 2. Benchmark scores make cheap models look closer to expensive ones than they really are on long, multi-step jobs, so Ergo leans toward caution.
+**Safety floors for coding.** The manager and the verifier checker never use the light tier on coding tasks. A weak plan or a weak check can sink the whole task. Workers never use it on anything above complexity 2. Benchmark scores make cheap models look closer to expensive ones than they really are on long, multi-step jobs, so Ergo leans toward caution.
 
 **Bookkeeping** (the overview and completion log) always uses the light tier with little effort. It's simple work.
 
@@ -84,7 +84,7 @@ The slider next to the run button nudges Auto mode toward saving money or toward
 |---|---|
 | **Low** | One tier lower and less thinking, but never below the safety floors |
 | **Medium** | The plan above (the default) |
-| **High** | Stronger manager and QA checker, and more thinking for everyone |
+| **High** | Stronger manager and verifier checker, and more thinking for everyone |
 | **Extra High** | Every stage one tier stronger, with much more thinking |
 | **Max** | The strongest model at maximum thinking, whatever it costs |
 
@@ -106,12 +106,12 @@ A model that's both weaker *and* more expensive than another one is never used.
 
 ## Step 4: When the work fails
 
-The QA checker can reject the work and send it back with a list of problems. Normally the same model would just try again. Auto mode **steps up** instead:
+The verifier checker can reject the work and send it back with a list of problems. Normally the same model would just try again. Auto mode **steps up** instead:
 
 - **First retry:** the manager and workers move up one tier (e.g. Sonnet → Opus). In CLI runs (Claude Code, Codex, Antigravity) the manager is already mid-conversation and keeps its model; the workers it sends back to fix things step up, and the manager starts a step up on the next run.
 - **Already on the top tier:** they think harder instead (e.g. Opus at Medium → Opus at High).
 
-The QA checker keeps its model, because it was right to catch the problem.
+The verifier checker keeps its model, because it was right to catch the problem.
 
 If a task's last run failed or you stopped it, the next run of that task starts one step up (at most two). Once a run succeeds, the next one starts from the normal plan again.
 
@@ -129,9 +129,9 @@ Auto mode's starting plan is an educated guess. Over time Ergo adjusts it to *yo
 
 | Event | What Ergo learns |
 |---|---|
-| QA passed, or the run finished | Success for the models that did the work |
-| QA failed after all retries, or the run broke | Failure |
-| QA passed only after stepping up | The starting models failed and the stepped-up models succeeded. This shows exactly where the line was. |
+| verifier passed, or the run finished | Success for the models that did the work |
+| verifier failed after all retries, or the run broke | Failure |
+| verifier passed only after stepping up | The starting models failed and the stepped-up models succeeded. This shows exactly where the line was. |
 | You stopped the run | Nothing (stopping can mean many things) |
 | You ran the task again | Nothing (you may just be repeating a routine task) |
 | Your messages while it works | See below |
@@ -149,25 +149,25 @@ Auto mode's starting plan is an educated guess. Over time Ergo adjusts it to *yo
 - If a cheaper setting has a **long, strong track record** on tasks like this, it may start one step cheaper. That means roughly seven successes in a row, or something similar like 12 out of 13. It never goes below the safety floors, and never on thin evidence.
 - It compares the **total expected cost of getting a good result**, including the cost of failed attempts. A cheap model that often fails isn't actually cheap.
 
-**Trying a cheaper model, now and then.** Some tasks look like they'd be fine on a cheaper setting. For those, Ergo occasionally starts the manager *or* the workers (never both, and never QA) one step cheaper, so it can find out. It only does this when:
+**Trying a cheaper model, now and then.** Some tasks look like they'd be fine on a cheaper setting. For those, Ergo occasionally starts the manager *or* the workers (never both, and never verifier) one step cheaper, so it can find out. It only does this when:
 
 - the planned setting has a strong record on tasks like this (about seven clean results, or four "good" answers);
 - the cheaper setting has too little data to decide, and hasn't done badly so far;
 - a dice roll comes up, about one such run in four.
 
-It never goes below the safety floors. If the task has QA verification on, QA still checks the work, and a QA retry steps back up as usual. The run's notes say when Ergo is trying a cheaper model, and afterwards the task card asks you how it went. Choosing *Low* or *Manual* yourself builds the same evidence. Old results gradually count for less, so the table keeps up with new models and with how your projects change. When a provider releases a new model, its predecessor's results count for half until the new model builds its own record.
+It never goes below the safety floors. If the task has Verification on, verifier still checks the work, and a verifier retry steps back up as usual. The run's notes say when Ergo is trying a cheaper model, and afterwards the task card asks you how it went. Choosing *Low* or *Manual* yourself builds the same evidence. Old results gradually count for less, so the table keeps up with new models and with how your projects change. When a provider releases a new model, its predecessor's results count for half until the new model builds its own record.
 
 **"How did this task do?"** After some Auto runs, the task card asks for a quick **Good** or **Bad**. It only asks when Ergo can't judge the run well on its own:
 
 | When | Why your answer helps |
 |---|---|
-| QA couldn't reach a verdict | Your answer is the only check |
+| verifier couldn't reach a verdict | Your answer is the only check |
 | Ergo has fewer than three results for this model on tasks like this | Ergo can't tell yet whether it picked well |
 | The run tried a cheaper model | Ergo keeps asking until it has three answers for that model. A "bad" quickly sends similar tasks back up |
 
 It doesn't ask when the run failed or you stopped it, when you already judged the model in a message, in Manual mode, or once a model has a solid record on tasks like this. So the questions taper off as Ergo learns.
 
-Your answer counts double, because you saw the result and QA only checked it. "Bad" counts against the models that did the work, and against QA if QA passed it. "Good" counts for them. Ignore the question, or close it with ×, and nothing is recorded.
+Your answer counts double, because you saw the result and verifier only checked it. "Bad" counts against the models that did the work, and against verifier if verifier passed it. "Good" counts for them. Ignore the question, or close it with ×, and nothing is recorded.
 
 The run's notes always say when the table changed a pick, and why. For example: *"Your history: Sonnet at Medium passed 3 of 6 coding tasks like this, so starting on Opus."* You can see the table, or reset it, under **Settings → Model data**.
 

@@ -2,7 +2,7 @@
  * Small background decisions made before a CLI run starts.
  *
  * decideRunShape answers two questions for a task: is it one focused deliverable (single → the manager does it
- * itself, no worker delegation), and does it need the independent QA verifier? CLI runs have no triage call before
+ * itself, no worker delegation), and does it need the independent verifier? CLI runs have no triage call before
  * launch, so this is it. (The in-app pipeline gets the same answers from its Summary call.)
  *
  * Fallback order — a missing local model never makes a run fail:
@@ -20,8 +20,8 @@ import { getLocalModelMode } from './preference';
 export interface RunShapeDecision {
   /** One focused deliverable: the manager does the work itself (no worker delegation). */
   single: boolean;
-  /** Launch the QA verifier after the manager finishes (still subject to the user's QA setting). */
-  needsQa: boolean;
+  /** Launch the verifier after the manager finishes (still subject to the user's verifier setting). */
+  needsVerifier: boolean;
   source: 'local' | 'cloud' | 'heuristic';
   /** The cloud model that decided (source 'cloud'; empty when the CLI's default model was used). */
   model?: string;
@@ -72,9 +72,9 @@ const FILE_REF = /[\w./-]+\.(?:py|ts|tsx|js|jsx|mjs|cjs|sh|bash|rs|go|c|cpp|h|hp
 
 /**
  * Deterministic fallback. single: no subtasks, or ≤2 subtasks (≤3 for non-coding work) unless a coding task names
- * several files. needsQa: coding with ≥4 subtasks.
+ * several files. needsVerifier: coding with ≥4 subtasks.
  */
-export function heuristicRunShape(task: ShapeTask): { single: boolean; needsQa: boolean } {
+export function heuristicRunShape(task: ShapeTask): { single: boolean; needsVerifier: boolean } {
   const { title, subtasks } = taskParts(task);
   const text = [title, ...subtasks].join('\n');
   const coding = isExplicitCodeTask(text) || inferTaskKind(text) === 'coding';
@@ -82,7 +82,7 @@ export function heuristicRunShape(task: ShapeTask): { single: boolean; needsQa: 
   const multiFile = files.size >= 2;
   const n = subtasks.length;
   const single = n === 0 || (coding ? n <= 2 && !multiFile : n <= 3);
-  return { single, needsQa: coding && n >= 4 };
+  return { single, needsVerifier: coding && n >= 4 };
 }
 
 function asBool(v: unknown): boolean | undefined {
@@ -96,12 +96,12 @@ function asBool(v: unknown): boolean | undefined {
 }
 
 /** Parses the cloud model's answer; null when it isn't `{ single, needs_qa }`. */
-export function parseCloudShape(raw: string): { single: boolean; needsQa: boolean } | null {
+export function parseCloudShape(raw: string): { single: boolean; needsVerifier: boolean } | null {
   const parsed = parseJsonLoose<any>(raw);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   const single = asBool(parsed.single);
-  const needsQa = asBool(parsed.needs_qa ?? parsed.needsQa);
-  return single === undefined || needsQa === undefined ? null : { single, needsQa };
+  const needsVerifier = asBool(parsed.needs_qa ?? parsed.needsVerifier);
+  return single === undefined || needsVerifier === undefined ? null : { single, needsVerifier };
 }
 
 async function cloudRunShape(
@@ -109,7 +109,7 @@ async function cloudRunShape(
   aiConfig: AIProviderConfig | undefined,
   timeoutMs: number,
   parent?: AbortSignal
-): Promise<{ single: boolean; needsQa: boolean; model: string } | null> {
+): Promise<{ single: boolean; needsVerifier: boolean; model: string } | null> {
   const config = tinyCloudCallConfig(aiConfig);
   if (!config) return null;
   const { signal, cancel } = timeoutSignal(timeoutMs, parent);
@@ -150,7 +150,7 @@ export async function decideRunShape(
       { signal: opts.signal, timeoutMs: opts.localTimeoutMs ?? LOCAL_TIMEOUT_MS }
     );
     if (res.success) {
-      return { single: res.single, needsQa: kindHint ? false : res.needsQa, source: 'local', ms: elapsed() };
+      return { single: res.single, needsVerifier: kindHint ? false : res.needsVerifier, source: 'local', ms: elapsed() };
     }
     if (!opts.signal?.aborted) console.info('[RunShape] Local model unavailable, using the tiny cloud model:', res.error);
   }
@@ -158,29 +158,31 @@ export async function decideRunShape(
   if (!opts.signal?.aborted) {
     const cloud = await cloudRunShape(task, aiConfig, opts.cloudTimeoutMs ?? CLOUD_TIMEOUT_MS, opts.signal);
     if (cloud) {
-      return { single: cloud.single, needsQa: cloud.needsQa, source: 'cloud', ...(cloud.model ? { model: cloud.model } : {}), ms: elapsed() };
+      return { single: cloud.single, needsVerifier: cloud.needsVerifier, source: 'cloud', ...(cloud.model ? { model: cloud.model } : {}), ms: elapsed() };
     }
   }
 
   return { ...heuristicRunShape(task), source: 'heuristic', ms: elapsed() };
 }
 
-/** One line for the manager step, e.g. "Run plan: single deliverable · QA verifier skipped — decided locally by Qwen 0.5B (110 ms)". */
+/** One line for the manager step, e.g. "Run plan: single deliverable · verifier skipped — decided locally by Qwen 0.5B (110 ms)". */
 export function describeRunShape(
   decision: RunShapeDecision,
-  applied: { qaEnabled: boolean; maxWorkers: number }
+  applied: { verifierEnabled: boolean; maxWorkers: number }
 ): string {
   const plan = decision.single
     ? 'single deliverable'
     : applied.maxWorkers >= 2
       ? `several parts · up to ${applied.maxWorkers} workers`
       : 'several parts · worker delegation off in settings';
-  const qa = applied.qaEnabled ? 'QA verification on' : 'QA verification off for this task';
+  const verifier = !applied.verifierEnabled
+    ? (decision.needsVerifier ? 'Verification off for this task' : 'verifier skipped')
+    : 'Verification on';
   const by =
     decision.source === 'local'
       ? 'decided locally by Qwen 0.5B'
       : decision.source === 'cloud'
         ? `decided by ${decision.model || 'the CLI default model'}`
         : 'decided by heuristics';
-  return `Run plan: ${plan} · ${qa} — ${by} (${decision.ms} ms)`;
+  return `Run plan: ${plan} · ${verifier} — ${by} (${decision.ms} ms)`;
 }

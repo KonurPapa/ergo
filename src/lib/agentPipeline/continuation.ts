@@ -5,7 +5,7 @@
  *   - No new overview, related-task search, task rating or model routing: the saved overview, the run's bible
  *     (same run dir, same stable sections → the cached prefix still matches) and the run's models are reused.
  *   - The manager gets the prior state (completion log + the bible's event log) and the user's message, then the
- *     usual Cleaner / Hardener QA / Logger steps run, and the new completion entry is APPENDED to the log.
+ *     usual Cleaner / Verifier / Logger steps run, and the new completion entry is APPENDED to the log.
  *
  * Within one app session the run comes from runRegistry (exact bible, tools and routed config). After a restart the
  * bible is rebuilt from the saved overview and the earlier event log is read back from the run's TASK_CONTEXT.md.
@@ -47,8 +47,8 @@ import {
 } from './contracts';
 import { buildRunOutcomeRecord } from './escalation';
 import { familyForTarget } from '../modelCatalog/availability';
-import { runHardener, type HardenerResult } from './hardener';
-import { evaluateHardenerNecessity, type ExecuteTaskOptions } from './index';
+import { runVerifier, type VerifierResult } from './verifier';
+import { evaluateVerifierNecessity, type ExecuteTaskOptions } from './index';
 import { runLogger } from './logger';
 import { isStraightforwardTask, runManager, type ManagerRunResult } from './manager';
 import { pipelineRunKey, recallPipelineRun, rememberPipelineRun } from './runRegistry';
@@ -65,8 +65,8 @@ const BIBLE_EVENT_KINDS = new Set<BibleEventKind>([
   'human',
   'verify',
   'cleaner',
-  'qa_pass',
-  'qa_fail',
+  'verifier_pass',
+  'verifier_fail',
   'retry',
   'error',
 ]);
@@ -112,7 +112,7 @@ function configWithRecordedModels(aiConfig: AIProviderConfig, brief: AgentContex
   // CLI runs (`${taskId}-…` ids) record models in their CLI's vocabulary: not usable for API calls.
   if (!record?.models || record.runId.startsWith(`${taskId}-`)) return aiConfig;
   const roleConfigs = { ...(aiConfig.roleConfigs || {}) };
-  for (const role of ['manager', 'worker', 'hardener'] as const) {
+  for (const role of ['manager', 'worker', 'verifier'] as const) {
     const m = record.models[role];
     if (!m?.model && !m?.effort) continue;
     roleConfigs[role] = { ...(roleConfigs[role] || {}), ...(m.model ? { model: m.model } : {}), ...(m.effort ? { effort: m.effort } : {}) };
@@ -121,11 +121,11 @@ function configWithRecordedModels(aiConfig: AIProviderConfig, brief: AgentContex
 }
 
 function describeReusedModels(config: AIProviderConfig): string {
-  const roles: AgentRole[] = ['manager', 'worker', 'hardener', 'logger'];
+  const roles: AgentRole[] = ['manager', 'worker', 'verifier', 'logger'];
   return roles
     .map((role) => {
       const t = resolveRoleTarget(config, role);
-      return `- ${role === 'hardener' ? 'QA hardener' : role}: ${t.model || 'provider default'}${t.effort ? ` · ${t.effort}` : ''}`;
+      return `- ${role === 'verifier' ? 'Verifier' : role}: ${t.model || 'provider default'}${t.effort ? ` · ${t.effort}` : ''}`;
     })
     .join('\n');
 }
@@ -211,19 +211,19 @@ export async function continueTaskWithAi(
   const header = `**Follow-up (${date}):** _You: "${truncate(message, 240)}"_`;
   let bible: BibleStore | null = null;
   let workModels: AIProviderConfig = routedConfig;
-  const withOutcome = (updated: AgentContextItem, outcome: RunOutcome, qaRetries = 0): AgentContextItem => ({
+  const withOutcome = (updated: AgentContextItem, outcome: RunOutcome, verifierRetries = 0): AgentContextItem => ({
     ...updated,
     lastRunOutcome: buildRunOutcomeRecord({
       runId,
       outcome,
       escalation: brief?.lastRunOutcome?.escalation ?? 0,
-      qaRetries,
+      verifierRetries,
       rating: brief?.overviewDocument?.taskRating ?? brief?.lastRunOutcome?.rating,
       family: familyForTarget(resolveRoleTarget(workModels, 'manager')) ?? brief?.lastRunOutcome?.family,
       models: {
         manager: { model: resolveRoleTarget(workModels, 'manager').model, effort: resolveRoleTarget(workModels, 'manager').effort },
         worker: { model: resolveRoleTarget(workModels, 'worker').model, effort: resolveRoleTarget(workModels, 'worker').effort },
-        hardener: { model: resolveRoleTarget(workModels, 'hardener').model, effort: resolveRoleTarget(workModels, 'hardener').effort },
+        verifier: { model: resolveRoleTarget(workModels, 'verifier').model, effort: resolveRoleTarget(workModels, 'verifier').effort },
       },
     }),
   });
@@ -241,8 +241,8 @@ export async function continueTaskWithAi(
     // ── The run's bible: the same one (in memory), or rebuilt from the saved overview + its event log on disk ──
     let requiredSet: string[];
     let taskKind: TaskKind;
-    let requiresHardener: boolean | undefined;
-    let hardenerReason: string | undefined;
+    let requiresVerifier: boolean | undefined;
+    let verifierReason: string | undefined;
     let overviewDoc: OverviewDocument;
     if (prior) {
       // Same stable sections the run's agents saw (byte-identical cached prefix), plus its pieces and event log.
@@ -251,15 +251,15 @@ export async function continueTaskWithAi(
       bible.setPieces(prior.bible.pieces);
       requiredSet = prior.requiredMcps;
       taskKind = prior.taskKind;
-      requiresHardener = prior.requiresHardener;
-      hardenerReason = prior.hardenerReason;
+      requiresVerifier = prior.requiresVerifier;
+      verifierReason = prior.verifierReason;
       overviewDoc = prior.overviewDoc;
     } else {
       overviewDoc = brief ? overviewDocumentFor(brief) : { raw: buildOfflineTaskBrief(task) };
       const text = `${task.category || ''} ${task.title} ${task.subtasks.map((s) => s.text).join(' ')} ${overviewDoc.raw}`;
       taskKind = normalizeTaskKind(overviewDoc.taskKind) || (isExplicitCodeTask(text) ? 'coding' : inferTaskKind(text));
-      requiresHardener = overviewDoc.requiresHardener;
-      hardenerReason = overviewDoc.hardenerReason;
+      requiresVerifier = overviewDoc.requiresVerifier;
+      verifierReason = overviewDoc.verifierReason;
       requiredSet = Array.from(
         new Set([
           ...(overviewDoc.requiredMcps || []),
@@ -276,8 +276,8 @@ export async function continueTaskWithAi(
           overviewDoc,
           requiredMcps: requiredSet,
           taskKind,
-          requiresHardener,
-          hardenerReason,
+          requiresVerifier,
+          verifierReason,
           allowedRoots: ctx.allowedRoots,
           runId,
         }),
@@ -297,8 +297,8 @@ export async function continueTaskWithAi(
       stableSections: structuredClone(runBible.sections),
       requiredMcps: requiredSet,
       taskKind,
-      requiresHardener,
-      hardenerReason,
+      requiresVerifier,
+      verifierReason,
       overviewDoc,
       getAiConfig: () => ctx.aiConfig,
       getRouting: () => prior?.getRouting(),
@@ -309,12 +309,12 @@ export async function continueTaskWithAi(
       `${previousCompletion ? `Completion log so far:\n${previousCompletion.replace(/<!--[\s\S]*?-->/g, '').slice(-2500)}\n\n` : ''}` +
       runBible.renderEventLog({ last: 15 });
 
-    // ── Manager → Cleaner → Hardener (bounded QA retries), as in a normal run ──
+    // ── Manager → Cleaner → Verifier (bounded verifier retries), as in a normal run ──
     let mgr: ManagerRunResult | null = null;
-    let hardener: HardenerResult | undefined;
+    let verifier: VerifierResult | undefined;
     let diagnostics: string | undefined;
     let attempt = 1;
-    const maxAttempts = 1 + Math.max(0, resolvedOptions.maxQaRetries);
+    const maxAttempts = 1 + Math.max(0, resolvedOptions.maxVerifierRetries);
     for (; attempt <= maxAttempts; attempt++) {
       ctx.steering?.setManagerDone(false);
       mgr = await runManager(ctx, runBible, tools, locks, attempt, diagnostics, { message, priorState });
@@ -325,31 +325,35 @@ export async function continueTaskWithAi(
       if (resolvedOptions.enableCleaner && taskKind === 'coding' && filesArray.length > 1 && !isStraightforward) {
         await runCleaner(ctx, runBible, tools, filesArray, attempt);
       }
-      const hardenerEval = evaluateHardenerNecessity({ qaVerification: brief?.qaVerification === true, attempt });
-      if (!hardenerEval.shouldRun) {
-        runBible.appendEvent({ actor: 'pipeline', kind: 'info', text: `Hardener skipped for the follow-up: ${hardenerEval.reason}` });
+      const verifierEval = evaluateVerifierNecessity({
+        verification: brief?.verification !== false,
+        attempt,
+        summaryRequiresVerifier: requiresVerifier,
+      });
+      if (!verifierEval.shouldRun) {
+        runBible.appendEvent({ actor: 'pipeline', kind: 'info', text: `Verifier skipped for the follow-up: ${verifierEval.reason}` });
         ctx.emit({
-          id: `step-hardener-skipped-a${attempt}`,
-          stage: 'hardener',
-          agentRole: 'hardener',
-          title: 'Hardener QA: Skipped (Token Efficiency)',
-          detail: hardenerEval.reason,
+          id: `step-verifier-skipped-a${attempt}`,
+          stage: 'verifier',
+          agentRole: 'verifier',
+          title: 'Verifier: Skipped (Token Efficiency)',
+          detail: verifierEval.reason,
           status: 'success',
         });
         if (mgr.allCriteriaPass || attempt >= maxAttempts) break;
         diagnostics = mgr.verificationSummary;
         continue;
       }
-      hardener = await runHardener(ctx, runBible, tools, taskKind, filesArray, attempt);
-      if (hardener.verdict !== 'fail' || attempt >= maxAttempts) break;
+      verifier = await runVerifier(ctx, runBible, tools, taskKind, filesArray, attempt);
+      if (verifier.verdict !== 'fail' || attempt >= maxAttempts) break;
       diagnostics =
-        hardener.failures.map((f) => `- [${f.criterion}] ${f.diagnostics}`).join('\n') + (hardener.evidence ? `\n\nEvidence: ${hardener.evidence}` : '');
-      runBible.appendEvent({ actor: 'pipeline', kind: 'retry', text: `QA failed on follow-up attempt ${attempt}; re-running the manager with the diagnostics.` });
+        verifier.failures.map((f) => `- [${f.criterion}] ${f.diagnostics}`).join('\n') + (verifier.evidence ? `\n\nEvidence: ${verifier.evidence}` : '');
+      runBible.appendEvent({ actor: 'pipeline', kind: 'retry', text: `Verifier failed on follow-up attempt ${attempt}; re-running the manager with the diagnostics.` });
       ctx.emit({
         id: `step-retry-${attempt}`,
         stage: 'retry',
-        title: `QA Failed — Retrying Manager (attempt ${attempt + 1} of ${maxAttempts})`,
-        detail: hardener.failures.map((f) => `✗ ${f.criterion}: ${f.diagnostics.slice(0, 200)}`).join('\n'),
+        title: `Verifier Failed — Retrying Manager (attempt ${attempt + 1} of ${maxAttempts})`,
+        detail: verifier.failures.map((f) => `✗ ${f.criterion}: ${f.diagnostics.slice(0, 200)}`).join('\n'),
         status: 'warning',
       });
     }
@@ -360,15 +364,15 @@ export async function continueTaskWithAi(
     const result = await runLogger(ctx, runBible, {
       createdFiles: Array.from(createdFiles),
       usedToolCalling: mgr.usedToolCalling,
-      hardener,
-      qaAttempts: attempt,
+      verifier,
+      verifierAttempts: attempt,
       allCriteriaPass: mgr.allCriteriaPass,
       overviewDoc,
     });
     runBible.appendEvent({ actor: 'pipeline', kind: 'info', text: `Follow-up complete — status ${result.updatedTask.status}; usage ${formatUsage(ctx.usage)}.` });
     await runBible.persist();
-    const outcome: RunOutcome = hardener
-      ? hardener.verdict === 'pass' ? 'passed' : hardener.verdict === 'fail' ? 'qa_failed' : 'unverified'
+    const outcome: RunOutcome = verifier
+      ? verifier.verdict === 'pass' ? 'passed' : verifier.verdict === 'fail' ? 'verifier_failed' : 'unverified'
       : mgr.allCriteriaPass ? 'completed' : 'failed';
     const newCompletion = `${header}\n\n${result.updatedBrief.completion}`;
     const updatedBrief: AgentContextItem = {

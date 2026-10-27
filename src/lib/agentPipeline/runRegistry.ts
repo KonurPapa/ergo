@@ -19,8 +19,8 @@ export interface PipelineRunRecord {
   /** MCP selection the run's tool list was built from (the same list keeps the tools block byte-stable). */
   requiredMcps: string[];
   taskKind: TaskKind;
-  requiresHardener?: boolean;
-  hardenerReason?: string;
+  requiresVerifier?: boolean;
+  verifierReason?: string;
   overviewDoc: OverviewDocument;
   /** The routed config the run's agents used last (step-ups included). */
   getAiConfig: () => AIProviderConfig;

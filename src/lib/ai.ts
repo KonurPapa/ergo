@@ -22,13 +22,12 @@ import { callMcpTool, formatConnectionsForAiPrompt, getAllowedRoots } from './mc
 import { storageManager } from './storageManager';
 import { parseTodoMarkdown } from './parser';
 import { callAiEngine, stripSkillFrontmatter } from './llmClient';
-import { runSessionRetrospective, type RetrospectiveInput } from './memory';
 import { extractTaskRatingLine } from './agentPipeline/taskRating';
 import { buildOfflineTaskBrief, buildTaskBriefPrompts } from './agentPipeline/taskBrief';
 import { resolveRequiredMcps } from './agentPipeline/summary';
 import { loadPipelineSkill } from './agentPipeline/skills';
 
-// The agent execution pipeline (Discovery → Summary → Manager → Cleaner → Hardener → Logger)
+// The agent execution pipeline (Discovery → Summary → Manager → Cleaner → Verifier → Logger)
 // lives in ./agentPipeline. Re-exported here so existing imports keep working.
 export { executeTaskWithAi } from './agentPipeline';
 export { callAiEngine } from './llmClient';
@@ -900,23 +899,6 @@ export async function runOfflineExecution(
     totalUsage: { inputTokens: 1450, outputTokens: 420, cachedInputTokens: 300, cacheWriteTokens: 0, calls: 3 },
     subtasks: allSubtasks.length > 0 ? allSubtasks : task.subtasks.map((s) => ({ ...s, isDone: true }))
   };
-
-  // Run session retrospective to store concise results & learnings in vector memory
-  try {
-    const retroInput: RetrospectiveInput = {
-      taskId: task.id,
-      taskTitle: task.title,
-      projectId: project?.id,
-      overview: overviewContent,
-      buildLog: buildVerificationContent,
-      completion: completionContent,
-      createdFiles: sampleCreatedFiles,
-      allCriteriaPass: true,
-    };
-    void runSessionRetrospective(retroInput);
-  } catch (err) {
-    console.warn('[Ergo Offline] Session retrospective failed (non-fatal):', err);
-  }
 
   onStepUpdate({
     id: offlineSteps[4].id!,

@@ -40,7 +40,7 @@ import {
 export const MEMORY_EMBEDDING_DIM = 384;
 export const MEMORY_MODEL_ID = 'Xenova/all-MiniLM-L6-v2';
 export const MEMORY_NAMESPACES: readonly MemoryNamespace[] = ['learnings', 'tasks', 'code-map', 'agent-notes', 'workspace', 'insights'];
-export const AGENT_NOTE_KINDS: readonly AgentNoteKind[] = ['completion', 'worker', 'qa', 'plan', 'note', 'artifact'];
+export const AGENT_NOTE_KINDS: readonly AgentNoteKind[] = ['completion', 'worker', 'verifier', 'plan', 'note', 'artifact'];
 
 const DIM = MEMORY_EMBEDDING_DIM;
 const STORE_VERSION = 1;
@@ -598,6 +598,15 @@ export class MemoryStore {
         this.log(`Dropped ${n} stale overview copies (migrated_*)`);
         return n;
       }).catch((err) => this.log('Dropping stale overview copies failed', err));
+    }
+    // One-line run summaries an older app wrote after every run (ids `task_summary_<project>_<task>`): the run's
+    // completion record in agent-notes already holds this, so they were duplicates, dropped once.
+    if (rows.some((r) => r.id.startsWith('task_summary_'))) {
+      void this.mutate(async () => {
+        const n = this.removeWhere((r) => r.id.startsWith('task_summary_'));
+        this.log(`Dropped ${n} duplicate run summaries (task_summary_*)`);
+        return n;
+      }).catch((err) => this.log('Dropping duplicate run summaries failed', err));
     }
     if (!vectorsOk) {
       // A crash between the two renames (or a hand-edited file): re-embed everything in the background.

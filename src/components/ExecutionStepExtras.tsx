@@ -44,7 +44,7 @@ export const StepStatusIcon: React.FC<{ step: ExecutionStep; size?: number }> = 
         return <ShieldCheck size={size} color="var(--accent-emerald)" className="pulse-animate" />;
       case 'cleaner':
         return <Sparkles size={size} color="var(--accent-amber)" className="spin-animate" />;
-      case 'hardener':
+      case 'verifier':
         return <FlaskConical size={size} color="#a78bfa" className="pulse-animate" />;
       case 'retry':
         return <RotateCw size={size} color="var(--accent-rose)" className="spin-animate" />;
@@ -55,7 +55,7 @@ export const StepStatusIcon: React.FC<{ step: ExecutionStep; size?: number }> = 
   if (step.status === 'success') return <CheckCircle2 size={size} color="var(--accent-emerald)" />;
   if (step.status === 'warning') {
     if (step.stage === 'retry') return <RotateCw size={size} color="var(--accent-rose)" />;
-    if (step.stage === 'hardener') return <FlaskConical size={size} color="var(--accent-amber)" />;
+    if (step.stage === 'verifier') return <FlaskConical size={size} color="var(--accent-amber)" />;
     return <ShieldAlert size={size} color="var(--accent-rose)" />;
   }
   if (step.status === 'pending') return <CircleDot size={size} color="var(--text-dim)" />;

@@ -1,3 +1,4 @@
+import { parseSavedJson } from './legacyVerifier';
 import { type AgentContextItem, type ExecutionStep, type RunningJobsDoc } from '../types';
 
 export const RUNNING_JOBS_FILENAME = 'RUNNING_JOBS.json';
@@ -37,7 +38,7 @@ export function parseRunningJobsDoc(raw: string, fallbackProjectId: string): Run
   }
 
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = parseSavedJson(raw);
     return {
       version: parsed.version || 1,
       projectId: parsed.projectId || fallbackProjectId,

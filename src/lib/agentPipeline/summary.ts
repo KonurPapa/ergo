@@ -1,7 +1,7 @@
 /**
  * Step 2 — Summary: writes the working brief (docs/skills/task-brief, the same spec CLI runs hand their manager) from
  * the Markdown baseline — task, related tasks and notes, prior knowledge, project guidelines — and picks the MCPs, task
- * kind and Hardener decision. The brief, verbatim, is the spec section of the TASK_CONTEXT.md bible: the manager and
+ * kind and Verifier decision. The brief, verbatim, is the spec section of the TASK_CONTEXT.md bible: the manager and
  * workers get nothing else about the task.
  */
 import { type AgentContextItem, type MCPServer, type OverviewDocument, type TaskItem, type TaskKind, type TaskRating, type TokenUsage, type BibleSections } from '../../types';
@@ -28,8 +28,8 @@ export interface SummaryResult {
   overviewDoc: OverviewDocument;
   requiredMcps: string[];
   taskKind: TaskKind;
-  requiresHardener: boolean;
-  hardenerReason?: string;
+  requiresVerifier: boolean;
+  verifierReason?: string;
   /** How demanding the task is (Auto model selection); undefined when the model didn't rate it. */
   taskRating?: TaskRating;
   sections: BibleSections;
@@ -50,8 +50,8 @@ const OUTPUT_CONTRACT =
   '"brief" (the working brief as one Markdown string, in exactly the format and headings your skill defines), ' +
   '"requiredMcps" (array of connected MCP server names/ids actually needed — 0 to 2 typical; provision shell/process-execution tools or domain MCPs like Godot whenever headless execution, scripts, tests, or CLI commands are involved), ' +
   '"taskKind" (one of coding | writing | research | ops | data | other — MUST be "coding" if the task contains verbs like write, script, scaffold, compile, or references languages/extensions like .py, .ts, .sh), ' +
-  '"requiresHardener" (boolean: true for large coding/architectural tasks requiring independent QA proof; false for small/generic tasks or single-action MCP calls), ' +
-  '"hardenerReason" (short string explaining why Hardener QA is required or skipped), ' +
+  '"requiresVerifier" (boolean: true for large coding/architectural tasks requiring independent verifier proof; false for small/generic tasks or single-action MCP calls), ' +
+  '"verifierReason" (short string explaining why Verifier is required or skipped), ' +
   '"relatedTaskIds" (array of ids — task ids or note:… ids — from the "Candidate Related Tasks" list whose content is genuinely useful context for THIS task — a shared feature area, a dependency, prior work to build on, or a conflict to avoid; [] when none are or there is no list; 0 to 5 typical), ' +
   `"taskRating" (object {"complexity": 1-5, "reasoning": 1-5} rating how demanding the task is — ${TASK_RATING_SCALES}).`;
 
@@ -167,14 +167,14 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
   // for a new Summary call, unless the task's text changed since it was generated.
   const reusedDoc = brief && isOverviewReusable(brief, task) ? overviewDocumentFor(brief) : null;
 
-  // Task kind, MCP selection and the Hardener decision come from this step's own model call (or its heuristics).
+  // Task kind, MCP selection and the Verifier decision come from this step's own model call (or its heuristics).
   // A small local model was evaluated for them (40 labelled tasks: task kind 48%, MCP selection ≤60% exact) and is
   // not used here; it only decides the shape of CLI runs (src/lib/localModel/decisions.ts).
 
   let parsed: any = undefined;
   if (reusedDoc) {
     // Carry the saved classification through the same post-processing as a fresh result.
-    parsed = { taskKind: reusedDoc.taskKind, requiresHardener: reusedDoc.requiresHardener, hardenerReason: reusedDoc.hardenerReason };
+    parsed = { taskKind: reusedDoc.taskKind, requiresVerifier: reusedDoc.requiresVerifier, verifierReason: reusedDoc.verifierReason };
   } else {
     ctx.emit({
       id: 'step-overview',
@@ -276,20 +276,20 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
     /create an? (?:html|browser|standalone|simple) (?:game|page|script|app|tool)/i.test(titleText);
   const isSmallScope = task.subtasks.length <= 3;
 
-  let requiresHardener: boolean;
-  let hardenerReason: string | undefined;
+  let requiresVerifier: boolean;
+  let verifierReason: string | undefined;
 
   if (isStandaloneSingleDeliverable && isSmallScope) {
-    // Single deliverable / standalone tasks (e.g. single HTML game, standalone script) MUST skip Hardener to conserve tokens
-    requiresHardener = false;
-    hardenerReason = 'Standalone single deliverable; skipping Hardener to conserve tokens per workflow rules.';
-  } else if (typeof parsed?.requiresHardener === 'boolean') {
-    requiresHardener = parsed.requiresHardener;
-    hardenerReason = typeof parsed.hardenerReason === 'string' && parsed.hardenerReason.trim()
-      ? parsed.hardenerReason.trim()
+    // Single deliverable / standalone tasks (e.g. single HTML game, standalone script) MUST skip Verifier to conserve tokens
+    requiresVerifier = false;
+    verifierReason = 'Standalone single deliverable; skipping Verifier to conserve tokens per workflow rules.';
+  } else if (typeof parsed?.requiresVerifier === 'boolean') {
+    requiresVerifier = parsed.requiresVerifier;
+    verifierReason = typeof parsed.verifierReason === 'string' && parsed.verifierReason.trim()
+      ? parsed.verifierReason.trim()
       : undefined;
   } else {
-    // Intelligent heuristic fallback: large coding tasks across multiple files or complex architecture warrant Hardener QA.
+    // Intelligent heuristic fallback: large coding tasks across multiple files or complex architecture warrant Verifier.
     // Standalone single-file tasks (e.g. single html/script/doc) or simple tasks skip it to conserve tokens.
     const isMultiFileOrComplex =
       taskKind === 'coding' &&
@@ -297,15 +297,15 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
       (task.subtasks.length >= 3 || doneWhenCriteria(overviewDoc.raw).length >= 3);
 
     if (isMultiFileOrComplex) {
-      requiresHardener = true;
-      hardenerReason = 'Complex coding task with multiple deliverables warrants independent QA validation.';
+      requiresVerifier = true;
+      verifierReason = 'Complex coding task with multiple deliverables warrants independent verifier validation.';
     } else {
-      requiresHardener = false;
-      hardenerReason = 'Task scope is small, standalone or generic; skipping Hardener to conserve tokens.';
+      requiresVerifier = false;
+      verifierReason = 'Task scope is small, standalone or generic; skipping Verifier to conserve tokens.';
     }
   }
-  overviewDoc.requiresHardener = requiresHardener;
-  overviewDoc.hardenerReason = hardenerReason;
+  overviewDoc.requiresVerifier = requiresVerifier;
+  overviewDoc.verifierReason = verifierReason;
   overviewDoc.requiredMcps = [...requiredMcps];
 
   // ── Related tasks (stage 2) ────────────────────────────────────────────────
@@ -331,8 +331,8 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
     overviewDoc,
     requiredMcps,
     taskKind,
-    requiresHardener,
-    hardenerReason,
+    requiresVerifier,
+    verifierReason,
     allowedRoots: ctx.allowedRoots,
     runId: ctx.runId
   });
@@ -341,7 +341,7 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
 
   console.log('%c[Ergo Agent Pipeline] ── Step 2: Summary → Working Brief ──', 'color: #f59e0b; font-weight: bold; font-size: 13px;');
   console.log(overviewDoc.raw);
-  console.log(JSON.stringify({ requiredMcps, taskKind, requiresHardener, hardenerReason }, null, 2));
+  console.log(JSON.stringify({ requiredMcps, taskKind, requiresVerifier, verifierReason }, null, 2));
 
   // The context step shows the selection next to its candidates.
   if (selectedRelatedTaskIds && baseline.contextStep) {
@@ -363,11 +363,11 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
     stage: 'overview',
     agentRole: 'summary',
     title: reusedDoc ? 'Summary AI: Reused Saved Brief (no new call)' : 'Summary AI: Working Brief Ready',
-    detail: `${reusedDoc ? 'Reused the brief saved from an earlier run — edit the task to regenerate it. ' : ''}Working brief ready — kind: ${taskKind}${requiredMcps.length > 0 ? ` · MCPs: ${requiredMcps.join(', ')}` : ' · no external MCPs'} · hardener: ${requiresHardener ? 'required' : 'skipped'}`,
+    detail: `${reusedDoc ? 'Reused the brief saved from an earlier run — edit the task to regenerate it. ' : ''}Working brief ready — kind: ${taskKind}${requiredMcps.length > 0 ? ` · MCPs: ${requiredMcps.join(', ')}` : ' · no external MCPs'} · verifier: ${requiresVerifier ? 'required' : 'skipped'}`,
     status: 'success',
     overviewDocument: overviewDoc,
     usage: { ...usage }
   });
 
-  return { overviewDoc, requiredMcps, taskKind, requiresHardener, hardenerReason, ...(taskRating ? { taskRating } : {}), sections, usage };
+  return { overviewDoc, requiredMcps, taskKind, requiresVerifier, verifierReason, ...(taskRating ? { taskRating } : {}), sections, usage };
 }

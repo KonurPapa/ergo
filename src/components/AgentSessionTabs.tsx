@@ -7,11 +7,10 @@ import type { AgentRole, AgentSessionRole, AgentSessionStatus, SpawnedSession } 
  * of the Notes view, and the ordering / follow-live rules that decide which agent's terminal is shown.
  */
 
-/** Every role a badge can show: CLI agent sessions plus the in-app pipeline's step roles ("hardener" shows as QA). */
+/** Every role a badge can show: CLI agent sessions plus the in-app pipeline's step roles. */
 export type AgentBadgeRole = AgentSessionRole | AgentRole;
-type NormalizedBadgeRole = 'manager' | 'worker' | 'qa' | 'summary' | 'cleaner' | 'logger' | 'autocomplete';
 
-export const AGENT_ROLE_ORDER: Record<AgentSessionRole, number> = { manager: 0, worker: 1, qa: 2 };
+export const AGENT_ROLE_ORDER: Record<AgentSessionRole, number> = { manager: 0, worker: 1, verifier: 2 };
 
 /** Statuses during which an agent still counts as working on the task. */
 const WORKING_STATUSES: ReadonlySet<AgentSessionStatus> = new Set(['starting', 'running', 'awaiting_approval', 'waiting']);
@@ -46,19 +45,15 @@ export function agentStatusLabel(status: AgentSessionStatus | undefined): string
   }
 }
 
-function normalizeRole(role: AgentBadgeRole): NormalizedBadgeRole {
-  return role === 'hardener' ? 'qa' : role;
-}
-
-/** Default label for a role when no session label is known, e.g. "Worker W2", "QA". */
+/** Default label for a role when no session label is known, e.g. "Worker W2", "Verifier". */
 export function defaultAgentLabel(role: AgentBadgeRole, pieceId?: string): string {
-  switch (normalizeRole(role)) {
+  switch (role) {
     case 'manager':
       return 'Manager';
     case 'worker':
       return pieceId ? `Worker ${pieceId}` : 'Worker';
-    case 'qa':
-      return 'QA';
+    case 'verifier':
+      return 'Verifier';
     case 'summary':
       return 'Summary';
     case 'cleaner':
@@ -70,7 +65,7 @@ export function defaultAgentLabel(role: AgentBadgeRole, pieceId?: string): strin
   }
 }
 
-/** Order agents manager → workers (by piece id, numeric-aware) → QA; ties by launch time. */
+/** Order agents manager → workers (by piece id, numeric-aware) → verifier; ties by launch time. */
 export function sortAgentSessions(sessions: SpawnedSession[]): SpawnedSession[] {
   return [...sessions].sort(
     (a, b) =>
@@ -94,7 +89,7 @@ export interface LiveAgentPick {
 
 /**
  * Which agent the Notes view follows until the user picks another agent's tab:
- * an agent awaiting approval → (manager waiting) the first running worker, else running QA → the running manager →
+ * an agent awaiting approval → (manager waiting) the first running worker, else running verifier → the running manager →
  * any running agent → the still-open manager → the agent that finished most recently.
  */
 export function pickLiveAgent(sessions: SpawnedSession[]): LiveAgentPick | null {
@@ -107,8 +102,8 @@ export function pickLiveAgent(sessions: SpawnedSession[]): LiveAgentPick | null 
   if (manager?.status === 'waiting') {
     const worker = ordered.find((s) => s.role === 'worker' && isAgentRunning(s.status));
     if (worker) return { session: worker, reason: 'the Manager is waiting on its workers' };
-    const qa = ordered.find((s) => s.role === 'qa' && isAgentRunning(s.status));
-    if (qa) return { session: qa, reason: 'QA is verifying the work' };
+    const verifier = ordered.find((s) => s.role === 'verifier' && isAgentRunning(s.status));
+    if (verifier) return { session: verifier, reason: 'Verifier is verifying the work' };
   }
   if (manager && isAgentRunning(manager.status)) return { session: manager, reason: 'the Manager is working' };
 
@@ -127,10 +122,10 @@ export function pickLiveAgent(sessions: SpawnedSession[]): LiveAgentPick | null 
   return { session: last, reason: `${last.label} ran last` };
 }
 
-const ROLE_ICONS: Record<NormalizedBadgeRole, React.ComponentType<{ size?: number; className?: string }>> = {
+const ROLE_ICONS: Record<AgentBadgeRole, React.ComponentType<{ size?: number; className?: string }>> = {
   manager: Brain,
   worker: Users,
-  qa: ShieldCheck,
+  verifier: ShieldCheck,
   summary: Sparkles,
   cleaner: Eraser,
   logger: ScrollText,
@@ -140,7 +135,7 @@ const ROLE_ICONS: Record<NormalizedBadgeRole, React.ComponentType<{ size?: numbe
 export interface AgentRoleBadgeProps {
   role: AgentBadgeRole;
   pieceId?: string;
-  /** Text to show; defaults to the role name ("Manager", "Worker W2", "QA"). */
+  /** Text to show; defaults to the role name ("Manager", "Worker W2", "Verifier"). */
   label?: string;
   size?: 'sm' | 'md';
   title?: string;
@@ -148,12 +143,11 @@ export interface AgentRoleBadgeProps {
 
 /** Role pill: role colour + icon + label, used on tabs, terminal headers, the notes bridge and step cards. */
 export const AgentRoleBadge: React.FC<AgentRoleBadgeProps> = ({ role, pieceId, label, size = 'sm', title }) => {
-  const normalized = normalizeRole(role);
-  const Icon = ROLE_ICONS[normalized];
+  const Icon = ROLE_ICONS[role];
   const text = label?.trim() || defaultAgentLabel(role, pieceId);
   return (
     <span
-      className={`agent-role-badge role-${normalized} size-${size}`}
+      className={`agent-role-badge role-${role} size-${size}`}
       title={title || `${defaultAgentLabel(role, pieceId)} agent`}
     >
       <Icon size={size === 'md' ? 13 : 11} className="agent-role-badge-icon" />
@@ -173,7 +167,7 @@ export interface AgentSessionTabsProps {
   onSelect: (ptySessionId: string) => void;
 }
 
-/** Tab strip of a task run's agents (manager → workers → QA). */
+/** Tab strip of a task run's agents (manager → workers → verifier). */
 export const AgentSessionTabs: React.FC<AgentSessionTabsProps> = ({ sessions, selectedId, onSelect }) => {
   const ordered = sortAgentSessions(sessions);
   if (ordered.length === 0) return null;
@@ -189,7 +183,7 @@ export const AgentSessionTabs: React.FC<AgentSessionTabsProps> = ({ sessions, se
               type="button"
               role="tab"
               aria-selected={isSelected}
-              className={`agent-session-tab role-${normalizeRole(s.role)} ${isSelected ? 'is-selected' : ''} ${needsApproval ? 'needs-approval' : ''}`}
+              className={`agent-session-tab role-${s.role} ${isSelected ? 'is-selected' : ''} ${needsApproval ? 'needs-approval' : ''}`}
               onClick={() => onSelect(s.ptySessionId)}
               title={`${s.label} · ${s.cmd} · ${agentStatusLabel(s.status)}`}
             >

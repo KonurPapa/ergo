@@ -563,7 +563,7 @@ export const LocalModelOnboardingStep: React.FC<LocalModelOnboardingStepProps> =
       <div className="lm-card">
         <p className="lm-lead">
           Ergo can run <strong>Qwen 2.5 Coder 0.5B</strong>, a small open model, on this computer. It makes quick
-          background decisions, such as whether a task needs a separate QA check, and suggests autocomplete text as
+          background decisions, such as whether a task needs a separate verifier check, and suggests autocomplete text as
           you type. It runs privately: what it reads stays on your computer.
         </p>
 

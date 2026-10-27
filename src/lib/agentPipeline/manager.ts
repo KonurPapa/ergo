@@ -31,7 +31,7 @@ import { type BibleStore, type FileLockRegistry, doneWhenCriteria, normalizePath
 import { runToolLoop } from './providerLoop';
 import { createToolExecutor } from './toolExecutor';
 import { loadPipelineSkill } from './skills';
-import { verifyDeliverableHealth } from './verifier';
+import { verifyDeliverableHealth } from './smokeTest';
 
 export interface ManagerRunResult {
   pieces: PuzzlePiece[];
@@ -106,8 +106,8 @@ export function isStraightforwardTask(bible: BibleStore): boolean {
     return true;
   }
 
-  // Summary explicitly flagged task as small/generic needing no hardener
-  if (metadata.requiresHardener === false) {
+  // Summary explicitly flagged task as small/generic needing no verifier
+  if (metadata.requiresVerifier === false) {
     return true;
   }
 
@@ -365,7 +365,7 @@ export async function runManager(
   const criterionIds = criteria.map((c) => c.id);
   const criteriaLine = criteria.length > 0 ? criteria.map((c) => c.id).join(', ') : '(none listed — cover the Goal and Scope)';
   // The SAME tool list is offered to every role/phase (tools render at position 0 of the prompt, so any
-  // difference would forfeit cache sharing between manager, workers and hardener). What each phase may
+  // difference would forfeit cache sharing between manager, workers and verifier). What each phase may
   // actually do is enforced by the executor scope (read-only / write paths), not by pruning definitions.
   const managerTarget = resolveRoleTarget(aiConfig, 'manager');
   const workerTarget = resolveRoleTarget(aiConfig, 'worker');
@@ -451,7 +451,7 @@ export async function runManager(
       `- MANDATORY TOOL USE: When creating or modifying code deliverables, you MUST invoke the write_file tool on the Filesystem MCP. Outputting code blocks in chat or markdown does NOT count as task completion. Deliverable files MUST physically exist on disk.\n` +
       resumeNotice +
       (attempt > 1 && priorFailureDiagnostics
-        ? `\n## Prior attempt failed QA — fix exactly these:\n${priorFailureDiagnostics}\n\n${bible.renderEventLog({ last: 15 })}\n`
+        ? `\n## Prior attempt failed verifier — fix exactly these:\n${priorFailureDiagnostics}\n\n${bible.renderEventLog({ last: 15 })}\n`
         : '') +
       `\nProduce the complete, fully functioning deliverable per the brief's Scope and every criterion (no placeholder skeletons/stubs), verify your work with commands/evidence, and reply with a condensed summary ending with "STATUS: DONE".`;
 
@@ -691,7 +691,7 @@ export async function runManager(
     id: decomposeStepId,
     stage: 'decompose',
     agentRole: 'manager',
-    title: attempt > 1 ? `Manager AI: Re-planning after QA failure (attempt ${attempt})` : 'Manager AI: Decomposing the Brief into Puzzle Pieces',
+    title: attempt > 1 ? `Manager AI: Re-planning after verifier failure (attempt ${attempt})` : 'Manager AI: Decomposing the Brief into Puzzle Pieces',
     detail: 'Reading the bible and splitting the "Done when" criteria into setup / build / verify / edge pieces with disjoint file scopes…',
     status: 'running'
   });
@@ -704,7 +704,7 @@ export async function runManager(
     `- CRITICAL EFFICIENCY RULE: If this task builds a standalone deliverable, single file (e.g. an HTML game, standalone script, single component), or simple deliverable, plan EXACTLY 1 piece of kind "build" covering all criteria ("Implement and self-verify deliverable"). Do NOT split it into multiple workers or a separate "verify" worker. A single worker will implement and verify it directly.\n` +
     resumeNotice +
     (attempt > 1 && priorFailureDiagnostics
-      ? `\n## Prior attempt failed QA — fix exactly these (fresh workers will be spawned)\n${priorFailureDiagnostics}\n\n${bible.renderPieces()}\n${bible.renderEventLog({ last: 25 })}\n`
+      ? `\n## Prior attempt failed verifier — fix exactly these (fresh workers will be spawned)\n${priorFailureDiagnostics}\n\n${bible.renderPieces()}\n${bible.renderEventLog({ last: 25 })}\n`
       : '') +
     `\nReturn ONLY the JSON object with the "pieces" array: { "pieces": [ { "id": "P1", "kind": "build", "title": "...", "instructions": "...", "criterionRefs": ["C1", ...], "files": [...], "dependsOn": [] } ], "notes": "..." }.`;
 

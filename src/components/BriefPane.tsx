@@ -64,7 +64,6 @@ import {
   Archive,
   HelpCircle,
   MoreHorizontal,
-  Trash2,
   Database,
   PanelRightClose,
   PanelRightOpen,
@@ -81,7 +80,6 @@ import {
 
 import { RichTextToolbar } from './RichTextToolbar';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { ArchivedTasksModal } from './ArchivedTasksModal';
 import { ScheduleTaskModal } from './ScheduleTaskModal';
 import { TaskMcpToolsModal } from './TaskMcpToolsModal';
 import { type ScheduledJob } from '../lib/taskScheduler';
@@ -199,11 +197,7 @@ interface BriefPaneProps {
   taskBilling?: TaskBilling;
   tasks: TaskItem[];
   briefs: AgentContextItem[];
-  projectId?: string;
-  projectName?: string;
   archivedTasks?: TaskItem[];
-  archivedBriefs?: AgentContextItem[];
-  swimLanes?: import('../types').SwimLaneDoc[];
   selectedTaskId: string | number | null;
   runningTaskIds?: (string | number)[];
   onSelectTask?: (taskId: string | number) => void;
@@ -212,9 +206,8 @@ interface BriefPaneProps {
   onExecuteTask: (task: TaskItem, opts?: { startOver?: boolean }) => void;
   onUpdateBriefWithAi?: (task: TaskItem) => void;
   onSyncOverviewWithTask?: (task: TaskItem) => Promise<string | void>;
-  onUnarchiveTask?: (taskId: string | number) => void;
-  onDeleteArchivedTask?: (taskId: string | number) => void;
-  onRestoreMemoryAsTask?: (chunk: import('../lib/memory').MemoryChunk) => void;
+  /** Opens the Archives & Learnings screen. */
+  onOpenArchives?: () => void;
   onSaveArchivedBrief?: (brief: AgentContextItem) => void;
   autosaveStatus?: 'idle' | 'pending' | 'saving' | 'saved' | 'error';
   autosaveDelaySec?: number;
@@ -263,7 +256,7 @@ interface AiTaskCardProps {
   isSelected: boolean;
   isWorking: boolean;
   isQueued?: boolean;
-  /** This task's CLI agent sessions, ordered manager → workers → QA. */
+  /** This task's CLI agent sessions, ordered manager → workers → verifier. */
   agentSessions: SpawnedSession[];
   /** Current permission level (for sessions that don't report their own). */
   permissionLevel?: PermissionLevel;
@@ -427,8 +420,6 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   onSendTaskMessage,
   onTerminateAgent,
   onArchiveTask,
-  onRemoveAiTask,
-  onPurgeTaskFromAi,
   mcpServers: _mcpServers = [],
   onUpdateTaskMcpTools: _onUpdateTaskMcpTools,
   canOpenRelatedTask,
@@ -441,7 +432,6 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   const [completionText, setCompletionText] = useState('');
   const [viewModeSection2, setViewModeSection2] = useState<'notes' | 'steps'>('notes');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [isPurgeConfirmOpen, setIsPurgeConfirmOpen] = useState(false);
   const [isMcpModalOpen, setIsMcpModalOpen] = useState(false);
 
   const activeTaskTools = React.useMemo(() => {
@@ -452,7 +442,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   }, [task.mcpRequired, brief?.selectedMcpTools, brief?.requiredMcps]);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // ── CLI agents of this task's run (manager, workers, QA) ──
+  // ── CLI agents of this task's run (manager, workers, verifier) ──
   const managerSession = agentSessions.find((s) => s.role === 'manager') ?? null;
   // The manager stands for the run in the task-level status logic (falls back to whichever agent exists).
   const terminalSession = managerSession ?? agentSessions[0] ?? null;
@@ -835,9 +825,9 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     }
   };
 
-  // Task menu → "QA verification" (off by default). A task that has never run gets its brief record here.
-  const qaVerificationOn = brief?.qaVerification === true;
-  const toggleQaVerification = () => {
+  // Task menu → "Verification" (on by default). A task that has never run gets its brief record here.
+  const verificationOn = brief?.verification !== false;
+  const toggleVerification = () => {
     onSaveBrief({
       ...(brief || {
         title: task.title,
@@ -849,7 +839,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
       id: brief?.id || `brief_${task.id}`,
       sourceTaskId: task.id,
       sourceLaneId: task.swimLaneId || brief?.sourceLaneId,
-      qaVerification: !qaVerificationOn,
+      verification: !verificationOn,
     });
   };
 
@@ -1072,15 +1062,15 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     }
   };
 
-  // "Manager is waiting on …" while it handed work to workers / QA.
+  // "Manager is waiting on …" while it handed work to workers / verifier.
   const managerWaitingOn = React.useMemo(() => {
     if (managerSession?.status !== 'waiting') return null;
     const workers = agentSessions.filter((s) => s.role === 'worker' && isAgentWorking(s.status));
     if (workers.length > 0) {
       return { text: `Manager is waiting on ${workers.length} worker${workers.length === 1 ? '' : 's'}`, agents: workers };
     }
-    const qa = agentSessions.filter((s) => s.role === 'qa' && isAgentWorking(s.status));
-    if (qa.length > 0) return { text: 'Manager is waiting on QA', agents: qa };
+    const verifier = agentSessions.filter((s) => s.role === 'verifier' && isAgentWorking(s.status));
+    if (verifier.length > 0) return { text: 'Manager is waiting on verifier', agents: verifier };
     return { text: 'Manager is waiting for its agents to report back', agents: [] as SpawnedSession[] };
   }, [managerSession?.status, agentSessions]);
 
@@ -1122,7 +1112,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     const byId = new Map(agentSessions.map((s) => [s.ptySessionId, s] as const));
     const map = new Map<string, SpawnedSession>();
     const claimed = new Set<string>();
-    // Latest step wins (a QA retry reuses the QA session id).
+    // Latest step wins (a verifier retry reuses the verifier session id).
     for (let i = executionSteps.length - 1; i >= 0; i--) {
       const st = executionSteps[i];
       const agent = st.ptySessionId ? byId.get(st.ptySessionId) : undefined;
@@ -1142,7 +1132,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
         claimed.add(managerSession.ptySessionId);
       }
     }
-    return { stepTerminals: map, unclaimedAgents: agentSessions.filter((s) => !claimed.has(s.ptySessionId)) };
+    return { stepTerminals: map, unclaimedAgents: agentSessions.filter((s) => !claimed.has(s.ptySessionId) && s.status !== 'waiting') };
   }, [executionSteps, agentSessions, managerSession]);
 
   /** Terminal for one agent (attach-only: App launched it), headed by who it is. */
@@ -1516,180 +1506,58 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   <span>Configure MCP Tools{activeTaskTools.length > 0 ? ` (${activeTaskTools.length})` : ''}...</span>
                 </button>
 
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={qaVerificationOn}
-                  className="swimlane-dropdown-item"
-                  onClick={toggleQaVerification}
-                  disabled={runActive}
-                  title={
-                    runActive
-                      ? "Can't change this while the task is running"
-                      : 'A separate QA agent checks the finished work and sends it back to the manager if it fails. Costs an extra agent run (plus any retries).'
-                  }
-                >
-                  <ShieldCheck size={13} style={{ color: qaVerificationOn ? 'var(--accent-emerald)' : undefined }} />
-                  <span style={{ flex: 1 }}>QA verification</span>
-                  <span className={`toggle-switch-btn menu-switch ${qaVerificationOn ? 'is-active' : ''}`} aria-hidden="true">
-                    <span className="toggle-switch-thumb" />
-                  </span>
-                </button>
+                {(() => {
+                  const verifierSession = agentSessions.find((s) => s.role === 'verifier');
+                  const isVerifierActiveOrDone = Boolean(
+                    verifierSession &&
+                      (verifierSession.status === 'running' ||
+                        verifierSession.status === 'starting' ||
+                        verifierSession.status === 'done' ||
+                        verifierSession.status === 'failed')
+                  );
+                  const isVerifierDisabled = runActive && isVerifierActiveOrDone;
+                  return (
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={verificationOn}
+                      className="swimlane-dropdown-item"
+                      onClick={toggleVerification}
+                      disabled={isVerifierDisabled}
+                      title={
+                        isVerifierDisabled
+                          ? "Can't change this while the verifier is running or finished"
+                          : 'A separate verifier agent checks the finished work and sends it back to the manager if it fails. Runs only if the AI determines it is necessary.'
+                      }
+                    >
+                      <ShieldCheck size={13} style={{ color: verificationOn ? 'var(--accent-emerald)' : undefined }} />
+                      <span style={{ flex: 1 }}>Verification</span>
+                      <span className={`toggle-switch-btn menu-switch ${verificationOn ? 'is-active' : ''}`} aria-hidden="true">
+                        <span className="toggle-switch-thumb" />
+                      </span>
+                    </button>
+                  );
+                })()}
 
                 <div className="swimlane-dropdown-divider" />
 
-                {isTaskStarted ? (
-                  <>
-                    <button
-                      type="button"
-                      className="swimlane-dropdown-item"
-                      onClick={() => {
-                        setIsMenuOpen(false);
-                        onArchiveTask?.(task.title || brief?.title || '');
-                      }}
-                    >
-                      <Archive size={13} style={{ color: '#f59e0b' }} />
-                      <span>Archive Task</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="swimlane-dropdown-item is-danger"
-                      onClick={() => {
-                        setIsMenuOpen(false);
-                        setIsPurgeConfirmOpen(true);
-                      }}
-                    >
-                      <Trash2 size={13} />
-                      <span>Remove task</span>
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      className="swimlane-dropdown-item is-danger"
-                      onClick={() => {
-                        setIsMenuOpen(false);
-                        setIsPurgeConfirmOpen(true);
-                      }}
-                    >
-                      <Trash2 size={13} />
-                      <span>Remove task</span>
-                    </button>
-                  </>
-                )}
+                <button
+                  type="button"
+                  className="swimlane-dropdown-item"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    onArchiveTask?.(task.title || brief?.title || '');
+                  }}
+                >
+                  <Archive size={13} style={{ color: '#f59e0b' }} />
+                  <span>Archive</span>
+                </button>
               </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* Confirmation Modal for Removing Task from AI Workspace and local Vector DB */}
-      {isPurgeConfirmOpen && (
-        <div className="modal-overlay" onClick={() => setIsPurgeConfirmOpen(false)} style={{ zIndex: 120 }}>
-          <div
-            className="modal-content"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              maxWidth: '460px',
-              background: 'var(--bg-card, #222427)',
-              border: '1px solid rgba(244, 63, 94, 0.35)',
-              borderRadius: '10px',
-              boxShadow: '0 20px 50px rgba(0,0,0,0.7)',
-              padding: 0,
-              overflow: 'hidden',
-            }}
-          >
-            <div
-              className="modal-header"
-              style={{
-                padding: '0.85rem 1.25rem',
-                borderBottom: '1px solid rgba(255,255,255,0.08)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-rose, #f43f5e)' }}>
-                <AlertTriangle size={18} />
-                <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600 }}>Remove Task?</h4>
-              </div>
-              <button
-                type="button"
-                className="btn-icon"
-                onClick={() => setIsPurgeConfirmOpen(false)}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
-              >
-                <X size={15} />
-              </button>
-            </div>
-
-            <div style={{ padding: '1.15rem 1.25rem', fontSize: '0.86rem', lineHeight: 1.6, color: 'var(--text-main, rgba(255,255,255,0.85))' }}>
-              Are you sure you want to remove this task and any execution logs from the AI Workspace? This action can't be undone.
-              <div
-                style={{
-                  marginTop: '0.75rem',
-                  padding: '0.5rem 0.75rem',
-                  background: 'rgba(0,0,0,0.3)',
-                  border: '1px solid rgba(255,255,255,0.08)',
-                  borderRadius: '6px',
-                  fontWeight: 500,
-                  color: '#fff',
-                  fontSize: '0.82rem',
-                }}
-              >
-                "{task.title || brief?.title || 'Selected Task'}"
-              </div>
-            </div>
-
-            <div
-              className="modal-footer"
-              style={{
-                padding: '0.75rem 1.25rem',
-                borderTop: '1px solid rgba(255,255,255,0.08)',
-                display: 'flex',
-                justifyContent: 'flex-end',
-                gap: '0.5rem',
-                background: 'var(--bg-darkest, #191a1c)',
-              }}
-            >
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setIsPurgeConfirmOpen(false)}
-                style={{ height: '30px', padding: '0 0.85rem', fontSize: '0.78rem' }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn btn-danger"
-                onClick={() => {
-                  setIsPurgeConfirmOpen(false);
-                  if (onPurgeTaskFromAi) {
-                    onPurgeTaskFromAi(brief?.id || brief?.sourceTaskId || brief?.itemNumber || task.id);
-                  } else if (onRemoveAiTask) {
-                    onRemoveAiTask(brief?.id || brief?.sourceTaskId || brief?.itemNumber || task.id);
-                  }
-                }}
-                style={{
-                  height: '30px',
-                  padding: '0 0.95rem',
-                  fontSize: '0.78rem',
-                  background: 'var(--accent-rose, #f43f5e)',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '5px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
-              >
-                Remove Permanently
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── Task Card Content (Collapsible) ── */}
       {!isTaskCollapsed && (
@@ -1833,8 +1701,22 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                       )}
                     </div>
                   ) : (
-                    <div className="ai-card-hint">
-                      No overview yet. The first run generates one — goals, success criteria, and tool plan — so you can check the agent understood the task. It's kept for reruns. Click <strong>'Run Task'</strong> to begin.
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      <div className="brief-markdown-render" style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: '1.45' }}>
+                        <div style={{ fontWeight: 600 }}>{task.title}</div>
+                        {task.subtasks.length > 0 && (
+                          <ul style={{ margin: '0.3rem 0 0', paddingLeft: '1.1rem' }}>
+                            {task.subtasks.map((st) => (
+                              <li key={st.id} style={st.isDone ? { textDecoration: 'line-through', opacity: 0.6 } : undefined}>
+                                {st.text}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                      <div className="ai-card-hint">
+                        This is the task as written. The actual overview — goals, success criteria, and tool plan — is generated when the task is started, and kept for reruns. Click <strong>'Run Task'</strong> to begin.
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2024,6 +1906,18 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   {showExecutionSteps ? (
                     /* Sub-view 1: In-place Execution Steps & Workflow */
                     <div className="execution-steps-wrapper" style={{ padding: '0.65rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                      {showExecutionSteps && agentSessions.length > 1 && (
+                        <div style={{ padding: '0.2rem 0.2rem 0.4rem 0.2rem' }}>
+                          <AgentSessionTabs
+                            sessions={agentSessions}
+                            selectedId={shownAgent?.ptySessionId ?? null}
+                            onSelect={(id) => {
+                              setViewModeSection2('notes');
+                              pinAgent(id);
+                            }}
+                          />
+                        </div>
+                      )}
                       {/* Interactive Mid-Build Human Clarification Card if active */}
                       {pendingHumanInput && onHumanInputChoice && (
                         <HumanInputCard
@@ -2263,11 +2157,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   taskBilling,
   tasks,
   briefs,
-  projectId,
-  projectName,
   archivedTasks = [],
-  archivedBriefs = [],
-  swimLanes = [],
   selectedTaskId,
   runningTaskIds = [],
   queuedTaskIds = [],
@@ -2277,9 +2167,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   onExecuteTask,
   onUpdateBriefWithAi: _onUpdateBriefWithAi,
   onSyncOverviewWithTask,
-  onUnarchiveTask,
-  onDeleteArchivedTask,
-  onRestoreMemoryAsTask,
+  onOpenArchives,
   onSaveArchivedBrief: _onSaveArchivedBrief,
   terminalSessions = [],
   executingTaskId = null,
@@ -2309,13 +2197,12 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   agentPipelineOptions,
   onSetAgentPipelineOptions,
 }) => {
-  const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
   const [showExecSettings, setShowExecSettings] = useState(false);
   const [schedulingTask, setSchedulingTask] = useState<TaskItem | null>(null);
 
   const activeTaskRunningCount = runningTaskIds.length;
 
-  // Each task's agent sessions (String task ids), ordered manager → workers → QA.
+  // Each task's agent sessions (String task ids), ordered manager → workers → verifier.
   const sessionsByTask = React.useMemo(() => {
     const map = new Map<string, SpawnedSession[]>();
     for (const s of terminalSessions) {
@@ -2389,9 +2276,9 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
           <button
             type="button"
             className="ai-rail-action-btn"
-            onClick={() => setIsArchiveModalOpen(true)}
-            title="View Archived Tasks"
-            aria-label="View Archived Tasks"
+            onClick={onOpenArchives}
+            title="Archives &amp; Learnings"
+            aria-label="Archives &amp; Learnings"
           >
             <Archive size={14} color="#f59e0b" />
             {archivedTasks.length > 0 && (
@@ -2400,20 +2287,6 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
           </button>
         </div>
 
-        {/* Archived Tasks & AI Brain Modal Window */}
-        <ArchivedTasksModal
-          isOpen={isArchiveModalOpen}
-          onClose={() => setIsArchiveModalOpen(false)}
-          projectId={projectId}
-          projectName={projectName}
-          archivedTasks={archivedTasks}
-          swimLanes={swimLanes}
-          briefs={briefs}
-          archivedBriefs={archivedBriefs}
-          onUnarchiveTask={onUnarchiveTask}
-          onDeleteArchivedTask={onDeleteArchivedTask}
-          onRestoreMemoryAsTask={onRestoreMemoryAsTask}
-        />
       </div>
     );
   }
@@ -2455,9 +2328,9 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
             <button
               type="button"
               className="swimlane-menu-btn"
-              onClick={() => setIsArchiveModalOpen(true)}
-              title="Archived Tasks"
-              aria-label="Archived Tasks"
+              onClick={onOpenArchives}
+              title="Archives &amp; Learnings"
+              aria-label="Archives &amp; Learnings"
               style={{ position: 'relative' }}
             >
               <Archive size={15} style={{ color: '#f59e0b' }} />
@@ -2593,20 +2466,6 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
         </div>
       </div>
 
-      {/* ── Archived Tasks & AI Brain Modal Window ── */}
-      <ArchivedTasksModal
-        isOpen={isArchiveModalOpen}
-        onClose={() => setIsArchiveModalOpen(false)}
-        projectId={projectId}
-        projectName={projectName}
-        archivedTasks={archivedTasks}
-        swimLanes={swimLanes}
-        briefs={briefs}
-        archivedBriefs={archivedBriefs}
-        onUnarchiveTask={onUnarchiveTask}
-        onDeleteArchivedTask={onDeleteArchivedTask}
-        onRestoreMemoryAsTask={onRestoreMemoryAsTask}
-      />
 
       {/* ── Schedule Task Modal Window ── */}
       {schedulingTask && (

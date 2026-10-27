@@ -40,7 +40,7 @@ export interface CliAgentNotesBridgeProps {
   /** Bridge PTY key of the agent (SpawnedSession.ptySessionId). The view only attaches; App owns the process. */
   sessionId: string;
   role: AgentSessionRole;
-  /** Human label, e.g. "Manager", "Worker W2 · Login form", "QA Verifier". */
+  /** Human label, e.g. "Manager", "Worker W2 · Login form", "Verifier". */
   label: string;
   /** The prompt the agent was launched with (filtered out of the activity feed when the CLI echoes it). */
   launchPrompt?: string;
@@ -716,7 +716,11 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
           <div className="feed-scroll-body" ref={feedScrollRef}>
             {allEntries.length === 0 ? (
               <div className="feed-empty-hint">
-                <span>Watching {label}… actions and thoughts will stream here in real time.</span>
+                <span>
+                  {role === 'verifier'
+                    ? 'Verifier will check the work once the Manager finishes. (You can turn Verification off from the task menu.)'
+                    : `Watching ${label}… actions and thoughts will stream here in real time.`}
+                </span>
               </div>
             ) : (
               allEntries.map((item) => (

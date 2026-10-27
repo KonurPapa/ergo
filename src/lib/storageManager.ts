@@ -1,3 +1,4 @@
+import { migrateLegacyVerifier, parseSavedJson } from './legacyVerifier';
 import {
   type AppSettings,
   type AppSecrets,
@@ -15,7 +16,7 @@ import taskBriefSkillRaw from '../../docs/skills/task-brief/SKILL.md?raw';
 import managerAgentSkillRaw from '../../docs/skills/manager-agent/SKILL.md?raw';
 import workerAgentSkillRaw from '../../docs/skills/worker-agent/SKILL.md?raw';
 import cleanerAgentSkillRaw from '../../docs/skills/cleaner-agent/SKILL.md?raw';
-import hardenerAgentSkillRaw from '../../docs/skills/hardener-agent/SKILL.md?raw';
+import verifierAgentSkillRaw from '../../docs/skills/verifier-agent/SKILL.md?raw';
 
 const DB_NAME = 'ergo_storage_db';
 const DB_VERSION = 1;
@@ -36,7 +37,7 @@ export const BUILTIN_SKILL_DOCS: Readonly<Record<string, string>> = {
   'manager-agent': managerAgentSkillRaw,
   'worker-agent': workerAgentSkillRaw,
   'cleaner-agent': cleanerAgentSkillRaw,
-  'hardener-agent': hardenerAgentSkillRaw,
+  'verifier-agent': verifierAgentSkillRaw,
 };
 
 export const DEFAULT_HUMAN_ASSISTANT_SKILL = humanAssistantSkillRaw;
@@ -197,7 +198,7 @@ export async function initializeFolderStructure(
   let settings: AppSettings | null = null;
   if (settingsContent) {
     try {
-      settings = JSON.parse(settingsContent);
+      settings = parseSavedJson(settingsContent);
     } catch {}
   }
   if (!settings) {
@@ -218,7 +219,7 @@ export async function initializeFolderStructure(
   let secrets: AppSecrets | null = null;
   if (secretsContent) {
     try {
-      secrets = JSON.parse(secretsContent);
+      secrets = parseSavedJson(secretsContent);
     } catch {}
   }
   if (!secrets) {
@@ -541,7 +542,7 @@ export class StorageManager {
     try {
       const mcpRes = await callMcpTool('mcp-filesystem', 'read_file', { path: 'config/settings.json' });
       if (mcpRes.success && mcpRes.data?.content) {
-        return JSON.parse(mcpRes.data.content);
+        return parseSavedJson(mcpRes.data.content);
       }
     } catch {}
 
@@ -549,7 +550,7 @@ export class StorageManager {
       try {
         const configDir = await getOrCreateSubdir(this.activeHandle, 'config');
         const text = await readFileTextFromDir(configDir, 'settings.json');
-        if (text) return JSON.parse(text);
+        if (text) return parseSavedJson(text);
       } catch (err) {
         console.warn('[StorageManager] Error reading settings from FSA handle:', err);
       }
@@ -564,7 +565,7 @@ export class StorageManager {
       });
       if (res.ok) {
         const data = await res.json();
-        if (data.data) return data.data;
+        if (data.data) return migrateLegacyVerifier(data.data);
       }
     } catch {}
 
@@ -572,7 +573,7 @@ export class StorageManager {
     const saved = localStorage.getItem('ergo_app_settings');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        return parseSavedJson(saved);
       } catch {}
     }
     return null;
@@ -628,7 +629,7 @@ export class StorageManager {
     try {
       const mcpRes = await callMcpTool('mcp-filesystem', 'read_file', { path: 'config/secrets.json' });
       if (mcpRes.success && mcpRes.data?.content) {
-        return JSON.parse(mcpRes.data.content);
+        return parseSavedJson(mcpRes.data.content);
       }
     } catch {}
 
@@ -636,7 +637,7 @@ export class StorageManager {
       try {
         const configDir = await getOrCreateSubdir(this.activeHandle, 'config');
         const text = await readFileTextFromDir(configDir, 'secrets.json');
-        if (text) return JSON.parse(text);
+        if (text) return parseSavedJson(text);
       } catch (err) {
         console.warn('[StorageManager] Error reading secrets from FSA handle:', err);
       }
@@ -651,7 +652,7 @@ export class StorageManager {
       });
       if (res.ok) {
         const data = await res.json();
-        if (data.data) return data.data;
+        if (data.data) return migrateLegacyVerifier(data.data);
       }
     } catch {}
 
@@ -659,7 +660,7 @@ export class StorageManager {
     const savedKeys = localStorage.getItem('ergo_user_api_keys');
     if (savedKeys) {
       try {
-        const parsedKeys: UserApiKey[] = JSON.parse(savedKeys);
+        const parsedKeys: UserApiKey[] = parseSavedJson(savedKeys);
         return {
           version: 1,
           updatedAt: new Date().toISOString(),
@@ -734,13 +735,13 @@ export class StorageManager {
   public async loadModelCalibration(): Promise<unknown | null> {
     try {
       const mcpRes = await callMcpTool('mcp-filesystem', 'read_file', { path: 'config/model-calibration.json' });
-      if (mcpRes.success && mcpRes.data?.content) return JSON.parse(mcpRes.data.content);
+      if (mcpRes.success && mcpRes.data?.content) return parseSavedJson(mcpRes.data.content);
     } catch {}
     if (this.activeHandle && this.folderMetadata.status === 'connected') {
       try {
         const configDir = await getOrCreateSubdir(this.activeHandle, 'config');
         const text = await readFileTextFromDir(configDir, 'model-calibration.json');
-        if (text) return JSON.parse(text);
+        if (text) return parseSavedJson(text);
       } catch {}
     }
     try {
@@ -751,7 +752,7 @@ export class StorageManager {
       });
       if (res.ok) {
         const data = await res.json();
-        if (data.data) return data.data;
+        if (data.data) return migrateLegacyVerifier(data.data);
       }
     } catch {}
     return null;
@@ -860,7 +861,7 @@ export class StorageManager {
             const jobsRaw = (await readFileTextFromDir(projectDirHandle, 'RUNNING_JOBS.json')) || '';
             let runningJobsDoc: any = null;
             if (jobsRaw) {
-              try { runningJobsDoc = JSON.parse(jobsRaw); } catch {}
+              try { runningJobsDoc = parseSavedJson(jobsRaw); } catch {}
             }
 
             projectList.push({
@@ -891,7 +892,7 @@ export class StorageManager {
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.projects) && data.projects.length > 0) {
-          return data.projects.map((p: any) => ({
+          return migrateLegacyVerifier(data.projects).map((p: any) => ({
             ...p,
             description: p.description || `Project directory: ${p.folderPath}`,
             connectedMcps: ['mcp-filesystem', 'mcp-fetch', 'mcp-git', 'mcp-github', 'mcp-slack']
@@ -904,7 +905,7 @@ export class StorageManager {
     const saved = localStorage.getItem('ergo_projects');
     if (saved) {
       try {
-        const parsed = JSON.parse(saved);
+        const parsed = parseSavedJson(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       } catch {}
     }

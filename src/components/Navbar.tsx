@@ -100,7 +100,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const activeLabel = activeUserKey
     ? activeUserKey.name
-    : 'Select AI Key';
+    : 'Select AI Profile';
 
   return (
     <header className="app-header">
@@ -191,9 +191,9 @@ export const Navbar: React.FC<NavbarProps> = ({
             <Folder size={18} color="var(--accent-cyan)" />
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', textAlign: 'left', lineHeight: 1.2 }}>
               <span style={{ fontWeight: 600, fontSize: '0.88rem' }}>{activeProject?.name || 'Default Workspace'}</span>
-              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+              {/* <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
                 {activeProject?.folderPath || 'projects/default-workspace'}
-              </span>
+              </span> */}
             </div>
             <ChevronDown
               size={15}

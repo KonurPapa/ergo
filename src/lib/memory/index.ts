@@ -39,14 +39,8 @@ export {
 } from './vectorEngine';
 
 export {
-  // Session retrospective
-  runSessionRetrospective,
   archiveTaskToVectorMemory,
-  // Types
-  type Learning,
-  type LearningCategory,
-  type RetrospectiveInput,
-} from './sessionRetrospective';
+} from './archiveRecords';
 
 export {
   // Workspace index + related tasks (stage 1: local candidates; stage 2 is the Summary step's LLM selection)

@@ -33,13 +33,13 @@ export interface LocalShapeRequest {
   subtasks?: string[];
   /**
    * The task kind when the client already knows it. A non-coding kind (e.g. 'writing', 'research') lets the bridge
-   * skip the QA question (needsQa: false).
+   * skip the verifier question (needsVerifier: false).
    */
   kindHint?: string;
 }
 
 export type LocalShapeResult =
-  | { success: true; single: boolean; needsQa: boolean; source: 'local'; ms: number }
+  | { success: true; single: boolean; needsVerifier: boolean; source: 'local'; ms: number }
   | { success: false; error: string };
 
 export interface LocalCompleteRequest {
@@ -138,7 +138,7 @@ export function uninstallLocalModel(opts: LocalCallOptions = {}): Promise<LocalM
   return action('/api/local-model/uninstall', opts);
 }
 
-/** Run-shape decision (single deliverable? needs a QA verifier?) from the local model. */
+/** Run-shape decision (single deliverable? needs a verifier?) from the local model. */
 export async function localShapeDecision(req: LocalShapeRequest, opts: LocalCallOptions = {}): Promise<LocalShapeResult> {
   try {
     const body: LocalShapeRequest = {
@@ -148,10 +148,12 @@ export async function localShapeDecision(req: LocalShapeRequest, opts: LocalCall
     };
     const json = await requestJson('/api/local-model/shape', body, opts.timeoutMs ?? SHAPE_TIMEOUT_MS, opts.signal);
     if (json.success === false) return { success: false, error: String(json.error || 'local model unavailable') };
-    if (typeof json.single !== 'boolean' || typeof json.needsQa !== 'boolean') {
+    // Bridges before the Verifier rename answer with `needsQa`.
+    if (json && typeof json.needsVerifier !== 'boolean') json.needsVerifier = json.needsQa;
+    if (typeof json.single !== 'boolean' || typeof json.needsVerifier !== 'boolean') {
       return { success: false, error: 'local model returned no decision' };
     }
-    return { success: true, single: json.single, needsQa: json.needsQa, source: 'local', ms: Number(json.ms) || 0 };
+    return { success: true, single: json.single, needsVerifier: json.needsVerifier, source: 'local', ms: Number(json.ms) || 0 };
   } catch (err) {
     return { success: false, error: errorText(err) };
   }

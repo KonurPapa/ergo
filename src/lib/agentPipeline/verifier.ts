@@ -1,423 +1,119 @@
 /**
- * Automated Deliverable Health & Startup Smoke Test
- *
- * Deterministically tests every created file and endpoint (HTML pages, scripts, configs)
- * on startup at ZERO LLM token cost. Catches syntax errors, undefined references
- * (e.g. ReferenceError: dx is not defined), TypeErrors, and unhandled startup exceptions
- * before the pipeline declares a task finished.
+ * Step 5 — Verifier: independent verification harness. Read-only for files, may run commands.
+ * Returns a strict verdict; failures carry actionable diagnostics that feed a fresh Step 3 retry.
  */
-import { callMcpTool } from '../mcpClient';
+import { type TaskKind, type TokenUsage } from '../../types';
+import { parseJsonLoose } from '../llmClient';
+import { type PipelineContext, type ToolDefinition, addUsage, emptyUsage, buildToolLoopRequest } from './contracts';
+import { type BibleStore } from './bible';
+import { runToolLoop } from './providerLoop';
+import { createToolExecutor } from './toolExecutor';
+import { loadPipelineSkill } from './skills';
 
-export interface DeliverableError {
-  file: string;
-  message: string;
-  line?: number;
-  col?: number;
-  stack?: string;
+export interface VerifierResult {
+  verdict: 'pass' | 'fail' | 'inconclusive';
+  failures: Array<{ criterion: string; diagnostics: string }>;
+  evidence: string;
+  usage: TokenUsage;
 }
 
-export interface DeliverableHealthReport {
-  ok: boolean;
-  totalTested: number;
-  passCount: number;
-  failCount: number;
-  errors: DeliverableError[];
-  testedFiles: string[];
-  summaryText: string;
-}
+const VERIFIER_RULES = `EXECUTION RULES (harness-enforced)
+- File writes are rejected in this phase; you may inspect and run commands only.
+- run_command may pause for user approval; a rejection is final for that call.
+- Return ONLY the verdict JSON from your skill — no prose, no fences.`;
 
-function makeSessionId(): string {
-  return `smoketest_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-/**
- * Tests an HTML file by booting it in a sandboxed, isolated headless iframe with
- * error traps for window.onerror, unhandledrejection, and console.error.
- */
-async function testHtmlDeliverable(
-  filePath: string,
-  content: string,
-  timeoutMs = 500
-): Promise<DeliverableError[]> {
-  if (typeof document === 'undefined' || typeof window === 'undefined') {
-    // Non-browser fallback (SSR/Node)
-    return [];
-  }
-
-  return new Promise((resolve) => {
-    const sessionId = makeSessionId();
-    const caughtErrors: DeliverableError[] = [];
-    let isCleanedUp = false;
-
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'fixed';
-    iframe.style.top = '-9999px';
-    iframe.style.left = '-9999px';
-    iframe.style.width = '800px';
-    iframe.style.height = '600px';
-    iframe.style.opacity = '0';
-    iframe.style.pointerEvents = 'none';
-    iframe.setAttribute('sandbox', 'allow-scripts');
-
-    const messageHandler = (event: MessageEvent) => {
-      try {
-        const data = event.data;
-        if (data && data.sessionId === sessionId) {
-          if (data.type === '__ERGO_SMOKE_ERROR__') {
-            caughtErrors.push({
-              file: filePath,
-              message: String(data.message || 'Unknown startup error'),
-              line: typeof data.line === 'number' ? data.line : undefined,
-              col: typeof data.col === 'number' ? data.col : undefined,
-              stack: typeof data.stack === 'string' ? data.stack : undefined
-            });
-          }
-        }
-      } catch {}
-    };
-
-    window.addEventListener('message', messageHandler);
-
-    const cleanup = () => {
-      if (isCleanedUp) return;
-      isCleanedUp = true;
-      try {
-        window.removeEventListener('message', messageHandler);
-      } catch {}
-      try {
-        if (iframe.parentNode) {
-          iframe.parentNode.removeChild(iframe);
-        }
-      } catch {}
-      resolve(caughtErrors);
-    };
-
-    // Inject early harness before any author scripts execute
-    const trapScript = `
-<script>
-(function() {
-  var sessionId = "${sessionId}";
-  var filePath = "${filePath.replace(/"/g, '\\"')}";
-
-  // Suppress intrusive dialogs
-  window.alert = function() {};
-  window.confirm = function() { return true; };
-  window.prompt = function() { return null; };
-
-  // Polyfill requestAnimationFrame and cancelAnimationFrame so that canvas animations
-  // and game loops execute immediately even in off-screen / headless iframes, preventing
-  // browser throttling from hiding startup crashes (e.g. ReferenceError: dx is not defined).
-  window.requestAnimationFrame = function(cb) {
-    return setTimeout(function() {
-      try {
-        cb(performance.now());
-      } catch (err) {
-        var msg = (err && err.message) || String(err);
-        var stack = (err && err.stack) || '';
-        window.parent.postMessage({
-          type: '__ERGO_SMOKE_ERROR__',
-          sessionId: sessionId,
-          message: msg,
-          stack: stack
-        }, '*');
-      }
-    }, 16);
-  };
-  window.cancelAnimationFrame = function(id) {
-    clearTimeout(id);
-  };
-
-  window.addEventListener('error', function(e) {
-    var msg = e.message || (e.error && e.error.message) || String(e.error || e);
-    var stack = e.error && e.error.stack ? e.error.stack : '';
-    window.parent.postMessage({
-      type: '__ERGO_SMOKE_ERROR__',
-      sessionId: sessionId,
-      message: msg,
-      line: e.lineno,
-      col: e.colno,
-      stack: stack
-    }, '*');
+export async function runVerifier(
+  ctx: PipelineContext,
+  bible: BibleStore,
+  tools: ToolDefinition[],
+  taskKind: TaskKind,
+  createdFiles: string[],
+  attempt: number
+): Promise<VerifierResult> {
+  const usage = emptyUsage();
+  const stepId = `step-verifier-a${attempt}`;
+  ctx.emit({
+    id: stepId,
+    stage: 'verifier',
+    agentRole: 'verifier',
+    title: 'Verifier: verification harness',
+    detail: taskKind === 'coding'
+      ? 'Acting as a human verifier engineer: running the system through its UI/CLI to prove every "Done when" criterion holds…'
+      : 'Acting as the human recipient: verifying every "Done when" criterion against the produced artifacts…',
+    status: 'running'
   });
 
-  window.addEventListener('unhandledrejection', function(e) {
-    var reason = e.reason || {};
-    var msg = 'Unhandled Promise Rejection: ' + (reason.message || String(reason));
-    var stack = reason.stack || '';
-    window.parent.postMessage({
-      type: '__ERGO_SMOKE_ERROR__',
-      sessionId: sessionId,
-      message: msg,
-      stack: stack
-    }, '*');
+  const skill = await loadPipelineSkill('verifier-agent');
+  // Full tool list (byte-stable prefix shared with the manager/workers); the scope blocks file writes.
+  const executor = createToolExecutor({
+    ctx,
+    tools,
+    scope: { actorLabel: 'verifier', readOnly: false, allowedWritePaths: [] },
+    agentRole: 'verifier',
+    stepIdPrefix: `step-tool-verifier-a${attempt}`
   });
+  const message =
+    `Perform verifier for this run and return the verdict JSON.\n\n` +
+    (createdFiles.length > 0 ? `### Files written this run\n${createdFiles.map((f) => `- ${f}`).join('\n')}\n\n` : '### Files written this run\n- (none recorded)\n\n') +
+    `${bible.renderPieces()}\n${bible.renderEventLog({ last: 40 })}`;
 
-  var origErr = console.error;
-  console.error = function() {
-    var args = Array.prototype.slice.call(arguments);
-    var msg = args.map(function(a) {
-      if (!a) return String(a);
-      if (typeof a === 'object') return a.message || JSON.stringify(a);
-      return String(a);
-    }).join(' ');
-    window.parent.postMessage({
-      type: '__ERGO_SMOKE_ERROR__',
-      sessionId: sessionId,
-      message: 'console.error: ' + msg
-    }, '*');
-    if (origErr) {
-      try { origErr.apply(console, arguments); } catch (err) {}
-    }
-  };
-})();
-</script>`;
+  const result = await runToolLoop(
+    buildToolLoopRequest(ctx, 'verifier', {
+      stableSystem: `${skill}\n\n${VERIFIER_RULES}`,
+      sharedContext: bible.renderStable(),
+      // Persona selection lives in the uncached tail so both cached blocks stay byte-identical across task kinds.
+      volatileSystem:
+        taskKind === 'coding'
+          ? createdFiles.some((f) => /\.(html|htm|jsx|tsx|vue|svelte)$/i.test(f))
+            ? 'ACTIVE PERSONA: Coding / Web tasks (human verifier engineer operating the system via UI/CLI; use headless browser / Playwright via run_command to verify rendering and interactions if tooling is available).'
+            : 'ACTIVE PERSONA: Coding tasks (human verifier engineer operating the system via UI/CLI).'
+          : 'ACTIVE PERSONA: Non-coding tasks (human recipient verifying the deliverable).',
+      tools,
+      initialUserMessage: message,
+      // Cap Verifier rounds strictly: 6 rounds max to prevent endless loops and token burns
+      maxRounds: Math.min(6, Math.max(3, ctx.options.maxToolRoundsPerAgent)),
+      maxTokens: 8000,
+      responseFormat: 'json',
+      onToolCalls: executor,
+      // Once the manager is done, the user's messages for it reach verifier (e.g. "also check X").
+      drainSteering: () => ctx.steering?.drainTexts('verifier') ?? []
+    })
+  );
+  addUsage(usage, result.usage);
+  addUsage(ctx.usage, usage);
 
-    // Insert trap script at the very top of HTML
-    let instrumentedHtml = content;
-    if (/<head[^>]*>/i.test(instrumentedHtml)) {
-      instrumentedHtml = instrumentedHtml.replace(/(<head[^>]*>)/i, `$1\n${trapScript}`);
-    } else if (/<html[^>]*>/i.test(instrumentedHtml)) {
-      instrumentedHtml = instrumentedHtml.replace(/(<html[^>]*>)/i, `$1\n<head>${trapScript}</head>`);
-    } else {
-      instrumentedHtml = `<head>${trapScript}</head>\n${instrumentedHtml}`;
-    }
+  const parsed = parseJsonLoose<any>(result.text);
+  let verdict: VerifierResult['verdict'] = 'inconclusive';
+  let failures: VerifierResult['failures'] = [];
+  let evidence = '';
+  if (parsed && typeof parsed === 'object') {
+    const v = String(parsed.verdict ?? '').toLowerCase();
+    if (v === 'pass' || v === 'fail' || v === 'inconclusive') verdict = v;
+    failures = Array.isArray(parsed.failures)
+      ? parsed.failures
+          .map((f: any) => ({ criterion: String(f?.criterion ?? 'unspecified criterion'), diagnostics: String(f?.diagnostics ?? '') }))
+          .filter((f: { diagnostics: string }) => f.diagnostics.trim().length > 0 || verdict === 'fail')
+      : [];
+    evidence = typeof parsed.evidence === 'string' ? parsed.evidence : JSON.stringify(parsed.evidence ?? '');
+    if (verdict === 'fail' && failures.length === 0) failures = [{ criterion: 'unspecified', diagnostics: evidence || 'Verifier reported fail without details.' }];
+  } else {
+    evidence = result.error ? `Verifier call failed: ${result.error}` : result.text.slice(0, 1500);
+  }
 
-    const timer = setTimeout(() => {
-      cleanup();
-    }, timeoutMs);
-
-    iframe.onload = () => {
-      // Allow 300ms for initial event loops, requestAnimationFrame frames, and DOMContentLoaded listeners
-      setTimeout(() => {
-        clearTimeout(timer);
-        cleanup();
-      }, Math.min(300, timeoutMs));
-    };
-
-    iframe.onerror = (err) => {
-      caughtErrors.push({
-        file: filePath,
-        message: `Failed to load document in sandbox iframe: ${String(err)}`
-      });
-      clearTimeout(timer);
-      cleanup();
-    };
-
-    try {
-      document.body.appendChild(iframe);
-      iframe.srcdoc = instrumentedHtml;
-    } catch (err: any) {
-      caughtErrors.push({
-        file: filePath,
-        message: `Failed to attach sandbox iframe: ${err?.message || String(err)}`
-      });
-      clearTimeout(timer);
-      cleanup();
-    }
+  bible.appendEvent({
+    actor: 'verifier',
+    kind: verdict === 'fail' ? 'verifier_fail' : 'verifier_pass',
+    text: `${verdict.toUpperCase()}${failures.length ? ` — ${failures.map((f) => `[${f.criterion}] ${f.diagnostics}`).join(' || ')}` : ''}${evidence ? ` | evidence: ${evidence.slice(0, 700)}` : ''}`
   });
-}
-
-/**
- * Statically parses inline script tags in an HTML document to catch syntax errors
- * (unexpected tokens, unmatched brackets, malformed syntax, truncation) in 0ms at 0 token cost.
- */
-function validateHtmlStaticSyntax(filePath: string, content: string): DeliverableError[] {
-  const errors: DeliverableError[] = [];
-
-  // Check for truncated HTML with unclosed script tag
-  const scriptOpenRegex = /<script\b[^>]*>/gi;
-  const scriptCloseRegex = /<\/script>/gi;
-  const openMatches = content.match(scriptOpenRegex) || [];
-  const closeMatches = content.match(scriptCloseRegex) || [];
-  if (openMatches.length > closeMatches.length) {
-    errors.push({
-      file: filePath,
-      message: 'HTML deliverable has an unclosed <script> tag (deliverable appears truncated).'
-    });
-  }
-
-  // Parse each inline script block
-  const scriptRegex = /<script(?:\s+([^>]*))?>([\s\S]*?)<\/script>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = scriptRegex.exec(content)) !== null) {
-    const attrs = match[1] || '';
-    const scriptBody = match[2];
-
-    // Skip JSON / templates / non-JS scripts
-    if (/type=["'](?:application\/json|text\/template|text\/html)["']/i.test(attrs)) continue;
-    // Skip external scripts that don't have inline code
-    if (/src=["']/i.test(attrs) && !scriptBody.trim()) continue;
-    // Skip ES modules with import/export (iframe handles module imports)
-    if (/type=["']module["']/i.test(attrs) || /\b(import\s+|export\s+)/.test(scriptBody)) continue;
-
-    const upToMatch = content.slice(0, match.index);
-    const scriptStartLine = upToMatch.split('\n').length;
-
-    try {
-      new Function(scriptBody);
-    } catch (err: any) {
-      if (err instanceof SyntaxError) {
-        errors.push({
-          file: filePath,
-          line: scriptStartLine,
-          message: `SyntaxError in inline <script> (starts at line ${scriptStartLine}): ${err.message}`
-        });
-      }
-    }
-  }
-
-  return errors;
-}
-
-/**
- * Statically parses a standalone JavaScript file to catch syntax errors.
- */
-function validateJsStaticSyntax(filePath: string, content: string): DeliverableError[] {
-  const errors: DeliverableError[] = [];
-  if (!/\b(import\s+|export\s+)/.test(content)) {
-    try {
-      new Function(content);
-    } catch (err: any) {
-      if (err instanceof SyntaxError) {
-        errors.push({
-          file: filePath,
-          message: `JavaScript SyntaxError: ${err.message}`
-        });
-      }
-    }
-  }
-  return errors;
-}
-
-/**
- * Tests a standalone JavaScript file for syntax and load-time exceptions.
- */
-async function testJsDeliverable(filePath: string, content: string): Promise<DeliverableError[]> {
-  const htmlWrapper = `<!DOCTYPE html><html><head><script type="module">\n${content}\n</script></head><body></body></html>`;
-  return testHtmlDeliverable(filePath, htmlWrapper, 350);
-}
-
-/**
- * Tests a JSON file for syntax correctness.
- */
-function testJsonDeliverable(filePath: string, content: string): DeliverableError[] {
-  try {
-    JSON.parse(content);
-    return [];
-  } catch (err: any) {
-    return [{
-      file: filePath,
-      message: `JSON Syntax Error: ${err?.message || String(err)}`
-    }];
-  }
-}
-
-/**
- * Deterministically tests every created deliverable (applying to all pages,
- * scripts, and configs) for startup errors, syntax crashes, or uncaught exceptions.
- */
-export async function verifyDeliverableHealth(
-  files: string[],
-  options?: { timeoutMs?: number }
-): Promise<DeliverableHealthReport> {
-  const uniqueFiles = Array.from(new Set(files.map((f) => f.trim()))).filter(Boolean);
-  const testedFiles: string[] = [];
-  const errors: DeliverableError[] = [];
-  let passCount = 0;
-  let failCount = 0;
-
-  for (const filePath of uniqueFiles) {
-    const ext = filePath.split('.').pop()?.toLowerCase() || '';
-
-    // Only test code/web deliverables
-    const isHtml = ext === 'html' || ext === 'htm';
-    const isJs = ext === 'js' || ext === 'mjs' || ext === 'cjs';
-    const isJson = ext === 'json';
-
-    if (!isHtml && !isJs && !isJson) {
-      continue;
-    }
-
-    testedFiles.push(filePath);
-
-    // Read content via MCP Filesystem
-    let content = '';
-    try {
-      const readRes = await callMcpTool('mcp-filesystem', 'read_file', { path: filePath });
-      if (readRes.success && typeof readRes.data?.content === 'string') {
-        content = readRes.data.content;
-      }
-    } catch (err) {
-      errors.push({
-        file: filePath,
-        message: `Could not read file for verification: ${String(err)}`
-      });
-      failCount++;
-      continue;
-    }
-
-    if (!content.trim()) {
-      errors.push({
-        file: filePath,
-        message: 'Deliverable file is empty (0 bytes).'
-      });
-      failCount++;
-      continue;
-    }
-
-    let fileErrors: DeliverableError[] = [];
-    if (isHtml) {
-      // Phase 1: In-memory deterministic syntax & truncation validation
-      const staticSyntaxErrors = validateHtmlStaticSyntax(filePath, content);
-      fileErrors.push(...staticSyntaxErrors);
-
-      // Phase 2: Unthrottled sandbox runtime execution
-      const runtimeErrors = await testHtmlDeliverable(filePath, content, options?.timeoutMs || 500);
-      fileErrors.push(...runtimeErrors);
-    } else if (isJs) {
-      const staticSyntaxErrors = validateJsStaticSyntax(filePath, content);
-      fileErrors.push(...staticSyntaxErrors);
-
-      const runtimeErrors = await testJsDeliverable(filePath, content);
-      fileErrors.push(...runtimeErrors);
-    } else if (isJson) {
-      fileErrors = testJsonDeliverable(filePath, content);
-    }
-
-    // Deduplicate identical error messages for this file
-    const seenErrors = new Set<string>();
-    const uniqueFileErrors: DeliverableError[] = [];
-    for (const fe of fileErrors) {
-      const key = `${fe.line ?? 0}:${fe.message.slice(0, 80)}`;
-      if (!seenErrors.has(key)) {
-        seenErrors.add(key);
-        uniqueFileErrors.push(fe);
-      }
-    }
-
-    if (uniqueFileErrors.length > 0) {
-      errors.push(...uniqueFileErrors);
-      failCount++;
-    } else {
-      passCount++;
-    }
-  }
-
-  const ok = errors.length === 0;
-  const summaryText = ok
-    ? (testedFiles.length > 0
-        ? `All ${testedFiles.length} deliverable file(s) passed automated startup smoke tests with 0 console errors.`
-        : 'No code deliverables needed automated smoke testing.')
-    : `Startup verification failed with ${errors.length} error(s) across ${failCount} file(s):\n` +
-      errors.map((e) => `- [${e.file}${e.line ? `:${e.line}` : ''}] ${e.message}${e.stack ? `\n  Stack: ${e.stack.split('\n')[0]}` : ''}`).join('\n');
-
-  return {
-    ok,
-    totalTested: testedFiles.length,
-    passCount,
-    failCount,
-    errors,
-    testedFiles,
-    summaryText
-  };
+  await bible.persist();
+  ctx.emit({
+    id: stepId,
+    stage: 'verifier',
+    agentRole: 'verifier',
+    title: verdict === 'pass' ? 'Verifier: Verifier Passed' : verdict === 'fail' ? `Verifier: Verifier Failed (${failures.length} issue${failures.length === 1 ? '' : 's'})` : 'Verifier: Verifier Inconclusive',
+    detail: (failures.length > 0 ? failures.map((f) => `✗ ${f.criterion}: ${f.diagnostics}`).join('\n') + '\n\n' : '') + evidence.slice(0, 800),
+    status: verdict === 'pass' ? 'success' : 'warning',
+    usage: { ...usage }
+  });
+  return { verdict, failures, evidence, usage };
 }

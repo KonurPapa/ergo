@@ -73,7 +73,7 @@ const ROLE_ICONS: Record<AgentRole, React.ReactNode> = {
   manager: <Brain size={14} color="var(--accent-cyan)" />,
   worker: <Cpu size={14} color="var(--accent-primary)" />,
   cleaner: <Wrench size={14} color="var(--accent-emerald)" />,
-  hardener: <ShieldAlert size={14} color="var(--accent-rose)" />,
+  verifier: <ShieldAlert size={14} color="var(--accent-rose)" />,
   logger: <FileText size={14} color="var(--accent-cyan)" />,
   autocomplete: <Zap size={14} color="var(--accent-amber)" />
 };
@@ -310,7 +310,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
         else if (role === 'manager') legacyModel = k.generalModel || k.model || '';
         else if (role === 'worker') legacyModel = k.workerModel || k.generalModel || k.model || '';
         else if (role === 'cleaner') legacyModel = k.cleanerModel || '';
-        else if (role === 'hardener') legacyModel = k.hardenerModel || k.generalModel || k.model || '';
+        else if (role === 'verifier') legacyModel = k.verifierModel || k.generalModel || k.model || '';
         else if (role === 'logger') legacyModel = k.loggerModel || '';
         else if (role === 'autocomplete') legacyModel = k.autocompleteModel || '';
 
@@ -792,7 +792,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
       generalModel: finalRoleConfigs.manager?.model,
       workerModel: finalRoleConfigs.worker?.model,
       cleanerModel: finalRoleConfigs.cleaner?.model,
-      hardenerModel: finalRoleConfigs.hardener?.model,
+      verifierModel: finalRoleConfigs.verifier?.model,
       loggerModel: finalRoleConfigs.logger?.model,
       autocompleteModel: finalRoleConfigs.autocomplete?.model,
       roleConfigs: finalRoleConfigs,
@@ -1766,7 +1766,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
 
                       {isInstalled && (
                         <div style={{ marginTop: '0.45rem', padding: '0.4rem 0.65rem', background: 'rgba(16, 185, 129, 0.08)', borderRadius: '5px', border: '1px solid rgba(16, 185, 129, 0.22)', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                          <span style={{ color: 'var(--accent-emerald)', fontWeight: 600 }}>⚡ Active CLI Subscription Bridge:</span> During task execution, all workflow AI requests (Summary, Manager, QA) are automatically bridged headlessly through {currentAgent?.name || 'the CLI'} using your authenticated subscription.
+                          <span style={{ color: 'var(--accent-emerald)', fontWeight: 600 }}>⚡ Active CLI Subscription Bridge:</span> During task execution, all workflow AI requests (Summary, Manager, Verifier) are automatically bridged headlessly through {currentAgent?.name || 'the CLI'} using your authenticated subscription.
                         </div>
                       )}
 
@@ -2900,8 +2900,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                               ? k.summaryModel
                               : role === 'cleaner'
                                 ? k.cleanerModel
-                                : role === 'hardener'
-                                  ? k.hardenerModel
+                                : role === 'verifier'
+                                  ? k.verifierModel
                                   : role === 'logger'
                                     ? k.loggerModel
                                     : role === 'worker'

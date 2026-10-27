@@ -1,3 +1,4 @@
+import { parseSavedJson } from './lib/legacyVerifier';
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   type ProjectData,
@@ -50,8 +51,11 @@ import {
   preWarmEmbeddings,
   archiveTaskToVectorMemory,
   removeChunksByTaskId,
+  removeChunksById,
+  getChunksByNamespace,
   clearProjectMemory,
-  clearAllMemory
+  clearAllMemory,
+  type MemoryChunk
 } from './lib/memory';
 import { useAutosave } from './hooks/useAutosave';
 import { SUPPORTED_AI_PROVIDERS } from './lib/aiProviders';
@@ -120,6 +124,8 @@ import { getWorkspaceSkills, loadWorkspaceSkills } from './lib/skillsManager';
 import { describeTaskReferences, formatReferenceNoteForBrief, projectWorkingFolder, resolveTaskReferences } from './lib/taskReferences';
 import { bridgeClient, type BridgeStatus, getBridgeDownload } from './lib/bridgeClient';
 import { AlertTriangle, RefreshCw, Undo2 } from 'lucide-react';
+import { ArchiveConfirmModal, type ArchiveConfirmRequest, type ArchiveScope } from './components/ArchiveConfirmModal';
+import { ArchivedTasksModal, type ArchiveRestorePlan, type ArchiveTab } from './components/ArchivedTasksModal';
 
 /** One-line description of what a pipeline permission prompt is asking for: the command, the path, or the summary. */
 function describePermissionRequest(prompt: McpToolPermissionPrompt): string {
@@ -149,7 +155,7 @@ function App() {
     const saved = localStorage.getItem('ergo_projects');
     if (saved) {
       try {
-        const parsed: ProjectData[] = JSON.parse(saved);
+        const parsed: ProjectData[] = parseSavedJson(saved);
         const cleaned = parsed.filter(
           (p) =>
             p.folderPath &&
@@ -181,6 +187,9 @@ function App() {
   const [archivedTasks, setArchivedTasks] = useState<TaskItem[]>([]);
   const [briefs, setBriefs] = useState<AgentContextItem[]>([]);
   const [archivedBriefs, setArchivedBriefs] = useState<AgentContextItem[]>([]);
+  const [archiveConfirm, setArchiveConfirm] = useState<ArchiveConfirmRequest | null>(null);
+  // The Archives & Learnings screen: the tab it is open on, or null when closed.
+  const [archivesTab, setArchivesTab] = useState<ArchiveTab | null>(null);
   const [headerComments, setHeaderComments] = useState<string>('');
   const [selectedTaskId, setSelectedTaskId] = useState<string | number | null>(null);
   const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>(() => getScheduledJobs());
@@ -200,7 +209,7 @@ function App() {
     const saved = localStorage.getItem('ergo_user_api_keys');
     if (saved) {
       try {
-        const parsed = JSON.parse(saved);
+        const parsed = parseSavedJson(saved);
         if (Array.isArray(parsed)) return parsed;
       } catch { }
     }
@@ -208,7 +217,7 @@ function App() {
     const legacyCreds = localStorage.getItem('ergo_ai_credentials');
     if (legacyCreds) {
       try {
-        const parsedMap = JSON.parse(legacyCreds);
+        const parsedMap = parseSavedJson(legacyCreds);
         const migrated: UserApiKey[] = [];
         Object.keys(parsedMap).forEach((pid) => {
           if (pid !== 'mock' && parsedMap[pid]?.apiKey) {
@@ -268,7 +277,7 @@ function App() {
     return 'light';
   });
 
-  // Agent Execution Pipeline tuning (concurrency, QA retries, tool rounds, cleaner/hardener gates)
+  // Agent Execution Pipeline tuning (concurrency, verifier retries, tool rounds, cleaner/verifier gates)
   const [agentPipelineOptions, setAgentPipelineOptions] = useState<AgentPipelineOptions>(DEFAULT_AGENT_PIPELINE_OPTIONS);
   // Synchronous mirror: runs read the live settings (e.g. the permission level) from here, never from a closure.
   const agentPipelineOptionsRef = useRef<AgentPipelineOptions>(DEFAULT_AGENT_PIPELINE_OPTIONS);
@@ -545,7 +554,7 @@ function App() {
         generalModel: activeKey.generalModel || activeKey.model || pMeta?.defaultGeneralModel || pMeta?.defaultModel || 'gpt-4o',
         workerModel: activeKey.workerModel || undefined,
         cleanerModel: activeKey.cleanerModel || undefined,
-        hardenerModel: activeKey.hardenerModel || undefined,
+        verifierModel: activeKey.verifierModel || undefined,
         loggerModel: activeKey.loggerModel || undefined,
         autocompleteModel: activeKey.autocompleteModel || undefined,
         roleConfigs: activeKey.roleConfigs || undefined,
@@ -1431,15 +1440,15 @@ function App() {
       (effectiveCli.command.includes('grok') && env.XAI_API_KEY)
     );
 
-    // Pick each agent's model + effort (manager, workers, QA verifier = hardener role).
+    // Pick each agent's model + effort (manager, workers, verifier).
     const options = agentPipelineOptionsRef.current;
     const mode = options.modelSelection;
     const roles: CliLaunchConfig['roles'] = {
       manager: { effort: options.effortLevel },
       worker: { effort: options.effortLevel },
-      qa: { effort: options.effortLevel },
+      verifier: { effort: options.effortLevel },
     };
-    // A rerun after a failed / stopped run starts the manager and workers a rung up; each QA retry climbs one more.
+    // A rerun after a failed / stopped run starts the manager and workers a rung up; each verifier retry climbs one more.
     const startEscalation = rerunEscalation(brief);
     const retryRoles: NonNullable<CliLaunchConfig['retryRoles']> = [];
     const routingConfig: AIProviderConfig = { ...aiConfig, authMode: 'cli_subscription', cliCustomCommand: effectiveCli.command };
@@ -1460,13 +1469,13 @@ function App() {
     const cliRolesFrom = (decisions: RoutingResult['decisions']) => {
       const out: Partial<CliLaunchConfig['roles']> = {};
       for (const decision of decisions) {
-        const role = decision.role === 'hardener' ? 'qa' : decision.role === 'worker' ? 'worker' : decision.role === 'manager' ? 'manager' : null;
+        const role = decision.role === 'verifier' || decision.role === 'worker' || decision.role === 'manager' ? decision.role : null;
         if (!role) continue;
         out[role] = {
           // Auto picks are in the CLI's own vocabulary; a profile model is passed only when this CLI accepts it.
           model: decision.via === 'auto' ? decision.model : decision.via === 'pinned' ? cliModelForPin(effectiveCli.command, decision.model) : undefined,
           effort: decision.effort || options.effortLevel,
-          // Kept for the learning table (set even when absent, so a QA-retry step-up replaces the earlier pick's).
+          // Kept for the learning table (set even when absent, so a verifier-retry step-up replaces the earlier pick's).
           tier: decision.tier,
           calibrated: decision.calibrated,
         };
@@ -1478,13 +1487,13 @@ function App() {
         config: routingConfig,
         effort: options.effortLevel,
         mode,
-        roles: ['manager', 'worker', 'hardener'],
+        roles: ['manager', 'worker', 'verifier'],
         rating,
         escalation: workEscalation(startEscalation),
         signal: opts.signal,
       });
       Object.assign(roles, cliRolesFrom(routing.decisions));
-      const maxRetries = Math.max(0, Math.floor(options.maxQaRetries || 0));
+      const maxRetries = Math.max(0, Math.floor(options.maxVerifierRetries || 0));
       for (let retry = 1; retry <= maxRetries; retry++) {
         const stepped = await routeModelsForRun({
           config: routingConfig,
@@ -1516,7 +1525,7 @@ function App() {
     };
   };
 
-  // ─── CLI agent runs (manager / workers / QA PTYs, completion log) ───
+  // ─── CLI agent runs (manager / workers / verifier PTYs, completion log) ───
   const { terminalSessions, api: cliRuns } = useCliAgentRuns({
     tasksRef,
     briefsRef,
@@ -1624,7 +1633,7 @@ function App() {
               {
                 label: 'Edit rules',
                 variant: 'secondary',
-                onClick: () => setIsSettingsModalOpen(true),
+                onClick: () => setArchivesTab('rules'),
               },
             ],
           });
@@ -2205,7 +2214,7 @@ function App() {
         const relatedRequest = buildRelatedTasksRequest(activeProjectId, latestTaskFor(task), currentBrief);
         const related: RelatedTasksResponse = await findRelatedTasksSoft(relatedRequest, { signal: launchController.signal });
         if (launchController.signal.aborted) return;
-        // Run shape (one deliverable? QA verifier?): local model → tiny cloud model → heuristics. Never rejects; runs
+        // Run shape (one deliverable? verifier?): local model → tiny cloud model → heuristics. Never rejects; runs
         // alongside the overview call and the launch preparation, and is awaited just before launch.
         const runShapePromise: Promise<RunShapeDecision> = decideRunShape(latestTaskFor(task), aiConfigRef.current, {
           signal: launchController.signal,
@@ -2420,12 +2429,14 @@ function App() {
           return;
         }
 
-        // QA runs only when the task's menu switch is on. Settings stay the upper bound for worker delegation: the
-        // decision can only reduce it.
+        // Verifier runs when the task's menu switch is on (on by default) and the AI determined it is necessary.
+        // Settings stay the upper bound for worker delegation: the decision can only reduce it.
         const pipelineOptions = agentPipelineOptionsRef.current;
-        const qaEnabled = (findBriefFor(task) || currentBrief)?.qaVerification === true;
+        const taskNeedsVerifier = runShape.needsVerifier || Boolean((findBriefFor(task) || currentBrief)?.overviewDocument?.requiresVerifier);
+        const userVerifierSetting = (findBriefFor(task) || currentBrief)?.verification !== false;
+        const verifierEnabled = userVerifierSetting && taskNeedsVerifier;
         const maxWorkers = runShape.single ? 1 : Math.max(1, Math.min(8, Math.floor(pipelineOptions.maxConcurrentAgents || 1)));
-        const runPlanNote = describeRunShape(runShape, { qaEnabled, maxWorkers });
+        const runPlanNote = describeRunShape(runShape, { verifierEnabled, maxWorkers });
         console.log(`[Ergo CLI Task] ${runPlanNote}`);
 
         cliLaunched = await cliRuns.launchCliRun({
@@ -2439,7 +2450,8 @@ function App() {
           ...(relatedSources ? { relatedSources } : {}),
           ...(projectRules ? { projectRules } : {}),
           ...(taskReferences ? { references: taskReferences } : {}),
-          qaEnabled,
+          verifierEnabled,
+          needsVerifier: taskNeedsVerifier,
           maxWorkers,
           runPlanNote,
         });
@@ -2462,7 +2474,7 @@ function App() {
           projectId: activeProjectId,
           taskTitle: task.title,
         });
-        const who = delivery.role === 'worker' ? `worker ${delivery.pieceId || ''}`.trim() : delivery.role === 'hardener' ? 'QA hardener' : 'manager';
+        const who = delivery.role === 'worker' ? `worker ${delivery.pieceId || ''}`.trim() : delivery.role === 'verifier' ? 'Verifier' : 'manager';
         upsertTaskStep(task.id, {
           id: `step-steer-${delivery.item.id}`,
           status: 'success',
@@ -3002,7 +3014,7 @@ function App() {
     await handleTerminateAgent(taskId);
   };
 
-  // Stop one agent: the manager stops the whole run; a worker / QA verifier stops just that agent.
+  // Stop one agent: the manager stops the whole run; a worker / verifier stops just that agent.
   const handleKillAgentSession = (ptySessionId: string) => {
     const session = terminalSessions.find((s) => s.ptySessionId === ptySessionId);
     if (session?.role === 'manager') {
@@ -3043,6 +3055,11 @@ function App() {
       nextBriefs = [...briefs, updatedBrief];
     }
     syncAndSaveProject(tasks, nextBriefs, true);
+
+    // If a CLI run is active for this task, dynamically sync the Verification setting:
+    if (updatedBrief.sourceTaskId) {
+      cliRunsRef.current.updateRunVerification(updatedBrief.sourceTaskId, updatedBrief.verification !== false);
+    }
   };
 
   // Helper to ensure an array of tasks have AI execution cards / briefs in AI Workspace
@@ -3219,10 +3236,9 @@ function App() {
   };
 
 
-  // Archive Task Handler (Moves task and corresponding brief into archive section immediately)
+  // Finds the human task and AI execution card an archive request refers to.
   // Takes the live title string read from the editor node, matching by title is immune to stale indices.
-  const handleArchiveTask = (taskTitleOrId: string | number) => {
-    if (!taskTitleOrId && taskTitleOrId !== 0) return;
+  const resolveArchiveTargets = (taskTitleOrId: string | number) => {
     const rawStr = String(taskTitleOrId).trim();
     const cleanedTitle = cleanAndUnescapeMarkdown(rawStr).toLowerCase();
     const rawLower = rawStr.toLowerCase();
@@ -3248,22 +3264,55 @@ function App() {
         cleanAndUnescapeMarkdown(b.title).trim().toLowerCase() === cleanedTitle
     );
 
+    // A card whose title drifted from its task still links back through sourceTaskId
+    const linkedTask = taskToArchive || (matchingBrief?.sourceTaskId != null
+      ? tasks.find((t) => String(t.id) === String(matchingBrief.sourceTaskId))
+      : undefined);
+
+    return { rawStr, taskToArchive: linkedTask, matchingBrief };
+  };
+
+  // Opens the archive confirmation; the archive itself runs from handleArchiveTask once confirmed.
+  const requestArchiveTask = (origin: ArchiveConfirmRequest['origin']) => (taskTitleOrId: string | number) => {
+    if (!taskTitleOrId && taskTitleOrId !== 0) return;
+    const { taskToArchive, matchingBrief } = resolveArchiveTargets(taskTitleOrId);
+    if (!taskToArchive && !matchingBrief) return;
+    setArchiveConfirm({
+      target: taskTitleOrId,
+      origin,
+      title: cleanAndUnescapeMarkdown(taskToArchive?.title || matchingBrief?.title || String(taskTitleOrId)),
+      hasTask: !!taskToArchive,
+      hasBrief: !!matchingBrief,
+    });
+  };
+
+  // Archive Task Handler: moves the execution card, and with scope 'both' the human task too, into vector memory.
+  const handleArchiveTask = (taskTitleOrId: string | number, scope: ArchiveScope = 'both') => {
+    if (!taskTitleOrId && taskTitleOrId !== 0) return;
+    const resolved = resolveArchiveTargets(taskTitleOrId);
+    const { rawStr, matchingBrief } = resolved;
+    const taskToArchive = scope === 'both' ? resolved.taskToArchive : undefined;
+    // The card-only archive still records the human task's details alongside the brief
+    const sourceTask = resolved.taskToArchive;
+
     if (!taskToArchive && !matchingBrief) return;
 
-    const taskTitle = taskToArchive?.title || matchingBrief?.title || 'Archived Task';
-    const taskIdToStore = taskToArchive?.id || matchingBrief?.sourceTaskId || matchingBrief?.id || Date.now();
+    const taskTitle = sourceTask?.title || matchingBrief?.title || 'Archived Task';
+    const taskIdToStore = sourceTask?.id || matchingBrief?.sourceTaskId || matchingBrief?.id || Date.now();
 
-    // 1. Persist concise summary & notes directly into local vector storage
-    void archiveTaskToVectorMemory({
+    // 1. Persist concise summary & notes directly into local vector storage, one record per workspace
+    const archiveRecord = {
       taskId: taskIdToStore,
       taskTitle,
-      category: taskToArchive?.category,
-      status: taskToArchive?.status || (taskToArchive?.isDone ? 'done' : 'archived'),
+      category: sourceTask?.category,
+      status: sourceTask?.status || (sourceTask?.isDone ? 'done' : 'archived'),
       overview: matchingBrief?.overview || matchingBrief?.brief,
       completion: matchingBrief?.completion || matchingBrief?.validation,
-      subtasks: taskToArchive?.subtasks,
+      subtasks: sourceTask?.subtasks,
       projectId: activeProjectId,
-    });
+    };
+    if (taskToArchive) void archiveTaskToVectorMemory({ ...archiveRecord, side: 'human' });
+    if (matchingBrief) void archiveTaskToVectorMemory({ ...archiveRecord, side: 'ai', brief: matchingBrief });
 
     // 2. Remove task from active human workspace
     const nextActiveTasks = taskToArchive ? tasks.filter((t) => t !== taskToArchive) : tasks;
@@ -3280,7 +3329,7 @@ function App() {
     if (
       selectedTaskId === taskToArchive?.id ||
       selectedTaskId === matchingBrief?.id ||
-      selectedTaskId === matchingBrief?.sourceTaskId
+      (taskToArchive && selectedTaskId === matchingBrief?.sourceTaskId)
     ) {
       setSelectedTaskId(
         nextActiveTasks.length > 0
@@ -3306,17 +3355,17 @@ function App() {
 
     showToast({
       type: 'info',
-      title: 'Task Archived to AI Brain',
-      message: `"${taskTitle}" was removed from the workspace and safely retained in vector storage.`,
+      title: taskToArchive ? 'Task Archived' : 'Execution Card Archived',
+      message: taskToArchive
+        ? `"${taskTitle}" was moved to Archives & Learnings.`
+        : `"${taskTitle}" was moved to Archives & Learnings. The human task is unchanged.`,
       duration: 3500,
     });
   };
 
-  // Restore a task from Vector DB into the active workspace
-  const handleRestoreMemoryAsTask = (chunk: import('./lib/memory').MemoryChunk) => {
-    const rawTitle = chunk.metadata.taskTitle || chunk.text.split('\n')[0].replace(/^Task:\s*/i, '').replace(/^Archived Task:\s*/i, '').replace(/[#*`_~]/g, '').trim();
-    const title = rawTitle || 'Restored Task';
-    const nextId = tasks.length > 0 ? Math.max(...tasks.map((t) => (typeof t.id === 'number' ? t.id : 0))) + 1 : 1;
+  // Rebuilds a human-workspace task from an archive record: its saved checklist, or the checklist lines in its text.
+  const taskFromArchiveRecord = (chunk: MemoryChunk, nextId: number, listIndex: number): TaskItem => {
+    const title = archiveRecordTitle(chunk);
     const restoredLaneId = activeProject?.swimLanes?.[0]?.id || 'lane-default';
 
     // Parse subtasks from metadata (direct array or JSON string) or parse checklist from chunk.text
@@ -3371,41 +3420,103 @@ function App() {
       }
     }
 
-    const restoredTask: TaskItem = {
+    return {
       id: nextId,
       title,
       category: chunk.metadata.category || 'General',
-      listIndex: tasks.length + 1,
+      listIndex,
       listType: 'ordered',
       status: 'not_started',
       isDone: false,
       subtasks: restoredSubtasks,
       swimLaneId: restoredLaneId,
     };
+  };
 
-    const restoredBrief: AgentContextItem = {
-      id: `brief_${nextId}`,
-      sourceTaskId: nextId,
-      sourceLaneId: restoredLaneId,
-      title,
-      status: 'not_started',
-      overview: chunk.text,
-      buildAndVerification: '',
-      completion: '',
-      createdFiles: [],
-    };
+  const archiveRecordTitle = (chunk: MemoryChunk) =>
+    (chunk.metadata.taskTitle || chunk.text.split('\n')[0].replace(/^Task:\s*/i, '').replace(/^Archived Task:\s*/i, '').replace(/[#*`_~"]/g, '').trim()) ||
+    'Restored Task';
 
-    const nextTasks = [...tasks, restoredTask];
-    const nextBriefs = [...briefs, restoredBrief];
-    setSelectedTaskId(nextId);
+  // The human-workspace task an AI-workspace archive record was made for, if it is still (or again) in the workspace.
+  // Task ids are positional, so the title has to match too.
+  const liveTaskForRecord = (chunk: MemoryChunk) => {
+    const clean = cleanAndUnescapeMarkdown(archiveRecordTitle(chunk)).trim().toLowerCase();
+    const sameTitle = tasks.filter((t) => cleanAndUnescapeMarkdown(t.title).trim().toLowerCase() === clean);
+    return sameTitle.find((t) => String(t.id) === String(chunk.metadata.taskId)) || sameTitle[0];
+  };
+
+  // What Restore would bring back; the archive screen shows this in its confirmation.
+  const planArchiveRestore = (chunk: MemoryChunk): ArchiveRestorePlan => {
+    const title = cleanAndUnescapeMarkdown(archiveRecordTitle(chunk));
+    if (chunk.metadata.source !== 'ai-archive') return { title, restoresTask: true, restoresCard: false };
+    const liveTask = liveTaskForRecord(chunk);
+    const cardExists = !!liveTask && briefs.some((b) => String(b.sourceTaskId) === String(liveTask.id));
+    return { title, restoresTask: !liveTask, restoresCard: !cardExists };
+  };
+
+  // Restores an archive record (and, for an execution card whose task was archived too, that task) and removes the
+  // restored records from the archive. Returns whether anything came back.
+  const handleRestoreArchive = async (chunk: MemoryChunk): Promise<boolean> => {
+    const plan = planArchiveRestore(chunk);
+    if (!plan.restoresTask && !plan.restoresCard) return false;
+
+    const nextId = tasks.length > 0 ? Math.max(...tasks.map((t) => (typeof t.id === 'number' ? t.id : 0))) + 1 : 1;
+    const consumed = [chunk.id];
+    let task = liveTaskForRecord(chunk);
+    let nextTasks = tasks;
+
+    if (plan.restoresTask) {
+      // An execution card's task comes back from its own archive record when there is one (it has the checklist).
+      let source = chunk;
+      if (chunk.metadata.source === 'ai-archive') {
+        const humanRecord = (await getChunksByNamespace('tasks', activeProjectId)).find(
+          (c) => c.metadata.source === 'workspace-archive' && String(c.metadata.taskId) === String(chunk.metadata.taskId)
+        );
+        if (humanRecord) {
+          source = humanRecord;
+          consumed.push(humanRecord.id);
+        }
+      }
+      task = taskFromArchiveRecord(source, nextId, tasks.length + 1);
+      nextTasks = [...tasks, task];
+    }
+
+    let nextBriefs = briefs;
+    if (plan.restoresCard && task) {
+      let saved: Partial<AgentContextItem> = {};
+      try {
+        if (chunk.metadata.serializedBrief) saved = JSON.parse(chunk.metadata.serializedBrief);
+      } catch (err) {
+        console.warn('[RestoreArchive] Failed to parse serializedBrief:', err);
+      }
+      const restoredBrief: AgentContextItem = {
+        buildAndVerification: '',
+        completion: '',
+        createdFiles: [],
+        ...saved,
+        id: `brief_${task.id}`,
+        sourceTaskId: task.id,
+        sourceLaneId: task.swimLaneId,
+        title: task.title,
+        status: saved.status || 'not_started',
+        // Records archived before the full card was saved keep only their text.
+        overview: saved.overview ?? chunk.text,
+      };
+      nextBriefs = [...briefs, restoredBrief];
+    }
+
+    if (task) setSelectedTaskId(task.id);
     syncAndSaveProject(nextTasks, nextBriefs, true);
+    await removeChunksById(consumed);
 
+    const what = plan.restoresTask && plan.restoresCard ? 'The task and its execution card are' : plan.restoresTask ? 'The task is' : 'The execution card is';
     showToast({
       type: 'success',
-      title: 'Restored to Workspace',
-      message: `"${title}" has been restored to your active workspace with ${restoredSubtasks.length} subtask${restoredSubtasks.length === 1 ? '' : 's'}.`,
+      title: 'Restored',
+      message: `"${plan.title}": ${what.toLowerCase()} back in the workspace.`,
       duration: 3000,
     });
+    return true;
   };
 
   // Remove AI Task Handler (Removes unstarted task from AI workspace without touching human workspace)
@@ -3740,86 +3851,6 @@ function App() {
       wasConnected = status.isConnected;
     });
   }, []);
-
-  // Unarchive Task Handler (Restores task from archive back to active workspace)
-  const handleUnarchiveTask = (taskId: string | number) => {
-    const taskToUnarchive = archivedTasks.find((t) => t.id === taskId);
-    if (!taskToUnarchive) return;
-
-    const normalTitle = taskToUnarchive.title.trim().toLowerCase();
-    const nextArchivedTasks = archivedTasks.filter((t) => t.id !== taskToUnarchive.id);
-
-    const restoredLaneId = taskToUnarchive.swimLaneId || (activeProject?.swimLanes?.[0]?.id || 'lane-default');
-    const restoredId = `${restoredLaneId}_task_${Date.now()}`;
-
-    const referenceTask = tasks.length > 0 ? tasks[0] : null;
-    const restoredTask: TaskItem = {
-      ...taskToUnarchive,
-      id: restoredId,
-      swimLaneId: restoredLaneId,
-      category: referenceTask?.category || 'Untitled',
-      categoryHeadingPrefix: referenceTask?.categoryHeadingPrefix || '##',
-      categoryHasColon: referenceTask?.categoryHasColon || false,
-      categoryColor: referenceTask?.categoryColor,
-      isArchived: false,
-      archivedAtIndex: undefined,
-    };
-
-    const nextActiveTasks = [...tasks, restoredTask];
-
-    const cleanTitle = cleanAndUnescapeMarkdown(taskToUnarchive.title).trim().toLowerCase();
-    const matchingArchivedBrief = archivedBriefs.find(
-      (b) =>
-        (taskToUnarchive && (b.sourceTaskId === taskToUnarchive.id || String(b.sourceTaskId) === String(taskToUnarchive.id))) ||
-        b.title.trim().toLowerCase() === normalTitle ||
-        cleanAndUnescapeMarkdown(b.title).trim().toLowerCase() === cleanTitle
-    );
-    const nextArchivedBriefs = archivedBriefs.filter((b) => b !== matchingArchivedBrief);
-
-    const nextActiveBriefs = matchingArchivedBrief
-      ? [
-        ...briefs,
-        {
-          ...matchingArchivedBrief,
-          isArchived: false,
-          id: `brief_${restoredId}`,
-          sourceTaskId: restoredId,
-          sourceLaneId: restoredLaneId,
-        },
-      ]
-      : briefs;
-
-    setSelectedTaskId(restoredId);
-    syncAndSaveProject(nextActiveTasks, nextActiveBriefs, true, nextArchivedTasks, nextArchivedBriefs);
-  };
-
-  // Permanent Delete Archived Task Handler
-  const handleDeleteArchivedTask = (taskId: string | number) => {
-    const taskToDelete = archivedTasks.find((t) => t.id === taskId);
-    if (!taskToDelete) return;
-
-    void removeChunksByTaskId(taskToDelete.id, activeProjectId);
-
-    const normalTitle = taskToDelete.title.trim().toLowerCase();
-    const cleanTitle = cleanAndUnescapeMarkdown(taskToDelete.title).trim().toLowerCase();
-    const nextArchivedTasks = archivedTasks.filter((t) => t.id !== taskToDelete.id);
-    const nextArchivedBriefs = archivedBriefs.filter(
-      (b) =>
-        b.sourceTaskId !== taskToDelete.id &&
-        String(b.sourceTaskId) !== String(taskToDelete.id) &&
-        b.title.trim().toLowerCase() !== normalTitle &&
-        cleanAndUnescapeMarkdown(b.title).trim().toLowerCase() !== cleanTitle
-    );
-    const nextActiveBriefs = briefs.filter(
-      (b) =>
-        b.sourceTaskId !== taskToDelete.id &&
-        String(b.sourceTaskId) !== String(taskToDelete.id) &&
-        b.title.trim().toLowerCase() !== normalTitle &&
-        cleanAndUnescapeMarkdown(b.title).trim().toLowerCase() !== cleanTitle
-    );
-
-    syncAndSaveProject(tasks, nextActiveBriefs, true, nextArchivedTasks, nextArchivedBriefs);
-  };
 
   // Save Archived Brief Edit
   const handleSaveArchivedBrief = (updatedBrief: AgentContextItem) => {
@@ -4561,10 +4592,8 @@ function App() {
             aiConfig={aiConfig}
             mcpServers={mcpServers}
             onApplyAssistantResult={handleApplyAssistantResult}
-            onArchiveTask={handleArchiveTask}
-            onUnarchiveTask={handleUnarchiveTask}
-            onDeleteArchivedTask={handleDeleteArchivedTask}
-            onRestoreMemoryAsTask={handleRestoreMemoryAsTask}
+            onArchiveTask={requestArchiveTask('human')}
+            onOpenArchives={() => setArchivesTab('human')}
             swimLanes={activeProject?.swimLanes}
             onAddSwimLane={handleAddSwimLane}
             onRenameSwimLane={handleRenameSwimLane}
@@ -4611,11 +4640,7 @@ function App() {
             taskBilling={taskBilling}
             tasks={tasks}
             briefs={briefs}
-            projectId={activeProjectId}
-            projectName={activeProject?.name}
             archivedTasks={archivedTasks}
-            archivedBriefs={archivedBriefs}
-            swimLanes={activeProject?.swimLanes}
             selectedTaskId={selectedTaskId}
             runningTaskIds={runningTaskIds}
             queuedTaskIds={queuedTaskIds}
@@ -4628,9 +4653,7 @@ function App() {
             onTerminateAgent={handleTerminateAgent}
             onUpdateBriefWithAi={handleUpdateBriefWithAi}
             onSyncOverviewWithTask={handleSyncOverviewWithTask}
-            onUnarchiveTask={handleUnarchiveTask}
-            onDeleteArchivedTask={handleDeleteArchivedTask}
-            onRestoreMemoryAsTask={handleRestoreMemoryAsTask}
+            onOpenArchives={() => setArchivesTab('ai')}
             onSaveArchivedBrief={handleSaveArchivedBrief}
             autosaveStatus={autosave.status}
             autosaveDelaySec={autosave.delaySec}
@@ -4647,7 +4670,7 @@ function App() {
             onKillSession={handleKillSession}
             onKillAgentSession={handleKillAgentSession}
             onSendTaskMessage={handleSendTaskMessage}
-            onArchiveTask={handleArchiveTask}
+            onArchiveTask={requestArchiveTask('ai')}
             onRemoveAiTask={handleRemoveAiTask}
             onPurgeTaskFromAi={handlePurgeTaskFromAi}
             scheduledJobs={scheduledJobs}
@@ -4797,6 +4820,26 @@ function App() {
         localModelMode={localModelMode}
         onSetLocalModelMode={handleSetLocalModelMode}
         tinyCloudModelLabel={tinyCloudModelLabel}
+      />
+
+      <ArchivedTasksModal
+        isOpen={archivesTab !== null}
+        initialTab={archivesTab ?? 'human'}
+        onClose={() => setArchivesTab(null)}
+        projectId={activeProjectId}
+        projectName={activeProject?.name || activeProjectId}
+        tasks={tasks}
+        planRestore={planArchiveRestore}
+        onRestore={handleRestoreArchive}
+      />
+
+      <ArchiveConfirmModal
+        request={archiveConfirm}
+        onCancel={() => setArchiveConfirm(null)}
+        onConfirm={(scope) => {
+          if (archiveConfirm) handleArchiveTask(archiveConfirm.target, scope);
+          setArchiveConfirm(null);
+        }}
       />
 
       {/* Global Toast Notifications */}

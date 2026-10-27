@@ -5,7 +5,7 @@
 import { storageManager, BUILTIN_SKILL_DOCS } from '../storageManager';
 import { stripSkillFrontmatter } from '../llmClient';
 
-export type PipelineSkillName = 'manager-agent' | 'worker-agent' | 'cleaner-agent' | 'hardener-agent' | 'task-brief';
+export type PipelineSkillName = 'manager-agent' | 'worker-agent' | 'cleaner-agent' | 'verifier-agent' | 'task-brief';
 
 export async function loadPipelineSkill(name: PipelineSkillName): Promise<string> {
   let raw: string | null = null;

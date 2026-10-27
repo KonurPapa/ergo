@@ -100,7 +100,7 @@ const BUILTIN_SKILL_NAMES = [
   'manager-agent',
   'worker-agent',
   'cleaner-agent',
-  'hardener-agent',
+  'verifier-agent',
 ];
 const SKILL_MANIFEST_FILE = '.defaults.json';
 
@@ -3958,6 +3958,7 @@ interface PtyUsageMeta {
   buffer: string[];
 }
 
+/** 'qa' is the verifier's wire name (kept so apps and bridges of every protocol version agree). */
 type BridgeAgentRole = 'manager' | 'worker' | 'qa';
 type AgentSignalKind = 'delegate' | 'worker-done' | 'complete' | 'qa-verdict' | 'question';
 
@@ -4500,7 +4501,7 @@ function transcriptFromBuffer(buffer: string[]): string[] {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PTY sessions
-// App launches every task agent (manager, workers, QA) over REST and views attach over the WebSocket. The bridge
+// App launches every task agent (manager, workers, verifier) over REST and views attach over the WebSocket. The bridge
 // keeps a VT screen per session, detects prompts on the rendered rows, auto-approves them under Full access,
 // applies live permission changes and watches the run's signal files. Everything is reported to attached views
 // (WebSocket) and to App (SSE /api/pty/events).
@@ -4698,7 +4699,7 @@ function signalFilesFor(session: PtySessionState): Array<{ name: string; signal:
 }
 
 /** "VERDICT: PASS" / "**VERDICT:** FAIL" / "# Verdict: pass" on one of the first non-empty lines. */
-function parseQaVerdict(content: string): 'PASS' | 'FAIL' | undefined {
+function parseVerifierVerdict(content: string): 'PASS' | 'FAIL' | undefined {
   const lines = content.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 5);
   for (const line of lines) {
     const m = line.match(/verdict\W{0,6}(pass|fail)/i);
@@ -4738,10 +4739,10 @@ function pollSignals(session: PtySessionState, final: boolean): Promise<void> {
             continue; // still being written (or invalid): look again on the next poll
           }
         } else if (signal === 'qa-verdict') {
-          verdict = parseQaVerdict(full);
+          verdict = parseVerifierVerdict(full);
           if (!verdict) {
             if (!final) continue;
-            verdict = 'FAIL'; // QA ended without a verdict line: treat as not verified
+            verdict = 'FAIL'; // Verifier ended without a verdict line: treat as not verified
           }
         }
         const content = full.length > SIGNAL_MAX_BYTES ? full.slice(0, SIGNAL_MAX_BYTES) : full;
@@ -6540,7 +6541,7 @@ const SIGNAL_MEMORY_KIND: Record<AgentSignalKind, AgentNoteKind> = {
   delegate: 'plan',
   complete: 'completion',
   'worker-done': 'worker',
-  'qa-verdict': 'qa',
+  'qa-verdict': 'verifier',
   question: 'note',
 };
 
@@ -6582,7 +6583,7 @@ async function ingestRunSignal(session: PtySessionState, name: string, signal: A
     signal === 'delegate' ? 'Delegation plan'
     : signal === 'complete' ? 'Completion record'
     : signal === 'worker-done' ? `Worker ${session.pieceId || ''} report`.replace(/\s+report$/, ' report')
-    : 'QA report';
+    : 'Verifier report';
   const body = signal === 'delegate' ? renderDelegatePlan(text) : text;
   const work = getMemoryStore()
     .upsertDocument({
@@ -7269,12 +7270,12 @@ export function ergoMemoryPlugin(): Plugin {
 // Local decision model — llama.cpp `llama-server` running Qwen 2.5 Coder 0.5B Instruct (GGUF Q4_K_M).
 // Installed per user under <storage root>/.ergo/local-model (no system install, no sudo). The server is a child
 // process bound to 127.0.0.1 with a random per-start API key. It makes the CLI-run shape decision (single
-// deliverable? QA verifier?) and serves autocomplete; the client falls back to the provider's tiny cloud model when
+// deliverable? verifier?) and serves autocomplete; the client falls back to the provider's tiny cloud model when
 // it is missing, so nothing here may make a task fail.
 // REST (all behind guardBridgeRequest):
 //   GET  /api/local-model/status
 //   POST /api/local-model/install | cancel | uninstall
-//   POST /api/local-model/shape     { title, subtasks?, kindHint? } → { success, single, needsQa, source: 'local', ms }
+//   POST /api/local-model/shape     { title, subtasks?, kindHint? } → { success, single, needsVerifier, source: 'local', ms }
 //   POST /api/local-model/complete  { prefix, suffix?, maxTokens? } → { success, text, source: 'local', ms }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -7351,7 +7352,7 @@ const LOCAL_SINGLE_QUESTION: LocalBoolQuestion = {
   ],
 };
 
-const LOCAL_QA_QUESTION: LocalBoolQuestion = {
+const LOCAL_VERIFIER_QUESTION: LocalBoolQuestion = {
   key: 'needs_qa',
   system:
     'Decide if a coding change is risky or broad enough that an independent reviewer should test it (needs_qa=true), or a small contained change (needs_qa=false). Reply with JSON.',
@@ -8011,17 +8012,17 @@ class LocalModelManager {
     }
   }
 
-  async shape(input: { title: string; subtasks: string[]; skipQa: boolean }): Promise<{ single: boolean; needsQa: boolean; ms: number }> {
+  async shape(input: { title: string; subtasks: string[]; skipVerifier: boolean }): Promise<{ single: boolean; needsVerifier: boolean; ms: number }> {
     this.syncDir();
     return this.inUse(async () => {
       const started = Date.now();
       await this.ensureStarted();
       const query = input.title + (input.subtasks.length ? ` | Subtasks: ${input.subtasks.join('; ')}` : '');
-      const [single, needsQa] = await Promise.all([
+      const [single, needsVerifier] = await Promise.all([
         this.askBool(LOCAL_SINGLE_QUESTION, query),
-        input.skipQa ? Promise.resolve(false) : this.askBool(LOCAL_QA_QUESTION, query),
+        input.skipVerifier ? Promise.resolve(false) : this.askBool(LOCAL_VERIFIER_QUESTION, query),
       ]);
-      return { single, needsQa, ms: Date.now() - started };
+      return { single, needsVerifier, ms: Date.now() - started };
     });
   }
 
@@ -8139,12 +8140,12 @@ export function ergoLocalModelPlugin(): Plugin {
               .map((s: unknown) => cleanLine(s, 200))
               .filter(Boolean)
               .slice(0, 12);
-            // The QA question only applies to coding work: a known non-coding kind skips it.
+            // The verifier question only applies to coding work: a known non-coding kind skips it.
             const kindHint = cleanLine(body?.kindHint, 40).toLowerCase();
-            const skipQa = Boolean(kindHint) && kindHint !== 'coding' && kindHint !== 'code';
+            const skipVerifier = Boolean(kindHint) && kindHint !== 'coding' && kindHint !== 'code';
             try {
-              const decision = await manager.shape({ title, subtasks, skipQa });
-              return sendJson(res, 200, { success: true, single: decision.single, needsQa: decision.needsQa, source: 'local', ms: decision.ms });
+              const decision = await manager.shape({ title, subtasks, skipVerifier });
+              return sendJson(res, 200, { success: true, single: decision.single, needsVerifier: decision.needsVerifier, source: 'local', ms: decision.ms });
             } catch (err) {
               return sendJson(res, 200, { success: false, error: errorText(err) });
             }

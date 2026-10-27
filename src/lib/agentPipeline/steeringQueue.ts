@@ -4,7 +4,7 @@
  * App pushes messages; each agent loop (providerLoop) drains the ones meant for it at its next round boundary and
  * appends them to the END of its conversation as a user turn (earlier turns, tools and the cached prefix are never
  * touched). A message addressed to a worker that is no longer running goes to the manager; once the manager's loops
- * are done for the attempt, the QA hardener takes the manager's messages. Whatever no loop took by the end of the run
+ * are done for the attempt, the Verifier takes the manager's messages. Whatever no loop took by the end of the run
  * is returned by close() and continues the run as a follow-up.
  */
 import type { AgentRole } from '../../types';
@@ -78,7 +78,7 @@ export class SteeringQueue {
     else this.activeWorkers.delete(pieceId);
   }
 
-  /** The manager's loops are done for this attempt (QA / logger next) — or running again (false). */
+  /** The manager's loops are done for this attempt (Verifier / logger next) — or running again (false). */
   setManagerDone(done: boolean): void {
     this.managerDone = done;
   }
@@ -86,7 +86,7 @@ export class SteeringQueue {
   /**
    * Called by an agent loop at a round boundary: removes and returns the messages for this agent (and reports each
    * delivery). Worker loops take only their own; the manager also takes messages for workers that are no longer
-   * running; the hardener takes the manager's once the manager is done.
+   * running; the verifier takes the manager's once the manager is done.
    */
   drain(role: AgentRole, pieceId?: string): SteeringItem[] {
     if (this.items.length === 0) return [];
@@ -94,7 +94,7 @@ export class SteeringQueue {
     const take = (it: SteeringItem): boolean => {
       if (role === 'worker') return Boolean(pieceId) && it.pieceId === pieceId;
       if (role === 'manager') return forManager(it);
-      if (role === 'hardener') return this.managerDone && forManager(it);
+      if (role === 'verifier') return this.managerDone && forManager(it);
       return false;
     };
     const taken = this.items.filter(take);

@@ -4424,7 +4424,7 @@ button.related-task-title.is-link:focus-visible {
   cursor: not-allowed;
 }
 
-/* ── Agent identity: role colours (manager / workers / QA / pipeline roles) ── */
+/* ── Agent identity: role colours (manager / workers / verifier / pipeline roles) ── */
 .agent-role-badge.role-manager,
 .agent-session-tab.role-manager,
 .cli-notes-bridge.role-manager {
@@ -4441,9 +4441,9 @@ button.related-task-title.is-link:focus-visible {
   --role-border: rgba(139, 92, 246, 0.45);
 }
 
-.agent-role-badge.role-qa,
-.agent-session-tab.role-qa,
-.cli-notes-bridge.role-qa {
+.agent-role-badge.role-verifier,
+.agent-session-tab.role-verifier,
+.cli-notes-bridge.role-verifier {
   --role-fg: #fbbf24;
   --role-bg: rgba(245, 158, 11, 0.15);
   --role-border: rgba(245, 158, 11, 0.45);
@@ -4489,9 +4489,9 @@ button.related-task-title.is-link:focus-visible {
   --role-border: #c4b5fd;
 }
 
-[data-theme="light"] .agent-role-badge.role-qa,
-[data-theme="light"] .agent-session-tab.role-qa,
-[data-theme="light"] .cli-notes-bridge.role-qa {
+[data-theme="light"] .agent-role-badge.role-verifier,
+[data-theme="light"] .agent-session-tab.role-verifier,
+[data-theme="light"] .cli-notes-bridge.role-verifier {
   --role-fg: #b45309;
   --role-bg: #fffbeb;
   --role-border: #fcd34d;
@@ -5177,7 +5177,7 @@ button.related-task-title.is-link:focus-visible {
 /* ── Notes bridge: agent identity, statuses & prompt details ── */
 .cli-notes-bridge.role-manager,
 .cli-notes-bridge.role-worker,
-.cli-notes-bridge.role-qa {
+.cli-notes-bridge.role-verifier {
   border-left: 3px solid var(--role-fg);
 }
 
@@ -7367,6 +7367,17 @@ button.related-task-title.is-link:focus-visible {
   color: #fda4af;
   font-size: 0.82rem;
   line-height: 1.45;
+}
+
+.archive-delete-modal.is-archive {
+  border-color: rgba(245, 158, 11, 0.35);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), 0 0 20px rgba(245, 158, 11, 0.12);
+}
+
+.archive-delete-modal.is-archive .archive-delete-warning-box {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.25);
+  color: #fcd34d;
 }
 
 /* ── Mid-Build Interactive Human Clarification Styles ────────────────────────── */
@@ -9672,7 +9683,7 @@ button.related-task-title.is-link:focus-visible {
   color: #1e293b;
 }
 
-/* A small on/off switch inside a dropdown row (task menu → QA verification); the row itself is the button. */
+/* A small on/off switch inside a dropdown row (task menu → Verification); the row itself is the button. */
 .toggle-switch-btn.menu-switch {
   display: inline-block;
   flex-shrink: 0;

@@ -92,7 +92,7 @@ Returns the candidate models for one role target:
   |---|---|---|
   | manager | axis | 40 + 12·(max(c, r) − 1) |
   | worker | axis | 35 + 12·(c − 1) |
-  | hardener (QA) | coding | 45 + 10·(c − 1) |
+  | verifier (Verifier) | coding | 45 + 10·(c − 1) |
   | cleaner, logger, summary | intelligence | 30 |
 
 - **Effort offset:** low −10, medium 0, high +8, xhigh +16, max = "best available" (highest quality on the axis, ties → cheaper).
@@ -111,10 +111,10 @@ Returns the candidate models for one role target:
 
 ### Run flows
 - **CLI path** (`src/App.tsx`, the CLI task run around `syncTaskOverviewWithAi` and `prepareCliLaunch`):
-  - Auto: run the overview on the tiny model; get the rating (from the overview, the saved doc, or `rateTask`); pass it to `prepareCliLaunch`, which routes manager / worker / hardener with mode + rating.
+  - Auto: run the overview on the tiny model; get the rating (from the overview, the saved doc, or `rateTask`); pass it to `prepareCliLaunch`, which routes manager / worker / verifier with mode + rating.
   - Manual: routing uses profile models. `decision.model` is passed to the CLI as today. Today's code passes `undefined` for pinned models; in Manual, pass the pinned model so the CLI actually uses the profile's choice. Pins that are not valid for the CLI family stay undefined (CLI default).
 - **In-app pipeline** (`src/lib/agentPipeline/index.ts`):
-  - Auto: route `summary` (tiny) first, run `runSummary`, then route manager / worker / cleaner / hardener / logger with the rating.
+  - Auto: route `summary` (tiny) first, run `runSummary`, then route manager / worker / cleaner / verifier / logger with the rating.
   - Manual: route all roles up front, as today.
   - Emit one "Model routing" step after the second routing (update the same step id).
 
@@ -145,38 +145,38 @@ The user pushed back on the score-threshold picker: it chose models that were to
   - Light: the cheapest model scoring at least 60.
 - **Stage plan** (`basePlan`): the tier comes from scope, the effort from difficulty (`rating.reasoning`). At Medium, for coding:
 
-  | Task | Manager | Workers | QA |
+  | Task | Manager | Workers | verifier |
   |---|---|---|---|
   | c1 | standard | light | standard |
   | c2–3 | standard | standard | standard |
   | c4 or r ≥ 4 | top | standard | top |
   | c5 | top | top | top |
 
-  - **Floors:** the manager and QA never go below standard for coding; workers never go below standard from c3 up.
-  - **Effort by reasoning** (manager / QA): low, medium, medium, high, xhigh. Workers run one step lower. QA for coding runs at least at medium.
+  - **Floors:** the manager and verifier never go below standard for coding; workers never go below standard from c3 up.
+  - **Effort by reasoning** (manager / verifier): low, medium, medium, high, xhigh. Workers run one step lower. Verifier for coding runs at least at medium.
 - **Slider:**
   - Low: −1 tier (down to the floors) and −1 effort.
-  - High: +1 tier for manager and QA, +1 effort.
+  - High: +1 tier for manager and verifier, +1 effort.
   - Extra High: +1 tier for everyone, +2 effort.
   - Max: top tier at max effort.
   - Bookkeeping stays light at low/medium effort.
 - **Collapsed top:** when top is the same model as standard, top tier adds one effort step.
 - **Escalation** (`escalation.ts`), for the manager and workers only:
   - Each step moves up one tier, or adds one effort step once at the top tier.
-  - **QA retry:** in the pipeline, the manager and workers are re-routed. In CLI runs, the precomputed `launch.retryRoles` are used: new workers pick them up, and a Claude Code manager is switched with `/model`.
-  - **Rerun after a qa_failed, failed or stopped run:** start one step higher (at most 2), based on `brief.lastRunOutcome`.
+  - **Verifier retry:** in the pipeline, the manager and workers are re-routed. In CLI runs, the precomputed `launch.retryRoles` are used: new workers pick them up, and a Claude Code manager is switched with `/model`.
+  - **Rerun after a verifier_failed, failed or stopped run:** start one step higher (at most 2), based on `brief.lastRunOutcome`.
   - **Manual:** keeps the profile's models and raises effort instead.
-- **Run record:** `AgentContextItem.lastRunOutcome` (`RunOutcomeRecord`) stores the outcome, escalation, QA retries, rating and the models / efforts used.
+- **Run record:** `AgentContextItem.lastRunOutcome` (`RunOutcomeRecord`) stores the outcome, escalation, verifier retries, rating and the models / efforts used.
 
 ## Revision 3 (2026-10-20): "How did this task do?" surveys and cheaper tries
 
-- **Survey** (`calibration.ts` `surveyReason`, decided when `recordRunCalibration` stores a run): the task card (`RunSurveyCard`) asks for a Good or Bad answer after an Auto run (a stage with a `tier`) that passed, completed or got no QA verdict. The user mustn't have judged the run already, in a steering message or an earlier answer. Reasons:
-  - `no_verdict`: QA was unverified.
+- **Survey** (`calibration.ts` `surveyReason`, decided when `recordRunCalibration` stores a run): the task card (`RunSurveyCard`) asks for a Good or Bad answer after an Auto run (a stage with a `tier`) that passed, completed or got no verifier verdict. The user mustn't have judged the run already, in a steering message or an earlier answer. Reasons:
+  - `no_verdict`: Verifier was unverified.
   - `thin`: a manager or worker setting has fewer than 3 weighted results for this group (`MIN_RUNS_UP`).
   - `cheaper`: a stage started a rung down (`calibrated: -1`) and that setting has fewer than 3 answers.
 - **Answer** (`CalibrationRun.verdict`): replaces the automatic verdict and counts double (`CONFIRMED_WEIGHT`).
-  - Bad blames the end models, and QA if it passed the work.
-  - Starting models that a QA retry stepped up from still count as failures.
+  - Bad blames the end models, and verifier if it passed the work.
+  - Starting models that a verifier retry stepped up from still count as failures.
   - Closing the survey with × sets `survey.dismissed`.
 - **Cheaper try** (`PROBE_*` in `calibrationAdjustment`): the user approved this, and it replaces the old "never experiments" rule.
   - Conditions: manager or workers only, at most one stage per run (`modelRouter` `probed`), on about 25% of the runs where the other conditions hold. The planned rung's Wilson lower bound must be ≥ 0.7. The cheaper rung must have fewer than 5 weighted results and a success estimate ≥ 0.5.

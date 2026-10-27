@@ -66,12 +66,12 @@ export function buildBibleSections(args: {
   overviewDoc: OverviewDocument;
   requiredMcps: string[];
   taskKind: TaskKind;
-  requiresHardener?: boolean;
-  hardenerReason?: string;
+  requiresVerifier?: boolean;
+  verifierReason?: string;
   allowedRoots: McpRootBoundary[];
   runId: string;
 }): BibleSections {
-  const { task, project, overviewDoc, requiredMcps, taskKind, requiresHardener, hardenerReason, allowedRoots, runId } = args;
+  const { task, project, overviewDoc, requiredMcps, taskKind, requiresVerifier, verifierReason, allowedRoots, runId } = args;
   return {
     title: task.title,
     metadata: {
@@ -83,8 +83,8 @@ export function buildBibleSections(args: {
       projectPath: project.folderPath || 'projects/default-workspace',
       taskKind,
       runId,
-      requiresHardener,
-      hardenerReason
+      requiresVerifier,
+      verifierReason
     },
     subtasks: task.subtasks.map((s) => ({ text: s.text, isDone: Boolean(s.isDone), isHumanReview: Boolean(s.isHumanReview) })),
     spec: (overviewDoc.raw || '').trim(),
@@ -148,8 +148,8 @@ export class BibleStore {
     out.push(`- **Source**: ${s.metadata.sourceDocument}`);
     out.push(`- **Project**: ${s.metadata.projectName} (${s.metadata.projectPath})`);
     out.push(`- **Task Kind**: ${s.metadata.taskKind}`);
-    if (s.metadata.requiresHardener !== undefined) {
-      out.push(`- **QA Hardener**: ${s.metadata.requiresHardener ? 'Required' : 'Skipped'}${s.metadata.hardenerReason ? ` (${s.metadata.hardenerReason})` : ''}`);
+    if (s.metadata.requiresVerifier !== undefined) {
+      out.push(`- **Verifier**: ${s.metadata.requiresVerifier ? 'Required' : 'Skipped'}${s.metadata.verifierReason ? ` (${s.metadata.verifierReason})` : ''}`);
     }
     out.push(`- **Run ID**: ${s.metadata.runId}`, '');
 
@@ -171,7 +171,7 @@ export class BibleStore {
 
     if (s.projectRules && s.projectRules.length > 0) {
       out.push("## Project Rules (the user's standing requirements, learned from their feedback on earlier runs)");
-      out.push('_Follow them. Where one conflicts with this task or with the run protocol, the task and the protocol win. QA checks them._');
+      out.push('_Follow them. Where one conflicts with this task or with the run protocol, the task and the protocol win. Verifier checks them._');
       out.push(...s.projectRules.map((r) => `- ${r}`), '');
     }
 

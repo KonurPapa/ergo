@@ -24,7 +24,7 @@ export const AGENT_ROLES: AgentRole[] = [
   'manager',
   'worker',
   'cleaner',
-  'hardener',
+  'verifier',
   'logger',
   'autocomplete'
 ];
@@ -98,11 +98,11 @@ export const AGENT_ROLE_INFO: Record<AgentRole, AgentRoleMeta> = {
       cli_subscription: 'claude-code'
     }
   },
-  hardener: {
-    role: 'hardener',
-    name: 'Hardener Agent (QA)',
+  verifier: {
+    role: 'verifier',
+    name: 'Verifier Agent',
     score: 9.0,
-    scoreLabel: '9.0 / 10 (Frontier QA)',
+    scoreLabel: '9.0 / 10 (Frontier verifier)',
     tier: 'advanced',
     description: 'Adversarial quality assurance harness: tests edge cases, verifies the brief\'s "Done when" criteria via browser/commands, and catches regressions before completion.',
     defaultModels: {

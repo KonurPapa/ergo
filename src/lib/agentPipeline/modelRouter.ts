@@ -9,7 +9,7 @@
  *    Auto can't serve (Ollama, Cursor, custom CLIs, nothing matched) fall back to Manual's choice.
  *
  * Effort: Auto picks it per stage with the model (autoRouter.ts stagePlan: difficulty sets effort, the slider shifts
- * it); Manual uses the slider's level (one step lower for bookkeeping stages, effortForRole). Escalation steps (QA
+ * it); Manual uses the slider's level (one step lower for bookkeeping stages, effortForRole). Escalation steps (Verifier
  * retries, reruns after a failed run) climb one rung each: Auto moves to the next model tier, then more effort;
  * Manual keeps the profile's models and raises effort. The tiny cloud model (tinyCloudModelFor) makes the
  * small background decisions (run shape, autocomplete, task rating) when the local model is not used.
@@ -71,7 +71,7 @@ export interface RoutingResult {
 }
 
 /** Roles whose model need depends on the task rating (the others need a fixed baseline). */
-const RATED_ROLES = new Set<AgentRole>(['manager', 'worker', 'hardener']);
+const RATED_ROLES = new Set<AgentRole>(['manager', 'worker', 'verifier']);
 
 /**
  * Returns a copy of `config` whose roleConfigs carry the routed model and effort for each role in `roles`. Roles not
@@ -88,7 +88,7 @@ export async function routeModelsForRun(params: {
   rating?: TaskRating;
   /** Auto: a catalog already fetched for this run (otherwise getModelCatalog()). */
   catalog?: ModelCatalog;
-  /** Rungs to climb per role (QA retries, reruns after a failed run). */
+  /** Rungs to climb per role (Verifier retries, reruns after a failed run). */
   escalation?: Partial<Record<AgentRole, number>>;
   signal?: AbortSignal;
   /** Not used for routing; accepted so existing callers keep compiling. */
@@ -145,7 +145,7 @@ export async function routeModelsForRun(params: {
     const group = ratingGroup(params.rating);
     // Calibration needs a real rating (not the mid-scale default) and a known family.
     const calibrate: CalibrateFn | undefined =
-      calibration && family && group.difficulty && (role === 'manager' || role === 'worker' || role === 'hardener')
+      calibration && family && group.difficulty && (role === 'manager' || role === 'worker' || role === 'verifier')
         ? (options) =>
             calibrationAdjustment({ file: calibration, family, coding: Boolean(group.coding), difficulty: group.difficulty!, role, allowProbe: !probed, ...options })
         : undefined;

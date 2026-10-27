@@ -13,7 +13,7 @@ import {
 
 /** Why Ergo is asking, in one line. */
 function reasonText(reason: SurveyReason, record: RunOutcomeRecord | undefined): string {
-  if (reason === 'no_verdict') return "QA couldn't confirm this run, so your answer is the only check.";
+  if (reason === 'no_verdict') return "Verifier couldn't confirm this run, so your answer is the only check.";
   if (reason === 'cheaper') {
     const tried = (['manager', 'worker'] as const)
       .map((role) => record?.startModels?.[role] ?? record?.models?.[role])

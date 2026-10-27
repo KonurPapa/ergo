@@ -5,6 +5,7 @@
  *
  * Several open tabs may write: each write re-reads the file and keeps, per run, the most recently saved state.
  */
+import { parseSavedJson } from './legacyVerifier';
 import { readFilesFromDisk, writeFilesToDisk } from './fileSystem';
 
 const RUNS_FILE = 'config/cli-runs.json';
@@ -27,7 +28,7 @@ let writing: Promise<void> = Promise.resolve();
 
 function parseFile(raw: string | null | undefined): Record<string, StoredRunState> {
   try {
-    const parsed = raw ? JSON.parse(raw) : null;
+    const parsed = raw ? parseSavedJson(raw) : null;
     return parsed && typeof parsed.runs === 'object' && parsed.runs ? parsed.runs : {};
   } catch {
     return {};
@@ -44,7 +45,7 @@ function takeLegacyRuns(): StoredRunState[] {
     }
     for (const key of keys) {
       try {
-        const state = JSON.parse(localStorage.getItem(key) || 'null');
+        const state = parseSavedJson(localStorage.getItem(key) || 'null');
         if (state && typeof state.runId === 'string') out.push(state);
       } catch {}
     }

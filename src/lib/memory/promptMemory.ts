@@ -1,6 +1,6 @@
 /**
  * Memory pre-fetched for a prompt: the overview call (prior knowledge the working brief folds in) and the worker /
- * QA agents' launch prompts. Fail-soft: a failed, slow (> 1.5 s) or unscoped search yields no hits and never blocks.
+ * Verifier agents' launch prompts. Fail-soft: a failed, slow (> 1.5 s) or unscoped search yields no hits and never blocks.
  * Agent searches never include the live workspace index (related tasks cover that); they find earlier runs' notes
  * and completed or archived tasks.
  */

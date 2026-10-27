@@ -189,7 +189,7 @@ export function buildTaskCliPrompt(task: TaskItem, brief?: AgentContextItem): st
   return sections.join('\n\n');
 }
 
-// ─── Multi-agent CLI runs (manager → workers → QA) ──────────────────────────
+// ─── Multi-agent CLI runs (manager → workers → verifier) ──────────────────────────
 //
 // Agents report milestones by writing files into `<cwd>/<runDirRel>/`; the bridge watches those files
 // (see vite.config.ts, ergo-pty plugin) and App orchestrates the next agent. Messages Ergo types into a
@@ -205,8 +205,8 @@ export interface CliRunPromptContext {
   runDirRel: string;
   /** Most workers the manager may delegate to (delegation is offered only when this is ≥ 2). */
   maxWorkers: number;
-  /** A QA verifier agent checks the manager's work after it writes completion.md. */
-  qaEnabled: boolean;
+  /** A verifier agent checks the manager's work after it writes completion.md. */
+  verifierEnabled: boolean;
   /** Memory pre-fetched for this agent's prompt (RELEVANT MEMORY section; at most 4 are shown). */
   memoryHits?: Array<{ id: string; label: string; text: string }>;
   /** The ergo-memory MCP tools are registered for this agent (default true). False: agents use the run files. */
@@ -240,7 +240,7 @@ export interface CliRunPromptContext {
   workspaceTools?: boolean;
   /**
    * The project's learned rules for this task (formatProjectRules, a few hundred tokens): every agent of the run gets
-   * them as a PROJECT RULES section, and QA checks them.
+   * them as a PROJECT RULES section, and verifier checks them.
    */
   projectRules?: string;
 }
@@ -258,7 +258,7 @@ const WORKER_ID_RE = /^[A-Za-z0-9_-]{1,12}$/;
 /** Keep any single argv entry well under Linux's 128 KiB MAX_ARG_STRLEN. */
 const MAX_INSTRUCTIONS_CHARS = 12_000;
 const MAX_FILES_PER_WORKER = 60;
-const MAX_COMPLETION_IN_QA_PROMPT = 12_000;
+const MAX_COMPLETION_IN_VERIFIER_PROMPT = 12_000;
 const MAX_OVERVIEW_IN_WORKER_PROMPT = 4_000;
 const MAX_MEMORY_HITS_IN_PROMPT = 4;
 const MAX_MEMORY_HIT_CHARS = 240;
@@ -289,7 +289,7 @@ function buildMemorySections(ctx: CliRunPromptContext, reportFile: string): stri
       `ERGO MEMORY (tools memory_search, memory_get, memory_save; pass run_id: "${ctx.runId}"):\n` +
       `- Search memory before re-reading many files or redoing analysis; memory_get <id> gives the full text.\n` +
       `- Save important findings, decisions and plans with memory_save, not note files. If the tools are unavailable, write notes under "${dir}/notes/".\n` +
-      `- Run reports (plan, workers, QA, completion) are in memory: never read files in "${dir}/" unless the tools are unavailable. Still WRITE "${reportFile}": it is Ergo's signal.`
+      `- Run reports (plan, workers, verifier, completion) are in memory: never read files in "${dir}/" unless the tools are unavailable. Still WRITE "${reportFile}": it is Ergo's signal.`
     );
   }
   const hits = (ctx.memoryHits || []).filter((h) => h && h.id && h.text).slice(0, MAX_MEMORY_HITS_IN_PROMPT);
@@ -304,7 +304,7 @@ function buildMemorySections(ctx: CliRunPromptContext, reportFile: string): stri
 
 /**
  * FINDING CODE section: code_search first for every lookup, grep only as the fallback, and enough surrounding code read
- * before changing anything. `edits`: the agent changes code (QA only verifies). Empty without a code index.
+ * before changing anything. `edits`: the agent changes code (Verifier only verifies). Empty without a code index.
  */
 function buildCodeSearchSection(ctx: Pick<CliRunPromptContext, 'codeSearchAvailable' | 'codeSearchPath'>, edits: boolean): string[] {
   if (!ctx.codeSearchAvailable) return [];
@@ -518,11 +518,11 @@ export function buildManagerCliPrompt(task: TaskItem, brief: AgentContextItem | 
     );
   }
 
-  if (ctx.qaEnabled) {
+  if (ctx.verifierEnabled) {
     sections.push(
-      `QA VERIFICATION:\n` +
-      `After you write the completion record, an independent QA verifier agent will check your work against the task. ` +
-      `If it finds problems, Ergo will type a message into this terminal starting with "Ergo:" that points to the QA findings${memoryOn(ctx) ? ' in memory' : ' file'}. ` +
+      `Verifier VERIFICATION:\n` +
+      `After you write the completion record, an independent verifier agent will check your work against the task. ` +
+      `If it finds problems, Ergo will type a message into this terminal starting with "Ergo:" that points to the verifier findings${memoryOn(ctx) ? ' in memory' : ' file'}. ` +
       `When that happens: read the findings, fix every issue it lists, re-verify, and then OVERWRITE "${completionFile}" with an updated, complete completion record as your last action again. ` +
       `Until then (after writing the completion record) simply end your turn and wait.`
     );
@@ -602,26 +602,26 @@ export function buildWorkerCliPrompt(
   return sections.join('\n\n');
 }
 
-/** Prompt for the QA verifier agent: verify (never implement), write qa.md with the VERDICT line first. */
-export function buildQaCliPrompt(
+/** Prompt for the verifier agent: verify (never implement), write qa.md with the VERDICT line first. */
+export function buildVerifierCliPrompt(
   task: TaskItem,
   brief: AgentContextItem | undefined,
   ctx: CliRunPromptContext & { completionMarkdown: string; attempt: number }
 ): string {
-  const qaFile = runFile(ctx, 'qa.md');
+  const verifierFile = runFile(ctx, 'qa.md');
   const completionFile = runFile(ctx, 'completion.md');
   const keyedToBrief = isTaskBrief(usableOverview(brief));
   const sections: string[] = [];
 
   sections.push(
     `YOUR ROLE:\n` +
-    `You are the independent QA VERIFIER of an Ergo task run (run id ${ctx.runId}, QA round ${Math.max(1, ctx.attempt)}). ` +
+    `You are the independent verifier VERIFIER of an Ergo task run (run id ${ctx.runId}, verifier round ${Math.max(1, ctx.attempt)}). ` +
     `A manager agent says it finished the task below. Your job is to find out whether that is true. ` +
     `You VERIFY ONLY: do NOT implement fixes, do NOT edit, create or delete project files, and do NOT create git commits. ` +
-    `The only file you write is your report "${qaFile}".`
+    `The only file you write is your report "${verifierFile}".`
   );
 
-  sections.push(...buildMemorySections(ctx, qaFile));
+  sections.push(...buildMemorySections(ctx, verifierFile));
   sections.push(...buildCodeSearchSection(ctx, false));
 
   sections.push(...buildTaskContentSections(task, brief, 'TASK UNDER REVIEW'));
@@ -631,19 +631,19 @@ export function buildQaCliPrompt(
   const completionSource = memoryOn(ctx)
     ? `memory_get "${runMemoryDocId(ctx.runId, 'completion.md')}"`
     : `read ${completionFile}`;
-  const completionExcerpt = completion.length > MAX_COMPLETION_IN_QA_PROMPT
-    ? `${completion.slice(0, MAX_COMPLETION_IN_QA_PROMPT)}\n… (truncated — ${completionSource} for the full record)`
+  const completionExcerpt = completion.length > MAX_COMPLETION_IN_VERIFIER_PROMPT
+    ? `${completion.slice(0, MAX_COMPLETION_IN_VERIFIER_PROMPT)}\n… (truncated — ${completionSource} for the full record)`
     : completion || `(empty — ${completionSource} if it exists)`;
   sections.push(`MANAGER'S COMPLETION RECORD (${completionFile}):\n${completionExcerpt}`);
 
   if (ctx.attempt > 1) {
     sections.push(
-      `PREVIOUS QA ROUND:\n` +
-      `This is a re-check after the manager tried to fix earlier QA findings. ` +
+      `PREVIOUS verifier ROUND:\n` +
+      `This is a re-check after the manager tried to fix earlier verifier findings. ` +
       (memoryOn(ctx)
         ? `Get the previous report with memory_get "${runMemoryDocId(ctx.runId, 'qa.md')}" first, `
-        : `"${qaFile}" may still hold the previous report: read it first, `) +
-      `confirm each earlier finding is really fixed, then look for new problems. Overwrite "${qaFile}" completely with your new report.`
+        : `"${verifierFile}" may still hold the previous report: read it first, `) +
+      `confirm each earlier finding is really fixed, then look for new problems. Overwrite "${verifierFile}" completely with your new report.`
     );
   }
 
@@ -657,8 +657,8 @@ export function buildQaCliPrompt(
   );
 
   sections.push(
-    `FINAL STEP — QA REPORT (REQUIRED):\n` +
-    `Use your normal file-write tool to create "${qaFile}" as your LAST action (Ergo reads the verdict from it). ` +
+    `FINAL STEP — verifier REPORT (REQUIRED):\n` +
+    `Use your normal file-write tool to create "${verifierFile}" as your LAST action (Ergo reads the verdict from it). ` +
     `The FIRST line must be exactly "VERDICT: PASS" or "VERDICT: FAIL" (nothing before it). Then markdown:\n\n` +
     `VERDICT: <PASS or FAIL>\n\n` +
     `**Checks run:** <one line: commands / checks and their results>\n\n` +
@@ -715,28 +715,28 @@ export function buildWorkersDoneMessage(
 }
 
 /**
- * One-line message Ergo types into the manager's terminal after a QA FAIL that still has fix rounds left.
+ * One-line message Ergo types into the manager's terminal after a verifier FAIL that still has fix rounds left.
  * Points to the findings in memory (the file only as a fallback); without `ctx.runId` it is read from the path.
  */
-export function buildQaFailMessage(
-  qaFileRel: string,
+export function buildVerifierFailMessage(
+  verifierFileRel: string,
   attempt: number,
   maxRetries: number,
   ctx: Partial<Pick<CliRunPromptContext, 'runId' | 'memoryToolsAvailable'>> = {}
 ): string {
-  const qa = oneLine(qaFileRel, 200);
-  const slash = qa.lastIndexOf('/');
-  const completionFile = slash >= 0 ? `${qa.slice(0, slash)}/completion.md` : 'completion.md';
+  const verifier = oneLine(verifierFileRel, 200);
+  const slash = verifier.lastIndexOf('/');
+  const completionFile = slash >= 0 ? `${verifier.slice(0, slash)}/completion.md` : 'completion.md';
   const round = Math.max(1, Math.floor(attempt) || 1);
   const max = Math.max(round, Math.floor(maxRetries) || round);
-  const runId = ctx.runId || (slash > 0 ? qa.slice(0, slash).replace(/^.*\//, '') : '');
+  const runId = ctx.runId || (slash > 0 ? verifier.slice(0, slash).replace(/^.*\//, '') : '');
   const findings = runId && memoryOn(ctx)
-    ? `Get the findings with memory_get "${runMemoryDocId(runId, qa)}" (only if the memory tool is unavailable, read ${qa})`
-    : `Read the findings in ${qa}`;
+    ? `Get the findings with memory_get "${runMemoryDocId(runId, verifier)}" (only if the memory tool is unavailable, read ${verifier})`
+    : `Read the findings in ${verifier}`;
   return oneLine(
-    `Ergo: the QA verifier FAILED your work (fix round ${round} of ${max}). ${findings}, fix every issue listed, ` +
+    `Ergo: the verifier FAILED your work (fix round ${round} of ${max}). ${findings}, fix every issue listed, ` +
     `re-run the relevant checks, then overwrite ${completionFile} with an updated complete completion record as your final action; ` +
-    `QA will check again after that.`,
+    `Verifier will check again after that.`,
     1500
   );
 }
@@ -748,7 +748,7 @@ const MAX_FOLLOW_UP_CHARS = 3000;
  * One-line message Ergo types into (or resumes) the manager with when the user sends a follow-up after the run
  * finished: the user's words first, then a short reminder of the run protocol so Ergo can tell when it is done again.
  */
-export function buildFollowUpMessage(userMessage: string, ctx: Pick<CliRunPromptContext, 'runDirRel' | 'qaEnabled' | 'maxWorkers'>): string {
+export function buildFollowUpMessage(userMessage: string, ctx: Pick<CliRunPromptContext, 'runDirRel' | 'verifierEnabled' | 'maxWorkers'>): string {
   const completionFile = runFile(ctx, 'completion.md');
   const delegation =
     Math.floor(ctx.maxWorkers || 0) >= 2
@@ -757,17 +757,17 @@ export function buildFollowUpMessage(userMessage: string, ctx: Pick<CliRunPrompt
   return oneLine(
     `${oneLine(userMessage, MAX_FOLLOW_UP_CHARS)} ` +
     `(Ergo: this is a follow-up from the user on the task you already finished — continue from where you left off, do not start over.${delegation} ` +
-    `When it is done and verified, overwrite ${completionFile} with an updated completion record covering this follow-up as your final action${ctx.qaEnabled ? '; QA will check it again' : ''}.)`,
+    `When it is done and verified, overwrite ${completionFile} with an updated completion record covering this follow-up as your final action${ctx.verifierEnabled ? '; verifier will check it again' : ''}.)`,
     MAX_FOLLOW_UP_CHARS + 900
   );
 }
 
 /** What a stopped run's manager was waiting on when it was stopped (Ergo restarts it on resume). */
-export type ResumeWaitingOn = 'workers' | 'qa' | undefined;
+export type ResumeWaitingOn = 'workers' | 'verifier' | undefined;
 
 function resumeWaitNote(waitingOn: ResumeWaitingOn, ctx: Pick<CliRunPromptContext, 'runDirRel'>): string {
-  if (waitingOn === 'qa') {
-    return `You had already written ${runFile(ctx, 'completion.md')} and were waiting on the QA verifier: Ergo has restarted it. Change nothing; wait for its "Ergo:" message.`;
+  if (waitingOn === 'verifier') {
+    return `You had already written ${runFile(ctx, 'completion.md')} and were waiting on the verifier: Ergo has restarted it. Change nothing; wait for its "Ergo:" message.`;
   }
   if (waitingOn === 'workers') {
     return `You were waiting on your workers: Ergo has restarted the ones that had not reported. Do not redo their pieces; wait for the "Ergo:" message saying they finished.`;
@@ -780,7 +780,7 @@ function resumeWaitNote(waitingOn: ResumeWaitingOn, ctx: Pick<CliRunPromptContex
  * on exactly where it was interrupted. `workersDone` is the hand-off for workers that reported while it was stopped.
  */
 export function buildResumeMessage(
-  ctx: Pick<CliRunPromptContext, 'runDirRel' | 'qaEnabled'>,
+  ctx: Pick<CliRunPromptContext, 'runDirRel' | 'verifierEnabled'>,
   opts: { userMessage?: string; waitingOn?: ResumeWaitingOn; workersDone?: string } = {}
 ): string {
   const completionFile = runFile(ctx, 'completion.md');
@@ -790,7 +790,7 @@ export function buildResumeMessage(
     `Ergo: the user stopped this run partway and has now resumed it. Continue exactly where you left off — do not start over, and check the files you were editing, since your last step may have been cut off. ` +
     (user ? `The user's message: "${oneLine(user, MAX_FOLLOW_UP_CHARS)}". ` : '') +
     (opts.workersDone ? `${opts.workersDone} ` : wait ? `${wait} ` : '') +
-    (opts.waitingOn === 'qa' ? '' : `When the task is done and verified, write ${completionFile} (overwrite it if it exists) as your final action${ctx.qaEnabled ? '; QA will check it' : ''}.`),
+    (opts.waitingOn === 'verifier' ? '' : `When the task is done and verified, write ${completionFile} (overwrite it if it exists) as your final action${ctx.verifierEnabled ? '; verifier will check it' : ''}.`),
     MAX_FOLLOW_UP_CHARS + 6000
   );
 }
@@ -864,9 +864,9 @@ export function buildContinuationPrompt(
       `Ergo types a message starting with "Ergo:" when they finish.`
     );
   }
-  if (ctx.qaEnabled) {
+  if (ctx.verifierEnabled) {
     sections.push(
-      `QA: after you write the completion record a QA verifier checks your work; if it fails, Ergo types a message starting with "Ergo:" — fix the findings and overwrite "${completionFile}" again.`
+      `Verifier: after you write the completion record a verifier checks your work; if it fails, Ergo types a message starting with "Ergo:" — fix the findings and overwrite "${completionFile}" again.`
     );
   }
   sections.push(

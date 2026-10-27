@@ -6,7 +6,7 @@
  * namespace `insights` (memoryStore.applyInsightOps): one call per message, reconciled on write, so the list stays
  * small and current and never needs a clean-up pass. Saving is automatic; the app shows each change with Undo.
  * Read: the related-tasks call returns the task's rules (whole list while small); every run's brief writer, manager,
- * workers and QA get them as a PROJECT RULES block of a few hundred tokens.
+ * workers and verifier get them as a PROJECT RULES block of a few hundred tokens.
  *
  * Tested against Mem0 (docs/wip/evals/insights): 14/14 rules, 0 stale, 0 noise, ~$0.0005 per message. The local
  * model is not used: it failed comparable judgement tasks (docs/wip/evals). No cloud model → nothing is learned.

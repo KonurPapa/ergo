@@ -11,18 +11,18 @@
   | Decision | Qwen 0.5B local | Claude Haiku (tiny cloud) |
   |---|---|---|
   | single deliverable vs split | **90%** | 82% |
-  | needs QA verifier | **83%** | 92% |
+  | needs verifier | **83%** | 92% |
   | task kind | 48% ✗ | 100% |
   | MCP selection exact | ≤60% ✗ | 88% |
   | related tasks F1 | 0.40 ✗ | 0.70 |
 
   - Autocomplete via Qwen FIM: median **~100 ms**, usable quality.
 - **Hybrid design** (the user chose it):
-  - **Local Qwen** handles: (1) the CLI-run **shape decision** — `single` (no worker delegation) and `needsQa` (launch the QA verifier or not); (2) **autocomplete**.
+  - **Local Qwen** handles: (1) the CLI-run **shape decision** — `single` (no worker delegation) and `needsVerifier` (launch the verifier or not); (2) **autocomplete**.
   - **Task kind, MCP selection, related-task selection** stay where they are now: inside the Summary / overview call that already runs on the provider's model. No change there, except removing Laya leftovers.
   - **Fallback order** for every local-model job: local Qwen → the provider's **tiny cloud model** (tier-1 of the active family in `modelRouter.ts`'s CATALOG: claude-haiku-5-5 / haiku / gpt-5-mini / gemini-3.7-flash / grok-3-mini / gemini-3.8-flash-low) → deterministic heuristics (autocomplete: no suggestion). A missing local model must never make a task fail.
   - **"Skip" in onboarding** (and mode `cloud` in Settings): nothing is downloaded, and the tiny cloud model does those jobs. This also covers low-powered / mobile users.
-- **In-app pipeline:** its Summary call already outputs `requiresHardener` / straightforwardness in the same call, from a stronger model, so the local shape decision is NOT added there. It is used for CLI runs, which have no triage call before launch.
+- **In-app pipeline:** its Summary call already outputs `requiresVerifier` / straightforwardness in the same call, from a stronger model, so the local shape decision is NOT added there. It is used for CLI runs, which have no triage call before launch.
 
 ## Pinned downloads (verify SHA-256 before use; refuse on mismatch)
 **llama.cpp build `b11669`**, base URL `https://github.com/ggml-org/llama.cpp/releases/download/b11669/`:
@@ -53,7 +53,7 @@
   - `POST /api/local-model/install` → starts a background install (idempotent: a second call while installing just reports state). On completion the server starts.
   - `POST /api/local-model/cancel` → aborts the install and removes partial files.
   - `POST /api/local-model/uninstall` → stops the server and deletes the install dir.
-  - `POST /api/local-model/shape` `{ title, subtasks?: string[] }` → `{ success, single, needsQa, source: 'local', ms }`, or `{ success:false, error }` when not installed / not ready. Two calls to llama-server (`/v1/chat/completions`, temperature 0, `response_format` json_schema, `cache_prompt: true`) with EXACTLY the few-shot prompts below.
+  - `POST /api/local-model/shape` `{ title, subtasks?: string[] }` → `{ success, single, needsVerifier, source: 'local', ms }`, or `{ success:false, error }` when not installed / not ready. Two calls to llama-server (`/v1/chat/completions`, temperature 0, `response_format` json_schema, `cache_prompt: true`) with EXACTLY the few-shot prompts below.
   - `POST /api/local-model/complete` `{ prefix, suffix?, maxTokens? (default 24, max 48) }` → `{ success, text, source: 'local', ms }`, via llama-server `/infill`: `{ input_prefix, input_suffix, n_predict, temperature: 0, stop: ["\n"] }`. Trim the result; empty → `text: ''`.
 - **Lifecycle:**
   - Start `llama-server -m <gguf> --host 127.0.0.1 --port <free port in 11500-11599> -c 4096 --parallel 2 -t <max(1, min(8, cpus-1))>` lazily on the first request, or at bridge start when installed. Wait for `/health` with a 20 s timeout.
@@ -67,19 +67,19 @@
 - **NEW `src/lib/localModel/client.ts`:** `getLocalModelStatus()`, `installLocalModel()`, `cancelLocalModelInstall()`, `uninstallLocalModel()`, `localShapeDecision(req)`, `localComplete(req)` via `bridgeClient.fetch`. All fail soft (`null` / `{success:false}`).
 - **NEW `src/lib/localModel/preference.ts`:** a module-level store `getLocalModelMode(): 'local'|'cloud'|'unset'` / `setLocalModelMode(mode)`. App sets it from settings on load and on change.
 - **NEW `src/lib/localModel/decisions.ts`:**
-  - `decideRunShape(task, aiConfig, opts?: { signal? }): Promise<{ single: boolean; needsQa: boolean; source: 'local'|'cloud'|'heuristic'; model?: string; ms: number }>`
+  - `decideRunShape(task, aiConfig, opts?: { signal? }): Promise<{ single: boolean; needsVerifier: boolean; source: 'local'|'cloud'|'heuristic'; model?: string; ms: number }>`
     - mode `local` → `localShapeDecision`. Any other mode, or local failure → the tiny cloud model.
     - **Cloud:** ONE call through the existing `llmClient` / `callAiEngine` path. It must work for API-key and CLI-subscription profiles; check how autocomplete and other light calls do it. Use the combined prompt below with JSON output and the tier-1 model. Cap it at about 8 s.
-    - **Heuristic:** `single` = no subtasks or ≤2 subtasks and not `isExplicitCodeTask` multi-file, or reuse `isStraightforwardTask`-like rules; `needsQa` = coding with ≥4 subtasks.
+    - **Heuristic:** `single` = no subtasks or ≤2 subtasks and not `isExplicitCodeTask` multi-file, or reuse `isStraightforwardTask`-like rules; `needsVerifier` = coding with ≥4 subtasks.
   - `tinyCloudModelFor(aiConfig)`: export a helper from `modelRouter.ts` returning the tier-1 model id of the active family. The CLI families use the CLI names (haiku, gemini-3.8-flash-low).
 - **Autocomplete** (`src/lib/autocompleteService.ts`): when mode is `local`, try `localComplete` first with prefix = surrounding list context plus the current line up to the cursor, and suffix = the rest of the line plus the next line. Keep the existing word / sentence modes and output shape.
   - On failure or empty, fall back to the existing cloud path, whose lightweight model should become `tinyCloudModelFor(aiConfig)` instead of its hard-coded outdated list (`claude-3-5-haiku-20241022` etc.). Keep the explicit overrides (`autocompleteModel`, `roleConfigs.autocomplete`).
 - **CLI runs** (`App.tsx` `handleExecuteTask` CLI branch → `useCliAgentRuns.launchCliRun`):
   - Before launch (after the related-task step, in parallel with overview generation where possible), call `decideRunShape`.
-  - Pass `qaEnabled = brief.qaVerification === true` (the task menu's QA switch, off by default; superseded `enableHardener && needsQa` on 2026-10-20) and `maxWorkers = single ? 1 : configured`.
+  - Pass `verifierEnabled = brief.verification === true` (the task menu's verifier switch, off by default; superseded `enableVerifier && needsVerifier` on 2026-10-20) and `maxWorkers = single ? 1 : configured`.
   - The manager prompt already says "do it yourself, no delegate.json" when maxWorkers < 2.
-  - Record the decision visibly: add one line to the manager step's detail, e.g. `Run plan: single deliverable · QA verifier skipped — decided locally by Qwen 0.5B (110 ms)`, or `… by claude-haiku-5-5` / `… by heuristics`.
-  - `LaunchCliRunParams` gets optional `qaEnabled` / `maxWorkers` overrides; they default to the current option-based values.
+  - Record the decision visibly: add one line to the manager step's detail, e.g. `Run plan: single deliverable · verifier skipped — decided locally by Qwen 0.5B (110 ms)`, or `… by claude-haiku-5-5` / `… by heuristics`.
+  - `LaunchCliRunParams` gets optional `verifierEnabled` / `maxWorkers` overrides; they default to the current option-based values.
 - **Settings:** `AppSettings.localModel?: { mode: 'local' | 'cloud' }`. Load and persist through the existing settings flow, and call `setLocalModelMode`.
   - App passes to OnboardingModal and SettingsModal: `localModelMode`, `onSetLocalModelMode(mode)`.
   - It also passes `tinyCloudModelLabel` (e.g. "Claude Haiku", or the tier-1 id), so the UI can say what Skip uses.
@@ -124,14 +124,14 @@
   - "Migrate the app to the new payment provider | Subtasks: API client; webhooks; data migration; remove old SDK" → {"single": false}
 - Query text: `<title>` plus ` | Subtasks: a; b; c` when there are subtasks. Schema: `{single: boolean}`.
 
-**Local QA (`needsQa`)** — system: `Decide if a coding change is risky or broad enough that an independent reviewer should test it (needs_qa=true), or a small contained change (needs_qa=false). Reply with JSON.`
+**Local verifier (`needsVerifier`)** — system: `Decide if a coding change is risky or broad enough that an independent reviewer should test it (needs_qa=true), or a small contained change (needs_qa=false). Reply with JSON.`
 - Few-shot pairs:
   - "Change the button color on the settings page" → {"needs_qa": false}
   - "Rewrite the authentication system to use OAuth | Subtasks: providers; token storage; migrate sessions" → {"needs_qa": true}
   - "Add a tooltip to the export icon" → {"needs_qa": false}
   - "Move all data from SQLite to Postgres with a migration script" → {"needs_qa": true}
 - Schema: `{needs_qa: boolean}`.
-- Only ask it for tasks that aren't clearly non-coding. When the client already knows the task kind (e.g. `isExplicitCodeTask` is false and there are no code signals), it may pass `kindHint` and the bridge may skip the QA question (`needsQa: false`).
+- Only ask it for tasks that aren't clearly non-coding. When the client already knows the task kind (e.g. `isExplicitCodeTask` is false and there are no code signals), it may pass `kindHint` and the bridge may skip the verifier question (`needsVerifier: false`).
 
 **Cloud combined (tiny model)** — system: `You triage a task from a software project's to-do list. Decide: single — true if it is one focused deliverable one person finishes in a single pass; false if it has several distinct parts better split up. needs_qa — true only for coding changes that span several parts of a codebase or carry risk (architecture, data migration, security/permissions, new subsystems); false otherwise. Reply with JSON {"single": boolean, "needs_qa": boolean}.`
 - User: `Task:\n<title>\nSubtasks:\n- …`

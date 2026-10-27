@@ -12,7 +12,7 @@ export interface SteeringMessage {
   taskId: string;
   /** The run the message belongs to (a post-run follow-up continues that run). */
   runId: string;
-  /** Which agent received it: manager / worker / hardener (QA). */
+  /** Which agent received it: manager / worker / verifier (Verifier). */
   role: AgentRole;
   text: string;
   /** mid-run: the agent was working · post-run: the run had finished and the message continued it. */

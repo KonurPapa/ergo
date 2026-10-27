@@ -125,7 +125,7 @@ flowchart TD
 ---
 
 ### Step 2: Summary AI (`task-brief` — the Working Brief)
-- **Objective:** Fold the task, its selected related tasks and notes, prior knowledge and project guidelines into the **working brief** — the exact spec the manager works from and the spec section of the bible (`TASK_CONTEXT.md`). It also picks the required MCPs, the task kind and the Hardener decision.
+- **Objective:** Fold the task, its selected related tasks and notes, prior knowledge and project guidelines into the **working brief** — the exact spec the manager works from and the spec section of the bible (`TASK_CONTEXT.md`). It also picks the required MCPs, the task kind and the Verifier decision.
 - **Format** (`docs/skills/task-brief/SKILL.md`): `Goal`, `Scope` (including what is out of scope), `Known context`, `Constraints`, `Done when`, `Assumptions` — one-line bullets, facts with their source ids, 60–350 words depending on the task.
 - **Done when is a strict checklist:** one bullet per behaviour (starting state → action → observable result, exact values from the input), including a failure or edge case where the behaviour has one. Gherkin-formatted criteria were tested and dropped: no measurable gain for the manager, 30% longer, more invented specifics.
 - **Master Markdown Bible Document Format:**

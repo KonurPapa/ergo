@@ -41,7 +41,6 @@ import { bridgeClient, type BridgeStatus, BRIDGE_LAUNCH_URL, getBridgeDownload }
 import { BridgeDownloadButton } from './BridgeDownloadButton';
 import { useBeta } from '../context/BetaContext';
 import { LocalModelSettingsSection, useLocalModelInstall, type LocalModelMode } from './LocalModelSetup';
-import { LearnedRulesSection } from './LearnedRulesSection';
 import { getModelCatalog, formatCatalogAge, snapshotDate, usesArtificialAnalysis } from '../lib/modelCatalog/catalog';
 import type { ModelCatalog } from '../lib/modelCatalog/types';
 import { BUILTIN_STRENGTHS_AS_OF } from '../lib/modelCatalog/builtinStrengths';
@@ -220,7 +219,7 @@ const ModelDataSettingsSection: React.FC<{
   );
 };
 
-const STAGE_WORDS: Record<string, string> = { manager: 'Manager', worker: 'Workers', hardener: 'QA' };
+const STAGE_WORDS: Record<string, string> = { manager: 'Manager', worker: 'Workers', verifier: 'Verifier' };
 const EFFORT_SHORT: Record<string, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra High', max: 'Max' };
 
 /** What Auto mode has learned from past runs (config/model-calibration.json), with a reset. */
@@ -299,7 +298,7 @@ const LearnedModelsPanel: React.FC = () => {
 /** Bounds for the numeric pipeline knobs (kept in sync with the helper text below). */
 const PIPELINE_LIMITS = {
   maxConcurrentAgents: { min: 1, max: 8 },
-  maxQaRetries: { min: 0, max: 5 },
+  maxVerifierRetries: { min: 0, max: 5 },
   maxToolRoundsPerAgent: { min: 5, max: 120 }
 } as const;
 
@@ -476,7 +475,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const setPipelineOption = <K extends keyof AgentPipelineOptions>(key: K, value: AgentPipelineOptions[K]) => {
     onSetAgentPipelineOptions({ ...agentPipelineOptions, [key]: value });
   };
-  const setPipelineNumber = (key: 'maxConcurrentAgents' | 'maxQaRetries' | 'maxToolRoundsPerAgent', raw: string) => {
+  const setPipelineNumber = (key: 'maxConcurrentAgents' | 'maxVerifierRetries' | 'maxToolRoundsPerAgent', raw: string) => {
     const parsed = parseInt(raw, 10);
     if (isNaN(parsed)) return;
     const { min, max } = PIPELINE_LIMITS[key];
@@ -1031,7 +1030,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <span style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--text-bright)' }}>Agent Pipeline</span>
             </div>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.85rem', lineHeight: '1.4' }}>
-              Tuning for the task execution engine (Vector Context → Summary → Manager fan-out → Cleaner → Hardener). Every knob trades tokens and latency against thoroughness.
+              Tuning for the task execution engine (Vector Context → Summary → Manager fan-out → Cleaner → Verifier). Every knob trades tokens and latency against thoroughness.
             </p>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.85rem' }}>
@@ -1057,26 +1056,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <p style={pipelineHelpStyle}>More workers finish faster but share the prompt cache less well and can hit rate limits.</p>
               </div>
 
-              {/* QA retries */}
+              {/* Verifier retries */}
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
                   <RotateCw size={13} color="var(--accent-rose)" />
-                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)' }}>QA retries</span>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)' }}>Verifier retries</span>
                 </div>
                 <div style={pipelineInputBoxStyle}>
                   <input
                     type="number"
-                    min={PIPELINE_LIMITS.maxQaRetries.min}
-                    max={PIPELINE_LIMITS.maxQaRetries.max}
+                    min={PIPELINE_LIMITS.maxVerifierRetries.min}
+                    max={PIPELINE_LIMITS.maxVerifierRetries.max}
                     step="1"
-                    value={agentPipelineOptions.maxQaRetries}
-                    onChange={(e) => setPipelineNumber('maxQaRetries', e.target.value)}
+                    value={agentPipelineOptions.maxVerifierRetries}
+                    onChange={(e) => setPipelineNumber('maxVerifierRetries', e.target.value)}
                     style={pipelineNumberInputStyle}
-                    aria-label="Maximum QA retries"
+                    aria-label="Maximum verifier retries"
                   />
                   <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>retries (0–5)</span>
                 </div>
-                <p style={pipelineHelpStyle}>For tasks with QA verification switched on (task menu): each QA failure sends the work back to the manager with the diagnostics; 0 means report and stop.</p>
+                <p style={pipelineHelpStyle}>For tasks with Verification switched on (task menu): each verifier failure sends the work back to the manager with the diagnostics; 0 means report and stop.</p>
               </div>
 
               {/* Tool rounds per agent */}
@@ -1223,9 +1222,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </button>
             </div>
           </div>
-
-          {/* Section: Learned rules (the user's feedback on runs, distilled per project) */}
-          <LearnedRulesSection projectId={activeProject.id} projectName={activeProject.name || activeProject.id} />
 
           {/* Section: Local AI model (Qwen 2.5 Coder 0.5B) — also for people who skipped it in onboarding */}
           <div

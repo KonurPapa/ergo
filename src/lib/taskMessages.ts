@@ -17,7 +17,7 @@ export type TaskMessageDelivery =
   | 'restarted'
   /** The run had been stopped partway: it was resumed and picks up where it stopped, with the message. */
   | 'unpaused'
-  /** The manager is gone while workers / QA still run: the message continues the run once they finish. */
+  /** The manager is gone while workers / verifier still run: the message continues the run once they finish. */
   | 'held';
 
 export interface TaskMessageResult {

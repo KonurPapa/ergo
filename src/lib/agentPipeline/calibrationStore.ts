@@ -100,7 +100,7 @@ export interface RunCalibrationInput {
 function cleanStages(stages: RunCalibrationInput['start']): Partial<Record<CalibratedRole, CalibrationStage>> | undefined {
   if (!stages) return undefined;
   const out: Partial<Record<CalibratedRole, CalibrationStage>> = {};
-  for (const role of ['manager', 'worker', 'hardener'] as const) {
+  for (const role of ['manager', 'worker', 'verifier'] as const) {
     const s = stages[role];
     if (s?.model && s.effort) {
       out[role] = { model: s.model, effort: s.effort, ...(s.tier ? { tier: s.tier } : {}), ...(s.calibrated ? { calibrated: s.calibrated } : {}) };
@@ -216,7 +216,7 @@ export async function classifySteeringMessage(text: string, aiConfig: AIProvider
 }
 
 function roleOf(message: SteeringMessage): CalibratedRole | null {
-  return message.role === 'manager' || message.role === 'worker' || message.role === 'hardener' ? message.role : null;
+  return message.role === 'manager' || message.role === 'worker' || message.role === 'verifier' ? message.role : null;
 }
 
 /**

@@ -19,11 +19,18 @@ export function newTokensOf(u: TokenUsage): number {
   return Math.max(0, u.inputTokens - (u.cachedInputTokens || 0)) + u.outputTokens;
 }
 
-/** "1.0M", "412k", "980". */
+/** "1M", "2.1M", "30k", "980". Truncates thousands and millions cleanly. */
 function compactTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 10_000) return `${Math.round(n / 1000)}k`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  if (n >= 1_000_000) {
+    const val = (n / 1_000_000).toFixed(1).replace(/\.0$/, '');
+    return `${val}M`;
+  }
+  if (n >= 1000) {
+    const val = n >= 10_000
+      ? `${Math.round(n / 1000)}`
+      : (n / 1000).toFixed(1).replace(/\.0$/, '');
+    return `${val}k`;
+  }
   return String(n);
 }
 
@@ -49,7 +56,7 @@ export function extractTaskTokenSummary(
     manager: emptyUsage(),
     worker: emptyUsage(),
     cleaner: emptyUsage(),
-    hardener: emptyUsage(),
+    verifier: emptyUsage(),
     logger: emptyUsage(),
     autocomplete: emptyUsage()
   };
@@ -220,7 +227,7 @@ function planLine(plan: PlanUsage, /*label: string*/): string | null {
 
 /**
  * Compact token usage card displaying the running tally of all tokens used
- * across all phases (Discovery, Summary, Manager, Workers, QA, etc.).
+ * across all phases (Discovery, Summary, Manager, Workers, verifier, etc.).
  * Styled according to ShadCN design guidelines.
  */
 export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
@@ -239,9 +246,10 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
 
   const { totalTokens, totalUsage, byRole, hasUsage } = summary;
   const { /*inputTokens,*/ outputTokens, cachedInputTokens, cacheWriteTokens, calls } = totalUsage;
+  const exactTokenCountStr = `${totalUsage.estimated ? '≈ ' : ''}${totalTokens.toLocaleString()}`;
   const tokenTitle = totalUsage.estimated
-    ? "Estimated from text length — this CLI doesn't report exact token counts"
-    : `New tokens: fresh input + cache writes + output. Each call also re-reads the agent's whole context from the prompt cache (${cachedInputTokens.toLocaleString()} tokens here, billed at ~10% of the input price), which is why "In" below is far larger.`;
+    ? `Estimated from text length: ${exactTokenCountStr} tokens — this CLI doesn't report exact token counts`
+    : `${exactTokenCountStr} new tokens: fresh input + cache writes + output. Each call also re-reads the agent's whole context from the prompt cache (${cachedInputTokens.toLocaleString()} tokens here, billed at ~10% of the input price), which is why "In" below is far larger.`;
 
   // Identify roles that actually consumed tokens
   const activeRoles = (Object.entries(byRole) as [AgentRole, { usage: TokenUsage; total: number }][]).filter(
@@ -253,7 +261,7 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
     manager: { label: 'Manager', color: '#818cf8', bg: 'rgba(129, 140, 248, 0.08)', border: 'rgba(129, 140, 248, 0.2)' },
     worker: { label: 'Workers', color: '#34d399', bg: 'rgba(52, 211, 153, 0.08)', border: 'rgba(52, 211, 153, 0.2)' },
     cleaner: { label: 'Cleaner', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.08)', border: 'rgba(251, 113, 133, 0.2)' },
-    hardener: { label: 'QA Hardener', color: '#c084fc', bg: 'rgba(192, 132, 252, 0.08)', border: 'rgba(192, 132, 252, 0.2)' },
+    verifier: { label: 'Verifier', color: '#c084fc', bg: 'rgba(192, 132, 252, 0.08)', border: 'rgba(192, 132, 252, 0.2)' },
     logger: { label: 'Logger', color: '#94a3b8', bg: 'rgba(148, 163, 184, 0.08)', border: 'rgba(148, 163, 184, 0.2)' },
     autocomplete: { label: 'Small model', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.08)', border: 'rgba(56, 189, 248, 0.2)' }
   };
@@ -330,7 +338,7 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
             padding: '0.2rem 0.1rem 0.1rem'
           }}
         >
-          Start the task to track token consumption across AI phases (Summary, Manager, Workers, QA, and Logger).
+          Start the task to track token consumption across AI phases (Summary, Manager, Workers, Verifier, and Logger).
         </div>
       </div>
     );
@@ -418,7 +426,7 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
           const costText = typeof totalUsage.costUsd === 'number'
             ? `${totalUsage.costPartial || totalUsage.estimated ? '≈ ' : ''}${formatUsd(totalUsage.costUsd)}`
             : null;
-          const tokenText = `${totalUsage.estimated ? '≈ ' : ''}${totalTokens.toLocaleString()}`;
+          const tokenText = `${totalUsage.estimated ? '≈ ' : ''}${compactTokens(totalTokens)}`;
           const bigStyle: React.CSSProperties = {
             fontFamily: 'var(--font-mono)',
             fontSize: '1.15rem',
@@ -495,7 +503,7 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
         )}
       </div>
 
-      {/* Bottom Stage Breakdown Row: Summary, Manager, Workers, QA, Logger */}
+      {/* Bottom Stage Breakdown Row: Summary, Manager, Workers, verifier, Logger */}
       {showBreakdown && activeRoles.length > 0 && (
         <div
           style={{
@@ -563,7 +571,7 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
                 border: '1px solid var(--border-subtle)',
                 whiteSpace: 'nowrap'
               }}
-              title="Total LLM round trips across Summary, Manager, Workers, QA, and Logger"
+              title="Total LLM round trips across Summary, Manager, Workers, Verifier, and Logger"
             >
               <span style={{ color: 'var(--text-dim)', marginRight: '0.25rem' }}>Calls:</span>
               <strong style={{ color: 'var(--text-bright)' }}>{calls}</strong>
@@ -644,11 +652,11 @@ export const BvHeaderTokenBadge: React.FC<BvTokenCounterCardProps> = ({
       {typeof summary.totalUsage.costUsd === 'number' ? (
         <>
           <span>{summary.totalUsage.costPartial || summary.totalUsage.estimated ? '≈ ' : ''}{formatUsd(summary.totalUsage.costUsd)}</span>
-          <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', fontWeight: 400 }}>{summary.totalTokens.toLocaleString()} tokens</span>
+          <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', fontWeight: 400 }}>{compactTokens(summary.totalTokens)} tokens</span>
         </>
       ) : (
         <>
-          <span>{summary.totalUsage.estimated ? '≈ ' : ''}{summary.totalTokens.toLocaleString()}</span>
+          <span>{summary.totalUsage.estimated ? '≈ ' : ''}{compactTokens(summary.totalTokens)}</span>
           <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', fontWeight: 400 }}>tokens</span>
         </>
       )}

@@ -23,7 +23,6 @@ import { TextColor } from '../lib/textColorMark';
 import { storageManager } from '../lib/storageManager';
 import { bridgeClient } from '../lib/bridgeClient';
 import { HumanAiAssistantModal } from './HumanAiAssistantModal';
-import { ArchivedTasksModal } from './ArchivedTasksModal';
 import { BatchRunModal } from './BatchRunModal';
 import { BetaFeature, useBeta } from '../context/BetaContext';
 import { ScheduleTaskModal } from './ScheduleTaskModal';
@@ -2543,7 +2542,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                   }}
                 >
                   <Archive size={13} style={{ color: '#f59e0b' }} />
-                  <span>Archived Tasks</span>
+                  <span>Archives &amp; Learnings</span>
                   {archivedTasksCount > 0 && (
                     <span className="dropdown-item-badge" style={{ marginLeft: 'auto', fontSize: '0.7rem', padding: '0.05rem 0.35rem', borderRadius: '8px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.35)', color: '#f59e0b', fontWeight: 600 }}>
                       {archivedTasksCount}
@@ -2986,9 +2985,8 @@ interface TaskPaneProps {
   mcpServers?: MCPServer[];
   onApplyAssistantResult?: (result: HumanAiAssistantResult, confirmedDeletions: boolean) => void;
   onArchiveTask?: (taskTitle: string) => void;
-  onUnarchiveTask?: (taskId: string | number) => void;
-  onDeleteArchivedTask?: (taskId: string | number) => void;
-  onRestoreMemoryAsTask?: (chunk: import('../lib/memory').MemoryChunk) => void;
+  /** Opens the Archives & Learnings screen. */
+  onOpenArchives?: () => void;
   swimLanes?: SwimLaneDoc[];
   onAddSwimLane?: (afterLaneId?: string) => void;
   onRenameSwimLane?: (laneId: string, newTitle: string) => void;
@@ -3019,9 +3017,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   mcpServers = [],
   onApplyAssistantResult = () => { },
   onArchiveTask,
-  onUnarchiveTask,
-  onDeleteArchivedTask,
-  onRestoreMemoryAsTask,
+  onOpenArchives,
   swimLanes,
   onAddSwimLane,
   onRenameSwimLane,
@@ -3037,7 +3033,6 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   const [showStyles, setShowStyles] = useState(false);
   const [assistantDrawerHeight, setAssistantDrawerHeight] = useState<number>(0);
   const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
-  const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
   const headerMenuRef = useRef<HTMLDivElement>(null);
 
   // Close workspace header dropdown on outside click or Escape
@@ -3167,7 +3162,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
               onRenameSwimLane={onRenameSwimLane}
               onDeleteSwimLane={onDeleteSwimLane}
               onAddSwimLaneAfter={(laneId) => onAddSwimLane?.(laneId)}
-              onOpenArchivedTasks={() => setIsArchiveModalOpen(true)}
+              onOpenArchivedTasks={onOpenArchives}
               archivedTasksCount={archivedTasks.length}
               onArchiveTask={onArchiveTask}
               onCreateTaskFromSelection={onCreateTaskFromSelection}
@@ -3198,18 +3193,6 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
         ))}
       </div>
 
-      {/* ── Archived Tasks & AI Brain Modal Window ── */}
-      <ArchivedTasksModal
-        isOpen={isArchiveModalOpen}
-        onClose={() => setIsArchiveModalOpen(false)}
-        projectId={project?.id}
-        projectName={project?.name}
-        archivedTasks={archivedTasks}
-        swimLanes={effectiveSwimLanes}
-        onUnarchiveTask={onUnarchiveTask}
-        onDeleteArchivedTask={onDeleteArchivedTask}
-        onRestoreMemoryAsTask={onRestoreMemoryAsTask}
-      />
 
     </div>
   );

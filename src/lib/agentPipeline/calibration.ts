@@ -2,15 +2,15 @@
  * Model calibration — Auto mode learning from the user's own runs (docs/AUTO_MODE.md, "Learning from your own runs").
  *
  * A small table of recent runs, kept in <storage>/config/model-calibration.json next to the agent skills so the user
- * can read it. Each run records, per stage (manager / workers / QA): the task group (coding or not, difficulty), the
- * model + effort it started on and ended on (QA retries step up), how the run ended, and the user's messages that
+ * can read it. Each run records, per stage (manager / workers / verifier): the task group (coding or not, difficulty), the
+ * model + effort it started on and ended on (Verifier retries step up), how the run ended, and the user's messages that
  * judged the model ("that's wrong, try again", "use a cheaper model"). Plain counts, no vector search: the picker's
  * question is exact ("how often did Sonnet at Medium pass coding tasks of difficulty 3?").
  *
  * What counts:
  *  - passed / completed → success for the models that did the work. Passed only after stepping up → the starting
  *    models failed and the stepped-up ones succeeded.
- *  - qa_failed / failed → failure. stopped / unverified, and reruns → nothing.
+ *  - verifier_failed / failed → failure. stopped / unverified, and reruns → nothing.
  *  - A message saying the model wasn't good enough → failure; saying it was more than needed → evidence for one rung
  *    cheaper.
  *
@@ -24,14 +24,14 @@
  * little data, about one run in four starts the manager or workers one rung cheaper, and asks the user afterwards.
  *
  * "How did this task do?" (surveyReason): after an Auto run that passed or finished, the task card asks for a
- * good / bad answer when Ergo can't judge the models well on its own: QA reached no verdict, a stage's setting has
+ * good / bad answer when Ergo can't judge the models well on its own: Verifier reached no verdict, a stage's setting has
  * fewer than three results on tasks like this, or the run tried a cheaper rung that has few answers yet. An answer
- * overrides the automatic verdict and counts double (CONFIRMED_WEIGHT): the user saw the result, QA only checked it.
+ * overrides the automatic verdict and counts double (CONFIRMED_WEIGHT): the user saw the result, verifier only checked it.
  */
 import type { EffortLevel, RunOutcome, TaskRating } from '../../types';
 
-export type CalibratedRole = 'manager' | 'worker' | 'hardener';
-export const CALIBRATED_ROLES: readonly CalibratedRole[] = ['manager', 'worker', 'hardener'];
+export type CalibratedRole = 'manager' | 'worker' | 'verifier';
+export const CALIBRATED_ROLES: readonly CalibratedRole[] = ['manager', 'worker', 'verifier'];
 
 export interface CalibrationStage {
   model: string;
@@ -44,7 +44,7 @@ export interface CalibrationStage {
 
 export type SteeringSignal = 'too_weak' | 'too_strong';
 
-/** Why Ergo asked "how did this task do?": QA gave no verdict, too few results, or a cheaper rung was tried. */
+/** Why Ergo asked "how did this task do?": Verifier gave no verdict, too few results, or a cheaper rung was tried. */
 export type SurveyReason = 'no_verdict' | 'thin' | 'cheaper';
 export type SurveyVerdict = 'good' | 'bad';
 
@@ -60,7 +60,7 @@ export interface CalibrationRun {
   outcome?: RunOutcome;
   /** Models the run started on, per stage. */
   start?: Partial<Record<CalibratedRole, CalibrationStage>>;
-  /** Models the run ended on, when QA retries stepped up. */
+  /** Models the run ended on, when verifier retries stepped up. */
   end?: Partial<Record<CalibratedRole, CalibrationStage>>;
   usage?: { inputTokens: number; outputTokens: number; cachedInputTokens: number };
   signals?: Array<{ role: CalibratedRole; signal: SteeringSignal; text: string; at: string }>;
@@ -134,22 +134,22 @@ export function samplesFromRun(run: CalibrationRun): Sample[] {
     const end = run.end?.[role] ?? start;
     const steppedUp = !sameStage(start, end);
     if (verdict) {
-      // The user judged the end result: it holds for the models that produced it (and for QA, which approved it).
-      // Starting models that QA retries stepped up from still failed.
-      if (role !== 'hardener' && steppedUp) push(role, start, 0, 1);
+      // The user judged the end result: it holds for the models that produced it (and for verifier, which approved it).
+      // Starting models that verifier retries stepped up from still failed.
+      if (role !== 'verifier' && steppedUp) push(role, start, 0, 1);
       if (verdict === 'good') push(role, end, CONFIRMED_WEIGHT, 0, 0, true);
-      else if (role !== 'hardener' || outcome === 'passed') push(role, end, 0, CONFIRMED_WEIGHT, 0, true);
+      else if (role !== 'verifier' || outcome === 'passed') push(role, end, 0, CONFIRMED_WEIGHT, 0, true);
       continue;
     }
     if (outcome === 'passed' || outcome === 'completed') {
-      if (role !== 'hardener' && steppedUp) {
+      if (role !== 'verifier' && steppedUp) {
         push(role, start, 0, 1);
         push(role, end, 1, 0);
       } else {
         push(role, start, 1, 0);
       }
-    } else if (outcome === 'qa_failed' || outcome === 'failed') {
-      if (role === 'hardener') continue; // QA caught the problem (or never ran): no verdict on its model
+    } else if (outcome === 'verifier_failed' || outcome === 'failed') {
+      if (role === 'verifier') continue; // Verifier caught the problem (or never ran): no verdict on its model
       push(role, end, 0, 1);
       if (steppedUp) push(role, start, 0, 1);
     }
@@ -345,7 +345,7 @@ export function calibrationAdjustment(params: {
     }
     if (
       params.allowProbe &&
-      role !== 'hardener' &&
+      role !== 'verifier' &&
       down.price < planned.price &&
       n < MIN_RUNS_DOWN - 0.01 &&
       pDown >= PROBE_MIN_DOWN_ESTIMATE &&
@@ -357,7 +357,7 @@ export function calibrationAdjustment(params: {
         probe: true,
         note:
           `Trying one step cheaper: ${planned.model} at ${EFFORT_WORDS[planned.effort]} has a strong record on ${what}, so this run ` +
-          `checks whether ${down.model} at ${EFFORT_WORDS[down.effort]} will do. QA still checks the work.`,
+          `checks whether ${down.model} at ${EFFORT_WORDS[down.effort]} will do. Verifier still checks the work.`,
       };
     }
   }
@@ -373,7 +373,7 @@ const SURVEY_CHEAPER_ANSWERS = 3;
 
 /**
  * Whether to ask the user how this run went, and why (null: don't ask). Auto runs only (a stage with a tier), that
- * passed, finished or got no QA verdict, that the user hasn't already judged in a message or an answer.
+ * passed, finished or got no verifier verdict, that the user hasn't already judged in a message or an answer.
  */
 export function surveyReason(file: CalibrationFile, run: CalibrationRun, now = Date.now()): SurveyReason | null {
   if (run.verdict || run.signals?.length) return null;

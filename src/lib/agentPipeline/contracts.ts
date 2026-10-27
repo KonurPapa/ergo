@@ -2,7 +2,7 @@
  * Shared contracts for the Agent Execution Pipeline.
  *
  * Every module in this directory codes against these interfaces so that the pieces
- * (discovery, summary, manager, workers, cleaner, hardener, logger) can be built and
+ * (discovery, summary, manager, workers, cleaner, verifier, logger) can be built and
  * tested independently while the orchestrator in ./index.ts wires them together.
  *
  * Context-engineering invariants (see docs/AI_WORKFLOW_ARCHITECTURE_2.md):
@@ -42,7 +42,7 @@ export const DEFAULT_AGENT_PIPELINE_OPTIONS: AgentPipelineOptions = {
   effortLevel: 'medium',
   modelSelection: 'auto',
   maxConcurrentAgents: 3,
-  maxQaRetries: 2,
+  maxVerifierRetries: 2,
   maxToolRoundsPerAgent: 10,
   enableCleaner: true
 };
@@ -58,7 +58,7 @@ export function mergeAgentPipelineOptions(
   if (!patch) return base;
   const next: AgentPipelineOptions = { ...base };
   if (typeof patch.maxConcurrentAgents === 'number' && Number.isFinite(patch.maxConcurrentAgents)) next.maxConcurrentAgents = patch.maxConcurrentAgents;
-  if (typeof patch.maxQaRetries === 'number' && Number.isFinite(patch.maxQaRetries)) next.maxQaRetries = patch.maxQaRetries;
+  if (typeof patch.maxVerifierRetries === 'number' && Number.isFinite(patch.maxVerifierRetries)) next.maxVerifierRetries = patch.maxVerifierRetries;
   if (typeof patch.maxToolRoundsPerAgent === 'number' && Number.isFinite(patch.maxToolRoundsPerAgent)) next.maxToolRoundsPerAgent = patch.maxToolRoundsPerAgent;
   if (typeof patch.enableCleaner === 'boolean') next.enableCleaner = patch.enableCleaner;
   if (patch.permissionLevel && ['plan', 'ask', 'acceptEdits', 'bypass'].includes(patch.permissionLevel)) next.permissionLevel = patch.permissionLevel;
@@ -115,7 +115,7 @@ export interface ToolDefinition {
   /** Owning MCP server id ('builtin' for ask_human). */
   serverId: string;
   serverName: string;
-  /** Read-only tools may run in verification/QA phases and never take file locks. */
+  /** Read-only tools may run in verification/verifier phases and never take file locks. */
   readOnly: boolean;
   /** Mirrors MCPTool.autoApprove — false means the user is prompted before execution. */
   autoApprove: boolean;
@@ -141,7 +141,7 @@ export interface ToolCallResult {
  * tool definitions). Violations return a high-signal error tool result — never a silent no-op.
  */
 export interface ToolScope {
-  /** Human-readable label used in error messages ("worker P2", "hardener"). */
+  /** Human-readable label used in error messages ("worker P2", "verifier"). */
   actorLabel: string;
   /** If true, any mutating tool (write_file, edit_file, create_directory, git_commit, run_command) is rejected. */
   readOnly: boolean;
@@ -182,7 +182,7 @@ export interface ToolLoopRequest {
   stableSystem: string;
   /**
    * Cached block 1 — the bible's stable sections. Byte-identical for every agent in a run and
-   * rendered FIRST (right after the tools block) so manager, workers, cleaner and hardener all
+   * rendered FIRST (right after the tools block) so manager, workers, cleaner and verifier all
    * hit the same cache entry. Empty for discovery/summary (no bible yet).
    */
   sharedContext: string;
@@ -304,8 +304,8 @@ export function resolveModelForRole(config: AIProviderConfig, role: AgentRole): 
       return config.cleanerModel || config.workerModel || general;
     case 'manager':
       return config.generalModel || general;
-    case 'hardener':
-      return config.hardenerModel || config.generalModel || general;
+    case 'verifier':
+      return config.verifierModel || config.generalModel || general;
     default:
       return general;
   }

@@ -11,7 +11,7 @@
  *      decent. Models another candidate beats on both quality and price are never used.
  *   3. The stage's tier follows the task's scope and its effort follows the task's difficulty (stagePlan), with
  *      floors for coding (benchmark scores understate how much more often small models fail long agent runs).
- *      The Effort slider shifts both; each escalation step (a QA retry, or a rerun after a failed run) moves one rung
+ *      The Effort slider shifts both; each escalation step (a verifier retry, or a rerun after a failed run) moves one rung
  *      up: the next tier, or more effort once at the top tier.
  */
 import type { AgentRole, EffortLevel, TaskRating } from '../../types';
@@ -256,7 +256,7 @@ const WORKER_EFFORT_BY_REASONING: EffortLevel[] = ['low', 'low', 'medium', 'medi
 const SLIDER_STEPS: Record<Exclude<EffortLevel, 'max'>, number> = { low: -1, medium: 0, high: 1, xhigh: 2 };
 /**
  * How the slider moves tiers: Low drops every rated stage one tier (never below its floor); High lifts the manager and
- * QA (the plan and the check) but gives workers more effort instead; Extra High lifts every stage.
+ * Verifier (the plan and the check) but gives workers more effort instead; Extra High lifts every stage.
  */
 function sliderTierShift(role: AgentRole, slider: Exclude<EffortLevel, 'max'>): number {
   if (slider === 'low') return -1;
@@ -275,11 +275,11 @@ export interface StagePlan {
 
 /**
  * The tier and effort a stage starts from at Medium, before the slider and escalation. Scope (complexity, and for
- * the manager / QA also difficulty) sets the tier; difficulty sets the effort. Coding floors: manager and QA never
+ * the manager / verifier also difficulty) sets the tier; difficulty sets the effort. Coding floors: manager and verifier never
  * below standard (Sonnet-class), because a weak plan or a weak check sinks the whole run; workers never below
  * standard from complexity 3 up.
  *
- *   coding            manager           workers           QA
+ *   coding            manager           workers           verifier
  *   complexity 1      standard          light             standard
  *   complexity 2–3    standard          standard          standard
  *   complexity 4 / reasoning ≥ 4  top    standard          top
@@ -301,7 +301,7 @@ export function basePlan(role: AgentRole, rating: TaskRating): StagePlan {
       return coding
         ? { axis, tier: c >= 5 ? 3 : c >= 2 ? 2 : 1, floor: c >= 3 ? 2 : 1, effort: WORKER_EFFORT_BY_REASONING[r - 1] }
         : { axis, tier: c >= 4 ? 2 : 1, floor: 1, effort: WORKER_EFFORT_BY_REASONING[r - 1] };
-    case 'hardener':
+    case 'verifier':
       return coding
         ? { axis: 'coding', tier: d >= 4 ? 3 : 2, floor: 2, effort: atLeast(byReasoning, 'medium') }
         : { axis, tier: d >= 4 ? 2 : 1, floor: 1, effort: byReasoning };
@@ -311,7 +311,7 @@ export function basePlan(role: AgentRole, rating: TaskRating): StagePlan {
   }
 }
 
-const RATED_ROLES = new Set<AgentRole>(['manager', 'worker', 'hardener']);
+const RATED_ROLES = new Set<AgentRole>(['manager', 'worker', 'verifier']);
 
 /**
  * The stage plan after the Effort slider and `escalation` steps: each step up is the next tier, or +1 effort at the top
@@ -389,7 +389,7 @@ const EFFORT_WORDS: Record<EffortLevel, string> = { low: 'Low', medium: 'Medium'
 
 /**
  * Picks the model and effort for one stage. `slider` is the user's Effort setting; `escalation` the number of rungs
- * to climb (QA retries, reruns after a failure). `relativeCost` words prices as a relative cost (subscription CLIs:
+ * to climb (Verifier retries, reruns after a failure). `relativeCost` words prices as a relative cost (subscription CLIs:
  * API prices stand in for usage-limit burn). Null when there are no priced candidates.
  */
 export function pickModelForStage(params: {

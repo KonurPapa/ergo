@@ -1,7 +1,7 @@
 /**
  * Client for the bridge's CLI-agent session API (bridge/plugins.ts, ergo-pty plugin).
  *
- * App owns the lifecycle of every agent PTY (manager, workers, QA): it launches them over REST, and terminal
+ * App owns the lifecycle of every agent PTY (manager, workers, verifier): it launches them over REST, and terminal
  * views only attach. The bridge watches each session's rendered screen and signal files and reports
  * prompts, auto-approvals, signals and exits on one Server-Sent Events stream.
  */
@@ -48,8 +48,17 @@ export interface PolicyResult {
   detail?: string;
 }
 
-/** Signal files an agent writes into its run dir when it reaches a milestone. */
+/**
+ * Signal files an agent writes into its run dir when it reaches a milestone. The verifier's signal keeps its
+ * original wire name ('qa-verdict', file qa.md) so older bridges still report it.
+ */
 export type AgentSignalKind = 'delegate' | 'worker-done' | 'complete' | 'qa-verdict' | 'question';
+
+/** The verifier's role on the bridge wire and in PTY keys: older bridges only know it as 'qa'. */
+const WIRE_VERIFIER_ROLE = 'qa';
+const toWireRole = (role: AgentSessionRole): string => (role === 'verifier' ? WIRE_VERIFIER_ROLE : role);
+export const fromWireRole = <T extends { role?: unknown }>(item: T): T =>
+  item && item.role === WIRE_VERIFIER_ROLE ? { ...item, role: 'verifier' } : item;
 
 export type CliAgentEvent =
   | ({ type: 'spawned'; label: string; pieceId?: string } & CliAgentEventBase)
@@ -131,7 +140,7 @@ async function postJson<T>(endpoint: string, body: unknown): Promise<T | null> {
 
 /** Launch (or relaunch — an existing session with the same id is killed first) one agent PTY. */
 export function spawnAgentSession(req: SpawnAgentRequest): Promise<SpawnAgentResponse> {
-  return postJson<SpawnAgentResponse>('/api/pty/spawn', req).then(
+  return postJson<SpawnAgentResponse>('/api/pty/spawn', { ...req, role: toWireRole(req.role) }).then(
     (r) => r ?? { success: false, error: 'Bridge unreachable' }
   );
 }
@@ -154,7 +163,7 @@ export async function sendAgentInput(sessionId: string, data: string): Promise<b
 }
 
 /**
- * Type an Ergo hand-off (worker results, QA findings) into an agent's terminal. Flagged as a hand-off so the
+ * Type an Ergo hand-off (worker results, verifier findings) into an agent's terminal. Flagged as a hand-off so the
  * bridge can refuse it while an approval / question menu is on screen (its digits, letters or Enter would answer
  * it); 'prompt-open' means it was refused for that reason and should be retried once the prompt clears.
  */
@@ -213,7 +222,7 @@ export async function listAgentSessions(): Promise<BridgeAgentSessionInfo[]> {
     const res = await bridgeClient.fetch('/api/pty/sessions');
     if (!res.ok) return [];
     const json = await res.json();
-    return Array.isArray(json?.sessions) ? json.sessions : [];
+    return Array.isArray(json?.sessions) ? json.sessions.map(fromWireRole) : [];
   } catch {
     return [];
   }
@@ -250,7 +259,7 @@ export function subscribeAgentEvents(onEvent: (ev: CliAgentEvent) => void, onRec
         if (source !== s) return;
         try {
           const data = JSON.parse(msg.data);
-          if (data && typeof data.type === 'string' && data.type !== 'connected') onEvent(data as CliAgentEvent);
+          if (data && typeof data.type === 'string' && data.type !== 'connected') onEvent(fromWireRole(data) as CliAgentEvent);
         } catch {}
       };
     } catch (err) {
@@ -301,7 +310,7 @@ export function agentSessionId(
   role: AgentSessionRole,
   pieceId?: string
 ): string {
-  return `${projectKey ? `${projectKey}~` : ''}${taskId}::${role}${pieceId ? `::${pieceId}` : ''}`;
+  return `${projectKey ? `${projectKey}~` : ''}${taskId}::${toWireRole(role)}${pieceId ? `::${pieceId}` : ''}`;
 }
 
 /** Project key and task id encoded in an agent PTY key (projectKey is null for legacy unscoped keys). */

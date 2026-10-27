@@ -5,7 +5,7 @@
  *   Step 2 Summary    → working brief (docs/skills/task-brief), filtered MCPs, task kind → TASK_CONTEXT.md bible
  *   Step 3 Manager    → decompose → fan-out workers (clean contexts, locks, cache warming) → verify
  *   Step 4 Cleaner    → lint/format (coding only)
- *   Step 5 Hardener   → QA verdict; a fail feeds a fresh Step 3 attempt (bounded by maxQaRetries)
+ *   Step 5 Verifier   → verifier verdict; a fail feeds a fresh Step 3 attempt (bounded by maxVerifierRetries)
  *   Final  Logger     → Build & Verification + Completion records, human review steps
  *
  * See docs/AI_WORKFLOW_ARCHITECTURE_2.md. Real errors are surfaced (never faked by the offline simulator).
@@ -38,7 +38,7 @@ import { runSummary, requiresCliOrProcessTools, formatOverviewDocToMarkdown } fr
 import { buildToolDefinitions } from './toolSchemas';
 import { runManager, isStraightforwardTask, type ManagerRunResult } from './manager';
 import { runCleaner } from './cleaner';
-import { runHardener, type HardenerResult } from './hardener';
+import { runVerifier, type VerifierResult } from './verifier';
 import { runLogger } from './logger';
 import { routeModelsForRun, describeRouting, familyForTarget, EFFORT_LABELS, type RoutingResult } from './modelRouter';
 import { rateTask } from './taskRating';
@@ -49,23 +49,29 @@ import { pipelineRunKey, rememberPipelineRun } from './runRegistry';
 import { describeTaskReferences, formatReferenceSections, projectWorkingFolder, resolveTaskReferences } from '../taskReferences';
 import { getWorkspaceSkills } from '../skillsManager';
 
-export interface HardenerEvaluation {
+export interface VerifierEvaluation {
   shouldRun: boolean;
   reason: string;
 }
 
 /**
- * Step 5 Hardener runs only when the task's "QA verification" switch is on (task menu; off by default: most models
- * check their own work and many tasks are one-shot, so an independent QA pass on every task costs more than it saves).
- * When on, it runs on every attempt, so a QA retry is verified too.
+ * Step 5 Verifier runs when the task's "Verification" switch is on (on by default) AND the AI summary
+ * determined that independent verifier is required for the task scope. When on, it runs on every attempt.
  */
-export function evaluateHardenerNecessity(params: { qaVerification: boolean; attempt: number }): HardenerEvaluation {
-  if (!params.qaVerification) {
-    return { shouldRun: false, reason: "QA verification is off for this task (turn it on from the task's menu)." };
+export function evaluateVerifierNecessity(params: {
+  verification: boolean;
+  attempt: number;
+  summaryRequiresVerifier?: boolean;
+}): VerifierEvaluation {
+  if (!params.verification) {
+    return { shouldRun: false, reason: "Verification is off for this task (turn it on from the task's menu)." };
+  }
+  if (params.summaryRequiresVerifier === false) {
+    return { shouldRun: false, reason: "verifier skipped: task scope is small or generic, independent verifier validation not required." };
   }
   return {
     shouldRun: true,
-    reason: params.attempt > 1 ? `QA verification is on for this task: checking retry attempt ${params.attempt}.` : 'QA verification is on for this task.'
+    reason: params.attempt > 1 ? `Verification is on for this task: checking retry attempt ${params.attempt}.` : 'Verification is on for this task.'
   };
 }
 
@@ -152,20 +158,20 @@ export async function executeTaskWithAi(
     return { ...updated, overviewSource: 'generated', overviewTaskHash: overviewTaskFingerprint(task), overviewDocument: summaryDoc };
   };
 
-  // Escalation: a rerun after a failed run starts the manager and workers a rung up; each QA retry adds one more.
+  // Escalation: a rerun after a failed run starts the manager and workers a rung up; each verifier retry adds one more.
   const startEscalation = rerunEscalation(brief);
   let routingRating: TaskRating | undefined;
   let workRouting: RoutingResult | undefined;
-  /** The routing the run's work started with (QA retries may step up from it). */
+  /** The routing the run's work started with (Verifier retries may step up from it). */
   let startRouting: RoutingResult | undefined;
   /** The returned brief also records how this run ended and which models did the work (see escalation.ts). */
-  const withRunOutcome = (updated: AgentContextItem, outcome: RunOutcome, qaRetries = 0): AgentContextItem => ({
+  const withRunOutcome = (updated: AgentContextItem, outcome: RunOutcome, verifierRetries = 0): AgentContextItem => ({
     ...updated,
     lastRunOutcome: buildRunOutcomeRecord({
       runId,
       outcome,
       escalation: startEscalation,
-      qaRetries,
+      verifierRetries,
       rating: routingRating ?? summaryDoc?.taskRating,
       decisions: workRouting?.decisions,
       startDecisions: startRouting?.decisions,
@@ -248,7 +254,7 @@ export async function executeTaskWithAi(
       console.log('[Ergo Agent Pipeline] Model routing:\n' + detail);
       ctx.emit({ id: 'step-model-routing', stage: 'context', title: routingTitle, detail, status });
     };
-    const laterRoles: AgentRole[] = ['manager', 'worker', 'cleaner', 'hardener', 'logger'];
+    const laterRoles: AgentRole[] = ['manager', 'worker', 'cleaner', 'verifier', 'logger'];
     const escalationNote = describeRerunEscalation(brief);
     const firstRouting = await routeModelsForRun({
       config: aiConfig,
@@ -306,8 +312,8 @@ export async function executeTaskWithAi(
       actor: 'pipeline',
       kind: 'info',
       text: isResumed
-        ? `Run ${runId} resumed from prior progress (attempt policy: ${resolvedOptions.maxQaRetries} QA retr${resolvedOptions.maxQaRetries === 1 ? 'y' : 'ies'}, ${resolvedOptions.maxConcurrentAgents} concurrent worker(s)).`
-        : `Run ${runId} initialized (attempt policy: ${resolvedOptions.maxQaRetries} QA retr${resolvedOptions.maxQaRetries === 1 ? 'y' : 'ies'}, ${resolvedOptions.maxConcurrentAgents} concurrent worker(s)).`
+        ? `Run ${runId} resumed from prior progress (attempt policy: ${resolvedOptions.maxVerifierRetries} verifier retr${resolvedOptions.maxVerifierRetries === 1 ? 'y' : 'ies'}, ${resolvedOptions.maxConcurrentAgents} concurrent worker(s)).`
+        : `Run ${runId} initialized (attempt policy: ${resolvedOptions.maxVerifierRetries} verifier retr${resolvedOptions.maxVerifierRetries === 1 ? 'y' : 'ies'}, ${resolvedOptions.maxConcurrentAgents} concurrent worker(s)).`
     });
     await bible.persist();
     // The filesystem harness is always available because deliverables land in files;
@@ -347,8 +353,8 @@ export async function executeTaskWithAi(
       stableSections: structuredClone(bible.sections),
       requiredMcps: requiredSet,
       taskKind: summary.taskKind,
-      requiresHardener: summary.requiresHardener,
-      hardenerReason: summary.hardenerReason,
+      requiresVerifier: summary.requiresVerifier,
+      verifierReason: summary.verifierReason,
       overviewDoc: summary.overviewDoc,
       getAiConfig: () => ctx.aiConfig,
       getRouting: () => workRouting
@@ -382,16 +388,16 @@ export async function executeTaskWithAi(
       });
     };
 
-    // Step 3 → 4 → 5 with bounded QA retry loop
+    // Step 3 → 4 → 5 with bounded verifier retry loop
     let mgr: ManagerRunResult | null = null;
-    let hardener: HardenerResult | undefined;
+    let verifier: VerifierResult | undefined;
     let diagnostics: string | undefined;
     let attempt = 1;
-    const maxAttempts = 1 + Math.max(0, resolvedOptions.maxQaRetries);
+    const maxAttempts = 1 + Math.max(0, resolvedOptions.maxVerifierRetries);
     for (; attempt <= maxAttempts; attempt++) {
       ctx.steering?.setManagerDone(false);
       mgr = await runManager(ctx, bible, tools, locks, attempt, diagnostics);
-      // The user's messages for the manager now go to QA (or continue the run as a follow-up after it).
+      // The user's messages for the manager now go to verifier (or continue the run as a follow-up after it).
       ctx.steering?.setManagerDone(true);
       for (const f of mgr.createdFiles) createdFiles.add(f);
 
@@ -419,17 +425,21 @@ export async function executeTaskWithAi(
         await bible.persist();
       }
 
-      const hardenerEval = evaluateHardenerNecessity({ qaVerification: brief?.qaVerification === true, attempt });
+      const verifierEval = evaluateVerifierNecessity({
+        verification: brief?.verification !== false,
+        attempt,
+        summaryRequiresVerifier: summary.requiresVerifier,
+      });
 
-      if (!hardenerEval.shouldRun) {
-        bible.appendEvent({ actor: 'pipeline', kind: 'info', text: `Step 5 Hardener skipped: ${hardenerEval.reason}` });
+      if (!verifierEval.shouldRun) {
+        bible.appendEvent({ actor: 'pipeline', kind: 'info', text: `Step 5 Verifier skipped: ${verifierEval.reason}` });
         await bible.persist();
         ctx.emit({
-          id: `step-hardener-skipped-a${attempt}`,
-          stage: 'hardener',
-          agentRole: 'hardener',
-          title: 'Hardener QA: Skipped (Token Efficiency)',
-          detail: hardenerEval.reason,
+          id: `step-verifier-skipped-a${attempt}`,
+          stage: 'verifier',
+          agentRole: 'verifier',
+          title: 'Verifier: Skipped (Token Efficiency)',
+          detail: verifierEval.reason,
           status: 'success'
         });
 
@@ -461,18 +471,18 @@ export async function executeTaskWithAi(
         continue;
       }
 
-      hardener = await runHardener(ctx, bible, tools, summary.taskKind, Array.from(createdFiles), attempt);
-      if (hardener.verdict !== 'fail') break;
+      verifier = await runVerifier(ctx, bible, tools, summary.taskKind, Array.from(createdFiles), attempt);
+      if (verifier.verdict !== 'fail') break;
       if (attempt >= maxAttempts) break;
 
-      diagnostics = hardener.failures.map((f) => `- [${f.criterion}] ${f.diagnostics}`).join('\n') + (hardener.evidence ? `\n\nEvidence: ${hardener.evidence}` : '');
-      bible.appendEvent({ actor: 'pipeline', kind: 'retry', text: `QA failed on attempt ${attempt}; re-running the manager with fresh contexts and the diagnostics above.` });
+      diagnostics = verifier.failures.map((f) => `- [${f.criterion}] ${f.diagnostics}`).join('\n') + (verifier.evidence ? `\n\nEvidence: ${verifier.evidence}` : '');
+      bible.appendEvent({ actor: 'pipeline', kind: 'retry', text: `Verifier failed on attempt ${attempt}; re-running the manager with fresh contexts and the diagnostics above.` });
       await bible.persist();
       ctx.emit({
         id: `step-retry-${attempt}`,
         stage: 'retry',
-        title: `QA Failed — Retrying Manager (attempt ${attempt + 1} of ${maxAttempts})`,
-        detail: hardener.failures.map((f) => `✗ ${f.criterion}: ${f.diagnostics.slice(0, 200)}`).join('\n'),
+        title: `Verifier Failed — Retrying Manager (attempt ${attempt + 1} of ${maxAttempts})`,
+        detail: verifier.failures.map((f) => `✗ ${f.criterion}: ${f.diagnostics.slice(0, 200)}`).join('\n'),
         status: 'warning'
       });
       await stepUpForRetry(attempt);
@@ -483,8 +493,8 @@ export async function executeTaskWithAi(
     const result = await runLogger(ctx, bible, {
       createdFiles: Array.from(createdFiles),
       usedToolCalling: mgr.usedToolCalling,
-      hardener,
-      qaAttempts: attempt,
+      verifier,
+      verifierAttempts: attempt,
       allCriteriaPass: mgr.allCriteriaPass,
       overviewDoc: summary.overviewDoc
     });
@@ -497,8 +507,8 @@ export async function executeTaskWithAi(
     bible.appendEvent({ actor: 'pipeline', kind: 'info', text: `Run complete — status ${result.updatedTask.status}; usage ${formatUsage(ctx.usage)}.` });
     await bible.persist();
     console.log('%c[Ergo Agent Pipeline] ── Pipeline Complete ✅ ──', 'color: #10b981; font-weight: bold;');
-    const outcome: RunOutcome = hardener
-      ? hardener.verdict === 'pass' ? 'passed' : hardener.verdict === 'fail' ? 'qa_failed' : 'unverified'
+    const outcome: RunOutcome = verifier
+      ? verifier.verdict === 'pass' ? 'passed' : verifier.verdict === 'fail' ? 'verifier_failed' : 'unverified'
       : mgr.allCriteriaPass ? 'completed' : 'failed';
     return { ...result, updatedBrief: withRunOutcome(withOverviewDoc(result.updatedBrief), outcome, attempt - 1) };
   } catch (err: any) {

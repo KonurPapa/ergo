@@ -11,7 +11,7 @@
  *   - `workspace`   — live index of the project's human workspace: every active task (one vector for the title and one
  *                     per subtask, so umbrella tasks match on their parts) and freeform text. Kept in sync on autosave.
  *                     Hidden from the archive UI; used to find related tasks.
- *   - `agent-notes` — the AI's own working memory: run notes (completion records, worker / QA reports, delegation
+ *   - `agent-notes` — the AI's own working memory: run notes (completion records, worker / verifier reports, delegation
  *                     plans), notes agents save mid-task, and CLI artifacts (e.g. Claude Code todo lists).
  *                     Searchable by agents, hidden from the archive UI.
  *   - `insights`    — the project's learned rules: the user's standing requirements, distilled from their feedback on
@@ -24,7 +24,7 @@ export type MemoryNamespace = 'learnings' | 'tasks' | 'code-map' | 'agent-notes'
 export const HIDDEN_MEMORY_NAMESPACES: readonly MemoryNamespace[] = ['agent-notes', 'workspace', 'insights'];
 
 /** What an `agent-notes` chunk is. */
-export type AgentNoteKind = 'completion' | 'worker' | 'qa' | 'plan' | 'note' | 'artifact';
+export type AgentNoteKind = 'completion' | 'worker' | 'verifier' | 'plan' | 'note' | 'artifact';
 
 export interface ChunkMetadata {
   taskId?: string | number;
@@ -39,6 +39,8 @@ export interface ChunkMetadata {
   subtasks?: Array<{ text: string; isDone?: boolean; isHumanReview?: boolean }>;
   /** JSON-serialized subtasks for persistent roundtripping */
   serializedSubtasks?: string;
+  /** AI-workspace archive records: the JSON-serialized execution card, so Restore brings it back whole. */
+  serializedBrief?: string;
   /** CLI task run the chunk came from. */
   runId?: string;
   /** Agent session (PTY id) that produced it. */

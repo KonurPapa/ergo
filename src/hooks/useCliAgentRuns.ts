@@ -1,5 +1,5 @@
 /**
- * Orchestrates CLI agent task runs (manager → optional workers → optional QA verifier).
+ * Orchestrates CLI agent task runs (manager → optional workers → optional verifier).
  *
  * App owns every agent PTY: this hook launches them over the bridge's REST API, listens to the bridge's
  * agent event stream (prompts, signal files, exits), drives the run protocol from those events and writes
@@ -14,7 +14,6 @@ import type {
   AIProviderConfig,
   AgentContextItem,
   AgentPipelineOptions,
-  AgentRole,
   AgentSessionRole,
   AgentSessionStatus,
   CliDetectedPrompt,
@@ -49,6 +48,7 @@ import {
   sendWorkspaceCallResult,
   type BridgeAgentSessionInfo,
   type CliAgentEvent,
+  fromWireRole,
 } from '../lib/cliRunClient';
 import {
   buildCliArgsForTask,
@@ -56,8 +56,8 @@ import {
   buildFollowUpMessage,
   buildManagerCliPrompt,
   buildTaskContentText,
-  buildQaCliPrompt,
-  buildQaFailMessage,
+  buildVerifierCliPrompt,
+  buildVerifierFailMessage,
   buildQuestionAnswerMessage,
   buildResumeMessage,
   buildResumedManagerPrompt,
@@ -74,7 +74,6 @@ import {
 } from '../lib/cliAgents';
 import { cliBiblePath, writeCliBible } from '../lib/cliBible';
 import { isBypassAcceptanceDialog, keystrokesForOption, pickApproveOption, promptSummary } from '../lib/cliPromptParser';
-import { runSessionRetrospective } from '../lib/memory';
 import { prefetchPromptMemory, taskMemoryQuery } from '../lib/memory/promptMemory';
 import { getRunState, listRunStates, loadRunStates, pruneRunStates, putRunState, type StoredRunState } from '../lib/runStateStore';
 import { refreshCodeIndex } from '../lib/mcpClient';
@@ -106,7 +105,7 @@ export interface CliLaunchConfig {
   /** Model + effort per agent role, in the CLI's own vocabulary. */
   roles: Record<AgentSessionRole, RunStageModel>;
   /**
-   * The manager and worker models for QA retry n (index n − 1), each one rung above the last (escalation.ts).
+   * The manager and worker models for verifier retry n (index n − 1), each one rung above the last (escalation.ts).
    * Workers spawned after the retry use them; a Claude Code manager is switched with /model.
    */
   retryRoles?: Array<Partial<Record<AgentSessionRole, RunStageModel>>>;
@@ -136,10 +135,12 @@ export interface LaunchCliRunParams {
   /** The task's `/skill` and `@file` commands, resolved by App (taskReferences.ts): the manager prompt shows them. */
   references?: TaskReferenceContext;
   /**
-   * Per-run override of the QA verifier. Defaults to the task's "QA verification" switch (brief.qaVerification, off
-   * unless set). Persisted with the run, so a restored run keeps it.
+   * Per-run override of the verifier. Defaults to the task's "Verification" switch (brief.verification, on
+   * by default unless false) and whether the AI determined verifier is needed. Persisted with the run.
    */
-  qaEnabled?: boolean;
+  verifierEnabled?: boolean;
+  /** Whether the AI determined that independent verifier is necessary for this task. */
+  needsVerifier?: boolean;
   /** Per-run cap on worker agents (1 = the manager does the work itself). Defaults to Settings' maxConcurrentAgents. */
   maxWorkers?: number;
   /** One line shown in the manager step explaining the run plan (e.g. "Run plan: single deliverable · …"). */
@@ -171,7 +172,7 @@ export interface CliAgentRunsDeps {
   /** Remove the task's question card without an answer (the question was answered another way, or is moot). */
   cancelHumanInput: (taskId: string | number) => void;
   /**
-   * Resolve the CLI launch config for a task (used when a restored run needs to start workers or QA, or a follow-up
+   * Resolve the CLI launch config for a task (used when a restored run needs to start workers or verifier, or a follow-up
    * resumes its manager). `skipRouting`: don't pick models — the run reuses the ones it launched with.
    */
   prepareLaunch: (
@@ -202,7 +203,7 @@ export interface CliAgentRunsApi {
   isCliRunPaused: (taskId: string | number) => boolean;
   /** Resume a stopped run from where it stopped (the manager's own conversation when the CLI can resume it). */
   resumeCliRun: (taskId: string | number, message?: string) => Promise<TaskMessageResult>;
-  /** Stop one worker or QA agent (the manager is stopped through stopCliRun). */
+  /** Stop one worker or verifier agent (the manager is stopped through stopCliRun). */
   killAgentSession: (ptySessionId: string) => void;
   /** Push a new permission level to every running agent. */
   applyPermissionLevel: (level: PermissionLevel) => Promise<void>;
@@ -223,6 +224,8 @@ export interface CliAgentRunsApi {
    * `{ ok: false, error: 'no-run' }` when the task has no CLI run to continue.
    */
   sendUserMessage: (taskId: string | number, text: string, opts?: TaskMessageOptions) => Promise<TaskMessageResult>;
+  /** Dynamically enable or disable the planned verifier on an active run before it runs. */
+  updateRunVerification: (taskId: string | number, enabled: boolean) => void;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────────────
@@ -275,7 +278,7 @@ async function fetchAgentSessionsStrict(): Promise<BridgeAgentSessionInfo[] | nu
     const res = await bridgeClient.fetch('/api/pty/sessions');
     if (!res.ok) return null;
     const json = await res.json();
-    return Array.isArray(json?.sessions) ? json.sessions : [];
+    return Array.isArray(json?.sessions) ? json.sessions.map(fromWireRole) : [];
   } catch {
     return null;
   }
@@ -396,13 +399,13 @@ function extractCreatedFiles(md: string): string[] {
   return Array.from(files).filter((f) => !f.includes('.ergo/'));
 }
 
-function qaVerdictFrom(content: string, explicit?: 'PASS' | 'FAIL'): 'PASS' | 'FAIL' {
+function verifierVerdictFrom(content: string, explicit?: 'PASS' | 'FAIL'): 'PASS' | 'FAIL' {
   if (explicit) return explicit;
   const first = content.split('\n').map((l) => l.trim()).find(Boolean) || '';
   return /VERDICT:\s*PASS/i.test(first) ? 'PASS' : 'FAIL';
 }
 
-/** First `max` findings of a QA report as single short lines ("None" → none). */
+/** First `max` findings of a verifier report as single short lines ("None" → none). */
 function topFindings(report: string, max: number): string[] {
   const section = extractSection(report, ['findings']) || report;
   const out: string[] = [];
@@ -487,7 +490,7 @@ interface PersistedRunState {
   relatedContext?: string;
   /** Their one-line index (from launch), shown instead of the block when the overview is a working brief. */
   relatedSources?: string;
-  /** The project's learned rules at launch: the run's later agents (workers, QA, a resumed manager) get the same. */
+  /** The project's learned rules at launch: the run's later agents (workers, verifier, a resumed manager) get the same. */
   projectRules?: string;
   /** The run's TASK_CONTEXT.md under the storage root (cliBible.ts): the brief as handed over, the log, the prompt. */
   bibleFilePath?: string;
@@ -507,20 +510,21 @@ interface PersistedRunState {
   cliName: string;
   managerSessionId: string;
   managerStepId: string;
-  qaEnabled: boolean;
+  needsVerifier?: boolean;
+  verifierEnabled: boolean;
   maxWorkers: number;
-  maxQaRetries: number;
+  maxVerifierRetries: number;
   workers: RunWorker[];
   delegateRounds: number;
   workersReported: boolean;
-  qaRuns: number;
-  qaRetriesUsed: number;
-  qaActive: boolean;
-  /** Exit code of a manager that exited while workers / QA were still running (the run finalizes when they finish). */
+  verifierRuns: number;
+  verifierRetriesUsed: number;
+  verifierActive: boolean;
+  /** Exit code of a manager that exited while workers / verifier were still running (the run finalizes when they finish). */
   managerExitCode?: number | null;
   lastCompletion?: string;
-  lastQa?: { verdict: 'PASS' | 'FAIL'; content: string; attempt: number };
-  qaNote?: string;
+  lastVerifier?: { verdict: 'PASS' | 'FAIL'; content: string; attempt: number };
+  verifierNote?: string;
   handledSignals: string[];
   finalized: boolean;
   /**
@@ -532,9 +536,9 @@ interface PersistedRunState {
   followUps?: number;
   /** The user's message that started the current follow-up cycle (quoted in its completion entry). */
   followUpText?: string;
-  /** qaRuns when the current follow-up cycle started: a cycle's QA attempts and retries count from here. */
-  qaBase?: number;
-  /** Messages for a manager that was gone mid-run (workers / QA still running): they continue the run when it ends. */
+  /** verifierRuns when the current follow-up cycle started: a cycle's verifier attempts and retries count from here. */
+  verifierBase?: number;
+  /** Messages for a manager that was gone mid-run (workers / verifier still running): they continue the run when it ends. */
   pendingFollowUps?: string[];
   /** The manager CLI's own conversation id (Claude: --session-id; Codex / Antigravity: from its exit text), to resume it. */
   cliSessionId?: string;
@@ -546,16 +550,16 @@ interface PersistedRunState {
    */
   paused?: {
     at: string;
-    /** The manager was still working (not exited while workers / QA ran): resume starts it again. */
+    /** The manager was still working (not exited while workers / verifier ran): resume starts it again. */
     managerWasLive?: boolean;
-    /** QA was verifying: resume runs that attempt again. */
-    qaInterrupted?: boolean;
+    /** Verifier was verifying: resume runs that attempt again. */
+    verifierInterrupted?: boolean;
   };
   /** Model + effort per role the run launched with: a restored run or a follow-up never routes models again. */
   roles?: CliLaunchConfig['roles'];
   retryRoles?: CliLaunchConfig['retryRoles'];
   startEscalation?: number;
-  /** The models the run started on, saved before a QA retry first steps them up (model calibration). */
+  /** The models the run started on, saved before a verifier retry first steps them up (model calibration). */
   startRoles?: CliLaunchConfig['roles'];
 }
 
@@ -570,7 +574,7 @@ interface RunState extends PersistedRunState {
   finalizePending?: boolean;
 }
 
-type FinalizeReason = 'complete' | 'qa-pass' | 'qa-fail' | 'qa-error' | 'exit' | 'stopped';
+type FinalizeReason = 'complete' | 'verifier-pass' | 'verifier-fail' | 'verifier-error' | 'exit' | 'stopped';
 
 interface FinalizeOptions {
   reason: FinalizeReason;
@@ -603,7 +607,7 @@ function mergeKnownRoles(defaults: CliLaunchConfig['roles'], known: CliLaunchCon
       ...(k.calibrated ? { calibrated: k.calibrated } : {}),
     };
   };
-  return { manager: pick('manager'), worker: pick('worker'), qa: pick('qa') };
+  return { manager: pick('manager'), worker: pick('worker'), verifier: pick('verifier') };
 }
 
 /** A reopened run (follow-up) needs a new completion promise: the previous one already resolved. */
@@ -636,9 +640,9 @@ function briefLoggedRun(brief: AgentContextItem | undefined, run: PersistedRunSt
 /** How a CLI run ended, for the task's run record (escalation.ts). */
 function runOutcomeFor(reason: FinalizeReason, verdict: string | undefined, failedRun: boolean): RunOutcome {
   if (reason === 'stopped') return 'stopped';
-  if (reason === 'qa-pass') return 'passed';
-  if (reason === 'qa-fail') return 'qa_failed';
-  if (reason === 'qa-error') return 'unverified';
+  if (reason === 'verifier-pass') return 'passed';
+  if (reason === 'verifier-fail') return 'verifier_failed';
+  if (reason === 'verifier-error') return 'unverified';
   if (failedRun) return 'failed';
   return verdict === 'PASS' ? 'passed' : 'completed';
 }
@@ -855,7 +859,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     runId: run.runId,
     runDirRel: runDirRel(run.runId),
     maxWorkers: run.maxWorkers,
-    qaEnabled: run.qaEnabled,
+    verifierEnabled: run.verifierEnabled,
     // The bridge registers its ergo-memory MCP server for every CLI it can (claude, codex, gemini, agy); the
     // prompts keep a run-file fallback for the rest.
     memoryToolsAvailable: true,
@@ -925,7 +929,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
   };
 
   /**
-   * QA retry n: the workers climb one rung (launch.retryRoles); workers spawned from now on use the new model. The
+   * Verifier retry n: the workers climb one rung (launch.retryRoles); workers spawned from now on use the new model. The
    * running manager keeps its model: Claude Code's /model would also save the model as the user's default for every
    * new Claude Code session, and other CLIs can't switch mid-session. A rerun after the failure starts the manager a
    * rung up instead. Returns a note for the manager step, or ''.
@@ -1181,7 +1185,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
   };
 
   // ── Usage ──
-  /** Sum over every agent process of the run (spawn ids are `${runId}-…`, so earlier QA attempts still count). */
+  /** Sum over every agent process of the run (spawn ids are `${runId}-…`, so earlier verifier attempts still count). */
   const runUsageTotal = (run: RunState): TokenUsage => {
     const total = emptyUsage();
     for (const [spawnId, u] of usageBySpawnRef.current) {
@@ -1327,49 +1331,49 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     saveRunState(run);
   };
 
-  // ── QA ──
-  const launchQa = async (run: RunState, completionMarkdown: string) => {
-    run.qaRuns += 1;
-    run.qaActive = true;
+  // ── verifier ──
+  const launchVerifier = async (run: RunState, completionMarkdown: string) => {
+    run.verifierRuns += 1;
+    run.verifierActive = true;
     saveRunState(run);
-    const attempt = run.qaRuns;
-    const stepId = `step-qa-${run.taskKey}-${run.runId}-${attempt}`;
-    // A follow-up cycle counts its QA attempts from 1 again (the step id above stays unique across cycles).
-    const shownAttempt = attempt - (run.qaBase ?? 0);
-    const ptySessionId = runSessionId(run, 'qa');
+    const attempt = run.verifierRuns;
+    const stepId = `step-verifier-${run.taskKey}-${run.runId}-${attempt}`;
+    // A follow-up cycle counts its verifier attempts from 1 again (the step id above stays unique across cycles).
+    const shownAttempt = attempt - (run.verifierBase ?? 0);
+    const ptySessionId = runSessionId(run, 'verifier');
     upsertStep(run, {
       id: stepId,
       taskId: run.taskId,
       time: nowTime(),
-      stage: 'hardener',
-      agentRole: 'hardener',
+      stage: 'verifier',
+      agentRole: 'verifier',
       ptySessionId,
-      title: shownAttempt > 1 ? `QA Verifier (attempt ${shownAttempt})` : run.followUps ? `QA Verifier (follow-up ${run.followUps})` : 'QA Verifier',
+      title: shownAttempt > 1 ? `Verifier (attempt ${shownAttempt})` : run.followUps ? `Verifier (follow-up ${run.followUps})` : 'Verifier',
       detail: 'Verifying the manager\'s work against the acceptance criteria (tests, build, completion record)…',
       status: 'running',
     });
     setSessionStatus(run.managerSessionId, 'waiting');
     patchStep(run, run.managerStepId, (s) => ({
       ...s,
-      detail: `${s.detail}\n\n↳ Completion record written; waiting on the QA verifier${shownAttempt > 1 ? ` (attempt ${shownAttempt})` : ''}.`,
+      detail: `${s.detail}\n\n↳ Completion record written; waiting on the verifier${shownAttempt > 1 ? ` (attempt ${shownAttempt})` : ''}.`,
     }));
-    const qaTask = latestTask(run);
-    const memoryHits = await prefetchPromptMemory(run.projectId, taskMemoryQuery(qaTask));
-    if (run.finalized || run.paused) return; // stopped while the memory search ran: the stop path settles QA / the run
-    const prompt = buildQaCliPrompt(qaTask, latestBrief(run), { ...runCtx(run, memoryHits), completionMarkdown, attempt: shownAttempt });
-    const res = await spawnAgent(run, 'qa', { label: shownAttempt > 1 ? `QA Verifier · attempt ${shownAttempt}` : 'QA Verifier', prompt });
-    if (!res.ok && res.cancelled) return; // stopped while starting: the stop path settles QA / the run
+    const verifierTask = latestTask(run);
+    const memoryHits = await prefetchPromptMemory(run.projectId, taskMemoryQuery(verifierTask));
+    if (run.finalized || run.paused) return; // stopped while the memory search ran: the stop path settles verifier / the run
+    const prompt = buildVerifierCliPrompt(verifierTask, latestBrief(run), { ...runCtx(run, memoryHits), completionMarkdown, attempt: shownAttempt });
+    const res = await spawnAgent(run, 'verifier', { label: shownAttempt > 1 ? `Verifier · attempt ${shownAttempt}` : 'Verifier', prompt });
+    if (!res.ok && res.cancelled) return; // stopped while starting: the stop path settles verifier / the run
     if (!res.ok) {
-      run.qaActive = false;
-      run.qaNote = `The QA verifier could not start: ${res.error}`;
+      run.verifierActive = false;
+      run.verifierNote = `The verifier could not start: ${res.error}`;
       saveRunState(run);
-      patchStep(run, stepId, { status: 'error', detail: run.qaNote });
+      patchStep(run, stepId, { status: 'error', detail: run.verifierNote });
       // eslint-disable-next-line @typescript-eslint/no-use-before-define
-      await finalizeRun(run, { reason: 'qa-error', completionMarkdown });
+      await finalizeRun(run, { reason: 'verifier-error', completionMarkdown });
     }
   };
 
-  const qaStepId = (run: RunState) => `step-qa-${run.taskKey}-${run.runId}-${run.qaRuns}`;
+  const verifierStepId = (run: RunState) => `step-verifier-${run.taskKey}-${run.runId}-${run.verifierRuns}`;
 
   // ── Finalize ──
   const finalizeRun = async (run: RunState, opts: FinalizeOptions): Promise<void> => {
@@ -1417,17 +1421,19 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       status: 'running',
     });
 
-    // Workers / QA never outlive the run; the manager stays open (unless stopped) so the user can keep steering.
+    // Workers / verifier never outlive the run; the manager stays open (unless stopped) so the user can keep steering.
     cancelOpenWorkers(run, opts.reason === 'stopped' ? 'Stopped by user.' : 'Run finished before this worker reported.');
-    if (run.qaActive) {
-      run.qaActive = false;
-      patchStep(run, qaStepId(run), { status: 'cancelled', detail: opts.reason === 'stopped' ? 'Stopped by user.' : 'Run ended before QA reported.' });
+    if (run.verifierActive) {
+      run.verifierActive = false;
+      patchStep(run, verifierStepId(run), { status: 'cancelled', detail: opts.reason === 'stopped' ? 'Stopped by user.' : 'Run ended before the verifier reported.' });
     }
     for (const s of sessionsRef.current) {
       if (s.runId !== run.runId || s.role === 'manager' || !s.session.isActive) continue;
       if (!TERMINAL_STATUSES.has(s.status)) setSessionStatus(s.ptySessionId, 'cancelled');
       void killAgentSessions({ sessionId: s.ptySessionId });
     }
+    // If a planned verifier session was never started, remove it from sessions so it does not linger:
+    commitSessions((prev) => prev.filter((s) => !(s.runId === run.runId && s.role === 'verifier' && s.status === 'waiting')));
 
     // CLIs flush their session logs on exit; give them a moment before reading usage / final message.
     if (opts.reason === 'exit' || opts.reason === 'stopped') await sleep(1500);
@@ -1465,7 +1471,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       return;
     }
     // The user switched projects while we awaited: App's tasks/briefs belong to another project now. Finish this
-    // run when its project is open again (restore picks up deferredFinalize); workers / QA were already stopped.
+    // run when its project is open again (restore picks up deferredFinalize); workers / verifier were already stopped.
     if (run.projectId && run.projectId !== dataProjectId()) {
       run.finalizePending = false;
       run.finalized = false;
@@ -1477,7 +1483,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     // ── Everything below reads the latest App state (after all awaits). ──
     const d = depsRef.current;
     const date = new Date().toISOString().split('T')[0];
-    const qa = run.lastQa;
+    const verifier = run.lastVerifier;
     const exitCode = opts.exitCode;
     const failedRun =
       opts.reason === 'stopped' || (opts.reason === 'exit' && exitCode !== 0 && !agentRecord);
@@ -1486,14 +1492,14 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       switch (opts.reason) {
         case 'complete':
           return 'completed';
-        case 'qa-pass':
-          return `completed, QA passed${qa && qa.attempt > 1 ? ` on attempt ${qa.attempt}` : ''}`;
-        case 'qa-fail': {
-          const attempts = run.qaRuns - (run.qaBase ?? 0);
-          return `QA failed after ${attempts} attempt${attempts === 1 ? '' : 's'}`;
+        case 'verifier-pass':
+          return `completed, verifier passed${verifier && verifier.attempt > 1 ? ` on attempt ${verifier.attempt}` : ''}`;
+        case 'verifier-fail': {
+          const attempts = run.verifierRuns - (run.verifierBase ?? 0);
+          return `Verifier failed after ${attempts} attempt${attempts === 1 ? '' : 's'}`;
         }
-        case 'qa-error':
-          return 'QA verifier did not reach a verdict';
+        case 'verifier-error':
+          return 'the verifier did not reach a verdict';
         case 'stopped':
           return 'stopped by user';
         case 'exit':
@@ -1505,14 +1511,14 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       }
     })();
 
-    // Human review items: the agent's own, plus Ergo's when QA failed / couldn't run / no record exists.
+    // Human review items: the agent's own, plus Ergo's when the verifier failed / couldn't run / no record exists.
     const agentReviewItems = agentRecord ? extractHumanReviewItems(agentRecord) : [];
     const ergoReviewItems: string[] = [];
-    if (opts.reason === 'qa-fail' && qa) {
-      ergoReviewItems.push(`QA verifier reported failures after ${run.qaRuns - (run.qaBase ?? 0)} attempt(s) — check the QA findings in the completion log.`);
+    if (opts.reason === 'verifier-fail' && verifier) {
+      ergoReviewItems.push(`The verifier reported failures after ${run.verifierRuns - (run.verifierBase ?? 0)} attempt(s) — check the verifier findings in the completion log.`);
     }
-    if (opts.reason === 'qa-error') {
-      ergoReviewItems.push(`Manually verify the work: ${run.qaNote || 'the QA verifier did not reach a verdict'}.`);
+    if (opts.reason === 'verifier-error') {
+      ergoReviewItems.push(`Manually verify the work: ${run.verifierNote || 'the verifier did not reach a verdict'}.`);
     }
     if (!agentRecord && opts.reason === 'exit' && exitCode !== 0) {
       ergoReviewItems.push('The agent ended without writing a completion record — review its terminal output and the changed files.');
@@ -1545,12 +1551,12 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
           run.workers.map((w) => `${w.piece.id} ${w.status === 'done' ? '✓' : '✗ did not finish'}`).join(' · ')
       );
     }
-    if (qa) {
+    if (verifier) {
       // PASS: just the verdict. FAIL: the first few findings, one line each.
-      const findings = qa.verdict === 'FAIL' ? topFindings(stripVerdictLine(qa.content), 3) : [];
-      parts.push(`**QA:** ${qa.verdict === 'PASS' ? 'passed' : 'failed'}${qa.attempt > 1 ? ` (attempt ${qa.attempt})` : ''}${findings.length ? `\n${findings.map((f) => `- ${f}`).join('\n')}` : ''}`);
-    } else if (run.qaNote) {
-      parts.push(`**QA:** ${truncate(run.qaNote, 200)}`);
+      const findings = verifier.verdict === 'FAIL' ? topFindings(stripVerdictLine(verifier.content), 3) : [];
+      parts.push(`**Verifier:** ${verifier.verdict === 'PASS' ? 'passed' : 'failed'}${verifier.attempt > 1 ? ` (attempt ${verifier.attempt})` : ''}${findings.length ? `\n${findings.map((f) => `- ${f}`).join('\n')}` : ''}`);
+    } else if (run.verifierNote) {
+      parts.push(`**Verifier:** ${truncate(run.verifierNote, 200)}`);
     }
     if (ergoReviewItems.length > 0 && !agentRecord) {
       parts.push(`**Needs your review:**\n${ergoReviewItems.map((i) => `- [ ] ${i}`).join('\n')}`);
@@ -1566,7 +1572,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     const agentLines = [
       `- Manager (${run.cliName})`,
       ...run.workers.map((w) => `- Worker ${w.piece.id} · ${w.piece.title}: ${w.status === 'done' ? 'done' : 'did not finish'}`),
-      ...(qa ? [`- QA Verifier: ${qa.verdict} (attempt ${qa.attempt})`] : run.qaNote ? [`- QA Verifier: ${run.qaNote}`] : []),
+      ...(verifier ? [`- Verifier: ${verifier.verdict} (attempt ${verifier.attempt})`] : run.verifierNote ? [`- Verifier: ${run.verifierNote}`] : []),
     ];
     const usageComment = hasUsage(totalUsage) ? `\n\n<!-- task_token_usage: ${JSON.stringify(totalUsage)} -->` : '';
     const buildRecord =
@@ -1638,19 +1644,19 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       completionRunId: completionKeyOf(run),
       lastRunOutcome: buildRunOutcomeRecord({
         runId: run.runId,
-        outcome: runOutcomeFor(opts.reason, qa?.verdict, failedRun),
+        outcome: runOutcomeFor(opts.reason, verifier?.verdict, failedRun),
         escalation: run.launch?.startEscalation ?? run.startEscalation ?? 0,
-        qaRetries: run.qaRetriesUsed - (run.qaBase ?? 0),
+        verifierRetries: run.verifierRetriesUsed - (run.verifierBase ?? 0),
         rating: (briefAtStart ?? latestBrief(run))?.overviewDocument?.taskRating,
         models: run.launch || run.roles
           ? {
               manager: (run.launch?.roles ?? run.roles)!.manager,
               worker: (run.launch?.roles ?? run.roles)!.worker,
-              hardener: (run.launch?.roles ?? run.roles)!.qa,
+              verifier: (run.launch?.roles ?? run.roles)!.verifier,
             }
           : undefined,
         startModels: run.startRoles
-          ? { manager: run.startRoles.manager, worker: run.startRoles.worker, hardener: run.startRoles.qa }
+          ? { manager: run.startRoles.manager, worker: run.startRoles.worker, verifier: run.startRoles.verifier }
           : undefined,
         family: run.launch ? familyForTarget({ provider: 'none', authMode: 'cli_subscription', cliCustomCommand: run.launch.cmd }) ?? undefined : undefined,
       }),
@@ -1709,18 +1715,6 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       clearTimeout(stepPersistTimerRef.current);
       stepPersistTimerRef.current = null;
     }
-
-    void runSessionRetrospective({
-      taskId: run.taskId,
-      taskTitle: baseTask.title,
-      projectId: d0.projectId,
-      overview: updatedBrief.overview || updatedBrief.brief || '',
-      buildLog: buildRecord,
-      completion: completionText,
-      createdFiles,
-      allCriteriaPass: status === 'done' && (!qa || qa.verdict === 'PASS'),
-      ...(qa ? { qaVerdict: qa.verdict.toLowerCase() } : {}),
-    }).catch(() => {});
 
     if (opts.reason !== 'stopped') {
       d.showToast({
@@ -1787,7 +1781,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
   /**
    * Settle a run the user stopped partway (stopCliRun already set run.paused and killed its agents). The run stays
    * open exactly where it was: no completion log, no checklist or done changes, no run record. Workers that were
-   * working are queued again and QA's attempt is rolled back, so resumeRun restarts them. `note` replaces the
+   * working are queued again and verifier's attempt is rolled back, so resumeRun restarts them. `note` replaces the
    * manager step's stop line (e.g. a resume that could not start).
    */
   const pauseRun = async (run: RunState, note?: string): Promise<void> => {
@@ -1796,7 +1790,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     run.paused = {
       ...run.paused,
       managerWasLive: run.paused.managerWasLive ?? run.managerExitCode === undefined,
-      qaInterrupted: Boolean(run.paused.qaInterrupted || run.qaActive),
+      verifierInterrupted: Boolean(run.paused.verifierInterrupted || run.verifierActive),
     };
     for (const w of run.workers) {
       if (w.status === 'running') {
@@ -1806,10 +1800,10 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         void killAgentSessions({ sessionId: w.ptySessionId });
       }
     }
-    if (run.qaActive) {
-      patchStep(run, qaStepId(run), { status: 'cancelled', detail: 'Stopped by user — QA runs again when the task is resumed.' });
-      run.qaActive = false;
-      run.qaRuns = Math.max(0, run.qaRuns - 1); // the resumed attempt reuses this attempt's number and step
+    if (run.verifierActive) {
+      patchStep(run, verifierStepId(run), { status: 'cancelled', detail: 'Stopped by user — verifier runs again when the task is resumed.' });
+      run.verifierActive = false;
+      run.verifierRuns = Math.max(0, run.verifierRuns - 1); // the resumed attempt reuses this attempt's number and step
     }
     const stopLine = note || '■ Stopped by user. Nothing was logged — Resume picks the run up from here.';
     updateSteps(run, (steps) =>
@@ -1848,7 +1842,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
   /**
    * Pick a stopped run up where it stopped: the manager's own conversation is resumed when the CLI can (else a new
    * manager gets the original prompt with a "continue, don't start over" note), interrupted workers start again and
-   * an interrupted QA attempt runs again. Runs in the run's event queue.
+   * an interrupted verifier attempt runs again. Runs in the run's event queue.
    */
   const resumeRun = async (run: RunState, message = ''): Promise<TaskMessageResult> => {
     if (!run.paused || run.finalized) return { ok: false, error: 'This run is not stopped.' };
@@ -1889,9 +1883,9 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       );
     }
     const workersQueued = run.workers.some((w) => w.status === 'queued');
-    // A message for a manager that was waiting on QA is work to do first: QA then checks its new completion record.
-    const rerunQa = Boolean(paused.qaInterrupted && !(userMessage && paused.managerWasLive));
-    const waitingOn: ResumeWaitingOn = rerunQa ? 'qa' : workersQueued ? 'workers' : undefined;
+    // A message for a manager that was waiting on verifier is work to do first: Verifier then checks its new completion record.
+    const rerunVerifier = Boolean(paused.verifierInterrupted && !(userMessage && paused.managerWasLive));
+    const waitingOn: ResumeWaitingOn = rerunVerifier ? 'verifier' : workersQueued ? 'workers' : undefined;
 
     let delivery: TaskMessageResult['delivery'] = 'unpaused';
     if (paused.managerWasLive) {
@@ -1905,16 +1899,16 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       if (workersDone) run.workersReported = true;
       if (waitingOn) setSessionStatus(run.managerSessionId, 'waiting');
     } else if (userMessage) {
-      // The manager had already exited (its workers / QA were still running): the message continues the run once they finish.
+      // The manager had already exited (its workers / verifier were still running): the message continues the run once they finish.
       run.pendingFollowUps = [userMessage];
       delivery = 'held';
     }
     saveRunState(run);
 
-    if (rerunQa) await launchQa(run, run.lastCompletion || '');
+    if (rerunVerifier) await launchVerifier(run, run.lastCompletion || '');
     launchQueuedWorkers(run);
     // Manager gone and nothing left to wait for: close the run out as the exit it was.
-    if (!paused.managerWasLive && !rerunQa && !run.workers.some((w) => w.status === 'queued' || w.status === 'running')) {
+    if (!paused.managerWasLive && !rerunVerifier && !run.workers.some((w) => w.status === 'queued' || w.status === 'running')) {
       await finalizeRun(run, { reason: 'exit', exitCode: run.managerExitCode ?? null, completionMarkdown: run.lastCompletion });
     }
     return { ok: true, delivery, target: 'Manager' };
@@ -2019,20 +2013,18 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
 
   // ── Prompt box: mid-run steering and post-run follow-ups ──
 
-  /** An agent that can take a message now: alive, and not a worker / QA verifier that already reported. */
+  /** An agent that can take a message now: alive, and not a worker / verifier that already reported. */
   const isLiveAgent = (s: SpawnedSession | undefined): s is SpawnedSession =>
     Boolean(
       s && s.session.isActive && s.status !== 'cancelled' && s.status !== 'failed' && (s.role === 'manager' || s.status !== 'done')
     );
-
-  const steeringRoleOf = (role: AgentSessionRole): AgentRole => (role === 'qa' ? 'hardener' : role);
 
   /** The step an agent's activity is noted under. */
   const stepIdForSession = (run: RunState, s: SpawnedSession): string => {
     if (s.role === 'worker') {
       return [...run.workers].reverse().find((w) => w.ptySessionId === s.ptySessionId)?.stepId ?? run.managerStepId;
     }
-    return s.role === 'qa' ? qaStepId(run) : run.managerStepId;
+    return s.role === 'verifier' ? verifierStepId(run) : run.managerStepId;
   };
 
   const noteOnStep = (run: RunState, stepId: string, line: string) =>
@@ -2072,7 +2064,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     opts: TaskMessageOptions,
     phase: 'mid-run' | 'post-run'
   ): Promise<TaskMessageResult> => {
-    const role = steeringRoleOf(target.role);
+    const role = target.role;
     const stepId = stepIdForSession(run, target);
     let queued = false;
     const status = await typeUserMessage(
@@ -2098,14 +2090,14 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     return { ok: true, delivery: queued ? 'queued' : 'sent', target: target.label };
   };
 
-  type ReopenSnapshot = Pick<PersistedRunState, 'followUps' | 'followUpText' | 'qaBase' | 'qaRetriesUsed' | 'managerStepId'> & {
+  type ReopenSnapshot = Pick<PersistedRunState, 'followUps' | 'followUpText' | 'verifierBase' | 'verifierRetriesUsed' | 'managerStepId'> & {
     taskStatus?: TaskStatus;
     taskDone?: boolean;
     briefStatus?: AgentContextItem['status'];
   };
 
   /**
-   * A follow-up reopens the finished run: a new follow-up cycle (its QA attempts count from 1, its completion entry is
+   * A follow-up reopens the finished run: a new follow-up cycle (its verifier attempts count from 1, its completion entry is
    * appended), a new manager step, and the task / job / executing indicator back to in progress.
    */
   const reopenRun = (run: RunState, message: string): ReopenSnapshot => {
@@ -2115,8 +2107,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     const snapshot: ReopenSnapshot = {
       followUps: run.followUps,
       followUpText: run.followUpText,
-      qaBase: run.qaBase,
-      qaRetriesUsed: run.qaRetriesUsed,
+      verifierBase: run.verifierBase,
+      verifierRetriesUsed: run.verifierRetriesUsed,
       managerStepId: run.managerStepId,
       taskStatus: task?.status,
       taskDone: task?.isDone,
@@ -2127,12 +2119,12 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     run.deferredFinalize = undefined;
     run.followUps = (run.followUps ?? 0) + 1;
     run.followUpText = message;
-    // QA runs again for this cycle's completion record ('complete' launches QA while qaRuns === qaRetriesUsed).
-    run.qaRetriesUsed = run.qaRuns;
-    run.qaBase = run.qaRuns;
-    run.qaActive = false;
-    run.lastQa = undefined;
-    run.qaNote = undefined;
+    // Verifier runs again for this cycle's completion record ('complete' launches verifier while verifierRuns === verifierRetriesUsed).
+    run.verifierRetriesUsed = run.verifierRuns;
+    run.verifierBase = run.verifierRuns;
+    run.verifierActive = false;
+    run.lastVerifier = undefined;
+    run.verifierNote = undefined;
     run.lastCompletion = undefined;
     run.managerExitCode = undefined;
     run.workersReported = true; // earlier delegation rounds are settled; a new delegate.json starts a new round
@@ -2172,8 +2164,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     run.finalized = true;
     run.followUps = snapshot.followUps;
     run.followUpText = snapshot.followUpText;
-    run.qaBase = snapshot.qaBase;
-    run.qaRetriesUsed = snapshot.qaRetriesUsed;
+    run.verifierBase = snapshot.verifierBase;
+    run.verifierRetriesUsed = snapshot.verifierRetriesUsed;
     run.managerStepId = snapshot.managerStepId;
     saveRunState(run);
     run.resolveDone();
@@ -2281,7 +2273,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     run.cliSessionId = undefined;
     saveRunState(run);
     noteOnStep(run, run.managerStepId, `⚠ Resuming the conversation failed (exit code ${code}); starting a new manager from the completion log instead.`);
-    const res = await restartManager(run, attempt.message, { followUps: run.followUps, followUpText: run.followUpText, qaBase: run.qaBase, qaRetriesUsed: run.qaRetriesUsed, managerStepId: run.managerStepId }, () => {}, false);
+    const res = await restartManager(run, attempt.message, { followUps: run.followUps, followUpText: run.followUpText, verifierBase: run.verifierBase, verifierRetriesUsed: run.verifierRetriesUsed, managerStepId: run.managerStepId }, () => {}, false);
     return res.ok;
   };
 
@@ -2302,8 +2294,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       return { ok: false, error: "Open this task's project to continue it." };
     }
     const snapshot = reopenRun(run, message);
-    // A follow-up uses the task's QA switch as it is now (the user may have changed it since the run).
-    if (!isForeignRun(run)) run.qaEnabled = latestBrief(run)?.qaVerification === true;
+    // A follow-up uses the task's verifier switch as it is now (the user may have changed it since the run).
+    if (!isForeignRun(run)) run.verifierEnabled = (latestBrief(run)?.verification !== false) && (run.needsVerifier ?? true);
     const record = () =>
       recordSteeringMessage({ taskId: String(run.taskId), runId: run.runId, role: 'manager', text: message, phase: 'post-run', projectId: run.projectId, taskTitle: run.taskTitle });
     if (managerAlive) {
@@ -2375,20 +2367,20 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         cliName: '',
         managerSessionId: agentSessionId(agentProjectKey(projectId), task.id, 'manager'),
         managerStepId: `step-manager-${taskKey}-${runId}`,
-        qaEnabled: brief?.qaVerification === true,
+        verifierEnabled: (brief?.verification !== false) && (brief?.overviewDocument?.requiresVerifier ?? true),
         maxWorkers: Math.max(1, Math.min(8, Math.floor(opts.maxConcurrentAgents || 1))),
-        maxQaRetries: Math.max(0, Math.floor(opts.maxQaRetries || 0)),
+        maxVerifierRetries: Math.max(0, Math.floor(opts.maxVerifierRetries || 0)),
         workers: [],
         delegateRounds: 0,
         workersReported: true,
-        qaRuns: 0,
-        qaRetriesUsed: 0,
-        qaActive: false,
+        verifierRuns: 0,
+        verifierRetriesUsed: 0,
+        verifierActive: false,
         handledSignals: [],
         finalized: true,
         followUps: Math.max(0, loggedCycleOf(brief, runId)),
         // Known models are reused; unknown ones fall back to the profile's defaults — never a new routing.
-        roles: { manager: { ...(models?.manager || {}) }, worker: { ...(models?.worker || {}) }, qa: { ...(models?.hardener || {}) } },
+        roles: { manager: { ...(models?.manager || {}) }, worker: { ...(models?.worker || {}) }, verifier: { ...(models?.verifier || {}) } },
       };
     }
     const run = withDonePromise(state);
@@ -2429,7 +2421,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         return steerLiveAgent(run, target, buildQuestionAnswerMessage(question, message), opts, 'mid-run');
       }
       if (target) return steerLiveAgent(run, target, message, opts, 'mid-run');
-      // The manager exited while workers / QA still run: the message continues the run once they finish.
+      // The manager exited while workers / verifier still run: the message continues the run once they finish.
       run.pendingFollowUps = [...(run.pendingFollowUps || []), message];
       saveRunState(run);
       noteOnStep(run, run.managerStepId, `↳ You: "${truncate(message, 400)}" — held: the manager has exited, so this continues the run once its agents finish.`);
@@ -2641,53 +2633,53 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         run.lastCompletion = ev.content;
         saveRunState(run);
         // Stopped: the resumed manager writes it again when it is done.
-        if (run.finalized || run.deferredFinalize || run.paused || run.qaActive) return;
+        if (run.finalized || run.deferredFinalize || run.paused || run.verifierActive) return;
         if (currentRoundWorkers(run).some((w) => w.status === 'queued' || w.status === 'running')) {
           cancelOpenWorkers(run, 'The manager finished the task before this worker reported.');
         }
-        if (run.qaEnabled && run.qaRuns === run.qaRetriesUsed) {
-          await launchQa(run, ev.content);
+        if (run.verifierEnabled && run.verifierRuns === run.verifierRetriesUsed) {
+          await launchVerifier(run, ev.content);
         } else {
           await finalizeRun(run, { reason: 'complete', completionMarkdown: ev.content });
         }
         return;
       }
       case 'qa-verdict': {
-        // Stopped: that QA attempt runs again on resume.
-        if (ev.role !== 'qa' || !run.qaActive || run.finalized || run.deferredFinalize || run.paused) return;
-        const verdict = qaVerdictFrom(ev.content, ev.verdict);
-        run.qaActive = false;
-        const qaBase = run.qaBase ?? 0;
-        run.lastQa = { verdict, content: ev.content, attempt: run.qaRuns - qaBase };
+        // Stopped: that verifier attempt runs again on resume.
+        if (ev.role !== 'verifier' || !run.verifierActive || run.finalized || run.deferredFinalize || run.paused) return;
+        const verdict = verifierVerdictFrom(ev.content, ev.verdict);
+        run.verifierActive = false;
+        const verifierBase = run.verifierBase ?? 0;
+        run.lastVerifier = { verdict, content: ev.content, attempt: run.verifierRuns - verifierBase };
         saveRunState(run);
         const findings = stripVerdictLine(ev.content);
-        patchStep(run, qaStepId(run), {
+        patchStep(run, verifierStepId(run), {
           status: verdict === 'PASS' ? 'success' : 'error',
           detail: `VERDICT: ${verdict}${findings ? `\n\n${firstLines(findings, 14)}` : ''}`,
         });
         setSessionStatus(ev.sessionId, 'done');
         void killAgentSessions({ sessionId: ev.sessionId });
         if (verdict === 'PASS') {
-          await finalizeRun(run, { reason: 'qa-pass', completionMarkdown: run.lastCompletion });
+          await finalizeRun(run, { reason: 'verifier-pass', completionMarkdown: run.lastCompletion });
           return;
         }
         const manager = findSession(run.managerSessionId);
-        if (run.qaRetriesUsed - qaBase < run.maxQaRetries && manager?.session.isActive) {
-          run.qaRetriesUsed += 1;
+        if (run.verifierRetriesUsed - verifierBase < run.maxVerifierRetries && manager?.session.isActive) {
+          run.verifierRetriesUsed += 1;
           saveRunState(run);
-          const cycleRetry = run.qaRetriesUsed - qaBase;
+          const cycleRetry = run.verifierRetriesUsed - verifierBase;
           const stepUp = await stepUpForRetry(run, cycleRetry);
-          const message = buildQaFailMessage(ev.file || `${runDirRel(run.runId)}/qa.md`, cycleRetry, run.maxQaRetries, runCtx(run));
+          const message = buildVerifierFailMessage(ev.file || `${runDirRel(run.runId)}/qa.md`, cycleRetry, run.maxVerifierRetries, runCtx(run));
           await typeIntoAgent(run.managerSessionId, message);
           setSessionStatus(run.managerSessionId, 'running');
           patchStep(run, run.managerStepId, (s) => ({
             ...s,
             status: 'running',
-            detail: `${s.detail}\n\n↳ QA failed (attempt ${run.qaRuns - qaBase}); findings sent back to the manager for fix-up ${cycleRetry}/${run.maxQaRetries}.${stepUp ? ` ${stepUp}` : ''}`,
+            detail: `${s.detail}\n\n↳ verifier failed (attempt ${run.verifierRuns - verifierBase}); findings sent back to the manager for fix-up ${cycleRetry}/${run.maxVerifierRetries}.${stepUp ? ` ${stepUp}` : ''}`,
           }));
           return;
         }
-        await finalizeRun(run, { reason: 'qa-fail', completionMarkdown: run.lastCompletion });
+        await finalizeRun(run, { reason: 'verifier-fail', completionMarkdown: run.lastCompletion });
         return;
       }
     }
@@ -2764,7 +2756,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
 
     // Signal files are polled once more at exit: give that last signal a moment to arrive (without holding up
     // this task's event queue), then decide what the exit means for the run.
-    const qaRunAtExit = run.qaRuns;
+    const verifierRunAtExit = run.verifierRuns;
     setTimeout(() => {
       void enqueue(rk(run), async () => {
         if (run.finalized || run.deferredFinalize || run.paused) return;
@@ -2773,21 +2765,21 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
           if (w && (w.status === 'running' || w.status === 'queued')) {
             finishWorker(run, w, false, `Worker exited (code ${ev.code}) without writing its result file.`);
           }
-        } else if (role === 'qa') {
-          if (run.qaActive && run.qaRuns === qaRunAtExit) {
-            run.qaActive = false;
-            run.qaNote = `The QA verifier exited (code ${ev.code}) without writing qa.md`;
+        } else if (role === 'verifier') {
+          if (run.verifierActive && run.verifierRuns === verifierRunAtExit) {
+            run.verifierActive = false;
+            run.verifierNote = `The verifier exited (code ${ev.code}) without writing qa.md`;
             saveRunState(run);
-            patchStep(run, qaStepId(run), { status: 'error', detail: run.qaNote });
-            await finalizeRun(run, { reason: 'qa-error', completionMarkdown: run.lastCompletion });
+            patchStep(run, verifierStepId(run), { status: 'error', detail: run.verifierNote });
+            await finalizeRun(run, { reason: 'verifier-error', completionMarkdown: run.lastCompletion });
           }
         } else {
-          // A resume the CLI rejected at once: a new manager takes over (also while workers / QA still run).
+          // A resume the CLI rejected at once: a new manager takes over (also while workers / verifier still run).
           if (await retryFailedResume(run, session, ev.code)) return;
           const workersOpen = currentRoundWorkers(run).some((w) => w.status === 'queued' || w.status === 'running');
-          if (run.qaActive || workersOpen) {
-            // One-shot CLIs exit right after writing completion.md / delegate.json. The run finalizes when QA
-            // reports (verdict, QA exit, or QA FAIL with no manager to fix it) or when the workers finish.
+          if (run.verifierActive || workersOpen) {
+            // One-shot CLIs exit right after writing completion.md / delegate.json. The run finalizes when verifier
+            // reports (verdict, verifier exit, or verifier FAIL with no manager to fix it) or when the workers finish.
             run.managerExitCode = ev.code;
             saveRunState(run);
             return;
@@ -2924,7 +2916,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     };
 
     const defaultLabel = (role: AgentSessionRole, pieceId?: string) =>
-      role === 'worker' ? `Worker ${pieceId || ''}`.trim() : role === 'qa' ? 'QA Verifier' : 'Manager';
+      role === 'worker' ? `Worker ${pieceId || ''}`.trim() : role === 'verifier' ? 'Verifier' : 'Manager';
 
     const restored: SpawnedSession[] = relevant.map((r) => {
       const role: AgentSessionRole = r.role || 'manager';
@@ -2996,15 +2988,15 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         cliName: row.cmd || 'CLI agent',
         managerSessionId: row.id,
         managerStepId: `step-manager-${taskKey}-${row.runId}`,
-        qaEnabled: brief?.qaVerification === true,
+        verifierEnabled: (brief?.verification !== false) && (brief?.overviewDocument?.requiresVerifier ?? true),
         maxWorkers: Math.max(1, Math.min(8, Math.floor(opts.maxConcurrentAgents || 1))),
-        maxQaRetries: Math.max(0, Math.floor(opts.maxQaRetries || 0)),
+        maxVerifierRetries: Math.max(0, Math.floor(opts.maxVerifierRetries || 0)),
         workers: [],
         delegateRounds: 0,
         workersReported: false,
-        qaRuns: 0,
-        qaRetriesUsed: 0,
-        qaActive: false,
+        verifierRuns: 0,
+        verifierRetriesUsed: 0,
+        verifierActive: false,
         handledSignals: [],
         finalized: loggedCycleOf(brief, row.runId!) >= 0,
       };
@@ -3074,24 +3066,24 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         }
       }
       if (run.finalized) return;
-      const qaId = runSessionId(run, 'qa');
-      if (run.qaActive && !activeIds.has(qaId) && findSession(qaId)?.status !== 'starting') {
-        run.qaActive = false;
-        run.qaNote = 'The QA verifier ended while Ergo was not connected, without a verdict';
+      const verifierId = runSessionId(run, 'verifier');
+      if (run.verifierActive && !activeIds.has(verifierId) && findSession(verifierId)?.status !== 'starting') {
+        run.verifierActive = false;
+        run.verifierNote = 'The verifier ended while Ergo was not connected, without a verdict';
         saveRunState(run);
-        patchStep(run, qaStepId(run), { status: 'error', detail: run.qaNote });
-        await finalizeRun(run, { reason: 'qa-error', completionMarkdown: run.lastCompletion });
+        patchStep(run, verifierStepId(run), { status: 'error', detail: run.verifierNote });
+        await finalizeRun(run, { reason: 'verifier-error', completionMarkdown: run.lastCompletion });
         return;
       }
       const manager = findSession(run.managerSessionId);
-      const waitingOnAgents = run.qaActive || currentRoundWorkers(run).some((w) => w.status === 'queued' || w.status === 'running');
+      const waitingOnAgents = run.verifierActive || currentRoundWorkers(run).some((w) => w.status === 'queued' || w.status === 'running');
       const managerGone = !activeIds.has(run.managerSessionId) && manager?.status !== 'starting';
       if (managerGone && !waitingOnAgents) {
         await finalizeRun(run, { reason: 'exit', exitCode: run.managerExitCode ?? manager?.session.exitCode ?? null, completionMarkdown: run.lastCompletion });
         return;
       }
       if (managerGone) {
-        // Workers / QA still running: the run finalizes when they report (see the manager exit handler).
+        // Workers / verifier still running: the run finalizes when they report (see the manager exit handler).
         if (run.managerExitCode === undefined) {
           run.managerExitCode = manager?.session.exitCode ?? null;
           saveRunState(run);
@@ -3145,7 +3137,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       const run = withDonePromise(state);
       runsRef.current.set(rk(state), run);
       if (!state.deferredFinalize && relevant.some((r) => r.isActive && r.runId === state.runId)) {
-        // The manager is gone but its workers / QA still run: the run finalizes when they report.
+        // The manager is gone but its workers / verifier still run: the run finalizes when they report.
         void enqueue(rk(run), () => reconcile(run));
         continue;
       }
@@ -3280,7 +3272,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       relatedSources,
       projectRules,
       references,
-      qaEnabled,
+      verifierEnabled,
+      needsVerifier,
       maxWorkers,
       runPlanNote,
     }: LaunchCliRunParams): Promise<boolean> => {
@@ -3320,6 +3313,10 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       dropDeferredInput(doomed);
       commitSessions((prev) => prev.filter((s) => !doomed.has(s.ptySessionId)));
 
+      const taskNeedsVerifier = needsVerifier ?? (verifierEnabled !== undefined ? verifierEnabled : (brief?.overviewDocument?.requiresVerifier ?? true));
+      const userVerifierSetting = brief?.verification !== false;
+      const resolvedVerifierEnabled = verifierEnabled !== undefined ? verifierEnabled : (userVerifierSetting && taskNeedsVerifier);
+
       const managerSessionId = agentSessionId(agentProjectKey(projectId), task.id, 'manager');
       const managerStepId = `step-manager-${taskKey}-${runId}`;
       const run = withDonePromise({
@@ -3334,15 +3331,16 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         managerSessionId,
         managerStepId,
         bibleFilePath: cliBiblePath(projectId, task.id, runId),
-        qaEnabled: qaEnabled ?? brief?.qaVerification === true,
+        needsVerifier: taskNeedsVerifier,
+        verifierEnabled: resolvedVerifierEnabled,
         maxWorkers: Math.max(1, Math.min(8, Math.floor(maxWorkers ?? (opts.maxConcurrentAgents || 1)) || 1)),
-        maxQaRetries: Math.max(0, Math.floor(opts.maxQaRetries || 0)),
+        maxVerifierRetries: Math.max(0, Math.floor(opts.maxVerifierRetries || 0)),
         workers: [],
         delegateRounds: 0,
         workersReported: false,
-        qaRuns: 0,
-        qaRetriesUsed: 0,
-        qaActive: false,
+        verifierRuns: 0,
+        verifierRetriesUsed: 0,
+        verifierActive: false,
         handledSignals: [],
         finalized: false,
         ...(relatedContext && relatedContext.trim() ? { relatedContext: relatedContext.trim() } : {}),
@@ -3361,6 +3359,31 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       run.retryRoles = launch.retryRoles;
       run.startEscalation = launch.startEscalation;
       runsRef.current.set(runKeyOf(projectId, taskKey), run);
+
+      // If the AI determined verifier is needed and it is enabled, show the planned Verifier tab in Actions tabs:
+      if (resolvedVerifierEnabled) {
+        const verifierSessionId = runSessionId(run, 'verifier');
+        const plannedVerifierSession: SpawnedSession = {
+          session: {
+            taskId: run.taskId,
+            taskTitle: run.taskTitle,
+            isActive: true,
+            spawnedAt: new Date().toISOString(),
+          },
+          role: 'verifier',
+          label: 'Verifier',
+          ptySessionId: verifierSessionId,
+          runId: run.runId,
+          status: 'waiting',
+          permissionLevel: depsRef.current.agentPipelineOptionsRef.current.permissionLevel,
+          pendingPrompt: null,
+          cwd: launch.cwd,
+          cmd: launch.cmd,
+          args: [],
+          spawnId: `${run.runId}-verifier-planned`,
+        };
+        commitSessions((prev) => [...prev.filter((s) => s.ptySessionId !== verifierSessionId), plannedVerifierSession]);
+      }
 
       // Fresh run: clear the previous run's completion log and mark the task in progress (latest state, not closures).
       const tasks = d.tasksRef.current;
@@ -3388,7 +3411,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         followUps: '',
       } as AgentContextItem;
       const nextBriefs = briefIdx === -1 ? [...briefs, resetBrief] : briefs.map((b, i) => (i === briefIdx ? resetBrief : b));
-      // Workers / QA build their prompts from this when the run's project isn't the open one.
+      // Workers / verifier build their prompts from this when the run's project isn't the open one.
       run.briefSnapshot = resetBrief;
       saveRunState(run);
 
@@ -3403,7 +3426,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         title: `Manager Agent (${launch.cliName || launch.cmd})`,
         detail: `Running \`${launch.cmd}\` in \`${launch.cwd}\`. ${
           run.maxWorkers >= 2 ? 'The manager works through the task and may delegate separable pieces to worker agents' : 'The manager works through the task itself'
-        }${run.qaEnabled ? '; a QA verifier checks the result before the completion log is written' : ''}.${
+        }${run.verifierEnabled ? '; a verifier checks the result before the completion log is written' : ''}.${
           runPlanNote && runPlanNote.trim() ? `\n${runPlanNote.trim()}` : ''
         }`,
         status: 'running',
@@ -3618,12 +3641,18 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
             implRef.current.finishWorker(run, w, false, 'Stopped by user before reporting a result.');
             patchStep(run, w.stepId, { status: 'cancelled' });
           }
-        } else if (s.role === 'qa' && run.qaActive) {
-          run.qaActive = false;
-          run.qaNote = 'The QA verifier was stopped by the user before reaching a verdict';
-          saveRunState(run);
-          patchStep(run, qaStepId(run), { status: 'cancelled', detail: run.qaNote });
-          await implRef.current.finalizeRun(run, { reason: 'qa-error', completionMarkdown: run.lastCompletion });
+        } else if (s.role === 'verifier') {
+          if (run.verifierActive) {
+            run.verifierActive = false;
+            run.verifierNote = 'The verifier was stopped by the user before reaching a verdict';
+            saveRunState(run);
+            patchStep(run, verifierStepId(run), { status: 'cancelled', detail: run.verifierNote });
+            await implRef.current.finalizeRun(run, { reason: 'verifier-error', completionMarkdown: run.lastCompletion });
+          } else {
+            run.verifierEnabled = false;
+            saveRunState(run);
+            commitSessions((prev) => prev.filter((x) => x.ptySessionId !== ptySessionId));
+          }
         }
       });
     };
@@ -3708,6 +3737,51 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       if (run && (run.finalized || run.finalizePending)) runsRef.current.delete(key);
     };
 
+    const updateRunVerification = (taskId: string | number, enabled: boolean) => {
+      const taskKey = String(taskId);
+      const projectId = depsRef.current.projectId;
+      const run = runsRef.current.get(runKeyOf(projectId, taskKey));
+      if (!run || run.finalized) return;
+
+      // Cannot change if verifier has already started running or finished
+      if (run.verifierActive || run.verifierRuns > 0) return;
+
+      const taskNeedsVerifier = run.needsVerifier ?? true;
+      const newVerifierEnabled = enabled && taskNeedsVerifier;
+      run.verifierEnabled = newVerifierEnabled;
+      saveRunState(run);
+
+      const verifierSessionId = runSessionId(run, 'verifier');
+      if (!newVerifierEnabled) {
+        commitSessions((prev) => prev.filter((s) => !(s.runId === run.runId && s.role === 'verifier' && s.status === 'waiting')));
+      } else {
+        commitSessions((prev) => {
+          if (prev.some((s) => s.ptySessionId === verifierSessionId)) return prev;
+          const launch = run.launch;
+          const plannedVerifierSession: SpawnedSession = {
+            session: {
+              taskId: run.taskId,
+              taskTitle: run.taskTitle,
+              isActive: true,
+              spawnedAt: new Date().toISOString(),
+            },
+            role: 'verifier',
+            label: 'Verifier',
+            ptySessionId: verifierSessionId,
+            runId: run.runId,
+            status: 'waiting',
+            permissionLevel: depsRef.current.agentPipelineOptionsRef.current.permissionLevel,
+            pendingPrompt: null,
+            cwd: launch?.cwd || '',
+            cmd: launch?.cmd || '',
+            args: [],
+            spawnId: `${run.runId}-verifier-planned`,
+          };
+          return [...prev, plannedVerifierSession];
+        });
+      }
+    };
+
     return {
       forgetTask,
       supersedeFinishedRun,
@@ -3721,6 +3795,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       restoreAgentSessions: (taskIds) => implRef.current.restoreAgentSessions(taskIds),
       hasActiveCliRun,
       sendUserMessage: (taskId, text, opts) => implRef.current.sendUserMessage(taskId, text, opts),
+      updateRunVerification,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -69,8 +69,8 @@ export interface AgentContextItem {
   passes?: Array<{ title: string; content: string }>;
   requiredMcps?: string[];
   selectedMcpTools?: string[];
-  /** Task menu → "QA verification": run the QA verifier (and its retry rounds) on this task. Off unless true. */
-  qaVerification?: boolean;
+  /** Task menu → "Verification": run the verifier (and its retry rounds) on this task. On by default unless false. */
+  verification?: boolean;
   /** runId of the CLI agent run whose completion log was last written into `completion` (finalize once per run). */
   completionRunId?: string;
   /**
@@ -88,10 +88,10 @@ export interface AgentContextItem {
 }
 
 /**
- * passed: QA verified it · completed: finished without a QA check · unverified: QA reached no verdict ·
- * qa_failed: QA still failed after the retries · failed: the run errored or the agent quit · stopped: by the user.
+ * passed: Verifier verified it · completed: finished without a verifier check · unverified: Verifier reached no verdict ·
+ * verifier_failed: Verifier still failed after the retries · failed: the run errored or the agent quit · stopped: by the user.
  */
-export type RunOutcome = 'passed' | 'completed' | 'unverified' | 'qa_failed' | 'failed' | 'stopped';
+export type RunOutcome = 'passed' | 'completed' | 'unverified' | 'verifier_failed' | 'failed' | 'stopped';
 
 /** One stage's model in a run. tier: Auto's pick (1 light · 2 standard · 3 top); calibrated: the learning table moved it a rung. */
 export interface RunStageModel {
@@ -107,13 +107,13 @@ export interface RunOutcomeRecord {
   outcome: RunOutcome;
   /** Rungs the manager and workers started above the plan (an earlier failed run). */
   escalation: number;
-  /** QA retries used (each one stepped the manager and workers up one more rung). */
-  qaRetries?: number;
+  /** Verifier retries used (each one stepped the manager and workers up one more rung). */
+  verifierRetries?: number;
   rating?: TaskRating;
-  /** The models the work ended on (after any QA-retry step-ups). */
-  models?: Partial<Record<'manager' | 'worker' | 'hardener', RunStageModel>>;
-  /** The models the run started on, when QA retries stepped up (otherwise the same as `models`). */
-  startModels?: Partial<Record<'manager' | 'worker' | 'hardener', RunStageModel>>;
+  /** The models the work ended on (after any verifier-retry step-ups). */
+  models?: Partial<Record<'manager' | 'worker' | 'verifier', RunStageModel>>;
+  /** The models the run started on, when verifier retries stepped up (otherwise the same as `models`). */
+  startModels?: Partial<Record<'manager' | 'worker' | 'verifier', RunStageModel>>;
   /** Model family the run used (cli-claude, anthropic, openai …), for model calibration. */
   family?: string;
 }
@@ -298,7 +298,7 @@ export interface AIProviderConfig {
   /** Optional cheaper/faster model used for fan-out worker sub-agents (defaults to generalModel). */
   workerModel?: string;
   cleanerModel?: string;
-  hardenerModel?: string;
+  verifierModel?: string;
   loggerModel?: string;
   autocompleteModel?: string;
   /** Per-role routing overrides: customize which provider and model runs each execution agent */
@@ -328,7 +328,7 @@ export interface ProviderCredentials {
   generalModel?: string;
   workerModel?: string;
   cleanerModel?: string;
-  hardenerModel?: string;
+  verifierModel?: string;
   loggerModel?: string;
   autocompleteModel?: string;
   roleConfigs?: Partial<Record<AgentRole, AgentModelConfig>>;
@@ -357,7 +357,7 @@ export interface UserApiKey {
   generalModel?: string;
   workerModel?: string;
   cleanerModel?: string;
-  hardenerModel?: string;
+  verifierModel?: string;
   loggerModel?: string;
   autocompleteModel?: string;
   /** Per-role routing overrides: customize which provider and model runs each execution agent */
@@ -433,9 +433,9 @@ export interface OverviewDocument {
   relatedTaskIds?: string[];
   /** Titles of those tasks: task ids are positional and shift when tasks are reordered, titles don't. */
   relatedTaskTitles?: string[];
-  taskKind?: TaskKind;   // Classified by the Summary AI; drives Cleaner/Hardener gating
-  requiresHardener?: boolean; // Evaluated by Summary AI: large tasks warrant Hardener QA, small/generic tasks skip it
-  hardenerReason?: string;    // Rationale for why Hardener is required or skipped
+  taskKind?: TaskKind;   // Classified by the Summary AI; drives Cleaner/Verifier gating
+  requiresVerifier?: boolean; // Evaluated by Summary AI: large tasks warrant Verifier, small/generic tasks skip it
+  verifierReason?: string;    // Rationale for why Verifier is required or skipped
   /** How demanding the task is (Auto model selection). Rated once with the overview and reused by reruns. */
   taskRating?: TaskRating;
 }
@@ -545,8 +545,8 @@ export interface ManagerBiblePayload {
  *  - mcp_call: an individual tool call (manager or worker)
  *  - verify: Manager verifying accumulated pieces against the brief's criteria
  *  - cleaner: Step 4 lint/format pass (coding tasks only)
- *  - hardener: Step 5 QA / eval harness
- *  - retry: QA failure fed back into a fresh Step 3 attempt
+ *  - verifier: Step 5 verification harness
+ *  - retry: Verifier failure fed back into a fresh Step 3 attempt
  */
 export type ExecutionStage =
   | 'context'
@@ -558,14 +558,14 @@ export type ExecutionStage =
   | 'execution'
   | 'verify'
   | 'cleaner'
-  | 'hardener'
+  | 'verifier'
   | 'retry'
   | 'human_input'
   | 'built_record'
   | 'done'
   | 'terminating';
 
-export type AgentRole = 'summary' | 'manager' | 'worker' | 'cleaner' | 'hardener' | 'logger' | 'autocomplete';
+export type AgentRole = 'summary' | 'manager' | 'worker' | 'cleaner' | 'verifier' | 'logger' | 'autocomplete';
 
 /** Token accounting for a single LLM call or an aggregate across calls. */
 export interface TokenUsage {
@@ -682,7 +682,7 @@ export interface AppSettings {
   storageDirectory?: string; // default: "~/.ergo"
   lastOpenedAt?: string;
   hasCompletedOnboarding?: boolean;
-  /** Agent execution pipeline tuning (concurrency, QA retries, tool rounds). */
+  /** Agent execution pipeline tuning (concurrency, verifier retries, tool rounds). */
   agentPipeline?: Partial<AgentPipelineOptions>;
   /** Autocomplete configuration (toggle, keybinding). */
   autocomplete?: AutocompleteSettings;
@@ -774,14 +774,14 @@ export interface TerminalSession {
 }
 
 /** Which agent of a CLI task run a PTY session belongs to. */
-export type AgentSessionRole = 'manager' | 'worker' | 'qa';
+export type AgentSessionRole = 'manager' | 'worker' | 'verifier';
 
 /**
  * Lifecycle of one agent session:
  *  - starting:          launch requested, PTY not confirmed yet
  *  - running:           working
  *  - awaiting_approval: the CLI is showing a prompt that needs the user (see pendingPrompt)
- *  - waiting:           manager handed work to workers (or QA) and is waiting for their results
+ *  - waiting:           manager handed work to workers (or verifier) and is waiting for their results
  *  - done / failed / cancelled: finished
  */
 export type AgentSessionStatus = 'starting' | 'running' | 'awaiting_approval' | 'waiting' | 'done' | 'failed' | 'cancelled';
@@ -826,7 +826,7 @@ export interface SpawnedSession {
   session: TerminalSession;
   /** Agent role within the task run. Sessions restored from older backends default to 'manager'. */
   role: AgentSessionRole;
-  /** Human label shown on tabs and terminal headers, e.g. "Manager", "Worker W2 · Login form", "QA Verifier". */
+  /** Human label shown on tabs and terminal headers, e.g. "Manager", "Worker W2 · Login form", "Verifier". */
   label: string;
   /** Worker piece id (workers only), e.g. "W2". */
   pieceId?: string;
@@ -870,7 +870,7 @@ export interface HumanAiAssistantResult {
 
 // ─── Agent Execution Pipeline Types ─────────────────────────────────────────
 
-/** Coarse classification of a task; gates the Cleaner (lint/format) and shapes the Hardener's QA prompt. */
+/** Coarse classification of a task; gates the Cleaner (lint/format) and shapes the Verifier's verifier prompt. */
 export type TaskKind = 'coding' | 'writing' | 'research' | 'ops' | 'data' | 'other';
 
 export type TaskRatingScore = 1 | 2 | 3 | 4 | 5;
@@ -913,8 +913,8 @@ export interface AgentPipelineOptions {
   modelSelection: ModelSelectionMode;
   /** Maximum worker sub-agents running concurrently (fan-out limit). */
   maxConcurrentAgents: number;
-  /** How many times a Hardener QA failure may trigger a fresh Step 3 retry. */
-  maxQaRetries: number;
+  /** How many times a Verifier failure may trigger a fresh Step 3 retry. */
+  maxVerifierRetries: number;
   /** Maximum LLM round-trips (tool-call rounds) any single agent loop may take. */
   maxToolRoundsPerAgent: number;
   /** Run the Cleaner (lint/format) pass for coding tasks. */
@@ -958,15 +958,15 @@ export type BibleEventKind =
   | 'human'
   | 'verify'
   | 'cleaner'
-  | 'qa_pass'
-  | 'qa_fail'
+  | 'verifier_pass'
+  | 'verifier_fail'
   | 'retry'
   | 'error';
 
 /** One append-only entry in the TASK_CONTEXT.md Execution Event Log. */
 export interface BibleEvent {
   at: string;          // ISO timestamp
-  actor: string;       // e.g. "manager", "worker:P2", "hardener"
+  actor: string;       // e.g. "manager", "worker:P2", "verifier"
   kind: BibleEventKind;
   text: string;        // condensed, human-readable
   pieceId?: string;
@@ -984,8 +984,8 @@ export interface BibleSections {
     projectPath: string;
     taskKind: TaskKind;
     runId: string;
-    requiresHardener?: boolean;
-    hardenerReason?: string;
+    requiresVerifier?: boolean;
+    verifierReason?: string;
   };
   subtasks: Array<{ text: string; isDone: boolean; isHumanReview?: boolean }>;
   /** The Summary step's working brief, verbatim: the manager's whole spec. */

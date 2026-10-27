@@ -1,13 +1,12 @@
 /**
  * Final step — Logger: writes the Build & Verification and Completion records from the CONDENSED
- * bible (pieces table + event log + QA verdict), never from raw transcripts.
+ * bible (pieces table + event log + verifier verdict), never from raw transcripts.
  */
 import { type AgentContextItem, type Subtask, type TaskItem, type OverviewDocument } from '../../types';
 import { parseJsonLoose } from '../llmClient';
-import { runSessionRetrospective, type RetrospectiveInput } from '../memory';
 import { type PipelineContext, addUsage, emptyUsage, formatUsage, buildToolLoopRequest } from './contracts';
 import { type BibleStore } from './bible';
-import { type HardenerResult } from './hardener';
+import { type VerifierResult } from './verifier';
 import { runToolLoop } from './providerLoop';
 import { formatOverviewDocToMarkdown } from './summary';
 import { COMPLETION_RECORD_FORMAT, COMPLETION_RECORD_RULES } from '../humanFacingOutput';
@@ -15,13 +14,13 @@ import { COMPLETION_RECORD_FORMAT, COMPLETION_RECORD_RULES } from '../humanFacin
 const LOGGER_SYSTEM =
   `You are the Logger AI in Ergo's task execution pipeline. Write the completion log for a task that was just executed by a manager and its worker sub-agents.\n` +
   `The completion log is a SHORT note a human scans in a few seconds to confirm the work is right — not a log of the execution. ` +
-  `Be accurate — do NOT fabricate details that are not in the event log, verification or QA sections. No code, no command output, no narrative of the process.\n\n` +
+  `Be accurate — do NOT fabricate details that are not in the event log, verification or verifier sections. No code, no command output, no narrative of the process.\n\n` +
   `"completion" (markdown) uses exactly these bold headings, in this order:\n${COMPLETION_RECORD_FORMAT}\n` +
-  `${COMPLETION_RECORD_RULES} The Verified line includes the QA verdict.\n\n` +
+  `${COMPLETION_RECORD_RULES} The Verified line includes the verifier verdict.\n\n` +
   `"buildAndVerification" (markdown, at most 4 short bullets): pieces done, retries, how it was verified.\n` +
   `"createdFiles": every file created, written or modified (paths only).\n\n` +
   `HUMAN REVIEW:\n` +
-  `- Needed for complex tasks, sensitive changes (auth, database schemas, billing, deletion, external API integrations, production deployments), QA verdicts other than pass, or if the task asked for human review.\n` +
+  `- Needed for complex tasks, sensitive changes (auth, database schemas, billing, deletion, external API integrations, production deployments), verifier verdicts other than pass, or if the task asked for human review.\n` +
   `- If needed: "needsHumanReview": true and at most 3 concrete, actionable "humanReviewSteps". Otherwise false and [].\n\n` +
   `Return ONLY valid JSON (no markdown fences) with exactly these fields:\n` +
   `{\n` +
@@ -35,8 +34,8 @@ const LOGGER_SYSTEM =
 export interface LoggerArgs {
   createdFiles: string[];
   usedToolCalling: boolean;
-  hardener?: HardenerResult;
-  qaAttempts: number;
+  verifier?: VerifierResult;
+  verifierAttempts: number;
   allCriteriaPass: boolean;
   overviewDoc?: OverviewDocument;
 }
@@ -63,21 +62,21 @@ export async function runLogger(
     ? `\n\n> **Note — Text-Only Execution:** The configured model (${aiConfig.generalModel || aiConfig.model || 'unknown'}) does not support native tool-calling, so workers could only describe their work instead of executing tools. Results may differ from a full tool-calling execution — consider an Anthropic, OpenAI, Gemini or tool-capable Ollama model.`
     : '';
 
-  const hardenerText = args.hardener
-    ? `QA verdict: ${args.hardener.verdict.toUpperCase()}${args.hardener.failures.length ? `\nQA failures:\n${args.hardener.failures.map((f) => `- [${f.criterion}] ${f.diagnostics}`).join('\n')}` : ''}${args.hardener.evidence ? `\nQA evidence: ${args.hardener.evidence.slice(0, 1200)}` : ''}`
-    : 'QA verdict: (hardener disabled)';
+  const verifierText = args.verifier
+    ? `verifier verdict: ${args.verifier.verdict.toUpperCase()}${args.verifier.failures.length ? `\nQA failures:\n${args.verifier.failures.map((f) => `- [${f.criterion}] ${f.diagnostics}`).join('\n')}` : ''}${args.verifier.evidence ? `\nQA evidence: ${args.verifier.evidence.slice(0, 1200)}` : ''}`
+    : 'verifier verdict: (verifier disabled)';
 
   const userPrompt =
     `TASK: "${task.title}" (#${task.id}) | Date: ${buildDate}\n` +
     `Provider: ${aiConfig.provider} / ${aiConfig.generalModel || aiConfig.model || 'default'}\n` +
     `Original Subtasks: ${task.subtasks.map((s) => `${s.isHumanReview ? '[human review] ' : ''}${s.text}`).join('; ') || 'none'}\n` +
     `Task is flagged for human review: ${task.isHumanReview ? 'YES' : 'NO'}\n` +
-    `Manager attempts (QA retries): ${args.qaAttempts}\n` +
+    `Manager attempts (Verifier retries): ${args.verifierAttempts}\n` +
     `Manager verification: ${args.allCriteriaPass ? 'all criteria pass' : 'NOT all criteria pass'}\n` +
     `Files written during execution: ${args.createdFiles.length > 0 ? args.createdFiles.join(', ') : 'none detected'}\n` +
     `Token usage (whole run): ${formatUsage(ctx.usage)}\n` +
     `Execution bible on disk: ${bible.filePath}\n\n` +
-    `${hardenerText}\n\n` +
+    `${verifierText}\n\n` +
     `${bible.renderPieces()}\n${bible.renderEventLog()}\n` +
     `EXISTING OVERVIEW:\n${brief?.overview || brief?.brief || '(none)'}\n` +
     (workerPatternNote ? `\nIMPORTANT: At the END of the completion field, append this exact markdown note:\n${workerPatternNote}` : '');
@@ -113,7 +112,7 @@ export async function runLogger(
     if (e?.name === 'AbortError') throw e;
     console.warn('[Ergo Logger] falling back to deterministic record:', e?.message || e);
     buildAndVerificationContent = `**Build Record (${buildDate}):**\n\n${bible.renderEventLog({ last: 6 })}`;
-    completionContent = `**Completion (${buildDate}):**\n\n${args.allCriteriaPass ? 'Manager verified every "Done when" criterion.' : 'Manager verification did not confirm every "Done when" criterion.'} ${hardenerText.split('\n')[0]}.${workerPatternNote}`;
+    completionContent = `**Completion (${buildDate}):**\n\n${args.allCriteriaPass ? 'Manager verified every "Done when" criterion.' : 'Manager verification did not confirm every "Done when" criterion.'} ${verifierText.split('\n')[0]}.${workerPatternNote}`;
   }
   addUsage(ctx.usage, usage);
 
@@ -126,13 +125,13 @@ export async function runLogger(
   }
   completionContent += `\n\nExecution bible: [TASK_CONTEXT.md](${bible.filePath})`;
 
-  // QA outcome drives human review.
-  if (args.hardener?.verdict === 'fail') {
+  // Verifier outcome drives human review.
+  if (args.verifier?.verdict === 'fail') {
     needsHumanReview = true;
-    for (const f of args.hardener.failures) humanReviewSteps.push(`QA failed: ${f.criterion} — ${f.diagnostics.slice(0, 160)}`);
-  } else if (args.hardener?.verdict === 'inconclusive') {
+    for (const f of args.verifier.failures) humanReviewSteps.push(`Verifier failed: ${f.criterion} — ${f.diagnostics.slice(0, 160)}`);
+  } else if (args.verifier?.verdict === 'inconclusive') {
     needsHumanReview = true;
-    humanReviewSteps.push(`Manually confirm QA: ${(args.hardener.evidence || 'the hardener could not obtain evidence').slice(0, 160)}`);
+    humanReviewSteps.push(`Manually confirm verifier: ${(args.verifier.evidence || 'the verifier could not obtain evidence').slice(0, 160)}`);
   }
   if (!args.allCriteriaPass && !humanReviewSteps.some((s) => s.startsWith('Manager verification'))) {
     needsHumanReview = true;
@@ -236,35 +235,6 @@ export async function runLogger(
     totalUsage: { ...ctx.usage },
     subtasks: allSubtasks.length > 0 ? allSubtasks : task.subtasks.map((s) => ({ ...s, isDone: true }))
   };
-
-  // ── Session Retrospective: distill durable learnings into vector memory ──
-  try {
-    const retroInput: RetrospectiveInput = {
-      taskId: task.id,
-      taskTitle: task.title,
-      projectId: ctx.project.id,
-      overview: overviewContent,
-      buildLog: buildAndVerificationContent,
-      completion: completionContent,
-      createdFiles: allCreatedFiles,
-      allCriteriaPass: args.allCriteriaPass,
-      qaVerdict: args.hardener?.verdict,
-      eventLog: bible.renderEventLog({ last: 20 }),
-    };
-    const storedCount = await runSessionRetrospective(retroInput);
-    if (storedCount > 0) {
-      ctx.emit({
-        id: 'step-retrospective',
-        stage: 'built_record',
-        agentRole: 'logger',
-        title: `Session Retrospective: ${storedCount} Learning(s) Stored`,
-        detail: `Distilled ${storedCount} durable lesson(s) from this task execution into local vector memory (0 API tokens).`,
-        status: 'success'
-      });
-    }
-  } catch (err) {
-    console.warn('[Ergo Logger] Session retrospective failed (non-fatal):', err);
-  }
 
   return { updatedBrief, updatedTask };
 }
