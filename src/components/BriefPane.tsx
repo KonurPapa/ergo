@@ -19,6 +19,7 @@ import { AgentTerminal } from './AgentTerminal';
 import { ResizableTerminalContainer } from './ResizableTerminalContainer';
 import { CliAgentNotesBridge } from './CliAgentNotesBridge';
 import { TaskPromptBox } from './TaskPromptBox';
+import { AgentLiveStatus } from './AgentLiveStatus';
 import { RunSurveyCard } from './RunSurveyCard';
 import type { TaskMessageOptions, TaskMessageResult } from '../lib/taskMessages';
 import {
@@ -75,7 +76,8 @@ import {
   Check,
   CornerUpLeft,
   BookOpen,
-  ExternalLink
+  ExternalLink,
+  FolderTree
 } from 'lucide-react';
 
 import { RichTextToolbar } from './RichTextToolbar';
@@ -84,6 +86,7 @@ import { ScheduleTaskModal } from './ScheduleTaskModal';
 import { TaskMcpToolsModal } from './TaskMcpToolsModal';
 import { type ScheduledJob } from '../lib/taskScheduler';
 import { handleMarkdownAutoWrap } from '../lib/markdownEditorUtils';
+import { getPref, setPref, subscribePrefs } from '../lib/userPrefs';
 
 interface HumanInputCardProps {
   prompt: HumanInputPrompt;
@@ -296,6 +299,59 @@ interface AiTaskCardProps {
 type CardStatus = 'not_started' | 'queued' | 'working' | 'done';
 
 const NO_AGENT_SESSIONS: SpawnedSession[] = [];
+
+/** AI Workspace card order: by the human workspace's headings and task numbers, or newest added first. */
+type AiSortMode = 'category' | 'added';
+const AI_SORT_PREF = 'ai_workspace_sort';
+const readAiSortMode = (): AiSortMode => (getPref(AI_SORT_PREF) === 'added' ? 'added' : 'category');
+
+/** The human-side task a brief belongs to: its source task id, else the same title. */
+function briefTask(brief: AgentContextItem, tasks: TaskItem[]): TaskItem | null {
+  return (
+    (brief.sourceTaskId ? tasks.find((t) => String(t.id) === String(brief.sourceTaskId)) : null) ||
+    tasks.find((t) => t.title.trim().toLowerCase() === brief.title.trim().toLowerCase()) ||
+    null
+  );
+}
+
+interface OrderedBrief {
+  brief: AgentContextItem;
+  /** Position in `briefs` (stable fallback key and tie-break). */
+  index: number;
+  task: TaskItem | null;
+  /** Category mode: the heading shown above the first card of each category. */
+  group?: { name: string; color: string };
+}
+
+function orderBriefs(briefs: AgentContextItem[], tasks: TaskItem[], mode: AiSortMode): OrderedBrief[] {
+  const rows: OrderedBrief[] = briefs.map((brief, index) => ({ brief, index, task: briefTask(brief, tasks) }));
+  if (mode === 'added') {
+    // Newest first; briefs from before addedAt existed come after the dated ones, last-listed (= last added) first.
+    const at = (r: OrderedBrief) => Date.parse(r.brief.addedAt || '') || 0;
+    return rows.sort((a, b) => at(b) - at(a) || b.index - a.index);
+  }
+  // Categories in the order their headings appear in the human workspace (lanes in order too).
+  const taskPos = new Map(tasks.map((t, i) => [t, i] as const));
+  const groupKey = (t: TaskItem) => `${t.swimLaneId ?? ''}\u0000${t.category}`;
+  const groupPos = new Map<string, number>();
+  for (const t of tasks) if (!groupPos.has(groupKey(t))) groupPos.set(groupKey(t), groupPos.size);
+  const rank = (r: OrderedBrief) => (r.task ? groupPos.get(groupKey(r.task)) ?? Infinity : Infinity);
+  const number = (r: OrderedBrief) => (r.task ? r.task.listIndex ?? taskPos.get(r.task) ?? 0 : r.brief.itemNumber ?? 0);
+  const pos = (r: OrderedBrief) => (r.task ? taskPos.get(r.task) ?? 0 : 0);
+  rows.sort((a, b) => rank(a) - rank(b) || number(a) - number(b) || pos(a) - pos(b) || a.index - b.index);
+  // Headings only help when there is more than one category.
+  const keyOf = (r: OrderedBrief) => (r.task ? groupKey(r.task) : '');
+  if (new Set(rows.map(keyOf)).size > 1) {
+    let last: string | null = null;
+    for (const r of rows) {
+      if (keyOf(r) === last) continue;
+      last = keyOf(r);
+      const name = r.task?.category?.trim() || (r.task ? 'Uncategorized' : 'Not linked to a task');
+      r.group = { name, color: r.task?.category ? resolveHeaderColor(r.task.category, r.task.categoryColor).hex : 'var(--text-dim)' };
+    }
+  }
+  return rows;
+}
 
 /** React key for an agent's views: a relaunch reuses the ptySessionId, so the launch id forces a fresh attach. */
 const agentViewKey = (s: SpawnedSession) => `${s.ptySessionId}|${s.spawnId || s.runId || s.session.spawnedAt}`;
@@ -1085,6 +1141,21 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 
   // ── Task prompt box ── mid-run it steers the agents; after the run it continues it (never a restart).
   const runActive = isWorking || isExecuting || agentsWorking;
+  // What the working agent is doing right now, above the prompt box (an in-app pipeline run: its running step).
+  const liveStatusFor = (agent: SpawnedSession | null, showBadge: boolean) =>
+    !runActive ? null : agent ? (
+      <AgentLiveStatus
+        key={agent.ptySessionId}
+        ptySessionId={agent.ptySessionId}
+        status={agent.status}
+        role={agent.role}
+        pieceId={agent.pieceId}
+        label={agent.label}
+        showBadge={showBadge && agent.role !== 'manager'}
+      />
+    ) : runningPipelineStep ? (
+      <AgentLiveStatus fallbackText={runningPipelineStep.title} />
+    ) : null;
   const hasEverRun = runActive || executionSteps.length > 0 || agentSessions.length > 0 || Boolean(brief?.completion?.trim());
   // In-app pipeline: workers running right now can be addressed directly.
   const pipelineWorkerTargets = React.useMemo(() => {
@@ -1992,6 +2063,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                           <TaskPromptBox
                             running={runActive}
                             onSend={sendTaskMessage}
+                            status={liveStatusFor(nowRunningAgent, true)}
                             workerTargets={agentSessions.length === 0 ? pipelineWorkerTargets : []}
                             hint={agentSessions.length > 0 && runActive ? 'Goes to the manager (pick an agent in the Notes view to message it directly).' : undefined}
                           />
@@ -2072,6 +2144,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                                   : undefined
                               }
                               runActive={runActive}
+                              liveStatus={isAgentWorking(shownAgent.status) ? liveStatusFor(shownAgent, false) : null}
                             />
                           )}
                         </div>
@@ -2079,7 +2152,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 
                       {!shownAgent && sendTaskMessage && hasEverRun && (
                         <div style={{ padding: '0.55rem 0.75rem 0' }}>
-                          <TaskPromptBox running={runActive} onSend={sendTaskMessage} workerTargets={pipelineWorkerTargets} />
+                          <TaskPromptBox running={runActive} onSend={sendTaskMessage} workerTargets={pipelineWorkerTargets} status={liveStatusFor(null, false)} />
                         </div>
                       )}
 
@@ -2216,6 +2289,15 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   }, [terminalSessions]);
   const doneCount = briefs.filter((b) => b.status === 'done').length;
 
+  const [sortMode, setSortMode] = useState<AiSortMode>(readAiSortMode);
+  // Preferences load after mount (and may change in another window).
+  useEffect(() => subscribePrefs(() => setSortMode(readAiSortMode())), []);
+  const chooseSortMode = (mode: AiSortMode) => {
+    setSortMode(mode);
+    setPref(AI_SORT_PREF, mode);
+  };
+  const orderedBriefs = React.useMemo(() => orderBriefs(briefs, tasks, sortMode), [briefs, tasks, sortMode]);
+
   // Related Tasks card: candidates carry String task ids; selection needs the task's own id (number or string).
   const taskIdByString = React.useMemo(() => new Map(tasks.map((t) => [String(t.id), t.id] as const)), [tasks]);
   const canOpenRelatedTask = React.useCallback((id: string) => taskIdByString.has(String(id)), [taskIdByString]);
@@ -2303,6 +2385,31 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
           </div>
 
           <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
+            {briefs.length > 1 && (
+              <div className="steps-notes-chip ai-sort-chip" role="group" aria-label="Sort AI tasks">
+                <button
+                  type="button"
+                  className={`steps-notes-segment ${sortMode === 'category' ? 'active' : ''}`}
+                  onClick={() => chooseSortMode('category')}
+                  aria-pressed={sortMode === 'category'}
+                  title="Sort by category: the human workspace's headings, then task number"
+                >
+                  <FolderTree size={10} />
+                  <span>Category</span>
+                </button>
+                <button
+                  type="button"
+                  className={`steps-notes-segment ${sortMode === 'added' ? 'active' : ''}`}
+                  onClick={() => chooseSortMode('added')}
+                  aria-pressed={sortMode === 'added'}
+                  title="Sort by when the task was added to the AI workspace, newest first"
+                >
+                  <Clock size={10} />
+                  <span>Date added</span>
+                </button>
+              </div>
+            )}
+
             {activeTaskRunningCount > 0 && (
               <span className="running-indicator-badge">
                 <span className="live-pulse-dot" />
@@ -2389,10 +2496,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
             </div>
           ) : (
             <div className="ai-tasks-list-container">
-              {briefs.map((brief, index) => {
-                const matchingTask =
-                  (brief.sourceTaskId ? tasks.find((t) => String(t.id) === String(brief.sourceTaskId)) : null) ||
-                  tasks.find((t) => t.title.trim().toLowerCase() === brief.title.trim().toLowerCase());
+              {orderedBriefs.map(({ brief, index, task: matchingTask, group }) => {
 
                 const effectiveTask: TaskItem = matchingTask || {
                   id: brief.sourceTaskId || brief.id || `brief-${brief.itemNumber || index + 1}`,
@@ -2420,9 +2524,15 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                 const isQueued = queuedTaskIds ? queuedTaskIds.some((qid) => String(qid) === String(effectiveTask.id)) : false;
 
                 return (
+                  <React.Fragment key={brief.id || brief.sourceTaskId || brief.itemNumber || `brief-${index}`}>
+                  {group && (
+                    <div className="ai-sort-group-header" style={{ '--group-color': group.color } as React.CSSProperties}>
+                      <span className="ai-sort-group-dot" />
+                      <span>{group.name}</span>
+                    </div>
+                  )}
                   <AiTaskCard
                     taskBilling={taskBilling}
-                    key={brief.id || brief.sourceTaskId || brief.itemNumber || `brief-${index}`}
                     task={effectiveTask}
                     brief={brief}
                     isSelected={isSelected}
@@ -2459,6 +2569,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                     canOpenRelatedTask={canOpenRelatedTask}
                     onOpenRelatedTask={onSelectTask ? (id) => openRelatedTask(id) : undefined}
                   />
+                  </React.Fragment>
                 );
               })}
             </div>

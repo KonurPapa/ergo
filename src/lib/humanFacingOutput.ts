@@ -7,17 +7,21 @@
  * two outputs are here; the full skill is written for chat replies and would cost tokens on every run.
  */
 
-/** Completion record headings, in order (the parsers in useCliAgentRuns / memoryStore read these). */
+/**
+ * Completion record headings, in order (the parsers in useCliAgentRuns / memoryStore read these). Laid out like the
+ * human side's TODO.md: `##` headings, numbered items, 4-space `- ` sub-items, `**human review**` on review items.
+ */
 export const COMPLETION_RECORD_FORMAT =
-  `**Done:** <one sentence, concrete: what now works. If the task is not finished: what works and what is left>\n\n` +
-  `**Try it:** <one action under 2 minutes that shows it working: a command to run, a page to open, a button to press — or "Nothing to try: <why>">\n\n` +
-  `**Changed:**\n` +
-  `- \`path/to/file.ext\` — a few words\n` +
-  `- (at most 5 bullets; group related files, e.g. "\`src/components/*\` — 4 files, menu wiring")\n\n` +
-  `**Verified:** <one line: the check you ran and its result — or "Not verified: <why>">\n\n` +
-  `**Needs your review:**\n` +
-  `- [ ] <one bounded check the user does by hand, with where to look> (at most 3, most important first; or write "None")\n\n` +
-  `**Separately:** <optional, one line: an unrelated problem you noticed and did not fix. Omit the heading when there is none>`;
+  `## Done\n<one sentence, concrete: what now works. If the task is not finished: what works and what is left>\n\n` +
+  `## Try it\n<one action under 2 minutes that shows it working: a command to run, a page to open, a button to press — or "Nothing to try: <why>">\n\n` +
+  `## Changed\n` +
+  `1. \`path/to/file.ext\`\n` +
+  `    - a few words on the change\n` +
+  `2. (at most 5 items; group related files, e.g. "\`src/components/*\`" with "    - 4 files, menu wiring")\n\n` +
+  `## Verified\n<one line: the check you ran and its result — or "Not verified: <why>">\n\n` +
+  `## Needs your review\n` +
+  `1. **human review** <one bounded check the user does by hand, with where to look> (at most 3, most important first; or write "None")\n\n` +
+  `## Separately\n<optional, one line: an unrelated problem you noticed and did not fix. Omit the heading when there is none>`;
 
 /** Writing rules for the completion record (appended after the format). */
 export const COMPLETION_RECORD_RULES =

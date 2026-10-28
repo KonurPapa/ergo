@@ -873,7 +873,7 @@ export async function executeWorkspaceToolAction(
           nextBriefs = [...briefs];
           nextBriefs[existingIdx] = { ...nextBriefs[existingIdx], ...nextBrief };
         } else {
-          nextBriefs = [...briefs, nextBrief];
+          nextBriefs = [...briefs, { ...nextBrief, addedAt: new Date().toISOString() }];
         }
 
         bridge.saveProject(tasks, nextBriefs, swimLanes);

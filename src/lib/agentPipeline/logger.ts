@@ -15,7 +15,7 @@ const LOGGER_SYSTEM =
   `You are the Logger AI in Ergo's task execution pipeline. Write the completion log for a task that was just executed by a manager and its worker sub-agents.\n` +
   `The completion log is a SHORT note a human scans in a few seconds to confirm the work is right — not a log of the execution. ` +
   `Be accurate — do NOT fabricate details that are not in the event log, verification or verifier sections. No code, no command output, no narrative of the process.\n\n` +
-  `"completion" (markdown) uses exactly these bold headings, in this order:\n${COMPLETION_RECORD_FORMAT}\n` +
+  `"completion" (markdown) uses exactly these headings, in this order:\n${COMPLETION_RECORD_FORMAT}\n` +
   `${COMPLETION_RECORD_RULES} The Verified line includes the verifier verdict.\n\n` +
   `"buildAndVerification" (markdown, at most 4 short bullets): pieces done, retries, how it was verified.\n` +
   `"createdFiles": every file created, written or modified (paths only).\n\n` +
@@ -112,16 +112,16 @@ export async function runLogger(
     if (e?.name === 'AbortError') throw e;
     console.warn('[Ergo Logger] falling back to deterministic record:', e?.message || e);
     buildAndVerificationContent = `**Build Record (${buildDate}):**\n\n${bible.renderEventLog({ last: 6 })}`;
-    completionContent = `**Completion (${buildDate}):**\n\n${args.allCriteriaPass ? 'Manager verified every "Done when" criterion.' : 'Manager verification did not confirm every "Done when" criterion.'} ${verifierText.split('\n')[0]}.${workerPatternNote}`;
+    completionContent = `## Completion (${buildDate})\n\n${args.allCriteriaPass ? 'Manager verified every "Done when" criterion.' : 'Manager verification did not confirm every "Done when" criterion.'} ${verifierText.split('\n')[0]}.${workerPatternNote}`;
   }
   addUsage(ctx.usage, usage);
 
   // Merge harness-detected files with Logger-reported ones.
   const allCreatedFiles = Array.from(new Set([...args.createdFiles, ...loggedCreatedFiles]));
-  if (allCreatedFiles.length > 0 && !/\*\*changed:?\*\*|created file|artifacts/i.test(completionContent)) {
-    const shown = allCreatedFiles.slice(0, 5).map((f) => `- [${f}](${f})`);
-    if (allCreatedFiles.length > 5) shown.push(`- …and ${allCreatedFiles.length - 5} more`);
-    completionContent += `\n\n**Changed:**\n${shown.join('\n')}`;
+  if (allCreatedFiles.length > 0 && !/\*\*changed:?\*\*|^#{1,6}\s+changed|created file|artifacts/im.test(completionContent)) {
+    const shown = allCreatedFiles.slice(0, 5).map((f, i) => `${i + 1}. [${f}](${f})`);
+    if (allCreatedFiles.length > 5) shown.push(`    - …and ${allCreatedFiles.length - 5} more`);
+    completionContent += `\n\n## Changed\n${shown.join('\n')}`;
   }
   completionContent += `\n\nExecution bible: [TASK_CONTEXT.md](${bible.filePath})`;
 
@@ -163,9 +163,9 @@ export async function runLogger(
 
   // The review steps all become subtasks; the note only needs the first few.
   if (combinedReviewSteps.length > 0 && !/needs your review|human review/i.test(completionContent)) {
-    const shown = combinedReviewSteps.slice(0, 3).map((s) => `- [ ] ${s}`);
-    if (combinedReviewSteps.length > 3) shown.push(`- …and ${combinedReviewSteps.length - 3} more (see the task's review items)`);
-    completionContent += `\n\n**Needs your review:**\n${shown.join('\n')}`;
+    const shown = combinedReviewSteps.slice(0, 3).map((s, i) => `${i + 1}. **human review** ${s}`);
+    if (combinedReviewSteps.length > 3) shown.push(`    - …and ${combinedReviewSteps.length - 3} more (see the task's review items)`);
+    completionContent += `\n\n## Needs your review\n${shown.join('\n')}`;
   }
 
   // A user-written overview stays exactly as the user wrote it.

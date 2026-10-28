@@ -16,6 +16,8 @@ export interface TaskPromptBoxProps {
   workerTargets?: TaskPromptTarget[];
   /** Shown above the input (e.g. which agent receives it). */
   hint?: string;
+  /** What the agent is doing right now (AgentLiveStatus), right above the input. */
+  status?: React.ReactNode;
 }
 
 interface SentMessage {
@@ -29,7 +31,7 @@ interface SentMessage {
  * The task's prompt box when no agent terminal is shown (in-app pipeline runs, a finished CLI run whose agents are
  * gone): a message mid-run steers the agents, a message after the run continues it from where it left off.
  */
-export const TaskPromptBox: React.FC<TaskPromptBoxProps> = ({ running, onSend, workerTargets = [], hint }) => {
+export const TaskPromptBox: React.FC<TaskPromptBoxProps> = ({ running, onSend, workerTargets = [], hint, status }) => {
   const [input, setInput] = useState('');
   const [target, setTarget] = useState<string>('');
   const [sent, setSent] = useState<SentMessage[]>([]);
@@ -99,6 +101,7 @@ export const TaskPromptBox: React.FC<TaskPromptBoxProps> = ({ running, onSend, w
           ))}
         </div>
       )}
+      {status}
       {(hint || (running && workerTargets.length > 0)) && (
         <div className="task-prompt-targets">
           {hint && <span className="task-prompt-hint">{hint}</span>}

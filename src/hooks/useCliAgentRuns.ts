@@ -376,7 +376,7 @@ function extractHumanReviewItems(md: string): string[] {
       .trim()
       .replace(/^(?:[-*•]\s+|\d+[.)]\s+)/, '')
       .replace(/^\[[ xX]\]\s*/, '')
-      .replace(/^\*\*human review\*\*\s*[-–—:]\s*/i, '')
+      .replace(/^\*\*human review\*\*\s*[-–—:]?\s*/i, '')
       .trim();
     if (!line || NONE_RE.test(line) || /^_?none_?\.?$/i.test(line)) continue;
     items.push(truncate(line, 240));
@@ -420,9 +420,36 @@ function topFindings(report: string, max: number): string[] {
 
 const RECORD_SECTION_CAP = 5;
 
+/** Numbered items with 4-space sub-items (the human side's TODO.md layout); "- …and N more" closes a capped list. */
+function numberedList(items: string[], max: number, more: (n: number) => string): string {
+  const kept = items.slice(0, max).map((item, i) => `${i + 1}. ${item}`);
+  if (items.length > max) kept.push(`    - ${more(items.length - max)}`);
+  return kept.join('\n');
+}
+
+/** Review items as the human side writes them: numbered, `**human review**` first, at most 3. */
+function reviewList(items: string[]): string {
+  return numberedList(items.map((i) => `**human review** ${truncate(i, 180)}`), 3, (n) => `…and ${n} more (see the task's review items)`);
+}
+
+/** Items of a list section: top-level items, each with its indented sub-items kept under it. */
+function listItems(text: string): string[] {
+  const items: string[] = [];
+  for (const raw of text.split('\n')) {
+    if (!raw.trim()) continue;
+    const sub = /^\s{2,}[-*•]\s+/.test(raw);
+    const line = raw.trim().replace(/^(?:[-*•]\s+|\d+[.)]\s+)/, '').replace(/^\[[ xX]\]\s*/, '').trim();
+    if (!line) continue;
+    if (sub && items.length > 0) items[items.length - 1] += `\n    - ${truncate(line, 160)}`;
+    else items.push(truncate(line, 180));
+  }
+  return items;
+}
+
 /**
- * The agent's completion record, cut down to the brief format (Summary · Changed · Verified · Needs your review)
- * whatever it actually wrote: each section capped to a few short lines.
+ * The agent's completion record, cut down to the brief format (Done · Try it · Changed · Verified · Needs your
+ * review) whatever it actually wrote: each section capped to a few short lines, under `###` headings (the run's
+ * `##` heading sits above them).
  */
 function compactCompletionRecord(md: string, reviewItems: string[]): string {
   // "Done" (older records: "Summary").
@@ -435,21 +462,13 @@ function compactCompletionRecord(md: string, reviewItems: string[]): string {
     // Not in the expected shape: keep a short excerpt rather than the whole thing.
     return truncate(md.replace(/\n{3,}/g, '\n\n').trim(), 800);
   }
-  const bullets = (text: string, max: number) => {
-    const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
-    const kept = lines.slice(0, max).map((l) => truncate(l.startsWith('-') ? l : `- ${l}`, 180));
-    if (lines.length > max) kept.push(`- …and ${lines.length - max} more`);
-    return kept.join('\n');
-  };
   const out: string[] = [];
-  if (summary) out.push(`**Done:** ${truncate(summary.replace(/\s*\n\s*/g, ' '), 400)}`);
-  if (tryIt) out.push(`**Try it:** ${truncate(tryIt.replace(/\s*\n\s*/g, ' '), 240)}`);
-  if (changed) out.push(`**Changed:**\n${bullets(changed, RECORD_SECTION_CAP)}`);
-  if (verified) out.push(`**Verified:** ${truncate(verified.replace(/^[-*•]\s*/gm, '').replace(/\s*\n\s*/g, '; '), 300)}`);
-  out.push(
-    `**Needs your review:** ${reviewItems.length ? `\n${[...reviewItems.slice(0, 3).map((i) => `- [ ] ${truncate(i, 180)}`), ...(reviewItems.length > 3 ? [`- …and ${reviewItems.length - 3} more (see the task's review items)`] : [])].join('\n')}` : 'None'}`
-  );
-  if (separately && !NONE_RE.test(separately.trim())) out.push(`**Separately:** ${truncate(separately.replace(/\s*\n\s*/g, ' '), 200)}`);
+  if (summary) out.push(`### Done\n${truncate(summary.replace(/\s*\n\s*/g, ' '), 400)}`);
+  if (tryIt) out.push(`### Try it\n${truncate(tryIt.replace(/\s*\n\s*/g, ' '), 240)}`);
+  if (changed) out.push(`### Changed\n${numberedList(listItems(changed), RECORD_SECTION_CAP, (n) => `…and ${n} more`)}`);
+  if (verified) out.push(`### Verified\n${truncate(verified.replace(/^\s*(?:[-*•]|\d+[.)])\s*/gm, '').replace(/\s*\n\s*/g, '; '), 300)}`);
+  out.push(`### Needs your review\n${reviewItems.length ? reviewList(reviewItems) : 'None'}`);
+  if (separately && !NONE_RE.test(separately.trim())) out.push(`### Separately\n${truncate(separately.replace(/\s*\n\s*/g, ' '), 200)}`);
   return out.join('\n\n');
 }
 
@@ -1529,15 +1548,15 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     // agent reports (that only costs tokens wherever the log is read back). Long agent text is cut down here too.
     const parts: string[] = followUp
       ? [
-          `**Follow-up ${followUp} (${date}) — ${run.cliName}, ${reasonText}:**`,
+          `## Follow-up ${followUp} (${date}) — ${run.cliName}, ${reasonText}`,
           ...(run.followUpText ? [`_You: "${truncate(run.followUpText, 240)}"_`] : []),
         ]
-      : [`**Completion (${date}) — ${run.cliName}, ${reasonText}:**`];
+      : [`## Completion (${date}) — ${run.cliName}, ${reasonText}`];
     if (agentRecord) {
       parts.push(compactCompletionRecord(agentRecord, reviewItems));
     } else if (body) {
       // No record file: the agent's last reply, trimmed to a short excerpt.
-      parts.push(`**Agent's last message (no completion record written):**\n${truncate(body.replace(/\n{3,}/g, '\n\n'), 600)}`);
+      parts.push(`### Agent's last message\n_No completion record was written._\n\n${truncate(body.replace(/\n{3,}/g, '\n\n'), 600)}`);
     } else {
       parts.push(
         opts.reason === 'stopped'
@@ -1547,19 +1566,19 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     }
     if (run.workers.length > 0) {
       parts.push(
-        `**Workers:** ` +
-          run.workers.map((w) => `${w.piece.id} ${w.status === 'done' ? '✓' : '✗ did not finish'}`).join(' · ')
+        `### Workers\n` +
+          numberedList(run.workers.map((w) => `${w.piece.id} ${w.status === 'done' ? '✓' : '✗ did not finish'}`), run.workers.length, () => '')
       );
     }
     if (verifier) {
       // PASS: just the verdict. FAIL: the first few findings, one line each.
       const findings = verifier.verdict === 'FAIL' ? topFindings(stripVerdictLine(verifier.content), 3) : [];
-      parts.push(`**Verifier:** ${verifier.verdict === 'PASS' ? 'passed' : 'failed'}${verifier.attempt > 1 ? ` (attempt ${verifier.attempt})` : ''}${findings.length ? `\n${findings.map((f) => `- ${f}`).join('\n')}` : ''}`);
+      parts.push(`### Verifier\n${verifier.verdict === 'PASS' ? 'Passed' : 'Failed'}${verifier.attempt > 1 ? ` (attempt ${verifier.attempt})` : ''}${findings.length ? `\n${numberedList(findings, findings.length, () => '')}` : ''}`);
     } else if (run.verifierNote) {
-      parts.push(`**Verifier:** ${truncate(run.verifierNote, 200)}`);
+      parts.push(`### Verifier\n${truncate(run.verifierNote, 200)}`);
     }
     if (ergoReviewItems.length > 0 && !agentRecord) {
-      parts.push(`**Needs your review:**\n${ergoReviewItems.map((i) => `- [ ] ${i}`).join('\n')}`);
+      parts.push(`### Needs your review\n${reviewList(ergoReviewItems)}`);
     }
     const completionText = parts.join('\n\n').trim();
 
@@ -3396,6 +3415,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       const resetBrief: AgentContextItem = {
         ...(baseBrief || {
           id: `brief_${taskKey}`,
+          addedAt: new Date().toISOString(),
           sourceTaskId: task.id,
           sourceLaneId: task.swimLaneId,
           title: task.title,

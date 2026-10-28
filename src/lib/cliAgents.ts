@@ -532,7 +532,7 @@ export function buildManagerCliPrompt(task: TaskItem, brief: AgentContextItem | 
     `FINAL STEP — COMPLETION RECORD (REQUIRED):\n` +
     `When the work is implemented and verified, use your normal file-write tool to create the file "${completionFile}" as your LAST action. ` +
     `Write it in one go, only once the work is really finished (Ergo treats the moment this file appears as "the manager is done"). ` +
-    `It is a short note for a human to scan in a few seconds and confirm the work — NOT a log. Use exactly these bold headings, in this order:\n\n` +
+    `It is a short note for a human to scan in a few seconds and confirm the work — NOT a log. Use exactly these headings, in this order:\n\n` +
     `${COMPLETION_FORMAT}\n\n` +
     `${COMPLETION_RECORD_RULES} ` +
     `If something is unfinished or failed, say so in the Done line and put what is left under Needs your review. ` +

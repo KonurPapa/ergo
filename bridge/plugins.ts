@@ -25,6 +25,18 @@ import {
   promptSummary,
 } from '../src/lib/cliPromptParser.ts';
 import type { CliDetectedPrompt } from '../src/types/index.ts';
+import {
+  activityFromScreen,
+  foldClaudeEntry,
+  foldCodexEvent,
+  foldGeminiMessage,
+  newActivityFold,
+  withScreenNarration,
+  type ActivityFold,
+  type AgentActivity,
+  type AgentActivityResponse,
+} from '../src/lib/agentActivity.ts';
+import { cleanRow, isSpinnerRow } from '../src/lib/cliActivityFeed.ts';
 import { createMemoryStore, embedWithMemoryModel, MEMORY_NAMESPACES, AGENT_NOTE_KINDS, WORKSPACE_MAX_ITEMS, type MemoryStore, type MemoryStoreIo } from '../src/lib/memory/memoryStore.ts';
 import { CodeIndexManager, SKIP_DIR } from '../src/lib/codeIndex/codeIndex.ts';
 import { rankPaths } from '../src/lib/pathRank.ts';
@@ -3932,7 +3944,7 @@ export function ergoFileSystemPlugin(): Plugin {
 // ─────────────────────────────────────────────────────────────────────────────
 // PTY Plugin — CLI agent sessions (one PTY per agent: `${taskId}::manager`, `${taskId}::worker::<id>`, `${taskId}::qa`)
 // REST (App):   POST /api/pty/spawn | /api/pty/input | /api/pty/kill | /api/pty/policy
-//               GET  /api/pty/sessions | /api/pty/usage | /api/pty/transcript | /api/pty/events (SSE)
+//               GET  /api/pty/sessions | /api/pty/usage | /api/pty/transcript | /api/pty/activity | /api/pty/events (SSE)
 // WebSocket ws://localhost:<PORT>/api/pty (views):
 // Messages in:  { type:'attach', sessionId, cols?, rows?, observe? }   (task agents: attach only)
 //               { type:'spawn', cmd, args, cwd, cols, rows, ... }     (legacy: login / onboarding terminals)
@@ -4266,12 +4278,63 @@ async function readCodexSessionUsage(meta: PtyUsageMeta): Promise<BridgeUsage | 
   return last;
 }
 
+/**
+ * A Gemini chat log as `{ projectHash, startTime, messages }`. Older CLIs write one JSON document (session-*.json);
+ * newer ones append JSONL (session-*.jsonl): a metadata line, then message records (a re-written message repeats its
+ * id) and `$set` / `$rewindTo` patches.
+ */
 async function readGeminiChat(file: string): Promise<any | null> {
+  let raw: string;
   try {
-    return JSON.parse(await fs.readFile(file, 'utf-8'));
+    raw = await fs.readFile(file, 'utf-8');
   } catch {
     return null;
   }
+  if (!file.endsWith('.jsonl')) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  const session: any = { messages: [] as any[] };
+  const indexById = new Map<string, number>();
+  const reindex = () => {
+    indexById.clear();
+    session.messages.forEach((m: any, i: number) => m?.id && indexById.set(String(m.id), i));
+  };
+  let first = true;
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    let rec: any;
+    try { rec = JSON.parse(line); } catch { continue; }
+    if (!rec || typeof rec !== 'object') continue;
+    if (first && !rec.type && !rec.$set && (rec.sessionId || rec.projectHash)) {
+      Object.assign(session, rec, { messages: session.messages });
+    } else if (rec.$set && typeof rec.$set === 'object') {
+      const { messages, ...rest } = rec.$set;
+      Object.assign(session, rest);
+      if (Array.isArray(messages)) {
+        session.messages = [...messages];
+        reindex();
+      }
+    } else if (rec.$rewindTo !== undefined) {
+      const at = indexById.get(String(rec.$rewindTo?.messageId ?? rec.$rewindTo));
+      if (at !== undefined) {
+        session.messages = session.messages.slice(0, at);
+        reindex();
+      }
+    } else if (rec.type) {
+      const at = rec.id !== undefined ? indexById.get(String(rec.id)) : undefined;
+      if (at !== undefined) session.messages[at] = rec;
+      else {
+        session.messages.push(rec);
+        if (rec.id !== undefined) indexById.set(String(rec.id), session.messages.length - 1);
+      }
+    }
+    first = false;
+  }
+  return session;
 }
 
 function geminiUserTexts(session: any): string[] {
@@ -4279,10 +4342,17 @@ function geminiUserTexts(session: any): string[] {
   return messages.filter((m: any) => m?.type === 'user' || m?.role === 'user').map((m: any) => textOfContent(m.content ?? m.parts));
 }
 
-/** This session's Gemini CLI chat log (~/.gemini/tmp/<project>/chats/session-*.json), parsed. */
+/** This session's Gemini CLI chat log (~/.gemini/tmp/<project>/chats/session-*.json or .jsonl), parsed. */
 async function findGeminiSession(meta: PtyUsageMeta): Promise<any | null> {
+  return (await findGeminiSessionFile(meta))?.session ?? null;
+}
+
+async function findGeminiSessionFile(meta: PtyUsageMeta): Promise<{ file: string; session: any } | null> {
   const bound = boundSessionLog(meta);
-  if (bound) return readGeminiChat(bound);
+  if (bound) {
+    const session = await readGeminiChat(bound);
+    return session ? { file: bound, session } : null;
+  }
   const startMs = Date.parse(meta.startedAt) || Date.now();
   const { createHash } = await import('node:crypto');
   const hash = createHash('sha256').update(meta.cwd).digest('hex');
@@ -4293,7 +4363,7 @@ async function findGeminiSession(meta: PtyUsageMeta): Promise<any | null> {
   for (const d of dirs) {
     const chats = path.join(root, d, 'chats');
     for (const f of await fs.readdir(chats).catch(() => [] as string[])) {
-      if (!f.startsWith('session-') || !f.endsWith('.json')) continue;
+      if (!f.startsWith('session-') || !(f.endsWith('.json') || f.endsWith('.jsonl'))) continue;
       const file = path.join(chats, f);
       const stat = await fs.stat(file).catch(() => null);
       if (!stat || stat.mtimeMs < startMs - 5_000) continue;
@@ -4307,7 +4377,8 @@ async function findGeminiSession(meta: PtyUsageMeta): Promise<any | null> {
     }
   }
   const file = pickSessionLog(meta, candidates);
-  return file ? parsed.get(file) ?? null : null;
+  const session = file ? parsed.get(file) : null;
+  return file && session ? { file, session } : null;
 }
 
 async function readGeminiCliSessionUsage(meta: PtyUsageMeta): Promise<BridgeUsage | null> {
@@ -4484,6 +4555,160 @@ async function readAgentFinalMessage(meta: PtyUsageMeta, transcript?: ScreenTran
   const fromTranscript = transcript ? lastAssistantBlock(transcript.lines()) : null;
   if (fromTranscript) return { text: fromTranscript, source: 'transcript' };
   return { source: 'none' };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent activity (the live status line above the task prompt box)
+// Folded from the CLI's own session log — JSONL logs are read incrementally, only the lines appended since the last
+// poll — else from the rendered transcript. The folding itself is src/lib/agentActivity.ts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type ActivitySource = NonNullable<AgentActivityResponse['source']>;
+
+interface ActivityCursor {
+  file: string;
+  /** Byte offset of the first line not folded yet. */
+  offset: number;
+  /** The first read started mid-file: the partial line before the first newline is skipped. */
+  skipPartial: boolean;
+  fold: ActivityFold;
+  /** Gemini's whole-document log: the mtime/size it was folded at. */
+  stamp?: string;
+  reading?: Promise<AgentActivity | null>;
+}
+
+/** Session (owner key) → its log cursor. */
+const activityCursors = new Map<string, ActivityCursor>();
+const MAX_ACTIVITY_CURSORS = 200;
+/** A first read of a long log starts this far from its end (the status only needs the latest turn). */
+const ACTIVITY_MAX_READ_BYTES = 8 * 1024 * 1024;
+/** Unbound Codex/Gemini log picks are re-resolved after this long (bound logs are cached by the binding). */
+const ACTIVITY_PICK_TTL_MS = 10_000;
+const activityPicks = new Map<string, { file: string | null; at: number }>();
+
+function activityCursor(owner: string, file: string): ActivityCursor {
+  let cursor = activityCursors.get(owner);
+  if (!cursor || cursor.file !== file) cursor = { file, offset: 0, skipPartial: false, fold: newActivityFold() };
+  activityCursors.delete(owner);
+  activityCursors.set(owner, cursor);
+  while (activityCursors.size > MAX_ACTIVITY_CURSORS) {
+    const oldest = activityCursors.keys().next().value;
+    if (oldest === undefined) break;
+    activityCursors.delete(oldest);
+  }
+  return cursor;
+}
+
+/** One read at a time per cursor: overlapping polls would fold the same lines twice. */
+function readOnce(cursor: ActivityCursor, read: () => Promise<AgentActivity | null>): Promise<AgentActivity | null> {
+  if (!cursor.reading) cursor.reading = read().finally(() => { cursor.reading = undefined; });
+  return cursor.reading;
+}
+
+/** Folds the whole lines appended to a JSONL log since the last read. */
+function foldJsonlTail(owner: string, file: string, foldLine: (fold: ActivityFold, entry: any) => void): Promise<AgentActivity | null> {
+  const cursor = activityCursor(owner, file);
+  return readOnce(cursor, async () => {
+    const stat = await fs.stat(file).catch(() => null);
+    if (!stat) return null;
+    if (stat.size < cursor.offset) Object.assign(cursor, { offset: 0, skipPartial: false, fold: newActivityFold() });
+    if (cursor.offset === 0 && stat.size > ACTIVITY_MAX_READ_BYTES) {
+      cursor.offset = stat.size - ACTIVITY_MAX_READ_BYTES;
+      cursor.skipPartial = true;
+    }
+    while (stat.size > cursor.offset) {
+      const length = Math.min(stat.size - cursor.offset, ACTIVITY_MAX_READ_BYTES);
+      const buf = Buffer.alloc(length);
+      const handle = await fs.open(file, 'r');
+      let bytesRead = 0;
+      try {
+        ({ bytesRead } = await handle.read(buf, 0, length, cursor.offset));
+      } finally {
+        await handle.close();
+      }
+      // Only whole lines: one still being written is folded on the next poll.
+      const end = buf.subarray(0, bytesRead).lastIndexOf(0x0a);
+      if (end < 0) break;
+      let start = 0;
+      if (cursor.skipPartial) {
+        start = buf.indexOf(0x0a) + 1;
+        cursor.skipPartial = false;
+      }
+      for (const line of buf.subarray(start, end).toString('utf-8').split('\n')) {
+        if (!line.trim()) continue;
+        let entry: any;
+        try { entry = JSON.parse(line); } catch { continue; }
+        foldLine(cursor.fold, entry);
+      }
+      cursor.offset += end + 1;
+    }
+    return cursor.fold.activity;
+  });
+}
+
+/** A Codex/Gemini log picked without a binding is kept for a few seconds instead of rescanning on every poll. */
+async function pickedActivityLog(meta: PtyUsageMeta, find: () => Promise<string | null>): Promise<string | null> {
+  const bound = boundSessionLog(meta);
+  if (bound) return bound;
+  const owner = sessionLogOwner(meta);
+  const cached = activityPicks.get(owner);
+  if (cached && Date.now() - cached.at < ACTIVITY_PICK_TTL_MS) return cached.file;
+  const file = await find();
+  activityPicks.set(owner, { file, at: Date.now() });
+  if (activityPicks.size > MAX_ACTIVITY_CURSORS) activityPicks.delete(activityPicks.keys().next().value!);
+  return file;
+}
+
+async function readGeminiActivity(meta: PtyUsageMeta, owner: string): Promise<AgentActivity | null> {
+  const file = await pickedActivityLog(meta, async () => (await findGeminiSessionFile(meta))?.file ?? null);
+  if (!file) return null;
+  // Even the JSONL log is folded whole (when it changed): a re-written message repeats its id, and $rewindTo drops some.
+  const cursor = activityCursor(owner, file);
+  return readOnce(cursor, async () => {
+    const stat = await fs.stat(file).catch(() => null);
+    if (!stat) return null;
+    const stamp = `${stat.mtimeMs}:${stat.size}`;
+    if (cursor.stamp !== stamp) {
+      const session = await readGeminiChat(file);
+      const fold = newActivityFold();
+      for (const msg of Array.isArray(session?.messages) ? session.messages : []) foldGeminiMessage(fold, msg);
+      cursor.fold = fold;
+      cursor.stamp = stamp;
+    }
+    return cursor.fold.activity;
+  });
+}
+
+async function readAgentActivity(
+  meta: PtyUsageMeta,
+  transcript?: ScreenTranscript,
+  liveRows: string[] = []
+): Promise<{ activity: AgentActivity; source: ActivitySource }> {
+  const base = path.basename(meta.cmd).toLowerCase();
+  const owner = sessionLogOwner(meta);
+  const launchPrompt = meta.args[meta.args.length - 1];
+  const fromLog = (activity: AgentActivity) => (transcript ? withScreenNarration(activity, transcript.tail(400), launchPrompt) : activity);
+  try {
+    if (base.includes('claude')) {
+      const sessionId = claudeSessionIdArg(meta.args);
+      const log = sessionId ? await findClaudeSessionLog(sessionId, meta.cwd) : null;
+      const activity = log ? await foldJsonlTail(owner, log.file, foldClaudeEntry) : null;
+      if (activity) return { activity: fromLog(activity), source: 'claude-session-log' };
+    } else if (base.includes('codex')) {
+      const file = await pickedActivityLog(meta, () => findCodexRollout(meta));
+      const activity = file ? await foldJsonlTail(owner, file, foldCodexEvent) : null;
+      if (activity) return { activity: fromLog(activity), source: 'codex-session-log' };
+    } else if (base === 'gemini' || base.startsWith('gemini')) {
+      const activity = await readGeminiActivity(meta, owner);
+      if (activity) return { activity: fromLog(activity), source: 'gemini-session-log' };
+    }
+  } catch (err) {
+    console.warn('[Ergo PTY] Reading agent activity from its session log failed, falling back to the screen:', err);
+  }
+  if (transcript) {
+    return { activity: activityFromScreen(transcript.tail(400), liveRows, launchPrompt), source: 'screen' };
+  }
+  return { activity: { said: '', doing: '', phase: 'thinking' }, source: 'none' };
 }
 
 /** Transcript of a session that has no screen model (fallback): unique non-empty lines of the stripped log. */
@@ -5575,6 +5800,33 @@ export function ergoPtyPlugin(): Plugin {
           if (!meta) return sendJson(res, 404, { success: false, error: 'No PTY session with that id.' });
           const { usage, source } = await resolvePtySessionUsage(meta);
           return sendJson(res, 200, { success: true, usage, source, cli: path.basename(meta.cmd) });
+        }
+
+        if (url === '/api/pty/activity' && req.method === 'GET') {
+          // What the agent is doing now, in plain words (the status line above the task prompt box).
+          const fullUrl = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+          const id = fullUrl.searchParams.get('sessionId') || '';
+          const live = activePtySessions.get(id);
+          const ended = live ? undefined : endedPtySessions.get(id);
+          const meta: PtyUsageMeta | undefined = live || ended;
+          if (!meta) return sendJson(res, 404, { success: false, error: 'No PTY session with that id.' });
+          let liveRows: string[] = [];
+          if (live?.isActive) {
+            try {
+              observeTranscript(live);
+              liveRows = live.screen.visibleRows();
+            } catch {}
+          }
+          const { activity, source } = await readAgentActivity(meta, live ? live.transcript : ended?.transcript, liveRows);
+          const body: AgentActivityResponse = {
+            success: true,
+            activity,
+            source,
+            isActive: Boolean(live?.isActive),
+            spinner: liveRows.some((row) => isSpinnerRow(cleanRow(row))),
+            quietMs: live?.isActive && live.lastOutputAt ? Date.now() - live.lastOutputAt : null,
+          };
+          return sendJson(res, 200, body);
         }
 
         if (url === '/api/pty/cli-session' && req.method === 'GET') {

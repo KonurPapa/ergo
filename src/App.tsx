@@ -1792,6 +1792,7 @@ function App() {
       sourceLaneTitle: laneTitle,
       sourceContent: sourceTask ? undefined : cleanText,
       itemNumber: nextItemNumber,
+      addedAt: new Date().toISOString(),
       title: taskTitle,
       status: sourceTask?.status || 'not_started',
       // Empty until a run's Summary step generates it. A freeform selection's text is kept in sourceContent.
@@ -2302,6 +2303,7 @@ function App() {
             const updatedBrief: AgentContextItem = {
               ...latestBrief,
               id: latestBrief?.id || `brief_${task.id}`,
+              addedAt: latestBrief?.addedAt || new Date().toISOString(),
               sourceTaskId: task.id,
               sourceLaneId: task.swimLaneId || latestBrief?.sourceLaneId,
               itemNumber: latestBrief?.itemNumber,
@@ -3086,6 +3088,7 @@ function App() {
           sourceLaneId: laneId,
           sourceLaneTitle: laneTitle,
           itemNumber: maxNumber,
+          addedAt: new Date().toISOString(),
           title: item.title,
           status: item.status || 'not_started',
           // Empty until a run's Summary step generates it (the task's own text lives on the task).
@@ -3494,6 +3497,8 @@ function App() {
         completion: '',
         createdFiles: [],
         ...saved,
+        // Restoring puts it back on the AI side now.
+        addedAt: new Date().toISOString(),
         id: `brief_${task.id}`,
         sourceTaskId: task.id,
         sourceLaneId: task.swimLaneId,
@@ -3920,6 +3925,7 @@ function App() {
     const updatedBrief: AgentContextItem = {
       ...existingBrief,
       id: existingBrief?.id || `brief_${task.id}`,
+      addedAt: existingBrief?.addedAt || new Date().toISOString(),
       sourceTaskId: task.id,
       sourceLaneId: task.swimLaneId || existingBrief?.sourceLaneId,
       itemNumber: existingBrief?.itemNumber,

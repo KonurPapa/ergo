@@ -460,10 +460,13 @@ export function planWorkspaceChunks(projectId: string, item: WorkspaceIndexItem)
   return out;
 }
 
-/** The `**Done:**` (older records: `**Summary:**`) line of a completion record, else its first ≤ max chars (one line). */
+/**
+ * The Done section of a completion record (`### Done` + its line; older records: `**Done:**` / `**Summary:**`), else
+ * its first ≤ max chars (one line).
+ */
 function completionSummaryOf(texts: string[], max = RELATED_SUMMARY_CHARS): string | undefined {
   for (const t of texts) {
-    const m = t.match(/\*\*(?:Done|Summary):?\*\*:?\s*(.+)/i);
+    const m = t.match(/^\s*#{1,6}\s+(?:Done|Summary)\s*:?\s*\n+\s*(\S.*)/im) || t.match(/\*\*(?:Done|Summary):?\*\*:?\s*(.+)/i);
     if (m && m[1].trim()) return oneLine(m[1], max);
   }
   const first = texts.find((t) => t.trim());

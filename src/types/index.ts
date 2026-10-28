@@ -59,6 +59,8 @@ export interface AgentContextItem {
   sourceLaneTitle?: string;       // Title of the swim lane (e.g. "Human Workspace")
   sourceContent?: string;         // Freeform content snippet if tied to a freeform section
   sourceHeading?: string;         // Heading under which it was selected (if any)
+  /** When the task was added to the AI side (ISO). Older briefs have none and keep their list position. */
+  addedAt?: string;
   // Compatibility fields
   brief?: string;
   built?: string;
