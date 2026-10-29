@@ -2186,7 +2186,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                       rows={4}
                     />
                   ) : completionText ? (
-                    <div className="brief-body" style={{ padding: '0.55rem 0.75rem' }}>
+                    <div className="brief-body" style={{ padding: '0.55rem 0.5rem 0.15rem' }}>
                       <div className="brief-markdown-render">
                         <MarkdownRenderer content={completionText} />
                       </div>

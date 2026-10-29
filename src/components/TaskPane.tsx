@@ -20,6 +20,7 @@ import { Markdown } from 'tiptap-markdown';
 import { stripHeaderComments, parseSwimLaneMarkdown } from '../lib/parser';
 import { HEADER_COLORS, HEADER_COLOR_TOKEN_RE, randomHeaderColorId, resolveHeaderColor, splitHeaderColor } from '../lib/headerColors';
 import { TextColor } from '../lib/textColorMark';
+import { LineSpacingParagraph, LINE_SPACINGS } from '../lib/lineSpacingMark';
 import { storageManager } from '../lib/storageManager';
 import { bridgeClient } from '../lib/bridgeClient';
 import { HumanAiAssistantModal } from './HumanAiAssistantModal';
@@ -1984,6 +1985,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
+        paragraph: false,
         bulletList: { keepMarks: true, keepAttributes: false },
         orderedList: { keepMarks: true, keepAttributes: false },
         listItem: false,
@@ -2001,6 +2003,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       }),
       Typography,
       TextColor,
+      LineSpacingParagraph,
       Image.configure({
         inline: false,
         allowBase64: true,
@@ -2630,6 +2633,26 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
             <ToolbarBtn onClick={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()} active={editor?.isActive('heading', { level: 3 })} title="Heading 3 (### Text)">
               <Heading3 size={13} />
             </ToolbarBtn>
+          </div>
+
+          <Sep />
+
+          <div className="tiptap-toolbar-group">
+            <select
+              className="line-spacing-select"
+              title="Line spacing"
+              value={editor?.getAttributes('paragraph').lineSpacing || ''}
+              onMouseDown={(e) => e.stopPropagation()}
+              onChange={(e) => {
+                const v = e.target.value || null;
+                editor?.chain().focus().updateAttributes('paragraph', { lineSpacing: v }).run();
+              }}
+            >
+              <option value="">Spacing</option>
+              {LINE_SPACINGS.map((v) => (
+                <option key={v} value={v}>{v === '1' ? '1.0' : v}</option>
+              ))}
+            </select>
           </div>
 
           <Sep />

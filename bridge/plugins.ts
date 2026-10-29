@@ -31,6 +31,8 @@ import {
   foldCodexEvent,
   foldGeminiMessage,
   newActivityFold,
+  pendingCallForPrompt,
+  promptContextOfCall,
   withScreenNarration,
   type ActivityFold,
   type AgentActivity,
@@ -1070,6 +1072,70 @@ async function runCliProcess(options: {
   });
 }
 
+// ── Change review helpers (/api/git/changes, /api/git/revert) ──
+
+interface GitChangeFile {
+  path: string;
+  status: 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked';
+  /** Unified diff against HEAD, capped; empty for binary files. */
+  diff: string;
+  binary: boolean;
+  truncated: boolean;
+}
+interface GitChangeRepo {
+  root: string;
+  files: GitChangeFile[];
+}
+
+const GIT_DIFF_MAX_CHARS = 60_000;
+const GIT_CHANGE_MAX_FILES = 200;
+
+function gitExec(cwd: string, args: string[], okCodes: number[] = []): Promise<{ out: string; ok: boolean }> {
+  return new Promise((resolve) => {
+    execFile('git', args, { cwd, maxBuffer: 32 * 1024 * 1024, timeout: 20_000 }, (err: any, stdout) => {
+      const code = err ? (typeof err.code === 'number' ? err.code : -1) : 0;
+      resolve({ out: String(stdout ?? err?.stdout ?? ''), ok: !err || okCodes.includes(code) });
+    });
+  });
+}
+
+/** Trimmed-free stdout of a git command, or null when it fails (e.g. not a repository). */
+async function gitOut(cwd: string, args: string[]): Promise<string | null> {
+  const r = await gitExec(cwd, args);
+  return r.ok ? r.out : null;
+}
+
+async function gitRun(cwd: string, args: string[]): Promise<void> {
+  const r = await gitExec(cwd, args);
+  if (!r.ok) throw new Error(`git ${args[0]} failed`);
+}
+
+async function listGitChanges(root: string, withDiff = true): Promise<GitChangeFile[]> {
+  const status = await gitOut(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  if (!status) return [];
+  const parts = status.split('\0').filter(Boolean);
+  const files: GitChangeFile[] = [];
+  for (let i = 0; i < parts.length && files.length < GIT_CHANGE_MAX_FILES; i++) {
+    const code = parts[i].slice(0, 2);
+    const file = parts[i].slice(3);
+    if (code[0] === 'R' || code[0] === 'C') i++; // the rename's old path follows
+    const st: GitChangeFile['status'] =
+      code === '??' ? 'untracked' : code.includes('D') ? 'deleted' : code[0] === 'R' ? 'renamed' : code.includes('A') ? 'added' : 'modified';
+    let diff = '';
+    if (withDiff) {
+      const r =
+        st === 'untracked'
+          ? await gitExec(root, ['diff', '--no-index', '--', os.devNull, file], [1])
+          : await gitExec(root, ['diff', 'HEAD', '--', file]);
+      diff = r.out;
+    }
+    const binary = withDiff && /^Binary files /m.test(diff);
+    const truncated = diff.length > GIT_DIFF_MAX_CHARS;
+    files.push({ path: file, status: st, diff: binary ? '' : diff.slice(0, GIT_DIFF_MAX_CHARS), binary, truncated });
+  }
+  return files;
+}
+
 function sendJson(res: ServerResponse, statusCode: number, data: any) {
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'application/json');
@@ -1619,6 +1685,65 @@ export function ergoFileSystemPlugin(): Plugin {
           return sendJson(res, 200, { success: true, files: results });
         } catch (err: any) {
           console.error('[Ergo FS API] Read error:', err);
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
+      // Change review (protocol 7): what the agents changed in the approved folders that are git repositories, and
+      // an undo per file. The baseline is HEAD, so it also shows edits that were already uncommitted before the run.
+      if (url === '/api/git/changes' && req.method === 'POST') {
+        try {
+          const roots = (await loadAllowedRoots(storageDir)).filter((r) => r !== path.resolve(storageDir));
+          const repos: GitChangeRepo[] = [];
+          const seen = new Set<string>();
+          for (const root of roots) {
+            const top = (await gitOut(root, ['rev-parse', '--show-toplevel']))?.trim();
+            if (!top || seen.has(top)) continue;
+            seen.add(top);
+            repos.push({ root: top, files: await listGitChanges(top) });
+          }
+          return sendJson(res, 200, { success: true, repos: repos.filter((r) => r.files.length > 0) });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
+      if (url === '/api/git/revert' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const root = path.resolve(String(body.root || ''));
+          const files: string[] = Array.isArray(body.files) ? body.files.filter((f: unknown) => typeof f === 'string' && f) : [];
+          if (!body.root || files.length === 0) return sendJson(res, 400, { error: 'root and a non-empty files array are required' });
+          const check = await resolveInsideAllowedRoots(root, storageDir);
+          if (!check.ok) return sendJson(res, 403, { error: check.error });
+          const known = new Map((await listGitChanges(root, false)).map((f) => [f.path, f]));
+          const reverted: string[] = [];
+          const failed: string[] = [];
+          for (const rel of files) {
+            const change = known.get(rel);
+            const full = path.resolve(root, rel);
+            if (!change || !full.startsWith(root + path.sep)) {
+              failed.push(rel);
+              continue;
+            }
+            try {
+              const inHead = (await gitOut(root, ['cat-file', '-e', `HEAD:${rel}`])) !== null;
+              if (inHead) {
+                await gitRun(root, ['restore', '--source=HEAD', '--staged', '--worktree', '--', rel]);
+              } else {
+                if (change.status !== 'untracked') await gitRun(root, ['rm', '-r', '-f', '--cached', '--ignore-unmatch', '--', rel]);
+                await fs.unlink(full).catch((e: any) => {
+                  if (e.code !== 'ENOENT') throw e;
+                });
+              }
+              recentWrites.set(full, Date.now());
+              reverted.push(rel);
+            } catch {
+              failed.push(rel);
+            }
+          }
+          return sendJson(res, 200, { success: failed.length === 0, reverted, failed });
+        } catch (err: any) {
           return sendJson(res, 500, { error: err.message });
         }
       }
@@ -4574,7 +4699,7 @@ interface ActivityCursor {
   fold: ActivityFold;
   /** Gemini's whole-document log: the mtime/size it was folded at. */
   stamp?: string;
-  reading?: Promise<AgentActivity | null>;
+  reading?: Promise<ActivityFold | null>;
 }
 
 /** Session (owner key) → its log cursor. */
@@ -4600,13 +4725,13 @@ function activityCursor(owner: string, file: string): ActivityCursor {
 }
 
 /** One read at a time per cursor: overlapping polls would fold the same lines twice. */
-function readOnce(cursor: ActivityCursor, read: () => Promise<AgentActivity | null>): Promise<AgentActivity | null> {
+function readOnce(cursor: ActivityCursor, read: () => Promise<ActivityFold | null>): Promise<ActivityFold | null> {
   if (!cursor.reading) cursor.reading = read().finally(() => { cursor.reading = undefined; });
   return cursor.reading;
 }
 
 /** Folds the whole lines appended to a JSONL log since the last read. */
-function foldJsonlTail(owner: string, file: string, foldLine: (fold: ActivityFold, entry: any) => void): Promise<AgentActivity | null> {
+function foldJsonlTail(owner: string, file: string, foldLine: (fold: ActivityFold, entry: any) => void): Promise<ActivityFold | null> {
   const cursor = activityCursor(owner, file);
   return readOnce(cursor, async () => {
     const stat = await fs.stat(file).catch(() => null);
@@ -4642,7 +4767,7 @@ function foldJsonlTail(owner: string, file: string, foldLine: (fold: ActivityFol
       }
       cursor.offset += end + 1;
     }
-    return cursor.fold.activity;
+    return cursor.fold;
   });
 }
 
@@ -4659,7 +4784,7 @@ async function pickedActivityLog(meta: PtyUsageMeta, find: () => Promise<string 
   return file;
 }
 
-async function readGeminiActivity(meta: PtyUsageMeta, owner: string): Promise<AgentActivity | null> {
+async function readGeminiActivity(meta: PtyUsageMeta, owner: string): Promise<ActivityFold | null> {
   const file = await pickedActivityLog(meta, async () => (await findGeminiSessionFile(meta))?.file ?? null);
   if (!file) return null;
   // Even the JSONL log is folded whole (when it changed): a re-written message repeats its id, and $rewindTo drops some.
@@ -4675,8 +4800,32 @@ async function readGeminiActivity(meta: PtyUsageMeta, owner: string): Promise<Ag
       cursor.fold = fold;
       cursor.stamp = stamp;
     }
-    return cursor.fold.activity;
+    return cursor.fold;
   });
+}
+
+/** The session's activity folded from its CLI's own log (null when the CLI or its log is unknown). */
+async function readActivityFold(meta: PtyUsageMeta): Promise<{ fold: ActivityFold; source: ActivitySource } | null> {
+  const base = path.basename(meta.cmd).toLowerCase();
+  const owner = sessionLogOwner(meta);
+  try {
+    if (base.includes('claude')) {
+      const sessionId = claudeSessionIdArg(meta.args);
+      const log = sessionId ? await findClaudeSessionLog(sessionId, meta.cwd) : null;
+      const fold = log ? await foldJsonlTail(owner, log.file, foldClaudeEntry) : null;
+      if (fold) return { fold, source: 'claude-session-log' };
+    } else if (base.includes('codex')) {
+      const file = await pickedActivityLog(meta, () => findCodexRollout(meta));
+      const fold = file ? await foldJsonlTail(owner, file, foldCodexEvent) : null;
+      if (fold) return { fold, source: 'codex-session-log' };
+    } else if (base === 'gemini' || base.startsWith('gemini')) {
+      const fold = await readGeminiActivity(meta, owner);
+      if (fold) return { fold, source: 'gemini-session-log' };
+    }
+  } catch (err) {
+    console.warn('[Ergo PTY] Reading agent activity from its session log failed:', err);
+  }
+  return null;
 }
 
 async function readAgentActivity(
@@ -4684,26 +4833,11 @@ async function readAgentActivity(
   transcript?: ScreenTranscript,
   liveRows: string[] = []
 ): Promise<{ activity: AgentActivity; source: ActivitySource }> {
-  const base = path.basename(meta.cmd).toLowerCase();
-  const owner = sessionLogOwner(meta);
   const launchPrompt = meta.args[meta.args.length - 1];
-  const fromLog = (activity: AgentActivity) => (transcript ? withScreenNarration(activity, transcript.tail(400), launchPrompt) : activity);
-  try {
-    if (base.includes('claude')) {
-      const sessionId = claudeSessionIdArg(meta.args);
-      const log = sessionId ? await findClaudeSessionLog(sessionId, meta.cwd) : null;
-      const activity = log ? await foldJsonlTail(owner, log.file, foldClaudeEntry) : null;
-      if (activity) return { activity: fromLog(activity), source: 'claude-session-log' };
-    } else if (base.includes('codex')) {
-      const file = await pickedActivityLog(meta, () => findCodexRollout(meta));
-      const activity = file ? await foldJsonlTail(owner, file, foldCodexEvent) : null;
-      if (activity) return { activity: fromLog(activity), source: 'codex-session-log' };
-    } else if (base === 'gemini' || base.startsWith('gemini')) {
-      const activity = await readGeminiActivity(meta, owner);
-      if (activity) return { activity: fromLog(activity), source: 'gemini-session-log' };
-    }
-  } catch (err) {
-    console.warn('[Ergo PTY] Reading agent activity from its session log failed, falling back to the screen:', err);
+  const fromLog = await readActivityFold(meta);
+  if (fromLog) {
+    const { activity } = fromLog.fold;
+    return { activity: transcript ? withScreenNarration(activity, transcript.tail(400), launchPrompt) : { ...activity }, source: fromLog.source };
   }
   if (transcript) {
     return { activity: activityFromScreen(transcript.tail(400), liveRows, launchPrompt), source: 'screen' };
@@ -4798,6 +4932,11 @@ interface PtySessionState {
   /** Replaced by a newer process under the same id: its late events are dropped. */
   superseded: boolean;
   endedMeta?: EndedPtySession;
+  /**
+   * Request details for the prompt with this signature, read from the session log when the CLI's panel did not fit
+   * on screen (fields null while the lookup runs). Merged into every re-parse of the same prompt.
+   */
+  promptContext?: { signature: string; fields: Partial<CliDetectedPrompt> | null };
 }
 
 const activePtySessions = new Map<string, PtySessionState>();
@@ -5055,23 +5194,63 @@ function evaluateSessionScreen(session: PtySessionState) {
   if (signature === (session.prompt?.signature ?? null)) {
     // Same prompt; keep the latest rendering (the highlighted option may have moved — answers depend on it).
     if (parsed && session.prompt && defaultOptionIndex(parsed) !== defaultOptionIndex(session.prompt)) {
-      session.prompt = parsed;
+      session.prompt = withPromptContext(session, parsed);
       if (session.promptVisible) {
         // App (toast Approve) needs the moved highlight too: Enter answers whichever option is highlighted.
         sendToSubscribers(session, { type: 'prompt', prompt: parsed });
         broadcastAgentEvent(session, { type: 'prompt', prompt: parsed });
       }
     } else if (parsed) {
-      session.prompt = parsed;
+      session.prompt = withPromptContext(session, parsed);
     }
     return;
   }
   setSessionPrompt(session, parsed);
 }
 
+/** A prompt that shows neither the command nor what it would change: its panel was taller than the screen. */
+function promptNeedsContext(prompt: CliDetectedPrompt): boolean {
+  return prompt.kind !== 'notice' && Boolean(prompt.options?.length) && !prompt.targetCommand && !prompt.detailLines?.length;
+}
+
+function withPromptContext(session: PtySessionState, prompt: CliDetectedPrompt): CliDetectedPrompt;
+function withPromptContext(session: PtySessionState, prompt: CliDetectedPrompt | null): CliDetectedPrompt | null;
+function withPromptContext(session: PtySessionState, prompt: CliDetectedPrompt | null): CliDetectedPrompt | null {
+  const ctx = session.promptContext;
+  if (!prompt || !ctx?.fields || ctx.signature !== prompt.signature) return prompt;
+  const fields = Object.fromEntries(Object.entries(ctx.fields).filter(([, v]) => v !== undefined));
+  return { ...prompt, ...fields };
+}
+
+/** When the log names it, how long after a prompt appears its tool call is looked up (the log may lag the screen). */
+const PROMPT_CONTEXT_RETRY_MS = [0, 600, 1500, 3000];
+
+/**
+ * Fills in what a prompt asks to approve from the call waiting on it in the CLI's session log (the newest pending
+ * call that isn't a question to the user), then re-sends the prompt — and re-checks Full-access auto-approval, since
+ * a request with a pending tool call behind it is a permission prompt.
+ */
+function lookUpPromptContext(session: PtySessionState, prompt: CliDetectedPrompt) {
+  if (session.promptContext?.signature === prompt.signature) return;
+  session.promptContext = { signature: prompt.signature, fields: null };
+  void (async () => {
+    for (const delay of PROMPT_CONTEXT_RETRY_MS) {
+      if (delay) await sleep(delay);
+      if (!session.isActive || session.superseded || session.prompt?.signature !== prompt.signature) return;
+      const call = pendingCallForPrompt((await readActivityFold(session))?.fold ?? newActivityFold());
+      if (!call) continue;
+      session.promptContext = { signature: prompt.signature, fields: { ...promptContextOfCall(call), kind: 'approval' } };
+      setSessionPrompt(session, session.prompt);
+      return;
+    }
+  })();
+}
+
 function setSessionPrompt(session: PtySessionState, prompt: CliDetectedPrompt | null) {
   const wasVisible = session.promptVisible;
+  prompt = withPromptContext(session, prompt);
   session.prompt = prompt;
+  if (prompt && promptNeedsContext(prompt)) lookUpPromptContext(session, prompt);
   session.promptVisible = false;
   const visible = prompt ? !tryAutoApprove(session, prompt) : false;
   if (visible) {

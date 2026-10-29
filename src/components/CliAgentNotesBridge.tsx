@@ -85,7 +85,8 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
   const [promptAnswer, setPromptAnswer] = useState('');
   const [isCopiedCommand, setIsCopiedCommand] = useState(false);
   const [submitting, setSubmitting] = useState<{ signature: string; key: string } | null>(null);
-  const [isFeedCollapsed, setIsFeedCollapsed] = useState(false);
+  // Collapsed by default: the live status line above the prompt box is enough for most people.
+  const [isFeedCollapsed, setIsFeedCollapsed] = useState(true);
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
   const feedScrollRef = useRef<HTMLDivElement>(null);

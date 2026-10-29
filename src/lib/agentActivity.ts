@@ -35,11 +35,17 @@ export interface AgentActivityResponse {
 /** Fold state: the activity plus the tool calls that have not returned yet. */
 export interface ActivityFold {
   activity: AgentActivity;
-  pending: Set<string>;
+  /** Tool calls that have not returned yet, by call id, in call order (what an approval prompt is about). */
+  pending: Map<string, PendingToolCall>;
+}
+
+export interface PendingToolCall {
+  name: string;
+  input: unknown;
 }
 
 export function newActivityFold(): ActivityFold {
-  return { activity: { said: '', doing: '', phase: 'thinking' }, pending: new Set() };
+  return { activity: { said: '', doing: '', phase: 'thinking' }, pending: new Map() };
 }
 
 const MAX_SAID = 240;
@@ -192,9 +198,12 @@ function say(fold: ActivityFold, text: string) {
   if (fold.pending.size === 0) fold.activity.phase = 'thinking';
 }
 
-function startTool(fold: ActivityFold, id: string | undefined, label: string) {
-  fold.activity.doing = label;
-  if (id) fold.pending.add(id);
+function startTool(fold: ActivityFold, id: string | undefined, name: string, input: unknown) {
+  fold.activity.doing = describeToolCall(name, input);
+  if (id) {
+    fold.pending.delete(id);
+    fold.pending.set(id, { name, input });
+  }
   fold.activity.phase = 'tool';
 }
 
@@ -230,7 +239,7 @@ export function foldClaudeEntry(fold: ActivityFold, entry: any): void {
   if (entry.type !== 'assistant' || !Array.isArray(content)) return;
   for (const block of content) {
     if (block?.type === 'text') say(fold, String(block.text ?? ''));
-    else if (block?.type === 'tool_use') startTool(fold, block.id, describeToolCall(String(block.name ?? ''), block.input));
+    else if (block?.type === 'tool_use') startTool(fold, block.id, String(block.name ?? ''), block.input);
     else if (block?.type === 'thinking' || block?.type === 'redacted_thinking') {
       if (fold.pending.size === 0) fold.activity.phase = 'thinking';
     }
@@ -256,13 +265,13 @@ export function foldCodexEvent(fold: ActivityFold, ev: any): void {
       say(fold, reasoningHeadline(p.text ?? (Array.isArray(p.summary) ? p.summary.map((s: any) => s?.text ?? '').join('\n') : '')));
       return;
     case 'function_call':
-      startTool(fold, p.call_id, describeToolCall(String(p.name ?? ''), p.arguments));
+      startTool(fold, p.call_id, String(p.name ?? ''), p.arguments);
       return;
     case 'custom_tool_call':
-      startTool(fold, p.call_id, describeToolCall(String(p.name ?? ''), p.name === 'apply_patch' ? { input: p.input } : p.input));
+      startTool(fold, p.call_id, String(p.name ?? ''), p.name === 'apply_patch' ? { input: p.input } : p.input);
       return;
     case 'local_shell_call':
-      startTool(fold, p.call_id, describeToolCall('local_shell', { command: p.action?.command }));
+      startTool(fold, p.call_id, 'local_shell', { command: p.action?.command });
       return;
     case 'web_search_call':
       // Logged once it finished: nothing to wait on.
@@ -298,9 +307,68 @@ export function foldGeminiMessage(fold: ActivityFold, msg: any): void {
   say(fold, text.trim() ? text : thought);
   for (const call of Array.isArray(msg.toolCalls) ? msg.toolCalls : []) {
     const id = String(call?.id ?? '');
-    startTool(fold, id || undefined, describeToolCall(String(call?.name ?? call?.displayName ?? ''), call?.args));
+    startTool(fold, id || undefined, String(call?.name ?? call?.displayName ?? ''), call?.args);
     if (GEMINI_DONE.has(String(call?.status ?? '').toLowerCase()) || call?.result !== undefined) endTool(fold, id || undefined);
   }
+}
+
+/** Tools through which the agent asks the user something (their prompt is a question, not a permission request). */
+const ASK_USER_TOOL_RE = /^(?:askuserquestion|askuser|askhuman|requestuserinput|ask_user(?:_question)?)$/i;
+
+/** What an approval prompt is about, from the call it is for: the newest pending call (not a question tool). */
+export function pendingCallForPrompt(fold: ActivityFold): PendingToolCall | null {
+  const calls = [...fold.pending.values()];
+  for (let i = calls.length - 1; i >= 0; i--) {
+    if (!ASK_USER_TOOL_RE.test(calls[i].name.replace(/^mcp__.+?__/, ''))) return calls[i];
+  }
+  return null;
+}
+
+const MAX_DETAIL_LINES = 40;
+
+/**
+ * The prompt card's request details for a tool call: the command for shell tools, the file and change for edits,
+ * the arguments for anything else. Filled in when the CLI's own panel did not fit on screen.
+ */
+export function promptContextOfCall(call: PendingToolCall): { toolLabel: string; targetCommand?: string; description?: string; detailLines?: string[] } {
+  let input: any = call.input;
+  if (typeof input === 'string') {
+    try {
+      input = JSON.parse(input);
+    } catch {
+      input = { input };
+    }
+  }
+  input = input && typeof input === 'object' ? input : {};
+  const tool = call.name.replace(/^mcp__.+?__/, '').replace(/^functions\./, '');
+  const key = tool.toLowerCase().replace(/[^a-z]/g, '');
+  const description = typeof input.description === 'string' && input.description.trim() ? input.description.trim() : undefined;
+  const lines = (text: unknown) => String(text ?? '').split('\n').slice(0, MAX_DETAIL_LINES);
+  if (/^(?:bash|shell|shellcommand|runshellcommand|execcommand|localshell|powershell|terminal|runterminalcommand|runcommand)$/.test(key)) {
+    let command: unknown = input.command ?? input.cmd ?? input.input;
+    if (Array.isArray(command)) {
+      const parts = command.map(String);
+      command = parts.length >= 3 && /^-/.test(parts[1]) ? parts[parts.length - 1] : parts.join(' ');
+    }
+    return { toolLabel: 'Bash command', targetCommand: String(command ?? '').trim() || undefined, description };
+  }
+  const file = input.file_path ?? input.absolute_path ?? input.path ?? input.notebook_path;
+  if (key === 'applypatch') {
+    const patch = String(input.input ?? input.patch ?? '');
+    return { toolLabel: 'Edit files', description: describeToolCall(call.name, input), detailLines: lines(patch) };
+  }
+  if (typeof file === 'string' && file) {
+    const change = input.new_string ?? input.content ?? input.edits;
+    const detail = [file, ...(change !== undefined ? ['', ...lines(typeof change === 'string' ? change : JSON.stringify(change, null, 2))] : [])];
+    const toolLabel = /^(?:read|readfile|view|viewfile|notebookread|cat)$/.test(key)
+      ? 'Read file'
+      : /^(?:write|writefile|create|createfile)$/.test(key)
+        ? 'Write file'
+        : 'Edit file';
+    return { toolLabel, description, detailLines: detail.slice(0, MAX_DETAIL_LINES) };
+  }
+  const args = Object.keys(input).length ? lines(JSON.stringify(input, null, 2)) : undefined;
+  return { toolLabel: tool, description: description ?? describeToolCall(call.name, input), detailLines: args };
 }
 
 /** Screen fallback (CLIs without a readable log): narration and tool rows of the rendered transcript. */

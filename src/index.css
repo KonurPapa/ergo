@@ -2843,7 +2843,7 @@ body {
 }
 
 .ai-task-card-header {
-  padding: 0.45rem 0.75rem;
+  padding: 0.45rem 0.45rem;
   background: rgba(255, 255, 255, 0.015);
   border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
   display: flex;
@@ -2917,7 +2917,7 @@ body {
 
 .ai-task-title-text {
   font-size: 0.86rem;
-  font-weight: 600;
+  font-weight: 400;
   color: var(--text-bright);
   white-space: nowrap;
   overflow: hidden;
@@ -2933,7 +2933,7 @@ body {
 }
 
 .ai-task-card-body {
-  padding: 0.6rem 0.75rem;
+  padding: 0.6rem 0.45rem;
   background: rgba(0, 0, 0, 0.08);
   display: flex;
   flex-direction: column;
@@ -9473,6 +9473,7 @@ button.related-task-title.is-link:focus-visible {
 }
 
 @keyframes agentLiveBounce {
+
   0%,
   70%,
   100% {
@@ -9921,6 +9922,23 @@ button.related-task-title.is-link:focus-visible {
 .stage-tabs-card .stage-panel {
   padding-left: 0;
   padding-right: 0;
+  padding-bottom: 0.15rem;
+}
+
+.stage-tabs-card .stage-panel>*:last-child,
+.stage-tabs-card .stage-panel .brief-markdown-render>*:last-child,
+.stage-tabs-card .stage-panel .markdown-styled-content>*:last-child {
+  margin-bottom: 0 !important;
+}
+
+.stage-tabs-card.stage-overview .stage-panel .brief-markdown-render,
+.stage-tabs-card.stage-overview .stage-panel .obsidian-card-textarea {
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+
+.stage-tabs-card.stage-actions .stage-panel {
+  padding-bottom: 0;
 }
 
 .stage-tab {
@@ -10097,4 +10115,14 @@ button.related-task-title.is-link:focus-visible {
 .tiptap .task-skill-token {
   color: var(--accent-violet);
   font-weight: 600;
+}
+/* Paragraph line spacing (`text {spacing=1.5}`) toolbar select */
+.line-spacing-select {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-main);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font-size: 0.72rem;
+  height: 26px;
+  padding: 0 0.25rem;
 }
