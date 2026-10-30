@@ -1,4 +1,5 @@
 import { Paragraph } from '@tiptap/extension-paragraph';
+import { blankLineMarkdownIt, isKeptBlankLine, NBSP_ENTITY, renderInlineKeepingSpaces } from './preserveWhitespace';
 
 /**
  * Per-paragraph line spacing (Google Docs style).
@@ -47,8 +48,13 @@ export const LineSpacingParagraph = Paragraph.extend({
     return {
       markdown: {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        serialize(state: any, node: any) {
-          state.renderInline(node);
+        serialize(state: any, node: any, parent: any, index: number) {
+          if (isKeptBlankLine(node, parent, index)) {
+            state.write(NBSP_ENTITY);
+            state.closeBlock(node);
+            return;
+          }
+          renderInlineKeepingSpaces(state, node);
           const spacing = node.attrs.lineSpacing;
           if (spacing && node.content.size > 0) state.text(` {spacing=${spacing}}`, false);
           state.closeBlock(node);
@@ -57,6 +63,7 @@ export const LineSpacingParagraph = Paragraph.extend({
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           setup(markdownit: any) {
             markdownit.use(lineSpacingMarkdownIt);
+            markdownit.use(blankLineMarkdownIt);
           },
         },
       },

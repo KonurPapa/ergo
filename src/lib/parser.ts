@@ -506,6 +506,8 @@ export function cleanAndUnescapeMarkdown(text: string): string {
   cleaned = cleaned.replace(/(?<!\\)\*\*human review(?<!\\)\*\*\s*-\s*/gi, '');
 
   cleaned = stripTextColorTokens(cleaned);
+  // Spaces the editor keeps as entities (preserveWhitespace.ts)
+  cleaned = cleaned.replace(/&nbsp;/g, ' ');
 
   // Strip unescaped bold/italic tags and strikethrough
   cleaned = cleaned.replace(/(?<!\\)~~/g, '');

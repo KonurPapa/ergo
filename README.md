@@ -1,6 +1,6 @@
 # Ergo
 
-## Work together with AI
+## Collaborate with AI
 
 **The AI Problem:** It's often an invisible black-box agent that you have to micromanage with prompts, or a token-hungry over-thinker that spends too much time planning and not enough time building.
 

@@ -437,7 +437,7 @@ export async function executeWorkspaceToolAction(
 
       // ── 2. Update Task ──
       case 'workspace_update_task': {
-        const taskId = String(args.taskId);
+        const taskId = String(args.taskId).replace(/^#/, '').trim(); // "#3", as the bible shows it, works too
         const idx = tasks.findIndex((t) => String(t.id) === taskId);
         if (idx === -1) return { success: false, error: `Task #${taskId} not found.` };
 
@@ -514,7 +514,7 @@ export async function executeWorkspaceToolAction(
 
       // ── 5. Update Subtask ──
       case 'workspace_update_subtask': {
-        const taskId = String(args.taskId);
+        const taskId = String(args.taskId).replace(/^#/, '').trim(); // "#3", as the bible shows it, works too
         const idx = tasks.findIndex((t) => String(t.id) === taskId);
         if (idx === -1) return { success: false, error: `Task #${taskId} not found.` };
 

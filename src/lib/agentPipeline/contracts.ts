@@ -92,6 +92,17 @@ export function addUsage(target: TokenUsage, delta: Partial<TokenUsage>): TokenU
   return target;
 }
 
+/**
+ * The task's running token total for a run: what the task had used before it (a resumed run or follow-up continues
+ * that figure) plus this run's calls so far. `usage` only takes a loop's calls when the loop returns, so while one
+ * runs (or after a Stop aborted it) `liveUsage` is the one ahead.
+ */
+export function runningTaskUsage(ctx: Pick<PipelineContext, 'usage' | 'liveUsage' | 'baseUsage'>): TokenUsage {
+  const run = ctx.liveUsage && ctx.liveUsage.calls > ctx.usage.calls ? ctx.liveUsage : ctx.usage;
+  const total = ctx.baseUsage ? addUsage(emptyUsage(), ctx.baseUsage) : emptyUsage();
+  return addUsage(total, run);
+}
+
 export function formatUsage(u: TokenUsage): string {
   const parts: string[] = [];
   if (u.cachedInputTokens > 0) parts.push(`${u.cachedInputTokens.toLocaleString()} cached`);
@@ -259,6 +270,10 @@ export interface PipelineContext extends PipelineCallbacks {
   signal?: AbortSignal;
   /** Cumulative usage across the whole run. */
   usage: TokenUsage;
+  /** Every model call of the run as it returns, loops still running included (fed by ToolLoopRequest.onUsage). */
+  liveUsage?: TokenUsage;
+  /** The task's token total before this run (resume / follow-up): the run's reported totals continue from it. */
+  baseUsage?: TokenUsage;
   /** Shared consecutive failure counter for Ollama calls across all pipeline phases. */
   ollamaFailureState: { count: number };
   /** Permission rules the user granted with "allow for this task" (keys from permissionRuleKey). */
@@ -438,7 +453,16 @@ export function buildToolLoopRequest(
       // Re-resolve target after aiConfig has been updated by user
       return resolveRoleTarget(ctx.aiConfig, role);
     },
+    onUsage: trackLiveUsage(ctx),
     ...params
+  };
+}
+
+/** ToolLoopRequest.onUsage for a run's agent loops: counts each call into ctx.liveUsage as it returns. */
+export function trackLiveUsage(ctx: PipelineContext): (delta: TokenUsage) => void {
+  return (delta) => {
+    if (!ctx.liveUsage) ctx.liveUsage = emptyUsage();
+    addUsage(ctx.liveUsage, delta);
   };
 }
 

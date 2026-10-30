@@ -14,6 +14,6 @@ export default defineConfig({
   plugins: [react(), ergoFileSystemPlugin(), ergoPtyPlugin(), ergoMemoryPlugin(), ergoLocalModelPlugin(), ergoModelCatalogPlugin()],
   server: {
     // Agent run files (.ergo/runs/…) change constantly during a task run; never reload the app for them.
-    watch: { ignored: ['**/.ergo/**'] },
+    watch: { ignored: ['**/.ergo/**', '**/ergo-home/**'] },
   },
 });

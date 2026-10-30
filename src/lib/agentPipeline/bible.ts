@@ -155,7 +155,9 @@ export class BibleStore {
 
     out.push('## Task Checklist');
     if (s.subtasks.length > 0) {
-      for (const st of s.subtasks) out.push(`- [${st.isDone ? 'x' : ' '}] ${st.text}${st.isHumanReview ? ' **[Human Review]**' : ''}`);
+      // The ids the workspace_update_subtask tool takes, so a worker can check an item off on the user's board.
+      out.push(`_Task id in Ergo: "${s.metadata.taskId}"; each item's subtaskIndex follows it._`);
+      s.subtasks.forEach((st, i) => out.push(`- [${st.isDone ? 'x' : ' '}] ${st.text}${st.isHumanReview ? ' **[Human Review]**' : ''} (subtaskIndex ${i})`));
     } else {
       out.push(`- [ ] ${s.title}`);
     }

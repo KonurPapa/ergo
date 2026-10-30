@@ -43,6 +43,7 @@ import {
   formatUsage,
   isAbortError,
   resolveRoleTarget,
+  runningTaskUsage,
   slugify,
 } from './contracts';
 import { buildRunOutcomeRecord } from './escalation';
@@ -159,7 +160,7 @@ export async function continueTaskWithAi(
   // Step ids of this follow-up get their own suffix: the earlier run's steps (same ids) stay as they were.
   const suffix = `~fu${Date.now().toString(36).slice(-5)}`;
 
-  const { getPermissionLevel: liveLevelSource, steering, ...staticOptions } = options || {};
+  const { getPermissionLevel: liveLevelSource, steering, baseUsage, ...staticOptions } = options || {};
   steering?.attach(runId);
   const resolvedOptions = { ...DEFAULT_AGENT_PIPELINE_OPTIONS, ...staticOptions };
   if (aiConfig.provider === 'ollama') resolvedOptions.maxConcurrentAgents = 1;
@@ -187,6 +188,8 @@ export async function continueTaskWithAi(
     runDir,
     signal,
     usage: emptyUsage(),
+    liveUsage: emptyUsage(),
+    ...(baseUsage ? { baseUsage } : {}),
     ollamaFailureState: { count: 0 },
     sessionAllowedTools: new Set<string>(),
     onStepUpdate,
@@ -198,8 +201,8 @@ export async function continueTaskWithAi(
       onStepUpdate({
         time: new Date().toLocaleTimeString(),
         taskId: task.id,
-        totalUsage: step.totalUsage || { ...ctx.usage },
         ...step,
+        totalUsage: step.totalUsage || runningTaskUsage(ctx),
         id: `${step.id}${suffix}`,
       } as ExecutionStep),
   };
@@ -412,11 +415,11 @@ export async function continueTaskWithAi(
       buildAndVerification: brief?.buildAndVerification || '',
       completion: appendTo(previousCompletion, `${header}\n\nThe follow-up ended early (${errorText}).`),
       createdFiles: Array.from(createdFiles),
-      totalUsage: { ...ctx.usage },
+      totalUsage: runningTaskUsage(ctx),
     };
     return {
       updatedBrief: withOutcome(updatedBrief, aborted ? 'stopped' : 'failed'),
-      updatedTask: { ...task, status: 'partly_done', isDone: false, createdFiles: Array.from(createdFiles) },
+      updatedTask: { ...task, status: 'partly_done', isDone: false, createdFiles: Array.from(createdFiles), totalUsage: runningTaskUsage(ctx) },
       runId,
     };
   }

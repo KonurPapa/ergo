@@ -523,7 +523,10 @@ interface PersistedRunState {
   likelyFiles?: string[];
   /** The task's `/skill` and `@file` commands as resolved at launch (a resumed manager sees the same). */
   references?: TaskReferenceContext;
-  /** An invoked skill uses Ergo's workspace tools and this CLI can get them: the manager's MCP server lists them. */
+  /**
+   * The manager's MCP server lists Ergo's workspace tools (this CLI can get them): an invoked skill uses them, or the
+   * task has open checklist items for the manager to check off as it finishes them (workspace_update_subtask).
+   */
   workspaceTools?: boolean;
   startedAt: string;
   cliName: string;
@@ -580,6 +583,11 @@ interface PersistedRunState {
   startEscalation?: number;
   /** The models the run started on, saved before a verifier retry first steps them up (model calibration). */
   startRoles?: CliLaunchConfig['roles'];
+  /**
+   * The last usage reading of each of the run's agent processes (spawn id → its CLI's count), saved so the run's
+   * token total survives a reload and a Stop (the in-memory readings are gone after a reload).
+   */
+  spawnUsage?: Record<string, TokenUsage>;
 }
 
 interface RunState extends PersistedRunState {
@@ -664,6 +672,24 @@ function runOutcomeFor(reason: FinalizeReason, verdict: string | undefined, fail
   if (reason === 'verifier-error') return 'unverified';
   if (failedRun) return 'failed';
   return verdict === 'PASS' ? 'passed' : 'completed';
+}
+
+/** The task has checklist items left for the agent (not done, not human review). */
+function hasOpenChecklist(task: TaskItem): boolean {
+  return (task.subtasks || []).some((st) => !st.isDone && !st.isHumanReview);
+}
+
+/**
+ * Why a workspace call is refused for a run whose manager has the workspace tools only to check off its own
+ * checklist, or null when it is that: workspace_update_subtask on this task, checking an item (isDone true).
+ */
+function checklistOnlyError(taskKey: string, tool: string, args: Record<string, unknown>): string | null {
+  if (tool !== 'workspace_update_subtask') {
+    return `In this run the Ergo workspace tools are only for checking off this task's checklist (workspace_update_subtask); ${tool} is not available.`;
+  }
+  if (String(args.taskId ?? '').replace(/^#/, '').trim() !== taskKey) return `Only this task's own checklist (taskId "${taskKey}") can be updated in this run.`;
+  if (args.isDone !== true || args.text !== undefined) return 'Only checking an item off (isDone: true, no text change) is allowed in this run.';
+  return null;
 }
 
 /** Saves the run's state on the user's machine (runStateStore.ts); the run keeps working if that fails. */
@@ -888,7 +914,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     ...(run.projectRules ? { projectRules: run.projectRules } : {}),
     ...(run.codeSearch ? { codeSearchAvailable: true, ...(run.codeSearchPath ? { codeSearchPath: run.codeSearchPath } : {}) } : {}),
     ...(run.likelyFiles?.length ? { likelyFiles: run.likelyFiles } : {}),
-    ...(run.references ? { references: run.references, workspaceTools: Boolean(run.workspaceTools) } : {}),
+    ...(run.references ? { references: run.references } : {}),
+    ...(run.workspaceTools ? { workspaceTools: true } : {}),
     // Managers ask through question.md only when the bridge reports it (protocol 3); else the old way.
     ...((bridgeClient.getStatus().bridgeInfo?.protocol ?? 0) >= QUESTION_SIGNAL_PROTOCOL ? { questionFile: true } : {}),
   });
@@ -1204,16 +1231,69 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
   };
 
   // ── Usage ──
-  /** Sum over every agent process of the run (spawn ids are `${runId}-…`, so earlier verifier attempts still count). */
+  /**
+   * Sum over every agent process of the run (spawn ids are `${runId}-…`, so earlier verifier attempts still count):
+   * the live readings, plus the saved ones of processes this page hasn't read since a reload.
+   */
   const runUsageTotal = (run: RunState): TokenUsage => {
     const total = emptyUsage();
+    const counted = new Set<string>();
     for (const [spawnId, u] of usageBySpawnRef.current) {
-      if (spawnId.startsWith(`${run.runId}-`)) addUsageInto(total, u);
+      if (!spawnId.startsWith(`${run.runId}-`)) continue;
+      addUsageInto(total, u);
+      counted.add(spawnId);
+    }
+    for (const [spawnId, u] of Object.entries(run.spawnUsage || {})) {
+      if (!counted.has(spawnId)) addUsageInto(total, u);
     }
     return total;
   };
 
-  const applyRunUsage = (run: RunState) => {
+  /**
+   * A reading of one agent process's usage. A session's usage only grows, so a smaller reading (its log no longer
+   * found after the process was killed, a transcript estimate) never replaces a larger one.
+   */
+  const noteSpawnUsage = (spawnId: string, u: TokenUsage, run?: RunState | null) => {
+    const prev = usageBySpawnRef.current.get(spawnId) ?? run?.spawnUsage?.[spawnId];
+    if (prev && u.inputTokens + u.outputTokens < prev.inputTokens + prev.outputTokens) {
+      if (!usageBySpawnRef.current.has(spawnId)) usageBySpawnRef.current.set(spawnId, prev);
+      return;
+    }
+    usageBySpawnRef.current.set(spawnId, u);
+  };
+
+  /** A resumed Claude session's log holds the earlier turns too: the previous process's reading is dropped. */
+  const forgetSpawnUsage = (run: RunState, spawnId: string) => {
+    usageBySpawnRef.current.delete(spawnId);
+    if (run.spawnUsage && spawnId in run.spawnUsage) {
+      const { [spawnId]: _dropped, ...rest } = run.spawnUsage;
+      run.spawnUsage = rest;
+      saveRunState(run);
+    }
+  };
+
+  /** Copies the run's live readings into its saved state; true when any changed. */
+  const syncSpawnUsage = (run: RunState): boolean => {
+    let changed = false;
+    const saved = { ...(run.spawnUsage || {}) };
+    for (const [spawnId, u] of usageBySpawnRef.current) {
+      if (!spawnId.startsWith(`${run.runId}-`)) continue;
+      const prev = saved[spawnId];
+      if (prev && prev.calls === u.calls && prev.inputTokens === u.inputTokens && prev.outputTokens === u.outputTokens) continue;
+      saved[spawnId] = { ...u };
+      changed = true;
+    }
+    if (changed) run.spawnUsage = saved;
+    return changed;
+  };
+
+  /**
+   * Puts the run's token total on its steps (the token card). When it grew it is saved too — with the run's state
+   * and in RUNNING_JOBS.json — so the running figure survives a Stop and a reload; `persist` saves the steps anyway.
+   */
+  const applyRunUsage = (run: RunState, persist = false) => {
+    const grew = syncSpawnUsage(run);
+    if (grew) saveRunState(run);
     const total = runUsageTotal(run);
     const bySession = new Map<string, TokenUsage>();
     for (const s of sessionsRef.current) {
@@ -1238,7 +1318,21 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         return { ...st, ...(own ? { usage: own } : {}), totalUsage: total };
       });
       return changed ? next : steps;
-    }, false); // live usage ticks every 5 s: shown in the UI, persisted with the next real step change
+    }, persist || grew); // live usage ticks every 5 s: the steps file is only rewritten when the total grew
+  };
+
+  /** The run's token total so far onto its task and brief (saved with the project), e.g. once it is stopped. */
+  const saveRunUsage = (run: RunState) => {
+    if (isForeignRun(run)) return;
+    const total = runUsageTotal(run);
+    if (!hasUsage(total)) return;
+    const d = depsRef.current;
+    const tasks = d.tasksRef.current;
+    const nextTasks = tasks.map((t) => (String(t.id) === run.taskKey ? { ...t, totalUsage: total } : t));
+    const briefs = d.briefsRef.current;
+    const briefIdx = findBriefIndex(briefs, run.taskId, latestTask(run).title);
+    const nextBriefs = briefIdx === -1 ? briefs : briefs.map((b, i) => (i === briefIdx ? { ...b, totalUsage: total } : b));
+    d.syncAndSaveProject(nextTasks, nextBriefs, true);
   };
 
   // ── Workers ──
@@ -1462,7 +1556,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         .filter((s) => s.runId === run.runId && s.spawnId)
         .map(async (s) => {
           const u = await fetchCliSessionUsage(s.ptySessionId);
-          if (u && s.spawnId) usageBySpawnRef.current.set(s.spawnId, u);
+          if (u && s.spawnId) noteSpawnUsage(s.spawnId, u, run);
         })
     );
     applyRunUsage(run);
@@ -1849,10 +1943,12 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         .filter((s) => s.runId === run.runId && s.spawnId)
         .map(async (s) => {
           const u = await fetchCliSessionUsage(s.ptySessionId);
-          if (u && s.spawnId) usageBySpawnRef.current.set(s.spawnId, u);
+          if (u && s.spawnId) noteSpawnUsage(s.spawnId, u, run);
         })
     );
-    applyRunUsage(run);
+    // The total so far stays on the task (steps, brief, task): a Stop never drops it, and Resume adds to it.
+    applyRunUsage(run, true);
+    if (!run.finalized && run.paused && runsRef.current.get(rk(run)) === run) saveRunUsage(run);
     const manager = findSession(run.managerSessionId);
     if (manager && manager.runId === run.runId) await captureResumeId(run, manager);
     saveRunState(run);
@@ -1961,7 +2057,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       if (opts.workersDone) prompt = `${prompt}\n\n${opts.workersDone}`;
     }
     // A resumed Claude session log holds the earlier turns too: count them once.
-    if (resumeId && base === 'claude' && previous?.spawnId) usageBySpawnRef.current.delete(previous.spawnId);
+    if (resumeId && base === 'claude' && previous?.spawnId) forgetSpawnUsage(run, previous.spawnId);
     const res = await spawnAgent(run, 'manager', { label: 'Manager', prompt, ...(resumeId ? { resumeSessionId: resumeId } : {}) });
     if (!res.ok) return { ok: false, error: res.cancelled ? 'it was stopped while starting' : res.error };
     if (resumeId && res.session.spawnId) {
@@ -2247,7 +2343,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
           createdFiles: Array.from(new Set([...(task.createdFiles || []), ...(brief?.createdFiles || [])])),
         });
     // A resumed Claude session log holds the earlier turns too: count them once.
-    if (resumeId && base === 'claude' && previous?.spawnId) usageBySpawnRef.current.delete(previous.spawnId);
+    if (resumeId && base === 'claude' && previous?.spawnId) forgetSpawnUsage(run, previous.spawnId);
     const res = await spawnAgent(run, 'manager', { label: 'Manager', prompt, ...(resumeId ? { resumeSessionId: resumeId } : {}) });
     if (!res.ok) {
       if (res.cancelled) return { ok: false, error: 'The follow-up was stopped while the manager was starting.' };
@@ -2761,8 +2857,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     setTimeout(() => {
       void fetchCliSessionUsage(ev.sessionId).then((u) => {
         if (u && session.spawnId) {
-          usageBySpawnRef.current.set(session.spawnId, u);
           const run = runForSession(session);
+          noteSpawnUsage(session.spawnId, u, run);
           if (run) applyRunUsage(run);
         }
       });
@@ -2864,8 +2960,11 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     if (!run || !run.workspaceTools || run.finalized) return;
     if (!(await claimWorkspaceCall(ev.callId))) return;
     const d = depsRef.current;
-    const result =
-      run.projectId && run.projectId !== d.projectId
+    // Without a skill that needs the board, the tools are there only to check off this task's checklist.
+    const denied = run.references?.skills.some((sk) => sk.usesWorkspaceTools) ? null : checklistOnlyError(run.taskKey, ev.tool, ev.args || {});
+    const result = denied
+      ? { success: false, error: denied }
+      : run.projectId && run.projectId !== d.projectId
         ? { success: false, error: `Ergo has another project open. Open "${run.taskTitle}"'s project in Ergo and try again.` }
         : await executeWorkspaceToolAction(ev.tool, ev.args || {}).catch((err: unknown) => ({
             success: false,
@@ -3199,6 +3298,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
   // ── Per-agent usage polling ──
   const applyRunUsageRef = useRef(applyRunUsage);
   applyRunUsageRef.current = applyRunUsage;
+  const noteSpawnUsageRef = useRef(noteSpawnUsage);
+  noteSpawnUsageRef.current = noteSpawnUsage;
   const activeSessionKey = terminalSessions
     .filter((s) => s.session.isActive && s.spawnId)
     .map((s) => `${s.ptySessionId}@${s.spawnId}`)
@@ -3213,8 +3314,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         const usage = await fetchCliSessionUsage(s.ptySessionId);
         if (cancelled) return;
         if (usage && s.spawnId) {
-          usageBySpawnRef.current.set(s.spawnId, usage);
           const run = runForSession(s);
+          noteSpawnUsageRef.current(s.spawnId, usage, run);
           if (run) touchedRuns.add(run);
         }
       }
@@ -3367,8 +3468,11 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         ...(projectRules && projectRules.trim() ? { projectRules: projectRules.trim() } : {}),
         ...(references ? { references } : {}),
         // Claude Code and Codex reach the ergo-memory server per agent (its URL names the session); Gemini and
-        // Antigravity share one config entry, so they run skills without the workspace tools.
-        ...(references?.skills.some((s) => s.usesWorkspaceTools) && bridgeSupportsTaskReferences() && /^(claude|codex)$/.test(baseCommandName(launch.cmd))
+        // Antigravity share one config entry, so they run skills without the workspace tools (and their checklist is
+        // checked off when the run completes).
+        ...((references?.skills.some((s) => s.usesWorkspaceTools) || hasOpenChecklist(task)) &&
+        bridgeSupportsTaskReferences() &&
+        /^(claude|codex)$/.test(baseCommandName(launch.cmd))
           ? { workspaceTools: true }
           : {}),
       });

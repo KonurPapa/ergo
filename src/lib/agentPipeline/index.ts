@@ -27,11 +27,12 @@ import {
   type AgentRole,
   type OverviewDocument,
   type RunOutcome,
-  type TaskRating
+  type TaskRating,
+  type TokenUsage
 } from '../../types';
 import { runOfflineExecution } from '../ai';
 import { getAllowedRoots } from '../mcpClient';
-import { DEFAULT_AGENT_PIPELINE_OPTIONS, type PipelineContext, emptyUsage, formatUsage, isAbortError, resolveRoleTarget, slugify, throwIfAborted } from './contracts';
+import { DEFAULT_AGENT_PIPELINE_OPTIONS, type PipelineContext, emptyUsage, formatUsage, isAbortError, resolveRoleTarget, runningTaskUsage, slugify, throwIfAborted } from './contracts';
 import { BibleStore, FileLockRegistry } from './bible';
 import { assembleTaskContext } from './context';
 import { runSummary, requiresCliOrProcessTools, formatOverviewDocToMarkdown } from './summary';
@@ -84,6 +85,11 @@ export type ExecuteTaskOptions = Partial<AgentPipelineOptions> & {
   getPermissionLevel?: () => PermissionLevel;
   /** The prompt box's mid-run messages: agent loops take them at their next round boundary (steeringQueue.ts). */
   steering?: SteeringQueue;
+  /**
+   * The task's token total so far, when this run continues it (a resume after Stop, a rerun whose steps are appended,
+   * a follow-up): the run's step totals and the returned task / brief `totalUsage` add to it instead of starting at 0.
+   */
+  baseUsage?: TokenUsage;
 };
 
 const PERMISSION_LABELS: Record<PermissionLevel, string> = {
@@ -123,7 +129,7 @@ export async function executeTaskWithAi(
 
   const runId = makeRunId();
   const runDir = BibleStore.runDirFor(project.id || slugify(project.name || 'project'), task.id, runId);
-  const { getPermissionLevel: liveLevelSource, steering, ...staticOptions } = options || {};
+  const { getPermissionLevel: liveLevelSource, steering, baseUsage, ...staticOptions } = options || {};
   steering?.attach(runId);
   const resolvedOptions: AgentPipelineOptions = { ...DEFAULT_AGENT_PIPELINE_OPTIONS, ...staticOptions };
   if (aiConfig.provider === 'ollama') {
@@ -218,6 +224,8 @@ export async function executeTaskWithAi(
     runDir,
     signal,
     usage: emptyUsage(),
+    liveUsage: emptyUsage(),
+    ...(baseUsage ? { baseUsage } : {}),
     ollamaFailureState: { count: 0 },
     sessionAllowedTools: new Set<string>(),
     onStepUpdate,
@@ -225,12 +233,14 @@ export async function executeTaskWithAi(
     onRequestHumanInput,
     onRequestOllamaFallback,
     steering,
+    // Every step carries the task's running total (calls of loops still in flight included), so the token card
+    // keeps counting during a long agent loop and keeps the figure when the run is stopped.
     emit: (step) =>
       onStepUpdate({
         time: new Date().toLocaleTimeString(),
         taskId: task.id,
-        totalUsage: step.totalUsage || { ...ctx.usage },
-        ...step
+        ...step,
+        totalUsage: step.totalUsage || runningTaskUsage(ctx)
       } as ExecutionStep)
   };
 
@@ -537,14 +547,15 @@ export async function executeTaskWithAi(
         buildAndVerification: brief?.buildAndVerification || brief?.built || '',
         completion: brief?.completion || brief?.validation || '',
         createdFiles: Array.from(createdFiles),
-        totalUsage: { ...ctx.usage },
+        // The calls of the loop the Stop aborted never reach ctx.usage: the running total has them.
+        totalUsage: runningTaskUsage(ctx),
         brief: summaryOverview || brief?.overview || brief?.brief || `Task (${task.title})`,
         built: brief?.buildAndVerification || brief?.built || '',
         validation: brief?.validation || '',
         humanReview: '',
         followUps: ''
       };
-      return { updatedBrief: withRunOutcome(withOverviewDoc(partialBrief), 'stopped'), updatedTask: { ...task, status: 'partly_done', isDone: false, createdFiles: Array.from(createdFiles), totalUsage: { ...ctx.usage } } };
+      return { updatedBrief: withRunOutcome(withOverviewDoc(partialBrief), 'stopped'), updatedTask: { ...task, status: 'partly_done', isDone: false, createdFiles: Array.from(createdFiles), totalUsage: runningTaskUsage(ctx) } };
     }
 
     const message = err?.message || String(err);
@@ -574,8 +585,8 @@ export async function executeTaskWithAi(
       buildAndVerification: `${brief?.buildAndVerification || ''}${errorNote}`.trim(),
       completion: brief?.completion || '',
       createdFiles: brief?.createdFiles || [],
-      totalUsage: { ...ctx.usage }
+      totalUsage: runningTaskUsage(ctx)
     };
-    return { updatedBrief: withRunOutcome(withOverviewDoc(updatedBrief), 'failed'), updatedTask: { ...task, status: 'not_started', isDone: false, totalUsage: { ...ctx.usage } } };
+    return { updatedBrief: withRunOutcome(withOverviewDoc(updatedBrief), 'failed'), updatedTask: { ...task, status: 'not_started', isDone: false, totalUsage: runningTaskUsage(ctx) } };
   }
 }

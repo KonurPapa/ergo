@@ -18,10 +18,13 @@ import Image from '@tiptap/extension-image';
 import Typography from '@tiptap/extension-typography';
 import { Markdown } from 'tiptap-markdown';
 import { stripHeaderComments, parseSwimLaneMarkdown } from '../lib/parser';
-import { HEADER_COLORS, HEADER_COLOR_TOKEN_RE, randomHeaderColorId, resolveHeaderColor, splitHeaderColor } from '../lib/headerColors';
+import { HEADER_COLORS, randomHeaderColorId, resolveHeaderColor } from '../lib/headerColors';
+import { ColorHeading } from '../lib/headingColorNode';
+import { Highlight, MarkdownUnderline } from '../lib/delimitedMarks';
 import { TextColor } from '../lib/textColorMark';
 import { LineSpacingParagraph, LINE_SPACINGS } from '../lib/lineSpacingMark';
 import { storageManager } from '../lib/storageManager';
+import { getPref, setPref, subscribePrefs } from '../lib/userPrefs';
 import { bridgeClient } from '../lib/bridgeClient';
 import { HumanAiAssistantModal } from './HumanAiAssistantModal';
 import { BatchRunModal } from './BatchRunModal';
@@ -73,7 +76,13 @@ import {
   Edit2,
   MoreHorizontal,
   CornerDownRight,
-  Palette
+  Palette,
+  Underline as UnderlineIcon,
+  Highlighter,
+  Baseline,
+  RemoveFormatting,
+  IndentIncrease,
+  IndentDecrease
 } from 'lucide-react';
 
 interface WithMarkdownStorage {
@@ -101,6 +110,9 @@ function saveCollapsedCards() {
     localStorage.setItem(COLLAPSED_CARDS_KEY, JSON.stringify([...collapsedCardsState]));
   } catch { /* storage unavailable: state just won't persist */ }
 }
+
+const FORMATTING_BAR_PREF = 'human_formatting_bar';
+const readShowFormattingBar = () => getPref(FORMATTING_BAR_PREF) !== 'hidden';
 
 // Collapsed group headers, remembered across reloads: { [lane file]: ["<level>:<header name>", ...] }.
 const COLLAPSED_HEADERS_KEY = 'ergo_collapsed_headers';
@@ -162,8 +174,8 @@ function insertSubtaskAtCardPos(editorInstance: any, listItemPos: number) {
   liveNode.forEach((child: any, offset: number) => {
     if (child.type.name !== 'bulletList' && child.type.name !== 'orderedList') {
       insertAfterContent = listItemPos + 1 + offset + child.nodeSize;
-    }
-    if (child.type.name === 'bulletList') {
+    } else {
+      // Append to the card's last subtask list, numbered or not.
       existingBulletEnd = listItemPos + 1 + offset + child.nodeSize - 1;
     }
   });
@@ -186,6 +198,64 @@ function insertSubtaskAtCardPos(editorInstance: any, listItemPos: number) {
   tr.setStoredMarks([]);
   editorInstance.view.dispatch(tr);
   editorInstance.view.focus();
+}
+
+// Helper: the numbered / bullet list buttons. Unlike Tiptap's toggles, which retype the whole list the cursor is in,
+// this changes only the selected items (tasks or subtasks): they're split out into a list of the other type.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toggleListTypeForSelection(editorInstance: any, typeName: 'orderedList' | 'bulletList') {
+  if (!editorInstance) return;
+  const { state, view } = editorInstance;
+  const listType = state.schema.nodes[typeName];
+  const { $from, $to, from, to } = state.selection;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const range = $from.blockRange($to, (node: any) => node.type.name === 'orderedList' || node.type.name === 'bulletList');
+  if (!range) {
+    // Not in a list yet: make one.
+    const chain = editorInstance.chain().focus();
+    (typeName === 'orderedList' ? chain.toggleOrderedList() : chain.toggleBulletList()).run();
+    return;
+  }
+  const list = range.parent;
+  if (list.type === listType) {
+    // Same type: take just the selected items out of the list.
+    editorInstance.chain().focus().liftListItem('listItem').run();
+    return;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const before: any[] = [], selected: any[] = [], after: any[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  list.forEach((child: any, _offset: number, i: number) => {
+    (i < range.startIndex ? before : i < range.endIndex ? selected : after).push(child);
+  });
+  const listPos = range.$from.before(range.depth);
+  // Numbered items after the split-out ones keep their numbers (`3.` stays `3.` in the file, not a new `1.` list).
+  const afterAttrs = list.type.name === 'orderedList'
+    ? { ...list.attrs, start: (list.attrs.start ?? 1) + before.length + selected.length }
+    : list.attrs;
+  const pieces = [
+    ...(before.length ? [list.type.create(list.attrs, before)] : []),
+    listType.create(null, selected),
+    ...(after.length ? [list.type.create(afterAttrs, after)] : []),
+  ];
+  const tr = state.tr.replaceWith(listPos, listPos + list.nodeSize, pieces);
+  // The selected items moved past the close of the "before" list and the open of their own.
+  const shift = before.length ? 2 : 0;
+  tr.setSelection(TextSelection.create(tr.doc, from + shift, to + shift));
+  view.dispatch(tr);
+  view.focus();
+}
+
+// Helper: type of the innermost list the cursor is in (lights up the matching list button).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function innermostListType(editorInstance: any): string | null {
+  if (!editorInstance) return null;
+  const { $from } = editorInstance.state.selection;
+  for (let d = $from.depth; d > 0; d--) {
+    const name = $from.node(d).type.name;
+    if (name === 'orderedList' || name === 'bulletList') return name;
+  }
+  return null;
 }
 
 // Helper: robustly append a new task card to the existing ordered list
@@ -344,10 +414,32 @@ const CustomListKeymapExtension = Extension.create({
   name: 'customListKeymap',
   addKeyboardShortcuts() {
     return {
-      Enter: () => {
-        // Allow default ProseMirror / StarterKit list behaviors:
-        // - In regular paragraphs or headings, Enter creates a normal new line / paragraph.
-        // - In list items, Enter creates a new list item; pressing Enter on an empty list item lifts out back to a regular paragraph.
+      Enter: ({ editor }) => {
+        // At the end of a collapsed task's title, start a new empty task after it. (Splitting the item, the default,
+        // would hand the collapsed task's subtasks to the new one.)
+        const { state, view } = editor;
+        const { selection } = state;
+        const { $from } = selection;
+        const itemDepth = $from.depth - 1;
+        if (
+          selection.empty &&
+          itemDepth > 0 &&
+          $from.parentOffset === $from.parent.content.size &&
+          $from.node(itemDepth).type.name === 'listItem' &&
+          $from.index(itemDepth) === 0
+        ) {
+          const itemPos = $from.before(itemDepth);
+          const dom = view.nodeDOM(itemPos);
+          if (dom instanceof HTMLElement && dom.classList.contains('card-collapsed')) {
+            const afterItem = itemPos + $from.node(itemDepth).nodeSize;
+            const tr = state.tr.insert(afterItem, state.schema.nodes.listItem.create(null, state.schema.nodes.paragraph.create()));
+            tr.setSelection(TextSelection.create(tr.doc, afterItem + 2));
+            tr.setStoredMarks([]);
+            view.dispatch(tr.scrollIntoView());
+            return true;
+          }
+        }
+        // Otherwise the default list behavior: a new list item, or out of the list from an empty one.
         return false;
       },
       Tab: ({ editor }) => {
@@ -1871,6 +1963,17 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   const [colorPaletteOpen, setColorPaletteOpen] = useState(false);
   // The selection tooltip starts as a small chip and only expands to the full toolbar on hover.
   const [selectionToolsExpanded, setSelectionToolsExpanded] = useState(false);
+  // Text / header color palette in the formatting bar
+  const [toolbarColorOpen, setToolbarColorOpen] = useState(false);
+  const toolbarColorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!toolbarColorOpen) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (toolbarColorRef.current && !toolbarColorRef.current.contains(e.target as Node)) setToolbarColorOpen(false);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [toolbarColorOpen]);
   const headerCollapseKey = lane.filePath || lane.id;
   const collapsedHeadersRef = useRef<Set<string> | null>(null);
   if (!collapsedHeadersRef.current) collapsedHeadersRef.current = loadCollapsedHeaders(headerCollapseKey);
@@ -1878,68 +1981,51 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   const setHeadingColor = useCallback((view: any, pos: number, colorId: string) => {
     const node = view.state.doc.nodeAt(pos);
     if (!node || node.type.name !== 'heading') return;
-    const end = pos + node.nodeSize - 1;
-    const m = node.textContent.match(HEADER_COLOR_TOKEN_RE);
-    const from = m ? end - m[0].length : end;
-    const text = ` {color=${colorId}}`;
-    const tr = view.state.tr.replaceWith(from, end, view.state.schema.text(text));
-    view.dispatch(tr);
+    view.dispatch(view.state.tr.setNodeAttribute(pos, 'color', colorId));
     flushMarkdownChange();
   }, [flushMarkdownChange]);
 
-  // Extension: group header colors — hides the `{color=id}` token, tints the heading,
-  // auto-assigns a random palette color to newly written headers, and opens a recolor menu on right-click.
+  // Extension: group header colors (the heading's `color` attribute, see headingColorNode.ts) — tints the heading
+  // and gives every header a color the moment it's created, so it stays the same while its name is typed out.
   const HeaderColorExtension = Extension.create({
     name: 'headerColor',
     addProseMirrorPlugins() {
       return [
         new Plugin({
           key: new PluginKey(`headerColor_${lane.id}`),
-          appendTransaction: (transactions, oldState, newState) => {
+          appendTransaction: (transactions, _oldState, newState) => {
             if (!transactions.some((t) => t.docChanged && !t.getMeta('preventUpdate'))) return null;
-            const sel = newState.selection;
-            const oldNodes = new Set<any>();
-            oldState.doc.descendants((n) => { if (n.type.name === 'heading') oldNodes.add(n); });
-            const inserts: { at: number; text: string }[] = [];
-            newState.doc.descendants((node, pos) => {
-              if (node.type.name !== 'heading') return;
-              if (oldNodes.has(node)) return;
-              const { name, colorId } = splitHeaderColor(node.textContent);
-              if (colorId || !name.trim()) return;
-              const end = pos + node.nodeSize - 1;
-              if (sel.from >= pos && sel.to <= end + 1) return; // still typing in it
-              inserts.push({ at: end, text: ` {color=${randomHeaderColorId()}}` });
-            });
-            if (!inserts.length) return null;
             const tr = newState.tr;
-            for (const ins of inserts.reverse()) tr.insertText(ins.text, ins.at);
-            return tr;
+            newState.doc.descendants((node, pos) => {
+              if (node.type.name !== 'heading' || node.attrs.color) return;
+              // A brand-new header gets a random color; an older uncolored one keeps the color it's already showing.
+              const name = node.textContent.trim();
+              tr.setNodeAttribute(pos, 'color', name ? resolveHeaderColor(name).id : randomHeaderColorId());
+            });
+            return tr.docChanged ? tr.setMeta('addToHistory', false) : null;
           },
           props: {
             decorations: (state) => {
               const decos: Decoration[] = [];
               state.doc.descendants((node, pos) => {
                 if (node.type.name !== 'heading') return;
-                const { name, colorId } = splitHeaderColor(node.textContent);
-                if (!name.trim()) return;
-                const color = resolveHeaderColor(name, colorId);
+                const color = resolveHeaderColor(node.textContent.trim(), node.attrs.color);
                 decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'hdr-colored', style: `--hdr-color: ${color.hex}` }));
-                if (colorId) {
-                  const end = pos + node.nodeSize - 1;
-                  const m = node.textContent.match(HEADER_COLOR_TOKEN_RE);
-                  if (m) decos.push(Decoration.inline(end - m[0].length, end, { class: 'hdr-color-token' }));
-                }
               });
 
               // Header collapse: a collapsed header hides everything up to the next header of the same or higher level.
               const collapsed = collapsedHeadersRef.current!;
               let hideBelowLevel: number | null = null;
+              // A header shown right under another header (e.g. a run of collapsed ones) drops its top margin.
+              let lastShownWasHeading = false;
               state.doc.forEach((node, pos) => {
                 if (node.type.name === 'heading') {
                   const level = node.attrs.level as number;
                   if (hideBelowLevel !== null && level <= hideBelowLevel) hideBelowLevel = null;
                   if (hideBelowLevel === null) {
-                    const { name } = splitHeaderColor(node.textContent);
+                    if (lastShownWasHeading) decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'hdr-follows-hdr' }));
+                    lastShownWasHeading = true;
+                    const name = node.textContent;
                     if (!name.trim()) return;
                     const key = `${level}:${name.trim()}`;
                     const isCollapsed = collapsed.has(key);
@@ -1972,6 +2058,8 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                 }
                 if (hideBelowLevel !== null) {
                   decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'hdr-section-hidden' }));
+                } else {
+                  lastShownWasHeading = false;
                 }
               });
               return DecorationSet.create(state.doc, decos);
@@ -1986,11 +2074,16 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
     extensions: [
       StarterKit.configure({
         paragraph: false,
+        heading: false,
+        underline: false,
         bulletList: { keepMarks: true, keepAttributes: false },
         orderedList: { keepMarks: true, keepAttributes: false },
         listItem: false,
       }),
       CustomListItem,
+      ColorHeading,
+      MarkdownUnderline,
+      Highlight,
       Link.configure({
         openOnClick: false,
         HTMLAttributes: { class: 'md-link', target: '_blank', rel: 'noopener noreferrer' },
@@ -2302,8 +2395,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
     if (headingPos != null) {
       const node = editor.state.doc.nodeAt(headingPos);
       if (!node) return undefined;
-      const { name, colorId } = splitHeaderColor(node.textContent);
-      return resolveHeaderColor(name, colorId).id;
+      return resolveHeaderColor(node.textContent.trim(), node.attrs.color).id;
     }
     return editor.getAttributes('textColor').color || undefined;
   };
@@ -2607,6 +2699,9 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
             <ToolbarBtn onClick={() => editor?.chain().focus().toggleItalic().run()} active={editor?.isActive('italic')} title="Italic (*text*)">
               <Italic size={13} />
             </ToolbarBtn>
+            <ToolbarBtn onClick={() => editor?.chain().focus().toggleUnderline().run()} active={editor?.isActive('underline')} title="Underline (Ctrl+U, ++text++)">
+              <UnderlineIcon size={13} />
+            </ToolbarBtn>
             <ToolbarBtn onClick={() => editor?.chain().focus().toggleStrike().run()} active={editor?.isActive('strike')} title="Strike (~~text~~)">
               <Strikethrough size={13} />
             </ToolbarBtn>
@@ -2618,6 +2713,52 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
             </ToolbarBtn>
             <ToolbarBtn onClick={triggerImageUpload} title="Attach Image / Screenshot">
               <ImageIcon size={13} />
+            </ToolbarBtn>
+          </div>
+
+          <Sep />
+
+          <div className="tiptap-toolbar-group">
+            <ToolbarBtn onClick={() => editor?.chain().focus().toggleHighlight().run()} active={editor?.isActive('highlight')} title="Highlight (Ctrl+Shift+H, ==text==)">
+              <Highlighter size={13} />
+            </ToolbarBtn>
+            <div className="toolbar-color-wrapper" ref={toolbarColorRef}>
+              <ToolbarBtn onClick={() => setToolbarColorOpen((o) => !o)} active={toolbarColorOpen || editor?.isActive('textColor')} title={selectionHeadingPos() != null ? 'Header color' : 'Text color'}>
+                <Baseline size={13} />
+              </ToolbarBtn>
+              {toolbarColorOpen && (
+                <div className="selection-color-palette toolbar-color-palette" role="menu">
+                  {HEADER_COLORS.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      role="menuitem"
+                      title={c.label}
+                      aria-label={c.label}
+                      className={`hdr-color-swatch ${currentSelectionColor() === c.id ? 'is-active' : ''}`}
+                      style={{ background: c.hex }}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => { applySelectionColor(c.id); setToolbarColorOpen(false); }}
+                    />
+                  ))}
+                  {selectionHeadingPos() == null && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      title="Remove color"
+                      aria-label="Remove color"
+                      className="hdr-color-swatch is-clear"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => { applySelectionColor(null); setToolbarColorOpen(false); }}
+                    >
+                      <X size={11} />
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+            <ToolbarBtn onClick={() => editor?.chain().focus().unsetAllMarks().run()} title="Clear formatting">
+              <RemoveFormatting size={13} />
             </ToolbarBtn>
           </div>
 
@@ -2658,11 +2799,17 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
           <Sep />
 
           <div className="tiptap-toolbar-group">
-            <ToolbarBtn onClick={() => editor?.chain().focus().toggleOrderedList().run()} active={editor?.isActive('orderedList')} title="Task List / Numbered List (1. Task)">
+            <ToolbarBtn onClick={() => toggleListTypeForSelection(editor, 'orderedList')} active={innermostListType(editor) === 'orderedList'} title="Task List / Numbered List (1. Task)">
               <ListOrdered size={13} />
             </ToolbarBtn>
-            <ToolbarBtn onClick={() => editor?.chain().focus().toggleBulletList().run()} active={editor?.isActive('bulletList')} title="Subtask / Bullet List (- Subtask)">
+            <ToolbarBtn onClick={() => toggleListTypeForSelection(editor, 'bulletList')} active={innermostListType(editor) === 'bulletList'} title="Subtask / Bullet List (- Subtask)">
               <List size={13} />
+            </ToolbarBtn>
+            <ToolbarBtn onClick={() => editor?.chain().focus().liftListItem('listItem').run()} disabled={!editor?.can().liftListItem('listItem')} title="Outdent (Shift+Tab)">
+              <IndentDecrease size={13} />
+            </ToolbarBtn>
+            <ToolbarBtn onClick={() => editor?.chain().focus().sinkListItem('listItem').run()} disabled={!editor?.can().sinkListItem('listItem')} title="Indent: make a subtask of the item above (Tab)">
+              <IndentIncrease size={13} />
             </ToolbarBtn>
             <ToolbarBtn onClick={() => editor?.chain().focus().toggleBlockquote().run()} active={editor?.isActive('blockquote')} title="Blockquote (> quote)">
               <Quote size={13} />
@@ -2677,16 +2824,38 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         </div>
       )}
 
-      {/* Editor Scroll Container */}
-      <div
-        className="obsidian-editor-container obsidian-scroll-area"
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          paddingBottom: isActive ? `${(isAssistantOpen ? assistantDrawerHeight : 0) + 20}px` : '20px',
-        }}
-      >
-        <EditorContent editor={editor} className="tiptap-editor-root" />
+      <div className="swimlane-editor-area">
+        {/* Editor Scroll Container */}
+        <div
+          className="obsidian-editor-container obsidian-scroll-area"
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            // Room below the last task so the add-task button never covers it.
+            paddingBottom: `${(isActive && isAssistantOpen ? assistantDrawerHeight : 0) + 72}px`,
+          }}
+        >
+          <EditorContent editor={editor} className="tiptap-editor-root" />
+        </div>
+
+        {/* Add a new task to the end of this lane's task list */}
+        <button
+          type="button"
+          className="add-task-fab"
+          style={{ bottom: `${(isActive && isAssistantOpen ? assistantDrawerHeight : 0) + 16}px` }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onActivate();
+            if (editor) {
+              editor.commands.focus();
+              handleAddNewCard(editor);
+            }
+          }}
+          title="Add new task"
+          aria-label="Add new task"
+        >
+          <Plus size={20} strokeWidth={2.5} />
+        </button>
       </div>
 
       {/* ── Human AI Assistant Slide-up Bar / Drawer (rendered only within selected lane) ── */}
@@ -2712,19 +2881,6 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       {isActive && (
         <BetaFeature>
           <div className="swimlane-footer">
-            <button
-              type="button"
-              className="new-card-btn"
-              onClick={() => {
-                if (editor) {
-                  editor.commands.focus();
-                  handleAddNewCard(editor);
-                }
-              }}
-            >
-              <Plus size={15} />
-              <span>New Task</span>
-            </button>
             <button
               type="button"
               className={`new-task-btn ai-assistant-footer-btn ${isAssistantOpen ? 'active' : ''}`}
@@ -2950,8 +3106,8 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
           {/* Subtask (Bullet) */}
           <button
             type="button"
-            className={`selection-tooltip-btn ${editor?.isActive('bulletList') ? 'is-active' : ''}`}
-            onClick={() => editor?.chain().focus().toggleBulletList().run()}
+            className={`selection-tooltip-btn ${innermostListType(editor) === 'bulletList' ? 'is-active' : ''}`}
+            onClick={() => toggleListTypeForSelection(editor, 'bulletList')}
             title="Subtask / Bullet List (- item)"
           >
             <List size={13} />
@@ -3053,7 +3209,15 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   autocompleteSettings = { enabled: true, keybinding: 'Tab' },
   onUpdateTaskMcpTools: _onUpdateTaskMcpTools,
 }) => {
-  const [showStyles, setShowStyles] = useState(false);
+  // Formatting bar: on unless the user has hidden it.
+  const [showStyles, setShowStyles] = useState(readShowFormattingBar);
+  useEffect(() => subscribePrefs(() => setShowStyles(readShowFormattingBar())), []);
+  const toggleStyles = () => {
+    setShowStyles((prev) => {
+      setPref(FORMATTING_BAR_PREF, prev ? 'hidden' : 'shown');
+      return !prev;
+    });
+  };
   const [assistantDrawerHeight, setAssistantDrawerHeight] = useState<number>(0);
   const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
   const headerMenuRef = useRef<HTMLDivElement>(null);
@@ -3179,7 +3343,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
               runningTaskIds={runningTaskIds}
               pendingHumanInputs={pendingHumanInputs}
               showStyles={showStyles}
-              onToggleStyles={() => setShowStyles((prev) => !prev)}
+              onToggleStyles={toggleStyles}
               onSelectTask={onSelectTask}
               onMarkdownChange={handleLaneMarkdownChange}
               onRenameSwimLane={onRenameSwimLane}

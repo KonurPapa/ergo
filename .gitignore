@@ -30,3 +30,6 @@ config/
 
 # Ergo Bridge desktop app build output
 desktop/release/
+
+# Symlink to ~/.ergo (live app data, for agent visibility)
+ergo-home

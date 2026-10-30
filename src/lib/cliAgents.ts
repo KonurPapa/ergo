@@ -236,7 +236,10 @@ export interface CliRunPromptContext {
   questionFile?: boolean;
   /** The task's `/skill` and `@file` commands (taskReferences.ts): the manager prompt shows the skills and files. */
   references?: TaskReferenceContext;
-  /** The manager's ergo-memory server lists Ergo's workspace tools (an invoked skill uses them). */
+  /**
+   * The manager's ergo-memory server lists Ergo's workspace tools: an invoked skill uses them, and the manager checks
+   * off the task's checklist with workspace_update_subtask (CHECKLIST IN ERGO).
+   */
   workspaceTools?: boolean;
   /**
    * The project's learned rules for this task (formatProjectRules, a few hundred tokens): every agent of the run gets
@@ -453,6 +456,23 @@ function buildProjectRulesSection(ctx: Pick<CliRunPromptContext, 'projectRules'>
   return rules ? [rules] : [];
 }
 
+/**
+ * CHECKLIST IN ERGO: a manager with the workspace tools checks off the task's open checklist items in Ergo as it
+ * finishes them (the user sees them struck through on the board); the run's completion checks off the rest.
+ */
+function buildChecklistToolSection(task: TaskItem, ctx: Pick<CliRunPromptContext, 'workspaceTools'>): string[] {
+  if (!ctx.workspaceTools) return [];
+  const open = (task.subtasks || []).map((s, i) => ({ s, i })).filter(({ s }) => !s.isDone && !s.isHumanReview);
+  if (open.length === 0) return [];
+  return [
+    `CHECKLIST IN ERGO:\n` +
+    `The checklist above is the user's task list in Ergo. Each time you finish one of its open items (implemented and verified), check it off right away ` +
+    `with the workspace_update_subtask tool (ergo-memory MCP server): taskId "${task.id}", the item's subtaskIndex below, isDone true. ` +
+    `Check an item only once it is really done; never uncheck items or change anything else on the board. Ergo checks off the task itself when the run completes.\n` +
+    open.map(({ s, i }) => `- subtaskIndex ${i}: ${oneLine(s.text, 200)}`).join('\n'),
+  ];
+}
+
 export function buildManagerCliPrompt(task: TaskItem, brief: AgentContextItem | undefined, ctx: CliRunPromptContext): string {
   const sections = buildTaskContentSections(task, brief);
   const delegateFile = runFile(ctx, 'delegate.json');
@@ -488,6 +508,8 @@ export function buildManagerCliPrompt(task: TaskItem, brief: AgentContextItem | 
     `4. Write the completion record (see FINAL STEP). That is the last thing you do.\n` +
     `Do not ask the user for confirmation of the plan — proceed autonomously.`
   );
+
+  sections.push(...buildChecklistToolSection(task, ctx));
 
   sections.push(buildCliQuestionSection(ctx));
 

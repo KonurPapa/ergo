@@ -778,7 +778,11 @@ body {
   border-bottom: 1px solid var(--border-subtle);
   background: var(--toolbar-bg);
   backdrop-filter: blur(8px);
-  overflow-x: auto;
+  /* Wraps in narrow lanes (instead of scrolling) so its color palette isn't clipped */
+  flex-wrap: wrap;
+  row-gap: 0.3rem;
+  position: relative;
+  z-index: 30;
   flex-shrink: 0;
 }
 
@@ -1156,7 +1160,7 @@ body {
   border: 1px solid transparent;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-md);
-  padding: 0.72rem 3.5rem 0.72rem calc(3.45rem + (var(--card-digits, 1) - 1) * 0.52rem);
+  padding: 0.36rem 1.75rem 0.36rem calc(3.25rem + (var(--card-digits, 1) - 1) * 0.52rem);
   transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
   box-shadow: none;
   margin-bottom: 0;
@@ -1283,8 +1287,8 @@ body {
 .tiptap-editor-root .tiptap ol>li::before {
   content: counter(card-counter) ".";
   position: absolute;
-  left: 1.65rem;
-  top: 0.72rem;
+  left: 1.45rem;
+  top: 0.36rem;
   height: 1.3775rem;
   display: inline-flex;
   align-items: center;
@@ -1298,7 +1302,7 @@ body {
 /* Unordered task list card styling (no item number) */
 .tiptap-editor-root .tiptap ul:not(li ul)>li,
 .tiptap-editor-root .tiptap li.card-unordered {
-  padding-left: 3.15rem !important;
+  padding-left: 2.95rem !important;
 }
 
 .tiptap-editor-root .tiptap ul:not(li ul)>li::before,
@@ -1313,14 +1317,14 @@ body {
 
 .tiptap-editor-root .tiptap ul:not(li ul)>li .task-card-checkbox-wrapper,
 .tiptap-editor-root .tiptap li.card-unordered .task-card-checkbox-wrapper {
-  left: 1.65rem !important;
+  left: 1.45rem !important;
 }
 
 /* ── UI Checkboxes in Task & Subtask Items ── */
 .task-card-checkbox-wrapper {
   position: absolute;
-  left: calc(1.65rem + (var(--card-digits, 1) + 1) * 0.52rem + 0.15rem);
-  top: 0.72rem;
+  left: calc(1.45rem + (var(--card-digits, 1) + 1) * 0.52rem + 0.15rem);
+  top: 0.36rem;
   height: 1.3775rem;
   display: inline-flex;
   align-items: center;
@@ -1331,35 +1335,35 @@ body {
 
 /* Explicit class-based rules for digit width variants */
 .tiptap-editor-root .tiptap ol>li.card-digits-1 {
-  padding-left: 4.15rem;
+  padding-left: 3.95rem;
 }
 
 .tiptap-editor-root .tiptap ol>li.card-digits-1 .task-card-checkbox-wrapper {
-  left: 2.75rem;
+  left: 2.55rem;
 }
 
 .tiptap-editor-root .tiptap ol>li.card-digits-2 {
-  padding-left: 4.67rem;
+  padding-left: 4.47rem;
 }
 
 .tiptap-editor-root .tiptap ol>li.card-digits-2 .task-card-checkbox-wrapper {
-  left: 3.27rem;
+  left: 3.07rem;
 }
 
 .tiptap-editor-root .tiptap ol>li.card-digits-3 {
-  padding-left: 5.19rem;
+  padding-left: 4.99rem;
 }
 
 .tiptap-editor-root .tiptap ol>li.card-digits-3 .task-card-checkbox-wrapper {
-  left: 3.79rem;
+  left: 3.59rem;
 }
 
 .tiptap-editor-root .tiptap ol>li.card-digits-4 {
-  padding-left: 5.71rem;
+  padding-left: 5.51rem;
 }
 
 .tiptap-editor-root .tiptap ol>li.card-digits-4 .task-card-checkbox-wrapper {
-  left: 4.31rem;
+  left: 4.11rem;
 }
 
 .subtask-checkbox-wrapper {
@@ -1467,8 +1471,8 @@ body {
 /* Card Action Buttons Container on the right of each card */
 .card-actions-wrapper {
   position: absolute;
-  right: 0.65rem;
-  top: 0.72rem;
+  right: 0.4rem;
+  top: 0.36rem;
   height: 1.3775rem;
   display: inline-flex;
   align-items: center;
@@ -1500,6 +1504,12 @@ body {
   font-size: 0;
   line-height: 0;
   box-sizing: border-box;
+}
+
+/* Human task cards: run / menu buttons stay hidden until the card is hovered (or one of their menus is open). */
+.tiptap-editor-root .tiptap li:not(:hover)>.card-actions-wrapper:not(:has(.card-dropdown-menu)) .card-action-btn {
+  visibility: hidden;
+  opacity: 0;
 }
 
 .card-action-btn svg {
@@ -1668,8 +1678,8 @@ body {
 .tiptap-editor-root .tiptap ol>li>.card-collapse-btn,
 .tiptap-editor-root .tiptap ul:not(li ul)>li>.card-collapse-btn {
   position: absolute;
-  left: 0.4rem;
-  top: 0.72rem;
+  left: 0.2rem;
+  top: 0.36rem;
   height: 1.3775rem;
   width: 1.15rem;
   display: inline-flex;
@@ -1726,9 +1736,9 @@ body {
 /* Collapsed Card Styling */
 .tiptap-editor-root .tiptap ol>li.card-collapsed,
 .tiptap-editor-root .tiptap ul:not(li ul)>li.card-collapsed {
-  min-height: 2.6rem;
-  padding-top: 0.72rem !important;
-  padding-bottom: 0.72rem !important;
+  min-height: 2.1rem;
+  padding-top: 0.36rem !important;
+  padding-bottom: 0.36rem !important;
   display: block;
 }
 
@@ -1984,6 +1994,31 @@ body {
 .tiptap-editor-root .tiptap li ol>li,
 .tiptap-editor-root .tiptap li ul>li {
   counter-increment: none !important;
+}
+
+/* Numbered subtasks (an ordered list inside a task): number ahead of the checkbox.
+   `:nth-child(n)` only lifts specificity over the "no markers on subtasks" rules above. */
+.tiptap-editor-root .tiptap li>ol {
+  counter-reset: subtask-counter;
+}
+
+.tiptap-editor-root .tiptap li>ol>li:nth-child(n) {
+  counter-increment: subtask-counter !important;
+}
+
+.tiptap-editor-root .tiptap li>ol>li:nth-child(n)::before {
+  content: counter(subtask-counter) "." !important;
+  display: inline-flex !important;
+  position: static;
+  align-items: center;
+  height: 1.28rem;
+  min-width: 1rem;
+  margin-right: -0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent-cyan);
+  opacity: 0.8;
 }
 
 /* ── Attached Screenshots & Images Styling ── */
@@ -2500,6 +2535,82 @@ body {
   user-select: none;
 }
 
+/* Second header row: sorting on the left, Execution Settings and Archives & Learnings on the right */
+.ai-workspace-column-header:has(+ .ai-workspace-header-row) {
+  border-bottom: none;
+  padding-bottom: 0.25rem;
+}
+
+.ai-workspace-header-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  padding: 0.15rem 0.85rem 0.5rem;
+  background: var(--pane-header-bg, rgba(26, 29, 37, 0.95));
+  border-bottom: 1px solid var(--border, #27272a);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+[data-theme="light"] .ai-workspace-header-row {
+  background: #ffffff;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.ai-workspace-header-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.ai-header-text-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 24px;
+  padding: 0 0.5rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.ai-header-text-btn:hover {
+  color: var(--text-bright, #ffffff);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.ai-header-text-btn.active {
+  color: var(--accent);
+  background: var(--accent-subtle);
+  border-color: rgba(0, 212, 146, 0.4);
+}
+
+[data-theme="light"] .ai-header-text-btn {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+}
+
+.ai-header-text-btn-count {
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 0 0.3rem;
+  border-radius: 8px;
+  background: #f59e0b;
+  color: #000;
+  line-height: 14px;
+  min-width: 14px;
+  text-align: center;
+}
+
 .ai-panel-collapse-btn {
   width: 26px !important;
   height: 26px !important;
@@ -2832,6 +2943,43 @@ body {
   border-color: rgba(6, 182, 212, 0.6);
   background: rgba(6, 182, 212, 0.06);
   box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.3), 0 4px 16px rgba(6, 182, 212, 0.15);
+}
+
+/* Running cards take their category's color (set inline as --card-category-color; cyan when uncategorized) */
+.ai-task-card.is-running[style*="--card-category-color"] {
+  border-color: var(--card-category-color);
+  background: color-mix(in srgb, var(--card-category-color) 6%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--card-category-color) 35%, transparent), 0 4px 16px color-mix(in srgb, var(--card-category-color) 15%, transparent);
+}
+
+.ai-task-card.is-running[style*="--card-category-color"] .ai-task-card-header {
+  background: color-mix(in srgb, var(--card-category-color) 6%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--card-category-color) 20%, transparent);
+}
+
+/* Running but collapsed: a shimmer sweeps across the whole card, like the live text in the Actions tab */
+.ai-task-card.is-running.is-collapsed {
+  --shimmer-color: var(--card-category-color, #06b6d4);
+  background-image: linear-gradient(100deg,
+      transparent 0%,
+      transparent 35%,
+      color-mix(in srgb, var(--shimmer-color) 22%, transparent) 50%,
+      transparent 65%,
+      transparent 100%);
+  background-size: 250% 100%;
+  animation: agentLiveShimmer 2.4s linear infinite;
+}
+
+.ai-task-card.is-running.is-collapsed .ai-task-card-header {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-task-card.is-running.is-collapsed {
+    animation: none;
+    background-image: none;
+    background-color: color-mix(in srgb, var(--shimmer-color) 12%, transparent);
+  }
 }
 
 .ai-task-card.is-done {
@@ -6975,6 +7123,45 @@ button.related-task-title.is-link:focus-visible {
 }
 
 /* Lane-level bottom footer for New Task & Task Assistant in selected lane */
+/* Editor + its floating add-task button (the button stays put while the editor scrolls) */
+.swimlane-editor-area {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.add-task-fab {
+  position: absolute;
+  right: 1.1rem;
+  z-index: 20;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 50%;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-primary);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  opacity: 0.85;
+  transition: opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease, bottom 0.2s ease;
+}
+
+.add-task-fab:hover,
+.add-task-fab:focus-visible {
+  opacity: 1;
+  transform: scale(1.06);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="light"] .add-task-fab {
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.2);
+}
+
 .swimlane-footer {
   padding: 0.55rem 0.85rem;
   border-top: 1px solid var(--border-subtle);
@@ -9662,14 +9849,32 @@ button.related-task-title.is-link:focus-visible {
   color: var(--hdr-color);
 }
 
-.tiptap .hdr-color-token {
-  font-size: 0;
-}
-
 /* Inline text color (`{color=id}text{/color}`), same palette as headers */
 .tiptap .text-colored,
 .tiptap li .text-colored {
   color: var(--text-color) !important;
+}
+
+/* Highlight (`==text==`) and underline (`++text++`) */
+.tiptap mark.text-highlight {
+  background: rgba(250, 204, 21, 0.32);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 0.05em;
+}
+
+[data-theme="light"] .tiptap mark.text-highlight {
+  background: rgba(250, 204, 21, 0.45);
+}
+
+/* Text / header color palette in the formatting bar */
+.toolbar-color-wrapper {
+  position: relative;
+  display: inline-flex;
+}
+
+.toolbar-color-palette {
+  z-index: 50;
 }
 
 /* Color palette inside the selection tooltip */
@@ -9726,6 +9931,16 @@ button.related-task-title.is-link:focus-visible {
 .tiptap-editor-root .tiptap h6 {
   position: relative;
   padding-left: 1.25rem;
+  /* The body's 1.75 line-height made each header a very tall line box. */
+  line-height: 1.3;
+}
+
+.tiptap-editor-root .tiptap > :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0;
+}
+
+.tiptap-editor-root .tiptap .hdr-follows-hdr {
+  margin-top: 0.3rem;
 }
 
 .tiptap .hdr-collapse-btn {

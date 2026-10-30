@@ -4,7 +4,7 @@
  */
 import { type AgentContextItem, type Subtask, type TaskItem, type OverviewDocument } from '../../types';
 import { parseJsonLoose } from '../llmClient';
-import { type PipelineContext, addUsage, emptyUsage, formatUsage, buildToolLoopRequest } from './contracts';
+import { type PipelineContext, addUsage, emptyUsage, formatUsage, buildToolLoopRequest, runningTaskUsage } from './contracts';
 import { type BibleStore } from './bible';
 import { type VerifierResult } from './verifier';
 import { runToolLoop } from './providerLoop';
@@ -197,11 +197,13 @@ export async function runLogger(
       : `Item #${task.id} marked DONE. Agent build record saved to workspace.`) + ` Total usage: ${formatUsage(ctx.usage)}.`,
     status: 'success',
     usage: { ...ctx.usage },
-    totalUsage: { ...ctx.usage },
+    totalUsage: runningTaskUsage(ctx),
     bibleFilePath: bible.filePath
   });
 
-  const tokenComment = `<!-- task_token_usage: ${JSON.stringify(ctx.usage)} -->`;
+  // The task's total: a resumed run or follow-up adds to what the task had used before it.
+  const taskUsage = runningTaskUsage(ctx);
+  const tokenComment = `<!-- task_token_usage: ${JSON.stringify(taskUsage)} -->`;
   if (!buildAndVerificationContent.includes('<!-- task_token_usage:')) {
     buildAndVerificationContent = `${tokenComment}\n\n${buildAndVerificationContent}`.trim();
   }
@@ -218,7 +220,7 @@ export async function runLogger(
     buildAndVerification: buildAndVerificationContent,
     completion: completionContent,
     createdFiles: allCreatedFiles,
-    totalUsage: { ...ctx.usage },
+    totalUsage: taskUsage,
     brief: overviewContent,
     built: buildAndVerificationContent,
     validation: completionContent,
@@ -232,7 +234,7 @@ export async function runLogger(
     isDone: reviewSubtasks.length === 0,
     isHumanReview: hasAnyHumanReview,
     createdFiles: allCreatedFiles,
-    totalUsage: { ...ctx.usage },
+    totalUsage: taskUsage,
     subtasks: allSubtasks.length > 0 ? allSubtasks : task.subtasks.map((s) => ({ ...s, isDone: true }))
   };
 

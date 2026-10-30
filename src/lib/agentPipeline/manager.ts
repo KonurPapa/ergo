@@ -25,7 +25,8 @@ import {
   formatUsage,
   isAbortError,
   resolveRoleTarget,
-  throwIfAborted
+  throwIfAborted,
+  trackLiveUsage
 } from './contracts';
 import { type BibleStore, type FileLockRegistry, doneWhenCriteria, normalizePath } from './bible';
 import { runToolLoop } from './providerLoop';
@@ -66,6 +67,7 @@ const WORKER_RULES = `EXECUTION RULES (harness-enforced)
 - Tools requiring approval (write_file, edit_file, run_command, git_commit) may pause for the user; a rejection is final for that call.
 - Tool results are truncated when large; use read_file offset/limit and code_search to narrow.
 ${CODE_SEARCH_RULE}
+- CHECKLIST: the bible's Task Checklist is the user's list in Ergo. When your piece (one that may write) finishes an item of it — done and checked, not just started — check it off in the same round as your final checks: workspace_update_subtask with the task id and the item's subtaskIndex shown there, isDone true. Never uncheck items, check items your piece did not finish, or change other tasks.
 - End with the condensed summary and the exact final line "STATUS: DONE" or "STATUS: FAILED — <reason>".`;
 
 /** Byte-stable prompt for Direct (Solo) Mode — clean, builder-focused, no decomposition JSON contracts. */
@@ -390,6 +392,7 @@ export async function runManager(
     taskId: ctx.task.id,
     onRequestOllamaFallback: ctx.onRequestOllamaFallback,
     onSwitchToCloud: async () => resolveRoleTarget(ctx.aiConfig, 'manager'),
+    onUsage: trackLiveUsage(ctx),
     // The user's mid-run messages reach every manager loop at its next round boundary.
     drainSteering: () => ctx.steering?.drainTexts('manager') ?? []
   } as const;
@@ -409,7 +412,8 @@ export async function runManager(
     ollamaFailureState: ctx.ollamaFailureState,
     taskId: ctx.task.id,
     onRequestOllamaFallback: ctx.onRequestOllamaFallback,
-    onSwitchToCloud: async () => resolveRoleTarget(ctx.aiConfig, 'worker')
+    onSwitchToCloud: async () => resolveRoleTarget(ctx.aiConfig, 'worker'),
+    onUsage: trackLiveUsage(ctx)
   } as const;
 
   const isResuming = ctx.task.status === 'partly_done' ||

@@ -27,7 +27,8 @@ import {
   type PermissionLevel,
   type AssembledBaselineContext,
   type TaskRating,
-  type ModelDataSettings
+  type ModelDataSettings,
+  type TokenUsage
 } from './types';
 
 import {
@@ -108,7 +109,7 @@ import { recordRunCalibration, startSteeringCalibration } from './lib/agentPipel
 import { describeProjectRules, formatProjectRules, startInsightCapture, undoInsightChanges, type InsightChange } from './lib/memory/insights';
 import { rerunEscalation, workEscalation, describeRerunEscalation } from './lib/agentPipeline/escalation';
 import { isSubscriptionTarget, resolveCliBinary } from './lib/agentPipeline/contracts';
-import type { TaskBilling } from './components/BvTokenCounterCard';
+import { extractTaskTokenSummary, type TaskBilling } from './components/BvTokenCounterCard';
 import { getModelCatalog, setArtificialAnalysisKey } from './lib/modelCatalog/catalog';
 import { decideRunShape, describeRunShape, type RunShapeDecision } from './lib/localModel/decisions';
 import { setLocalModelMode, type LocalModelMode } from './lib/localModel/preference';
@@ -126,6 +127,29 @@ import { bridgeClient, type BridgeStatus, getBridgeDownload } from './lib/bridge
 import { AlertTriangle, RefreshCw, Undo2 } from 'lucide-react';
 import { ArchiveConfirmModal, type ArchiveConfirmRequest, type ArchiveScope } from './components/ArchiveConfirmModal';
 import { ArchivedTasksModal, type ArchiveRestorePlan, type ArchiveTab } from './components/ArchivedTasksModal';
+
+/** The token total a task's steps carry (what its token card shows), or undefined when they have none. */
+function stepsTokenTotal(steps: ExecutionStep[] | undefined): TokenUsage | undefined {
+  if (!steps || steps.length === 0) return undefined;
+  const summary = extractTaskTokenSummary(undefined, undefined, steps);
+  return summary.hasUsage ? summary.totalUsage : undefined;
+}
+
+/**
+ * A run's returned task (built from the task as it was at launch), keeping the subtasks its agents checked off on the
+ * board while it ran (workspace_update_subtask): a stopped or failed run must not uncheck them again.
+ */
+function keepCheckedSubtasks(returned: TaskItem, latest: TaskItem | undefined): TaskItem {
+  const checked = new Set((latest?.subtasks || []).filter((s) => s.isDone).map((s) => s.text.trim().toLowerCase()));
+  if (checked.size === 0) return returned;
+  let changed = false;
+  const subtasks = returned.subtasks.map((s) => {
+    if (s.isDone || !checked.has(s.text.trim().toLowerCase())) return s;
+    changed = true;
+    return { ...s, isDone: true };
+  });
+  return changed ? { ...returned, subtasks } : returned;
+}
 
 /** One-line description of what a pipeline permission prompt is asking for: the command, the path, or the summary. */
 function describePermissionRequest(prompt: McpToolPermissionPrompt): string {
@@ -1975,7 +1999,9 @@ function App() {
       return nextRecord;
     });
 
-    // 8. Update task status from in_progress back to partly_done (latest state, not a render closure)
+    // 8. Update task status from in_progress back to partly_done (latest state, not a render closure). The token
+    //    total so far is saved on the brief right away, so a Stop never drops it (the aborted run's result follows).
+    const stoppedUsage = stepsTokenTotal(taskExecutionStepsRef.current[taskId] || taskExecutionStepsRef.current[String(taskId)]);
     const updatedTasks = tasksRef.current.map((t) =>
       String(t.id) === String(taskId)
         ? { ...t, status: 'partly_done' as TaskStatus, isDone: false }
@@ -1984,7 +2010,7 @@ function App() {
     const updatedBriefs = briefsRef.current.map((b) =>
       (b.sourceTaskId != null && String(b.sourceTaskId) === String(taskId)) ||
         (b.id != null && String(b.id) === String(taskId))
-        ? { ...b, status: 'partly_done' as TaskStatus }
+        ? { ...b, status: 'partly_done' as TaskStatus, ...(stoppedUsage ? { totalUsage: stoppedUsage } : {}) }
         : b
     );
     syncAndSaveProjectRef.current(updatedTasks, updatedBriefs, true);
@@ -2516,6 +2542,12 @@ function App() {
 
       const isResuming = !execOpts?.startOver && (currentTask.status === 'partly_done' ||
         (currentBrief && (currentBrief.status === 'partly_done' || Boolean(currentBrief.buildAndVerification && currentBrief.buildAndVerification.trim().length > 0))));
+      // A resumed run (its steps are appended to the earlier ones) or a follow-up adds to the task's token total so
+      // far instead of counting from 0 again; a fresh run or Start over starts a new count.
+      const priorTokens = followUp || isResuming
+        ? extractTaskTokenSummary(currentTask, currentBrief, taskExecutionStepsRef.current[task.id] || taskExecutionStepsRef.current[String(task.id)])
+        : undefined;
+      const baseUsage = priorTokens?.hasUsage ? priorTokens.totalUsage : undefined;
 
       setTaskExecutionSteps((prev) => {
         const existing = prev[task.id] || prev[String(task.id)] || [];
@@ -2728,6 +2760,7 @@ function App() {
             // Read on every tool call, so switching the approval mode mid-run takes effect immediately.
             getPermissionLevel: () => agentPipelineOptionsRef.current.permissionLevel,
             steering,
+            ...(baseUsage ? { baseUsage } : {}),
           },
           (ollamaFallbackPrompt) => {
             const toastId = `ollama-toast-${task.id}`;
@@ -2770,7 +2803,7 @@ function App() {
         // Completed execution: apply results to the LATEST tasks/briefs & persist to TODO.md and vector memory
         const latestTasks = tasksRef.current;
         const nextTasks = latestTasks.some((t) => String(t.id) === String(res.updatedTask.id))
-          ? latestTasks.map((t) => (String(t.id) === String(res.updatedTask.id) ? res.updatedTask : t))
+          ? latestTasks.map((t) => (String(t.id) === String(res.updatedTask.id) ? keepCheckedSubtasks(res.updatedTask, t) : t))
           : latestTasks;
         const latestBriefs = briefsRef.current;
         const existingBriefIdx = latestBriefs.findIndex(
@@ -2822,7 +2855,9 @@ function App() {
           return updated;
         });
         if (isAborted) {
-          // Latest state (refs), so edits made during the run — e.g. the overview — are kept.
+          // Latest state (refs), so edits made during the run — e.g. the overview — are kept, and the token total the
+          // steps reached is saved on the brief.
+          const stoppedUsage = stepsTokenTotal(taskExecutionStepsRef.current[task.id] || taskExecutionStepsRef.current[String(task.id)]);
           const nextTasks = tasksRef.current.map((t) =>
             String(t.id) === String(task.id)
               ? { ...t, status: 'partly_done' as TaskStatus, isDone: false }
@@ -2831,7 +2866,7 @@ function App() {
           const nextBriefs = briefsRef.current.map((b) =>
             (b.sourceTaskId != null && String(b.sourceTaskId) === String(task.id)) ||
               (b.id != null && String(b.id) === String(task.id))
-              ? { ...b, status: 'partly_done' as TaskStatus }
+              ? { ...b, status: 'partly_done' as TaskStatus, ...(stoppedUsage ? { totalUsage: stoppedUsage } : {}) }
               : b
           );
           const cancelSteps = (rec: Record<string | number, ExecutionStep[]>) => ({

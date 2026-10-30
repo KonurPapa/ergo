@@ -1262,10 +1262,17 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     );
   };
 
+  const categoryName = task.category?.trim();
+  const categoryColorHex = categoryName && categoryName !== 'AI Workspace' && categoryName !== 'Untitled'
+    ? resolveHeaderColor(categoryName, task.categoryColor).hex
+    : undefined;
+
   return (
     <div
       ref={cardRef}
-      className={`ai-task-card ${isSelected ? 'is-selected' : ''} ${isWorking ? 'is-running' : ''} ${task.isDone ? 'is-done' : ''} ${isMenuOpen ? 'has-open-menu' : ''}`}
+      className={`ai-task-card ${isSelected ? 'is-selected' : ''} ${isWorking ? 'is-running' : ''} ${isTaskCollapsed ? 'is-collapsed' : ''} ${task.isDone ? 'is-done' : ''} ${isMenuOpen ? 'has-open-menu' : ''}`}
+      // A running card is drawn in its category's (human workspace header's) color.
+      style={categoryColorHex ? ({ '--card-category-color': categoryColorHex } as React.CSSProperties) : undefined}
       onClick={() => {
         onSelect();
         if (isTaskCollapsed) {
@@ -2385,83 +2392,12 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
           </div>
 
           <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
-            {briefs.length > 1 && (
-              <div className="steps-notes-chip ai-sort-chip" role="group" aria-label="Sort AI tasks">
-                <button
-                  type="button"
-                  className={`steps-notes-segment ${sortMode === 'category' ? 'active' : ''}`}
-                  onClick={() => chooseSortMode('category')}
-                  aria-pressed={sortMode === 'category'}
-                  title="Sort by category: the human workspace's headings, then task number"
-                >
-                  <FolderTree size={10} />
-                  <span>Category</span>
-                </button>
-                <button
-                  type="button"
-                  className={`steps-notes-segment ${sortMode === 'added' ? 'active' : ''}`}
-                  onClick={() => chooseSortMode('added')}
-                  aria-pressed={sortMode === 'added'}
-                  title="Sort by when the task was added to the AI workspace, newest first"
-                >
-                  <Clock size={10} />
-                  <span>Date added</span>
-                </button>
-              </div>
-            )}
-
             {activeTaskRunningCount > 0 && (
               <span className="running-indicator-badge">
                 <span className="live-pulse-dot" />
                 <span>{activeTaskRunningCount} running</span>
               </span>
             )}
-
-            {/* Execution settings (permissions + effort) toggle — mirrors the formatting bar toggle */}
-            {agentPipelineOptions && onSetAgentPipelineOptions && (
-              <button
-                type="button"
-                className={`swimlane-menu-btn ${showExecSettings ? 'active' : ''}`}
-                onClick={() => setShowExecSettings((v) => !v)}
-                title={showExecSettings ? 'Hide execution settings' : 'Execution settings: permissions & effort'}
-                aria-label="Execution settings"
-                aria-expanded={showExecSettings}
-              >
-                <SlidersHorizontal size={14} />
-              </button>
-            )}
-
-            {/* Archive Tasks Header Icon Button */}
-            <button
-              type="button"
-              className="swimlane-menu-btn"
-              onClick={onOpenArchives}
-              title="Archives &amp; Learnings"
-              aria-label="Archives &amp; Learnings"
-              style={{ position: 'relative' }}
-            >
-              <Archive size={15} style={{ color: '#f59e0b' }} />
-              {archivedTasks.length > 0 && (
-                <span
-                  style={{
-                    position: 'absolute',
-                    top: '-4px',
-                    right: '-4px',
-                    fontSize: '0.62rem',
-                    fontWeight: 700,
-                    padding: '0 0.28rem',
-                    borderRadius: '8px',
-                    background: '#f59e0b',
-                    color: '#000',
-                    lineHeight: '13px',
-                    minWidth: '13px',
-                    textAlign: 'center',
-                  }}
-                >
-                  {archivedTasks.length}
-                </span>
-              )}
-            </button>
 
             {/* Collapse AI Workspace Panel Button */}
             {onTogglePanel && (
@@ -2475,6 +2411,61 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                 <PanelRightClose size={14} />
               </button>
             )}
+          </div>
+        </div>
+
+        {/* ── Header second row: sorting, execution settings, archives ── */}
+        <div className="ai-workspace-header-row">
+          {briefs.length > 1 && (
+            <div className="steps-notes-chip ai-sort-chip" role="group" aria-label="Sort AI tasks">
+              <button
+                type="button"
+                className={`steps-notes-segment ${sortMode === 'category' ? 'active' : ''}`}
+                onClick={() => chooseSortMode('category')}
+                aria-pressed={sortMode === 'category'}
+                title="Sort by category: the human workspace's headings, then task number"
+              >
+                <FolderTree size={10} />
+                <span>Category</span>
+              </button>
+              <button
+                type="button"
+                className={`steps-notes-segment ${sortMode === 'added' ? 'active' : ''}`}
+                onClick={() => chooseSortMode('added')}
+                aria-pressed={sortMode === 'added'}
+                title="Sort by when the task was added to the AI workspace, newest first"
+              >
+                <Clock size={10} />
+                <span>Date added</span>
+              </button>
+            </div>
+          )}
+
+          <div className="ai-workspace-header-row-actions">
+            {/* Execution settings (permissions + effort) toggle — mirrors the formatting bar toggle */}
+            {agentPipelineOptions && onSetAgentPipelineOptions && (
+              <button
+                type="button"
+                className={`ai-header-text-btn ${showExecSettings ? 'active' : ''}`}
+                onClick={() => setShowExecSettings((v) => !v)}
+                title={showExecSettings ? 'Hide execution settings' : 'Execution settings: permissions & effort'}
+                aria-expanded={showExecSettings}
+              >
+                <SlidersHorizontal size={13} />
+                <span>Execution Settings</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              className="ai-header-text-btn"
+              onClick={onOpenArchives}
+              title="Archived tasks and what the AI learned from them"
+            >
+              <Archive size={13} style={{ color: '#f59e0b' }} />
+              <span>Archives &amp; Learnings</span>
+              {archivedTasks.length > 0 && <span className="ai-header-text-btn-count">{archivedTasks.length}</span>}
+            </button>
           </div>
         </div>
 
