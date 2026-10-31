@@ -13,6 +13,7 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import ListItem from '@tiptap/extension-list-item';
 import StarterKit from '@tiptap/starter-kit';
 import Strike from '@tiptap/extension-strike';
+import CodeMark from '@tiptap/extension-code';
 import Placeholder from '@tiptap/extension-placeholder';
 import Link from '@tiptap/extension-link';
 import Image from '@tiptap/extension-image';
@@ -54,6 +55,10 @@ const CustomListItem = ListItem.extend({
 // (StarterKit's order) it was closed around bold words, "~~one ~~**~~two~~** ~~three~~", which markdown can't read
 // back: each save turned more of a checked-off task into literal, then escaped, tildes.
 const OuterStrike = Strike.extend({ priority: 1000 });
+
+// Inline code takes no other formatting, except strikethrough: a task with `code` in it has to be struck through as a
+// whole to count as checked off (it never could be with code's default "excludes everything").
+const StrikeableCode = CodeMark.extend({ excludes: 'bold italic underline highlight textColor link' });
 
 import {
   Plus,
@@ -2248,12 +2253,14 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         heading: false,
         underline: false,
         strike: false,
+        code: false,
         bulletList: { keepMarks: true, keepAttributes: false },
         orderedList: { keepMarks: true, keepAttributes: false },
         listItem: false,
       }),
       CustomListItem,
       OuterStrike,
+      StrikeableCode,
       ColorHeading,
       MarkdownUnderline,
       Highlight,
