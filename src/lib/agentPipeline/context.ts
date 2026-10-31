@@ -11,6 +11,7 @@ import { hasUsableOverview } from '../overviewUtils';
 import { searchMemory, type SearchResult } from '../memory';
 import { findRelatedTasks, formatRelatedCandidatesForPrompt } from '../memory/relatedTasks';
 import { describeProjectRules } from '../memory/insights';
+import { withScopedRules } from '../scopedRules';
 import type { ProjectInsight, RelatedNoteCandidate, RelatedTaskCandidate, RelatedTasksRequest, RelatedTasksResponse } from '../memory/types';
 import { callMcpTool } from '../mcpClient';
 import { type AgentContextItem, type AssembledBaselineContext, type ExecutionStep, type TaskItem } from '../../types';
@@ -263,7 +264,7 @@ function buildBaselineMarkdown(
 
   // Learned rules: the brief reflects the ones that bear on the task; the bible carries the list verbatim.
   if (projectRules.length > 0) {
-    out.push('## Project Rules (learned from the user\'s feedback on earlier runs)');
+    out.push('## Project Rules (set by the user, or learned from their feedback on earlier runs)');
     out.push('_Reflect the rules that bear on this task in Constraints or Done when; every agent also gets this list verbatim._');
     out.push(...projectRules.map((r) => `- ${r.text}`), '');
   }
@@ -330,7 +331,8 @@ export async function assembleTaskContext(ctx: PipelineContext): Promise<Baselin
   ]);
   const relatedCandidates = related.candidates || [];
   const relatedNotes = related.notes || [];
-  const projectRules = related.insights || [];
+  // Learned rules, plus the user's rules for every task and for this task's lane.
+  const projectRules = withScopedRules(related.insights, task.swimLaneId ?? ctx.brief?.sourceLaneId);
 
   throwIfAborted(ctx.signal);
 

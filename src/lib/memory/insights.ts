@@ -82,7 +82,7 @@ export function formatProjectRules(insights: ProjectInsight[] | undefined): stri
   const rules = (insights || []).map((r) => r.text.replace(/\s+/g, ' ').trim()).filter(Boolean);
   if (rules.length === 0) return '';
   return (
-    "PROJECT RULES (the user's standing requirements for this project, learned from their feedback on earlier runs). " +
+    "PROJECT RULES (the user's standing requirements for this project: set by them, or learned from their feedback on earlier runs). " +
     "Follow them. Where one conflicts with this task's own instructions or with this run's protocol, the task and the protocol win.\n" +
     rules.map((r) => `- ${r}`).join('\n')
   );
@@ -91,7 +91,7 @@ export function formatProjectRules(insights: ProjectInsight[] | undefined): stri
 /** Context-step detail for the rules a run got (empty for none). */
 export function describeProjectRules(insights: ProjectInsight[] | undefined): string {
   const n = insights?.length || 0;
-  return n > 0 ? `${n} learned project rule${n === 1 ? '' : 's'} handed to the agents.` : '';
+  return n > 0 ? `${n} project rule${n === 1 ? '' : 's'} handed to the agents.` : '';
 }
 
 // ─── Distilling feedback into rules ──────────────────────────────────────────

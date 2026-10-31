@@ -407,6 +407,11 @@ export interface ProjectData {
   runningJobsDoc?: RunningJobsDoc;
   connectedMcps: string[];
   swimLanes?: SwimLaneDoc[];
+  /**
+   * The project's own Allowed Folders (projects/<id>/project.json). When set, its agents may use only these (plus
+   * Ergo's storage) and start in the first one; otherwise they use the folders allowed for every project.
+   */
+  folders?: McpRootBoundary[];
 }
 
 export interface HumanInputPrompt {

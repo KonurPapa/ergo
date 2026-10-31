@@ -301,12 +301,49 @@ function parseJsonBody(req: IncomingMessage): Promise<any> {
   });
 }
 
+/** A project's own folders file, or null for an id that isn't a plain project folder name. */
+function projectFoldersFile(storageDir: string, projectId: unknown): string | null {
+  if (typeof projectId !== 'string' || !/^[A-Za-z0-9._ -]{1,200}$/.test(projectId) || /^\.+$/.test(projectId)) return null;
+  return path.join(path.resolve(storageDir), 'projects', projectId, 'project.json');
+}
+
+type ProjectFolder = { id: string; path: string; name: string; addedAt?: string };
+
 /**
- * Loads the allowed directory roots (storage dir + user-approved folders from config/roots.json),
- * resolved to absolute paths. Every filesystem / git / shell tool call is checked against this list.
+ * A project's own Allowed Folders (`projects/<id>/project.json`). A project that has some uses only those (plus Ergo's
+ * storage) instead of the folders allowed for every project, and its agents start in the first one.
  */
-async function loadAllowedRoots(storageDir: string): Promise<string[]> {
+async function loadProjectFolders(storageDir: string, projectId: unknown): Promise<ProjectFolder[]> {
+  const file = projectFoldersFile(storageDir, projectId);
+  if (!file) return [];
+  try {
+    const parsed = JSON.parse(await fs.readFile(file, 'utf-8'));
+    return (Array.isArray(parsed?.folders) ? parsed.folders : []).filter((f: any) => typeof f?.path === 'string' && f.path.trim());
+  } catch {
+    return [];
+  }
+}
+
+function resolveRootPath(raw: string): string {
+  const p = raw.trim();
+  return path.resolve(p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p);
+}
+
+/**
+ * Loads the allowed directory roots (storage dir + user-approved folders from config/roots.json, or the project's own
+ * folders when `projectId` has some), resolved to absolute paths. Every filesystem / git / shell tool call is checked
+ * against this list.
+ */
+async function loadAllowedRoots(storageDir: string, projectId?: unknown): Promise<string[]> {
   const roots = [path.resolve(storageDir)];
+  const own = projectId ? await loadProjectFolders(storageDir, projectId) : [];
+  if (own.length > 0) {
+    for (const f of own) {
+      const resolved = resolveRootPath(f.path);
+      if (!roots.includes(resolved)) roots.push(resolved);
+    }
+    return roots;
+  }
   try {
     const rootsContent = await fs.readFile(path.join(path.resolve(storageDir, 'config'), 'roots.json'), 'utf-8');
     const parsedRoots = JSON.parse(rootsContent);
@@ -326,7 +363,7 @@ async function loadAllowedRoots(storageDir: string): Promise<string[]> {
 type BoundaryCheck = { ok: true; fullPath: string } | { ok: false; error: string };
 
 /** Resolves a user/AI supplied path ('~' aware, relative to the storage dir) and enforces the allowed-roots boundary. */
-async function resolveInsideAllowedRoots(rawPath: string, storageDir: string): Promise<BoundaryCheck> {
+async function resolveInsideAllowedRoots(rawPath: string, storageDir: string, projectId?: unknown): Promise<BoundaryCheck> {
   let targetPath = (rawPath || '').trim();
   if (targetPath.startsWith('~')) targetPath = path.join(os.homedir(), targetPath.slice(1));
   const fullPath = path.isAbsolute(targetPath)
@@ -334,7 +371,7 @@ async function resolveInsideAllowedRoots(rawPath: string, storageDir: string): P
     : targetPath.startsWith('.agents')
     ? path.resolve(process.cwd(), targetPath)
     : path.resolve(storageDir, targetPath || '.');
-  const allowedRoots = await loadAllowedRoots(storageDir);
+  const allowedRoots = await loadAllowedRoots(storageDir, projectId);
   const agentsDir = path.resolve(process.cwd(), '.agents');
   const isAgentCustomization = fullPath === agentsDir || fullPath.startsWith(agentsDir + path.sep);
   const isAllowed = isAgentCustomization || allowedRoots.some((root) => fullPath === root || fullPath.startsWith(root + path.sep));
@@ -1970,6 +2007,7 @@ export function ergoFileSystemPlugin(): Plugin {
             todoMarkdown: string;
             runningJobsDoc?: any;
             swimLanes?: Array<{ id: string; title: string; filePath: string; markdown: string }>;
+            folders?: ProjectFolder[];
           }> = [];
 
           for (const entry of entries) {
@@ -2053,7 +2091,9 @@ export function ergoFileSystemPlugin(): Plugin {
                 } catch {}
               }
 
+              const folders = await loadProjectFolders(storageDir, entry.name);
               projectList.push({
+                ...(folders.length > 0 ? { folders } : {}),
                 id: entry.name,
                 name: entry.name.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
                 folderPath: `projects/${entry.name}`,
@@ -2076,7 +2116,53 @@ export function ergoFileSystemPlugin(): Plugin {
       // Model Context Protocol (MCP) Host Local Endpoints
       // ─────────────────────────────────────────────────────────────
 
+      // A project's own Allowed Folders (see loadProjectFolders).
+      if (url === '/api/projects/folders') {
+        const projectId = req.method === 'GET'
+          ? new URL(req.url || '', 'http://bridge').searchParams.get('projectId')
+          : undefined;
+        if (req.method === 'GET') {
+          if (!projectFoldersFile(storageDir, projectId)) return sendJson(res, 400, { success: false, error: 'A valid projectId is required.' });
+          return sendJson(res, 200, { success: true, folders: await loadProjectFolders(storageDir, projectId) });
+        }
+        if (req.method === 'POST') {
+          try {
+            const body = await parseJsonBody(req);
+            const file = projectFoldersFile(storageDir, body?.projectId);
+            if (!file) return sendJson(res, 400, { success: false, error: 'A valid projectId is required.' });
+            const folders: ProjectFolder[] = (Array.isArray(body.folders) ? body.folders : [])
+              .filter((f: any) => typeof f?.path === 'string' && f.path.trim())
+              .map((f: any) => ({
+                id: typeof f.id === 'string' ? f.id : `root-${Date.now()}`,
+                path: f.path.trim(),
+                name: typeof f.name === 'string' && f.name.trim() ? f.name.trim() : path.basename(f.path.trim()) || 'Folder',
+                ...(typeof f.addedAt === 'string' ? { addedAt: f.addedAt } : {}),
+              }));
+            let existing: any = {};
+            try {
+              existing = JSON.parse(await fs.readFile(file, 'utf-8'));
+            } catch {}
+            await fs.mkdir(path.dirname(file), { recursive: true });
+            await fs.writeFile(file, JSON.stringify({ ...existing, version: 1, folders }, null, 2), 'utf-8');
+            void syncCodeIndexRoots();
+            return sendJson(res, 200, { success: true, folders });
+          } catch (err: any) {
+            return sendJson(res, 500, { success: false, error: err.message });
+          }
+        }
+      }
+
       if (url === '/api/mcp/roots' && req.method === 'GET') {
+        // With ?projectId=: the folders that project's agents may use (its own when it has some).
+        const projectId = new URL(req.url || '', 'http://bridge').searchParams.get('projectId');
+        const own = projectId ? await loadProjectFolders(storageDir, projectId) : [];
+        if (own.length > 0) {
+          return sendJson(res, 200, {
+            success: true,
+            projectOnly: true,
+            roots: [{ id: 'root-default', path: storageDir, name: 'Home Ergo Root (~/.ergo)', isDefault: true }, ...own],
+          });
+        }
         try {
           const configDir = path.resolve(storageDir, 'config');
           const rootsFile = path.join(configDir, 'roots.json');
@@ -2875,6 +2961,8 @@ export function ergoFileSystemPlugin(): Plugin {
         try {
           const body = await parseJsonBody(req);
           const { serverId, toolName, args, endpoint, authHeader } = body;
+          // The project the call is made for: one with its own Allowed Folders is held to those.
+          const projectId = typeof body.projectId === 'string' ? body.projectId : undefined;
 
           if (!toolName) {
             return sendJson(res, 400, { error: 'toolName is required' });
@@ -2886,7 +2974,9 @@ export function ergoFileSystemPlugin(): Plugin {
             if (toolName === 'code_search') {
               const query = typeof args?.query === 'string' ? args.query.trim().slice(0, 2_000) : '';
               if (!query) return sendJson(res, 400, { error: 'code_search requires "query".' });
-              const out = await codeSearch(query, { path: typeof args.path === 'string' ? args.path : undefined, k: Number(args.k) || undefined, files: args.files });
+              // A project with its own folders searches its working folder (the first) unless told otherwise.
+              const ownFolder = (await loadProjectFolders(storageDir, projectId))[0];
+              const out = await codeSearch(query, { path: typeof args.path === 'string' ? args.path : undefined, ...(ownFolder ? { cwd: resolveRootPath(ownFolder.path) } : {}), k: Number(args.k) || undefined, files: args.files });
               if (out.isError) return sendJson(res, 400, { error: out.text });
               return sendJson(res, 200, { success: true, data: { content: out.text } }); // plain text for the agent, not JSON
             }
@@ -2894,7 +2984,7 @@ export function ergoFileSystemPlugin(): Plugin {
             if (toolName === 'run_command') {
               const command = typeof args.command === 'string' ? args.command.trim() : '';
               if (!command) return sendJson(res, 400, { error: 'run_command requires a non-empty "command" string.' });
-              const cwdCheck = await resolveInsideAllowedRoots(typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd : storageDir, storageDir);
+              const cwdCheck = await resolveInsideAllowedRoots(typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd : storageDir, storageDir, projectId);
               if ('error' in cwdCheck) return sendJson(res, 403, { error: cwdCheck.error });
               try {
                 const st = await fs.stat(cwdCheck.fullPath);
@@ -2923,7 +3013,7 @@ export function ergoFileSystemPlugin(): Plugin {
 
             const targetPath = (args.path || args.filePath || '').trim();
             if (!targetPath) return sendJson(res, 400, { error: `${toolName} requires a "path" argument.` });
-            const check = await resolveInsideAllowedRoots(targetPath, storageDir);
+            const check = await resolveInsideAllowedRoots(targetPath, storageDir, projectId);
             if ('error' in check) return sendJson(res, 403, { error: check.error });
             const fullPath = check.fullPath;
 
@@ -3153,7 +3243,7 @@ export function ergoFileSystemPlugin(): Plugin {
 
           // 3. Git Operations MCP Harness (cwd must be inside an allowed root; defaults to the storage dir)
           if (serverId === 'mcp-git' || toolName.startsWith('git_')) {
-            const cwdCheck = await resolveInsideAllowedRoots(typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd : storageDir, storageDir);
+            const cwdCheck = await resolveInsideAllowedRoots(typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd : storageDir, storageDir, projectId);
             if ('error' in cwdCheck) return sendJson(res, 403, { error: cwdCheck.error });
 
             const shellQuote = (v: string) => `'${String(v).replace(/'/g, `'\\''`)}'`;
@@ -6879,7 +6969,15 @@ function getCodeIndexManager(): CodeIndexManager {
 async function syncCodeIndexRoots(): Promise<void> {
   try {
     const storage = path.resolve(getActiveStorageDir());
-    const roots = (await loadAllowedRoots(storage)).filter((r) => r !== storage && r !== os.homedir() && r !== path.parse(r).root);
+    const all = await loadAllowedRoots(storage);
+    // Projects' own folders are indexed too.
+    for (const project of await fs.readdir(path.join(storage, 'projects')).catch(() => [] as string[])) {
+      for (const f of await loadProjectFolders(storage, project)) {
+        const resolved = resolveRootPath(f.path);
+        if (!all.includes(resolved)) all.push(resolved);
+      }
+    }
+    const roots = all.filter((r) => r !== storage && r !== os.homedir() && r !== path.parse(r).root);
     getCodeIndexManager().sync(roots);
   } catch (err) {
     console.warn('[Ergo Code Index] Could not sync the indexed folders:', err);

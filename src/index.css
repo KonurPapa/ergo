@@ -5697,6 +5697,10 @@ button.related-task-title.is-link:focus-visible {
   color: var(--text-muted);
 }
 
+.batch-run-parallel .toggle-switch-btn:not(.is-active) {
+  background: var(--border-subtle);
+}
+
 .batch-run-parallel {
   display: flex;
   align-items: center;
@@ -5704,6 +5708,120 @@ button.related-task-title.is-link:focus-visible {
   font-size: 0.8rem;
   color: var(--text-secondary);
   cursor: pointer;
+}
+
+/* Skills & rules of a lane / every task (ScopedRulesModal) */
+.scoped-rules-modal {
+  max-width: 560px;
+  width: 95vw;
+}
+
+.scoped-rules-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.scoped-rules-body h4 {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.scoped-rules-tabs {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.scoped-rules-tabs button {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scoped-rules-tabs button.is-active {
+  border-color: var(--accent-violet);
+  background: rgba(139, 92, 246, 0.08);
+  color: var(--text-bright);
+}
+
+.scoped-rules-hint {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.scoped-rules-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+.scoped-rules-empty {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.scoped-rules-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.scoped-rules-row span {
+  flex: 1;
+}
+
+.scoped-rules-add {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.scoped-rules-add .input-text {
+  flex: 1;
+}
+
+.scoped-rules-skill {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.4rem 0.2rem;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.scoped-rules-skill span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.scoped-rules-skill small {
+  font-size: 0.72rem;
+  color: var(--text-muted);
 }
 
 /* Form Controls */

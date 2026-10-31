@@ -33,7 +33,8 @@ export async function callMcpTool(
         toolName,
         args,
         endpoint: options?.endpoint,
-        authHeader: options?.authHeader
+        authHeader: options?.authHeader,
+        ...(rootsProjectId ? { projectId: rootsProjectId } : {})
       })
     });
 
@@ -83,12 +84,28 @@ export async function openFileInIdeOrSystem(
   }
 }
 
+/** The open project: Allowed Folders and tool calls are scoped to it (a project may have its own folders). */
+let rootsProjectId: string | null = null;
+export function setRootsProject(projectId: string | null): void {
+  rootsProjectId = projectId;
+}
+
 /**
- * Query safe directory roots from the MCP Host
+ * The folders AI agents of the open project may use: the project's own Allowed Folders when it has some, otherwise
+ * the folders allowed for every project.
  */
 export async function getAllowedRoots(): Promise<McpRootBoundary[]> {
+  return fetchRoots(rootsProjectId);
+}
+
+/** The folders allowed for every project (Connections → Allowed Folders). */
+export async function getGlobalAllowedRoots(): Promise<McpRootBoundary[]> {
+  return fetchRoots(null);
+}
+
+async function fetchRoots(projectId: string | null): Promise<McpRootBoundary[]> {
   try {
-    const res = await apiFetch('/api/mcp/roots');
+    const res = await apiFetch(`/api/mcp/roots${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`);
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.roots)) return data.roots;
@@ -121,7 +138,7 @@ export async function saveAllowedRoots(roots: McpRootBoundary[]): Promise<boolea
  * Add a new allowed root folder boundary
  */
 export async function addAllowedRoot(rootPath: string, name?: string): Promise<McpRootBoundary[]> {
-  const current = await getAllowedRoots();
+  const current = await getGlobalAllowedRoots();
   const trimmed = rootPath.trim();
   if (!trimmed) return current;
 
@@ -139,6 +156,34 @@ export async function addAllowedRoot(rootPath: string, name?: string): Promise<M
   const next = [...current, newRoot];
   await saveAllowedRoots(next);
   return next;
+}
+
+/** A project's own Allowed Folders (empty: it uses the folders allowed for every project). */
+export async function getProjectFolders(projectId: string): Promise<McpRootBoundary[]> {
+  try {
+    const res = await apiFetch(`/api/projects/folders?projectId=${encodeURIComponent(projectId)}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data?.folders) ? data.folders : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Saves a project's own Allowed Folders (the first is where its agents start); returns what was saved, or null. */
+export async function saveProjectFolders(projectId: string, folders: McpRootBoundary[]): Promise<McpRootBoundary[] | null> {
+  try {
+    const res = await apiFetch('/api/projects/folders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, folders }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return Array.isArray(data?.folders) ? data.folders : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Progress of the bridge's code index for one Allowed Folder (see src/lib/codeIndex/codeIndex.ts). */
@@ -189,7 +234,7 @@ export async function refreshCodeIndex(folder: string): Promise<boolean> {
  * Remove an allowed root folder boundary
  */
 export async function removeAllowedRoot(id: string): Promise<McpRootBoundary[]> {
-  const current = await getAllowedRoots();
+  const current = await getGlobalAllowedRoots();
   const next = current.filter((r) => r.id !== id || r.isDefault);
   await saveAllowedRoots(next);
   return next;

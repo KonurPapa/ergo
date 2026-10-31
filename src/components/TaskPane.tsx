@@ -12,6 +12,7 @@ import {
 import { useEditor, EditorContent } from '@tiptap/react';
 import ListItem from '@tiptap/extension-list-item';
 import StarterKit from '@tiptap/starter-kit';
+import Strike from '@tiptap/extension-strike';
 import Placeholder from '@tiptap/extension-placeholder';
 import Link from '@tiptap/extension-link';
 import Image from '@tiptap/extension-image';
@@ -28,6 +29,7 @@ import { getPref, setPref, subscribePrefs } from '../lib/userPrefs';
 import { bridgeClient } from '../lib/bridgeClient';
 import { HumanAiAssistantModal } from './HumanAiAssistantModal';
 import { BatchRunModal, type BatchRunMode } from './BatchRunModal';
+import { ScopedRulesModal } from './ScopedRulesModal';
 import { BetaFeature, useBeta } from '../context/BetaContext';
 import { ScheduleTaskModal } from './ScheduleTaskModal';
 import { getAutocompleteSuggestion, listContextAround } from '../lib/autocompleteService';
@@ -47,6 +49,11 @@ import { projectWorkingFolder, skillsBySlug } from '../lib/taskReferences';
 const CustomListItem = ListItem.extend({
   content: 'block+',
 });
+
+// A checked-off task is struck through as a whole, so strikethrough ranks outside every other mark. Ranked inside bold
+// (StarterKit's order) it was closed around bold words, "~~one ~~**~~two~~** ~~three~~", which markdown can't read
+// back: each save turned more of a checked-off task into literal, then escaped, tildes.
+const OuterStrike = Strike.extend({ priority: 1000 });
 
 import {
   Plus,
@@ -85,7 +92,8 @@ import {
   RemoveFormatting,
   IndentIncrease,
   IndentDecrease,
-  Play
+  Play,
+  ScrollText
 } from 'lucide-react';
 
 interface WithMarkdownStorage {
@@ -913,6 +921,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editedTitle, setEditedTitle] = useState(lane.title);
   const [isDeleteLaneModalOpen, setIsDeleteLaneModalOpen] = useState(false);
+  const [isRulesOpen, setIsRulesOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -2238,11 +2247,13 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         paragraph: false,
         heading: false,
         underline: false,
+        strike: false,
         bulletList: { keepMarks: true, keepAttributes: false },
         orderedList: { keepMarks: true, keepAttributes: false },
         listItem: false,
       }),
       CustomListItem,
+      OuterStrike,
       ColorHeading,
       MarkdownUnderline,
       Highlight,
@@ -2826,6 +2837,18 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                   )}
                 </button>
 
+                <button
+                  type="button"
+                  className="swimlane-dropdown-item"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    setIsRulesOpen(true);
+                  }}
+                >
+                  <ScrollText size={13} style={{ color: 'var(--accent-violet)' }} />
+                  <span>Skills &amp; Rules</span>
+                </button>
+
                 <div className="swimlane-dropdown-divider" />
 
                 <button
@@ -3307,6 +3330,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         document.body
       )}
 
+      {isRulesOpen && <ScopedRulesModal laneId={lane.id} laneTitle={lane.title} onClose={() => setIsRulesOpen(false)} />}
       {batchModal && (
         <BatchRunModal
           key={batchModal.openedAt}

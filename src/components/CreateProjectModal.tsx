@@ -6,9 +6,11 @@ import {
   CheckSquare,
   AlertCircle,
   CheckCircle2,
-  FolderOpen
+  FolderOpen,
+  FileText
 } from 'lucide-react';
 import { createSlug } from '../lib/demoData';
+import { importedLanes, type ImportedLane } from '../lib/markdownImport';
 import { type ProjectData } from '../types';
 
 interface CreateProjectModalProps {
@@ -18,7 +20,9 @@ interface CreateProjectModalProps {
     name: string,
     customFolder: string,
     description: string,
-    initialTodoContent?: string
+    initialTodoContent?: string,
+    /** Swim lanes beyond TODO.md, from a markdown import. */
+    extraLanes?: ImportedLane[]
   ) => void;
   storageDirectory?: string;
   existingProjects?: ProjectData[];
@@ -43,6 +47,10 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
   } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Markdown files to import: the first becomes TODO.md, each other one a swim lane.
+  const [imported, setImported] = useState<ImportedLane[] | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
@@ -88,6 +96,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
     }
 
     setDuplicateError(null);
+    setImported(null);
     setDuplicatedSource({
       name: found.name,
       todoContent: found.todoMarkdown
@@ -219,6 +228,25 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
     }
   };
 
+  const handleImportFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (files.length === 0) return;
+    try {
+      const lanes = importedLanes(await Promise.all(files.map(async (f) => ({ name: f.name, text: await f.text() }))));
+      setImported(lanes);
+      setImportError(null);
+      setDuplicatedSource(null);
+      setDuplicateError(null);
+      if (!name.trim()) {
+        setName(lanes[0].title);
+        if (!isFolderTouched) setFolderName(createSlug(lanes[0].title));
+      }
+    } catch (err: any) {
+      setImportError(`Couldn't read the files: ${err?.message || err}`);
+    }
+  };
+
   const handleClearDuplicate = () => {
     setDuplicatedSource(null);
     setDuplicateError(null);
@@ -231,8 +259,10 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
       name.trim(),
       currentSlug,
       description.trim(),
-      duplicatedSource?.todoContent
+      imported ? imported[0].markdown : duplicatedSource?.todoContent,
+      imported ? imported.slice(1) : undefined
     );
+    setImported(null);
     setName('');
     setFolderName('');
     setDescription('');
@@ -350,6 +380,49 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
                   onChange={handleFolderChange}
                 />
               </div>
+            </div>
+
+            {/* Optional Markdown Import */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '-0.5rem' }}>
+              <h4 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: 0 }}>
+                Import from Markdown (Optional)
+              </h4>
+            </div>
+            <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '0.85rem' }}>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0 0 0.65rem', lineHeight: '1.4' }}>
+                Start from your own <code style={{ color: 'var(--accent-cyan)' }}>.md</code> files: the first becomes the task list, each other file a
+                swim lane. Checklists (<code>- [ ]</code>, <code>- [x]</code>) become tasks, done ones checked off.
+              </p>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.4rem 0.8rem', fontSize: '0.82rem' }}
+                  onClick={() => importInputRef.current?.click()}
+                >
+                  <FileText size={15} color="var(--accent-cyan)" />
+                  <span>{imported ? 'Choose other files...' : 'Choose markdown files...'}</span>
+                </button>
+                {imported && (
+                  <button type="button" className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem' }} onClick={() => setImported(null)}>
+                    Clear
+                  </button>
+                )}
+              </div>
+              <input
+                type="file"
+                ref={importInputRef}
+                accept=".md,.markdown,.txt,text/markdown,text/plain"
+                multiple
+                onChange={handleImportFiles}
+                style={{ display: 'none' }}
+              />
+              {importError && (
+                <div style={{ color: '#f87171', fontSize: '0.78rem', marginTop: '0.65rem', display: 'flex', gap: '0.45rem' }}>
+                  <AlertCircle size={15} style={{ flexShrink: 0 }} />
+                  <span>{importError}</span>
+                </div>
+              )}
             </div>
 
             {/* Optional Project Duplication Section */}
@@ -513,9 +586,16 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
                   <CheckSquare size={13} color="var(--accent-cyan)" />
                   <span>{todoPath}</span>
                   <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                    {duplicatedSource ? '(Copied from source)' : '(Human Tasks List)'}
+                    {imported ? `(Imported: ${imported[0].title})` : duplicatedSource ? '(Copied from source)' : '(Human Tasks List)'}
                   </span>
                 </div>
+                {imported?.slice(1).map((lane) => (
+                  <div key={lane.fileName} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-cyan)', paddingLeft: '1.2rem' }}>
+                    <CheckSquare size={13} color="var(--accent-cyan)" />
+                    <span>{displayFolderPath}/{lane.fileName}</span>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>(Swim lane: {lane.title})</span>
+                  </div>
+                ))}
               </div>
             </div>
           </div>

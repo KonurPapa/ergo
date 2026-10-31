@@ -87,7 +87,7 @@ import { SteeringQueue } from './lib/agentPipeline/steeringQueue';
 import { recordSteeringMessage } from './lib/agentPipeline/steeringLog';
 import { pipelineRunKey, recallPipelineRun } from './lib/agentPipeline/runRegistry';
 import type { TaskMessageOptions, TaskMessageResult } from './lib/taskMessages';
-import { startMcpRoutineUpdateChecker } from './lib/mcpClient';
+import { setRootsProject, startMcpRoutineUpdateChecker } from './lib/mcpClient';
 import { DEFAULT_AGENT_PIPELINE_OPTIONS, mergeAgentPipelineOptions } from './lib/agentPipeline/contracts';
 import { formatOverviewDocToMarkdown, validateRelatedTaskIds } from './lib/agentPipeline/summary';
 import { buildRelatedTasksRequest, describeRelatedSearch, findRelatedTasksSoft } from './lib/agentPipeline/context';
@@ -122,6 +122,8 @@ import {
 } from './lib/taskScheduler';
 import { registerWorkspaceActionBridge } from './lib/workspaceMcp';
 import { getWorkspaceSkills, loadWorkspaceSkills } from './lib/skillsManager';
+import type { ImportedLane } from './lib/markdownImport';
+import { loadScopedRules, renameLaneScope, setScopedLanes, withScopedRules } from './lib/scopedRules';
 import { describeTaskReferences, formatReferenceNoteForBrief, projectWorkingFolder, resolveTaskReferences } from './lib/taskReferences';
 import { bridgeClient, type BridgeStatus, getBridgeDownload } from './lib/bridgeClient';
 import { AlertTriangle, RefreshCw, Undo2 } from 'lucide-react';
@@ -979,6 +981,14 @@ function App() {
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [isDragging]);
+
+  // Allowed Folders and file tool calls follow the open project (it may have folders of its own).
+  // Keyed by the project's folder in storage (projects/<name>), which is its id once listed from disk; a project
+  // created this session has a temporary id until then.
+  const projectStorageId = activeProject?.folderPath?.split('/').pop() || null;
+  useEffect(() => {
+    setRootsProject(projectStorageId);
+  }, [projectStorageId]);
 
   // Load active project markdown from disk or local state into structured state
   useEffect(() => {
@@ -2269,8 +2279,10 @@ function App() {
         const relatedCandidates = related.candidates || [];
         // Notes are selectable like tasks: selection, saving and the agents' context all use this pool.
         const relatedPool = relatedSelectionPool(relatedCandidates, related.notes || []);
-        // The project's learned rules (same call): the brief writer and every agent of the run get them.
-        const projectRules = formatProjectRules(related.insights);
+        // The project's learned rules (same call) plus the user's rules for every task and this lane: the brief writer
+        // and every agent of the run get them.
+        const runRules = withScopedRules(related.insights, latestTaskFor(task).swimLaneId ?? currentBrief?.sourceLaneId);
+        const projectRules = formatProjectRules(runRules);
         const relatedBaseline: AssembledBaselineContext = {
           query: [relatedRequest.title, ...(relatedRequest.subtasks || [])].join(' · '),
           threshold: 0,
@@ -2284,7 +2296,7 @@ function App() {
         let ctxStep: ExecutionStep = {
           ...ctxStepBase,
           title: 'Context Assembly & Task Spec',
-          detail: [describeRelatedSearch(related), describeProjectRules(related.insights)].filter(Boolean).join(' '),
+          detail: [describeRelatedSearch(related), describeProjectRules(runRules)].filter(Boolean).join(' '),
           status: 'success',
           baselineContext: relatedBaseline,
         };
@@ -3886,6 +3898,19 @@ function App() {
     });
   }, []);
 
+  // The user's rules and skills for every task and for this project's lanes: on project change and bridge (re)connect.
+  const projectFolderPath = activeProject?.folderPath;
+  useEffect(() => {
+    setScopedLanes(activeProject?.swimLanes || []);
+  }, [activeProject?.swimLanes]);
+  useEffect(() => {
+    let wasConnected = false;
+    return bridgeClient.subscribe((status) => {
+      if (status.isConnected && !wasConnected) void loadScopedRules(projectFolderPath);
+      wasConnected = status.isConnected;
+    });
+  }, [projectFolderPath]);
+
   // Save Archived Brief Edit
   const handleSaveArchivedBrief = (updatedBrief: AgentContextItem) => {
     const nextArchivedBriefs = archivedBriefs.map((b) =>
@@ -3941,7 +3966,7 @@ function App() {
         relatedCandidatesPrompt:
           relatedCandidates.length > 0 || relatedNotes.length > 0 ? formatRelatedCandidatesForPrompt(relatedCandidates, relatedNotes) : '',
         priorKnowledge: formatPriorKnowledge(memoryHits),
-        projectRules: formatProjectRules(related.insights),
+        projectRules: formatProjectRules(withScopedRules(related.insights, task.swimLaneId)),
       }
     );
     const syncedOverview = synced.overview;
@@ -4193,6 +4218,7 @@ function App() {
     );
 
     if (oldFilePath !== newFilePath) {
+      void renameLaneScope(oldFilePath, newFilePath); // the lane's skills & rules follow its file
       // Call rename API to move old file to new file on disk
       fetch(bridgeClient.getApiUrl('/api/files/rename'), {
         method: 'POST',
@@ -4383,11 +4409,23 @@ function App() {
     name: string,
     customFolder: string,
     description: string,
-    initialTodoContent?: string
+    initialTodoContent?: string,
+    extraLanes?: ImportedLane[]
   ) => {
     const newProj = createNewProjectData(name, customFolder, description, initialTodoContent);
     // Write the project folder and its TODO.md directly to disk
     await createProjectOnDisk(newProj.folderPath, newProj.todoMarkdown);
+    if (extraLanes && extraLanes.length > 0) {
+      // Imported markdown files beyond the first: a swim lane each (ids as the bridge lists them: lane-<file name>).
+      const lanes: SwimLaneDoc[] = extraLanes.map((l) => ({
+        id: `lane-${l.fileName.replace(/\.md$/i, '').toLowerCase()}`,
+        title: l.title,
+        filePath: `${newProj.folderPath}/${l.fileName}`,
+        markdown: l.markdown,
+      }));
+      await writeFilesToDisk(lanes.map((l) => ({ filePath: l.filePath, content: l.markdown })));
+      newProj.swimLanes = [...(newProj.swimLanes || []), ...lanes];
+    }
     setProjects((prev) => [...prev, newProj]);
     setActiveProjectId(newProj.id);
   };
@@ -4736,6 +4774,10 @@ function App() {
         isOpen={isMcpHubOpen}
         onClose={() => setIsMcpHubOpen(false)}
         mcpServers={mcpServers}
+        activeProject={activeProject && projectStorageId ? { id: projectStorageId, name: activeProject.name } : undefined}
+        onProjectFoldersChange={(folders) =>
+          setProjects((prev) => prev.map((p) => (p.id === activeProjectId ? { ...p, folders: folders.length > 0 ? folders : undefined } : p)))
+        }
         onToggleConnectServer={(serverId) =>
           setMcpServers((prev) => {
             markMcpServerToggled(serverId);

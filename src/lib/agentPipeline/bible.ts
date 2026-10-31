@@ -172,7 +172,7 @@ export class BibleStore {
     }
 
     if (s.projectRules && s.projectRules.length > 0) {
-      out.push("## Project Rules (the user's standing requirements, learned from their feedback on earlier runs)");
+      out.push("## Project Rules (the user's standing requirements: set by them, or learned from their feedback on earlier runs)");
       out.push('_Follow them. Where one conflicts with this task or with the run protocol, the task and the protocol win. Verifier checks them._');
       out.push(...s.projectRules.map((r) => `- ${r}`), '');
     }

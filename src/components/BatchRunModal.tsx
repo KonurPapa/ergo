@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Play, ListOrdered, Check } from 'lucide-react';
 import { type TaskItem } from '../types';
 
@@ -34,7 +35,8 @@ export const BatchRunModal: React.FC<BatchRunModalProps> = ({ isOpen, onClose, t
     });
   const order = new Map(chosen.map((t, i) => [String(t.id), i + 1] as const));
 
-  return (
+  // On document.body: inside the lane the overlay would only cover the lane (its own stacking context).
+  return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content batch-run-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
@@ -123,6 +125,7 @@ export const BatchRunModal: React.FC<BatchRunModalProps> = ({ isOpen, onClose, t
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

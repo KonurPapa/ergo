@@ -6,7 +6,9 @@ import {
 } from '../types';
 
 import {
-  getAllowedRoots,
+  getGlobalAllowedRoots,
+  getProjectFolders,
+  saveProjectFolders,
   getCodeIndexStatus,
   type CodeIndexStatus,
   addAllowedRoot,
@@ -77,6 +79,9 @@ interface McpHubModalProps {
   onAddCustomServer: (newServer: MCPServer) => void;
   onDeleteCustomServer?: (serverId: string) => void;
   onUpdateServer?: (server: MCPServer) => void;
+  /** The open project, which can have Allowed Folders of its own. */
+  activeProject?: { id: string; name: string };
+  onProjectFoldersChange?: (folders: McpRootBoundary[]) => void;
 }
 
 function renderServerIcon(server: MCPServer, isConnected: boolean) {
@@ -297,6 +302,8 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   onAddCustomServer,
   onDeleteCustomServer,
   onUpdateServer,
+  activeProject,
+  onProjectFoldersChange,
 }) => {
   const [activeTab, setActiveTab] = useState<'harnesses' | 'tools-skills' | 'roots' | 'external'>('harnesses');
 
@@ -410,6 +417,9 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   const [codeIndex, setCodeIndex] = useState<CodeIndexStatus[]>([]);
   const [newRootPath, setNewRootPath] = useState('');
   const [newRootName, setNewRootName] = useState('');
+  // The open project's own folders, and whether a new folder is added for it alone or for every project.
+  const [projectFolders, setProjectFolders] = useState<McpRootBoundary[]>([]);
+  const [addScope, setAddScope] = useState<'global' | 'project'>('global');
 
   // GitHub connection modal state
   const [isGhAuthModalOpen, setIsGhAuthModalOpen] = useState(false);
@@ -469,7 +479,15 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      getAllowedRoots().then(setRoots);
+      getGlobalAllowedRoots().then(setRoots);
+      if (activeProject) {
+        getProjectFolders(activeProject.id).then((folders) => {
+          setProjectFolders(folders);
+          if (folders.length > 0) setAddScope('project');
+        });
+      } else {
+        setProjectFolders([]);
+      }
       getGithubMcpStatus()
         .then((st) => {
           if (st.configured) {
@@ -478,7 +496,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
         })
         .catch(() => { });
     }
-  }, [isOpen]);
+  }, [isOpen, activeProject?.id]);
 
   // Code index progress for the Allowed Folders tab: polled while it is open (fast while anything is indexing).
   const anyIndexing = codeIndex.some((c) => c.state === 'scanning' || c.state === 'indexing');
@@ -492,15 +510,28 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
       alive = false;
       clearInterval(timer);
     };
-  }, [isOpen, activeTab, anyIndexing, roots]);
+  }, [isOpen, activeTab, anyIndexing, roots, projectFolders]);
 
   if (!isOpen) return null;
 
   const handleAddRootSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newRootPath.trim()) return;
-    const updated = await addAllowedRoot(newRootPath.trim(), newRootName.trim() || undefined);
-    setRoots(updated);
+    const rootPath = newRootPath.trim();
+    if (!rootPath) return;
+    if (addScope === 'project' && activeProject) {
+      if (!projectFolders.some((f) => f.path === rootPath)) {
+        const folder: McpRootBoundary = {
+          id: `root-${Date.now()}`,
+          path: rootPath,
+          name: newRootName.trim() || rootPath.split(/[\\/]/).filter(Boolean).pop() || 'Folder',
+          isDefault: false,
+          addedAt: new Date().toISOString(),
+        };
+        await updateProjectFolders([...projectFolders, folder]);
+      }
+    } else {
+      setRoots(await addAllowedRoot(rootPath, newRootName.trim() || undefined));
+    }
     setNewRootPath('');
     setNewRootName('');
   };
@@ -508,6 +539,14 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   const handleRemoveRoot = async (id: string) => {
     const updated = await removeAllowedRoot(id);
     setRoots(updated);
+  };
+
+  const updateProjectFolders = async (next: McpRootBoundary[]) => {
+    if (!activeProject) return;
+    const saved = await saveProjectFolders(activeProject.id, next);
+    if (!saved) return;
+    setProjectFolders(saved);
+    onProjectFoldersChange?.(saved);
   };
 
   const handleDiscoverEndpoint = async (url: string, auth?: string) => {
@@ -828,7 +867,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               padding: '0.75rem 1rem',
               border: 'none',
               borderBottom: activeTab === 'harnesses' ? '2px solid var(--accent-cyan)' : '2px solid transparent',
-              color: activeTab === 'harnesses' ? '#fff' : 'var(--text-muted)',
+              color: activeTab === 'harnesses' ? 'var(--text-bright)' : 'var(--text-muted)',
               fontWeight: 600,
               fontSize: '0.84rem',
               background: 'none',
@@ -852,7 +891,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               padding: '0.75rem 1rem',
               border: 'none',
               borderBottom: activeTab === 'tools-skills' ? '2px solid #a855f7' : '2px solid transparent',
-              color: activeTab === 'tools-skills' ? '#fff' : 'var(--text-muted)',
+              color: activeTab === 'tools-skills' ? 'var(--text-bright)' : 'var(--text-muted)',
               fontWeight: 600,
               fontSize: '0.84rem',
               background: 'none',
@@ -877,7 +916,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               padding: '0.75rem 1rem',
               border: 'none',
               borderBottom: activeTab === 'roots' ? '2px solid var(--accent-cyan)' : '2px solid transparent',
-              color: activeTab === 'roots' ? '#fff' : 'var(--text-muted)',
+              color: activeTab === 'roots' ? 'var(--text-bright)' : 'var(--text-muted)',
               fontWeight: 600,
               fontSize: '0.84rem',
               background: 'none',
@@ -901,7 +940,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               padding: '0.75rem 1rem',
               border: 'none',
               borderBottom: activeTab === 'external' ? '2px solid var(--accent-cyan)' : '2px solid transparent',
-              color: activeTab === 'external' ? '#fff' : 'var(--text-muted)',
+              color: activeTab === 'external' ? 'var(--text-bright)' : 'var(--text-muted)',
               fontWeight: 600,
               fontSize: '0.84rem',
               background: 'none',
@@ -1697,12 +1736,86 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                     onChange={(e) => setNewRootName(e.target.value)}
                     style={{ flex: 1 }}
                   />
+                  {activeProject && (
+                    <select
+                      className="input-text"
+                      value={addScope}
+                      onChange={(e) => setAddScope(e.target.value as 'global' | 'project')}
+                      title="Which projects may use this folder"
+                      style={{ flex: '0 1 11rem' }}
+                    >
+                      <option value="global">Every project</option>
+                      <option value="project">Only {activeProject.name}</option>
+                    </select>
+                  )}
                   <button type="submit" className="btn btn-primary" disabled={!newRootPath.trim()} style={{ whiteSpace: 'nowrap' }}>
                     <FolderPlus size={14} />
                     <span>Add Folder</span>
                   </button>
                 </form>
               </div>
+
+              {/* The open project's own folders */}
+              {activeProject && (
+                <div>
+                  <h4 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 0.4rem' }}>
+                    Only {activeProject.name} ({projectFolders.length})
+                  </h4>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0 0 0.75rem', lineHeight: 1.5 }}>
+                    {projectFolders.length > 0
+                      ? <>This project's agents use only these folders (and Ergo's storage), and start in the first one: its working folder. The folders below aren't used by this project.</>
+                      : <>None yet: this project uses the folders allowed for every project, below. Give it its own (for example its repo) with "Only {activeProject.name}" above, and its agents stop looking anywhere else.</>}
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                    {projectFolders.map((folder, i) => (
+                      <div
+                        key={folder.id}
+                        style={{
+                          background: 'var(--bg-card)',
+                          border: `1px solid ${i === 0 ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
+                          borderRadius: 'var(--radius-sm)',
+                          padding: '0.75rem 1rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between'
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          <Folder size={18} color="var(--accent-cyan)" />
+                          <div>
+                            <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-bright)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                              <span>{folder.name}</span>
+                              {i === 0 && <span className="badge badge-done" style={{ fontSize: '0.65rem' }}>Working folder</span>}
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', marginTop: '0.1rem' }}>{folder.path}</div>
+                            <CodeIndexLine status={codeIndex.find((c) => samePath(c.root, folder.path))} />
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                          {i > 0 && (
+                            <button
+                              className="btn btn-secondary"
+                              style={{ padding: '0.3rem 0.55rem', fontSize: '0.72rem' }}
+                              onClick={() => updateProjectFolders([folder, ...projectFolders.filter((f) => f.id !== folder.id)])}
+                              title="Make this the folder the project's agents start in"
+                            >
+                              Make working folder
+                            </button>
+                          )}
+                          <button
+                            className="btn btn-secondary"
+                            style={{ padding: '0.3rem 0.5rem', color: 'var(--accent-rose)' }}
+                            onClick={() => updateProjectFolders(projectFolders.filter((f) => f.id !== folder.id))}
+                            title="Remove this folder from the project"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Roots List */}
               <div>
@@ -1717,7 +1830,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                       margin: 0
                     }}
                   >
-                    Configured Folders ({roots.length})
+                    {activeProject ? 'Every project' : 'Configured Folders'} ({roots.length})
                   </h4>
                 </div>
 

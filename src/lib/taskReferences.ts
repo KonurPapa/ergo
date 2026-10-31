@@ -12,6 +12,7 @@
  */
 import type { AgentContextItem, ProjectData, TaskItem, WorkspaceSkill } from '../types';
 import { bridgeClient } from './bridgeClient';
+import { scopedSkillsFor } from './scopedRules';
 
 /** Bridge protocol that serves /api/files/search, /api/files/pick, /api/files/refs and the workspace-tool relay. */
 export const TASK_REFERENCES_PROTOCOL = 4;
@@ -20,9 +21,12 @@ export function bridgeSupportsTaskReferences(): boolean {
   return (bridgeClient.getStatus().bridgeInfo?.protocol ?? 0) >= TASK_REFERENCES_PROTOCOL;
 }
 
-/** The folder a project's agents work in (the cwd CLI runs launch with); relative paths in `@` references start here. */
-export function projectWorkingFolder(project: Pick<ProjectData, 'folderPath'> | null | undefined): string {
-  return project?.folderPath || '~';
+/**
+ * The folder a project's agents work in (the cwd CLI runs launch with); relative paths in `@` references start here.
+ * The first of the project's own Allowed Folders (its repo), else its folder in Ergo's storage.
+ */
+export function projectWorkingFolder(project: Pick<ProjectData, 'folderPath' | 'folders'> | null | undefined): string {
+  return project?.folders?.[0]?.path || project?.folderPath || '~';
 }
 
 // ── Skills ──
@@ -175,14 +179,17 @@ export function hasTaskReferences(refs: TaskReferenceContext | undefined): refs 
  * has no commands.
  */
 export async function resolveTaskReferences(
-  task: Pick<TaskItem, 'title' | 'subtasks'>,
-  brief: Pick<AgentContextItem, 'sourceContent'> | undefined,
+  task: Pick<TaskItem, 'title' | 'subtasks' | 'swimLaneId'>,
+  brief: Pick<AgentContextItem, 'sourceContent' | 'sourceLaneId'> | undefined,
   skills: WorkspaceSkill[],
   cwd: string
 ): Promise<TaskReferenceContext | undefined> {
   const text = taskCommandText(task, brief);
   const bySlug = skillsBySlug(skills);
-  const invoked: InvokedSkillRef[] = findInvokedSkills(text, skills).map((s) => ({
+  // Invoked with /name in the task, or set by the user for every task or for the task's lane.
+  const named = findInvokedSkills(text, skills);
+  const scoped = scopedSkillsFor(task.swimLaneId ?? brief?.sourceLaneId, skills).filter((s) => !named.includes(s));
+  const invoked: InvokedSkillRef[] = [...named, ...scoped].map((s) => ({
     id: s.id,
     slug: [...bySlug.entries()].find(([, v]) => v === s)?.[0] || skillSlug(s),
     name: s.name,
@@ -235,7 +242,7 @@ export function formatReferenceSections(refs: TaskReferenceContext | undefined, 
         ? `\nThe Ergo workspace tools these skills call (workspace_list_swim_lanes, workspace_create_subtask, …) are available to you as tools; they act on the user's task board in Ergo.`
         : `\nThe Ergo workspace tools these skills mention (workspace_*) are NOT available in this run. Do every part you can without them, and list the steps you could not do in your completion record.`;
     sections.push(
-      `SKILLS THE USER INVOKED (written as /name in the task; apply each one as part of this task, following its rules):${toolsNote}\n\n${blocks.join('\n\n')}`
+      `SKILLS THE USER INVOKED (written as /name in the task, or set by the user for every task or for this task's swim lane; apply each one as part of this task, following its rules):${toolsNote}\n\n${blocks.join('\n\n')}`
     );
   }
   if (refs.files.length > 0) {
