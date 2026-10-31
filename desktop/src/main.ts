@@ -175,20 +175,23 @@ function announce() {
 
 function refreshTray() {
   if (!tray) return;
+  const version = app.getVersion();
   const status = state.kind === 'running'
     ? `running on port ${state.port}`
     : state.kind === 'starting'
       ? 'starting…'
       : `not running (${state.detail})`;
-  tray.setToolTip(`Ergo Bridge: ${status}`);
+  tray.setToolTip(`Ergo Bridge v${version}: ${status}`);
   const updateLabel =
     update.status === 'downloading' ? `Downloading update ${update.version ?? ''} (${update.percent ?? 0}%)`
       : update.status === 'ready' ? `Update ${update.version ?? ''} installs when no task is running`
         : update.status === 'installing' ? 'Installing update…'
           : null;
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: `Ergo Bridge is ${status}`, enabled: false },
+    { label: `Ergo Bridge v${version}`, enabled: false },
+    { label: `Status: ${status}`, enabled: false },
     ...(updateLabel ? [{ label: updateLabel, enabled: false }] : []),
+    { type: 'separator' },
     { label: 'Open Ergo', click: openErgo },
     { type: 'separator' },
     { label: 'Start at login', type: 'checkbox', checked: isStartAtLogin(), click: (item) => setStartAtLogin(item.checked) },
