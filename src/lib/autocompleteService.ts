@@ -3,6 +3,8 @@ import { callAiEngine } from './llmClient';
 import { tinyCloudCallConfig } from './agentPipeline/modelRouter';
 import { localComplete } from './localModel/client';
 import { getLocalModelMode } from './localModel/preference';
+import { getPref } from './userPrefs';
+import { BETA_STORAGE_KEY } from '../context/BetaContext';
 
 /** Old built-in autocomplete defaults that profiles stored as pins. */
 const RETIRED_AUTOCOMPLETE_DEFAULTS = new Set(['claude-3-5-haiku-20241022']);
@@ -123,8 +125,9 @@ async function localSuggestion(ctx: AutocompleteContext, signal?: AbortSignal): 
  * Generate autocomplete completion string based on minimal lightweight AI query.
  * Can return either an inline suffix or a full replacement line (with rewording/grammar/typo fixes).
  *
- * With the local model selected (Settings → Local AI model) it answers first; when it is unavailable or has no
- * suggestion, the tiny cloud model of the active AI profile is asked instead.
+ * With the local model selected (Settings → Local AI model) and beta features on, it answers first; when it is
+ * unavailable or has no suggestion, the tiny cloud model of the active AI profile is asked instead. Local autocomplete
+ * is beta: without a cloud model it was the only source, and its guesses kept interrupting the user.
  */
 /**
  * Provider config for the active profile's small model — the one autocomplete and other little jobs (e.g. the file
@@ -152,7 +155,7 @@ export async function getAutocompleteSuggestion(
     return null;
   }
 
-  if (getLocalModelMode() === 'local') {
+  if (getLocalModelMode() === 'local' && getPref(BETA_STORAGE_KEY) === 'true') {
     const local = await localSuggestion(ctx, signal);
     if (local || signal?.aborted) return local;
   }

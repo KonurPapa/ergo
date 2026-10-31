@@ -5590,6 +5590,122 @@ button.related-task-title.is-link:focus-visible {
   gap: 0.65rem;
 }
 
+/* Run several tasks (BatchRunModal) */
+.batch-run-modal {
+  max-width: 520px;
+  width: 95vw;
+}
+
+.batch-run-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1rem 1.25rem;
+}
+
+.batch-run-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
+.batch-run-toolbar span {
+  flex: 1;
+}
+
+.batch-run-toolbar button {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.74rem;
+  color: var(--accent-violet);
+  cursor: pointer;
+}
+
+.batch-run-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.batch-run-task {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.batch-run-task:hover {
+  border-color: var(--accent-violet);
+}
+
+.batch-run-task.is-selected {
+  border-color: var(--accent-violet);
+  background: rgba(139, 92, 246, 0.08);
+  color: var(--text-bright);
+}
+
+.batch-run-task.is-done .batch-run-title {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.batch-run-check {
+  flex-shrink: 0;
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.68rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+.batch-run-task.is-selected .batch-run-check {
+  border-color: var(--accent-violet);
+  background: var(--accent-violet);
+  color: #fff;
+}
+
+.batch-run-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-run-tag {
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
+.batch-run-parallel {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
 /* Form Controls */
 .input-group {
   display: flex;

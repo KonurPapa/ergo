@@ -27,7 +27,7 @@ import { storageManager } from '../lib/storageManager';
 import { getPref, setPref, subscribePrefs } from '../lib/userPrefs';
 import { bridgeClient } from '../lib/bridgeClient';
 import { HumanAiAssistantModal } from './HumanAiAssistantModal';
-import { BatchRunModal } from './BatchRunModal';
+import { BatchRunModal, type BatchRunMode } from './BatchRunModal';
 import { BetaFeature, useBeta } from '../context/BetaContext';
 import { ScheduleTaskModal } from './ScheduleTaskModal';
 import { getAutocompleteSuggestion, listContextAround } from '../lib/autocompleteService';
@@ -36,7 +36,9 @@ import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { canJoin } from '@tiptap/pm/transform';
+import { Fragment, type Node as PMNode } from '@tiptap/pm/model';
 import { MARKDOWN_WRAPPER_PAIRS } from '../lib/markdownEditorUtils';
+import { applyExternalMarkdown } from '../lib/editorSync';
 import { createTaskCommandExtension, insertFileReferences, insertSkillCommand, type TaskCommandHandlers, type TaskCommandState } from '../lib/taskCommandExtension';
 import { TaskCommandMenu, type TaskCommandMenuHandle } from './TaskCommandMenu';
 import { getWorkspaceSkills, subscribeWorkspaceSkills } from '../lib/skillsManager';
@@ -82,7 +84,8 @@ import {
   Baseline,
   RemoveFormatting,
   IndentIncrease,
-  IndentDecrease
+  IndentDecrease,
+  Play
 } from 'lucide-react';
 
 interface WithMarkdownStorage {
@@ -356,6 +359,18 @@ function getTaskIndexAtPos(doc: any, pos: number): number | null {
   return found;
 }
 
+// Helper: a click on a card widget's empty area (contenteditable=false) puts the caret on the text beside it, at the
+// click's height. Left to the browser, the caret landed at the end of the task list.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function placeCaretBesideWidget(view: any, widget: HTMLElement, event: MouseEvent, side: 'left' | 'right') {
+  event.preventDefault();
+  event.stopPropagation();
+  const rect = widget.getBoundingClientRect();
+  const hit = view.posAtCoords({ left: side === 'left' ? rect.left - 2 : rect.right + 2, top: event.clientY });
+  if (hit) view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(hit.pos))));
+  view.focus();
+}
+
 // Extension: Auto-join directly adjacent ordered lists and bullet lists
 const AutoJoinListsExtension = Extension.create({
   name: 'autoJoinLists',
@@ -408,6 +423,121 @@ const AutoJoinListsExtension = Extension.create({
     ];
   },
 });
+
+// Extension: every task keeps a title line. Deleting a selection that runs from outside the list into a task's title
+// merges that title into the block above and left the task's subtasks under a parent with no title (`1. - sub`).
+const TitledTasksExtension = Extension.create({
+  name: 'titledTasks',
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: new PluginKey('titledTasksPlugin'),
+        appendTransaction(transactions, _oldState, newState) {
+          if (!transactions.some((t) => t.docChanged)) return null;
+          const paragraph = newState.schema.nodes.paragraph;
+          const tr = newState.tr;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          newState.doc.descendants((node: any, pos: number) => {
+            if (node.type.name === 'listItem' && node.firstChild && isListNode(node.firstChild)) {
+              tr.insert(tr.mapping.map(pos + 1), paragraph.create());
+            }
+          });
+          return tr.docChanged ? tr : null;
+        },
+      }),
+    ];
+  },
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function isListNode(node: any): boolean {
+  return node?.type.name === 'bulletList' || node?.type.name === 'orderedList';
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function isCollapsedCard(view: any, itemPos: number): boolean {
+  const dom = view.nodeDOM(itemPos);
+  return dom instanceof HTMLElement && dom.classList.contains('card-collapsed');
+}
+
+// Helper: the end of the last line the user can see in a task: its title when the card is collapsed, otherwise its
+// last line (a subtask's, when it has any).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function lastVisibleLineEnd(view: any, item: any, itemPos: number): number | null {
+  if (isCollapsedCard(view, itemPos) && item.firstChild?.isTextblock) return itemPos + item.firstChild.nodeSize;
+  let end: number | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  item.descendants((child: any, childPos: number) => {
+    if (!child.isTextblock) return true;
+    end = itemPos + 1 + childPos + child.nodeSize - 1;
+    return false;
+  });
+  return end;
+}
+
+/**
+ * Removes the task (or subtask) at `itemDepth` the way deleting a line break would: its title text joins the end of
+ * the line above it (the previous sibling's last visible line) and its subtasks move into that sibling's subtasks.
+ * Nothing is orphaned. Returns null when the item has no previous sibling.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mergeTaskIntoPrevious(view: any, $pos: any, itemDepth: number) {
+  const { state } = view;
+  const index = $pos.index(itemDepth - 1);
+  if (index === 0) return null;
+  const item = $pos.node(itemDepth);
+  const title = item.firstChild;
+  if (!title?.isTextblock) return null;
+  const itemPos = $pos.before(itemDepth);
+  const prev = $pos.node(itemDepth - 1).child(index - 1);
+  const prevPos = itemPos - prev.nodeSize;
+  const joinAt = lastVisibleLineEnd(view, prev, prevPos);
+  if (joinAt == null) return null;
+
+  const rest = item.content.cut(title.nodeSize);
+  const prevContentEnd = prevPos + prev.nodeSize - 1;
+  const tr = state.tr.delete(itemPos, itemPos + item.nodeSize);
+  if (rest.size) {
+    // Subtasks join the previous task's own subtask list when it has one.
+    if (isListNode(prev.lastChild) && isListNode(rest.firstChild)) {
+      const remaining = rest.cut(rest.firstChild.nodeSize);
+      tr.insert(prevContentEnd - 1, rest.firstChild.content);
+      if (remaining.size) tr.insert(tr.mapping.map(prevContentEnd), remaining);
+    } else {
+      tr.insert(prevContentEnd, rest);
+    }
+  }
+  if (title.content.size) tr.insert(joinAt, title.content);
+  return tr.setSelection(TextSelection.create(tr.doc, joinAt)).scrollIntoView();
+}
+
+/**
+ * Forward-delete at the end of a task's title when the next line is its first subtask: the subtask's text joins the
+ * title and the subtask's own subtasks take its place in the list.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mergeFirstSubtaskIntoParent(view: any, joinAt: number, $next: any, itemDepth: number) {
+  const { state } = view;
+  const item = $next.node(itemDepth);
+  const title = item.firstChild;
+  const rest = item.content.cut(title.nodeSize);
+  let children = Fragment.empty;
+  let movable = true;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  rest.forEach((block: any) => {
+    if (isListNode(block)) children = children.append(block.content);
+    else movable = false;
+  });
+  if (!movable) return null;
+
+  const list = $next.node(itemDepth - 1);
+  const itemPos = $next.before(itemDepth);
+  const tr = list.childCount === 1 && !children.size
+    ? state.tr.delete($next.before(itemDepth - 1), $next.after(itemDepth - 1))
+    : state.tr.replaceWith(itemPos, itemPos + item.nodeSize, children);
+  if (title.content.size) tr.insert(joinAt, title.content);
+  return tr.setSelection(TextSelection.create(tr.doc, joinAt)).scrollIntoView();
+}
 
 // Extension: Custom keymap for list item navigation and creation
 const CustomListKeymapExtension = Extension.create({
@@ -523,6 +653,27 @@ const CustomListKeymapExtension = Extension.create({
               }
             });
 
+            const atTitleStart = $from.parentOffset === 0 && $from.depth === depth + 1 && $from.index(depth) === 0;
+            // At the start of a task's title, Backspace removes the line break above it: the title joins the line
+            // above and its subtasks join that task's subtasks. (Lifting it out of the list orphaned its subtasks
+            // and restarted the numbering of every task below.)
+            if (isTopLevelCard && atTitleStart) {
+              const merged = mergeTaskIntoPrevious(view, $from, depth);
+              if (merged) {
+                view.dispatch(merged);
+                return true;
+              }
+              // The list's first task has no line above in the list. Keep its subtasks attached: an empty title gives
+              // way to them (they become tasks); a titled one stays a task.
+              const sublist = node.childCount === 2 && isListNode(node.lastChild) ? node.lastChild : null;
+              if (!isCardEmpty && $from.parent.content.size === 0 && sublist) {
+                const tr = state.tr.replaceWith($from.before(depth), $from.after(depth), sublist.content);
+                view.dispatch(tr.setSelection(TextSelection.near(tr.doc.resolve($from.pos))).scrollIntoView());
+                return true;
+              }
+              if (!isCardEmpty && node.childCount > 1) return true;
+            }
+
             if (isCardEmpty) {
               // Lift empty list item back into a paragraph, or remove if empty list
               if (editor.can().liftListItem('listItem')) {
@@ -537,16 +688,6 @@ const CustomListKeymapExtension = Extension.create({
               view.dispatch(tr);
               return true;
             }
-
-            if (isTopLevelCard) {
-              const cardStartPos = $from.start(depth);
-              if ($from.pos === cardStartPos) {
-                const indexInParent = $from.index(depth - 1);
-                if (indexInParent > 0) {
-                  return true;
-                }
-              }
-            }
             break;
           }
         }
@@ -558,6 +699,35 @@ const CustomListKeymapExtension = Extension.create({
         const { $from, empty } = selection;
 
         if (!empty) return false;
+
+        // At the end of a line, Delete removes the line break below it: the next task or subtask joins this line and
+        // its subtasks stay attached (they were pulled in as a loose paragraph, or moved under the wrong task).
+        if ($from.parent.isTextblock && $from.parentOffset === $from.parent.content.size) {
+          const lineDepth = $from.depth - 1;
+          const inTitle = lineDepth > 0 && $from.node(lineDepth).type.name === 'listItem' && $from.index(lineDepth) === 0;
+          // The next line the user sees: past a collapsed card's hidden subtasks.
+          const afterLine = inTitle && isCollapsedCard(view, $from.before(lineDepth)) ? $from.after(lineDepth) : $from.after();
+          const $next = afterLine < state.doc.content.size ? Selection.findFrom(state.doc.resolve(afterLine), 1, true)?.$from : null;
+          const nextDepth = $next ? $next.depth - 1 : 0;
+          if ($next && nextDepth > 0 && $next.parentOffset === 0 && $next.node(nextDepth).type.name === 'listItem' && $next.index(nextDepth) === 0) {
+            const listDepth = nextDepth - 1;
+            const nestedList = listDepth > 0 && $next.node(listDepth - 1).type.name === 'listItem';
+            let tr = null;
+            if ($next.index(listDepth) > 0) {
+              tr = mergeTaskIntoPrevious(view, $next, nextDepth);
+              if (tr && tr.selection.from !== $from.pos) tr = null;
+            } else if (nestedList && $next.before(listDepth) === $from.after()) {
+              tr = mergeFirstSubtaskIntoParent(view, $from.pos, $next, nextDepth);
+            } else if (!nestedList && $next.node(nextDepth).childCount > 1) {
+              // The first task of a list, below a header or note: joining its title upward would orphan its subtasks.
+              return true;
+            }
+            if (tr) {
+              view.dispatch(tr);
+              return true;
+            }
+          }
+        }
 
         for (let depth = $from.depth; depth > 0; depth--) {
           const node = $from.node(depth);
@@ -639,8 +809,8 @@ interface SwimLaneColumnProps {
   onEditorReady?: (laneId: string, editorInstance: any) => void;
   // Freeform text selection or task card handler to create AI task
   onCreateTaskFromSelection?: (selectedText: string, laneId: string, laneTitle: string, sourceTask?: TaskItemType) => void;
-  onRunTasksSequence?: (tasks: TaskItemType[], laneId: string, laneTitle: string) => void;
-  onRunTasksParallel?: (tasks: TaskItemType[], laneId: string, laneTitle: string) => void;
+  /** Run several tasks of a lane: one after another (queued) or all at once. */
+  onRunTasks?: (tasks: TaskItemType[], laneId: string, laneTitle: string, mode: BatchRunMode) => void;
   onScheduleTask?: (taskId: string | number, scheduledIso: string, cronExpr?: string) => void;
   // Selected lane action drawer props
   isAssistantOpen?: boolean;
@@ -675,8 +845,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   archivedTasksCount = 0,
   onArchiveTask,
   onCreateTaskFromSelection,
-  onRunTasksSequence,
-  onRunTasksParallel,
+  onRunTasks,
   onScheduleTask,
   assistantDrawerHeight,
   onEditorReady,
@@ -716,12 +885,8 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   const isBetaEnabledRef = useRef(isBetaEnabled);
   isBetaEnabledRef.current = isBetaEnabled;
 
-  // Run-task menu modal state (batch sequence/parallel + schedule)
-  const [batchModal, setBatchModal] = useState<{
-    mode: 'sequence' | 'parallel';
-    task: TaskItemType;
-    remaining: TaskItemType[];
-  } | null>(null);
+  // Run-task menu modal state ("Several tasks…" / the lane header's Run, and schedule)
+  const [batchModal, setBatchModal] = useState<{ selectedIds: Array<string | number>; openedAt: number } | null>(null);
   const [scheduleModalTask, setScheduleModalTask] = useState<TaskItemType | null>(null);
   const setBatchModalRef = useRef(setBatchModal);
   setBatchModalRef.current = setBatchModal;
@@ -790,7 +955,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         new Plugin({
           key: new PluginKey(`taskCheckboxDecorationPlugin_${lane.id}`),
           props: {
-            handleClick(view, pos) {
+            handleClick(view, pos, event) {
               if (onSelectTaskRef.current) {
                 const itemIndex = getTaskIndexAtPos(view.state.doc, pos);
                 if (itemIndex !== null) {
@@ -798,6 +963,11 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                   const targetTask = laneTasksRef.current[itemIndex - 1];
                   const targetId = targetTask ? targetTask.id : `${lane.id}_task_${itemIndex}`;
                   if (selectedTaskIdRef.current !== targetId) {
+                    // Selecting a task re-renders the lane before ProseMirror reads the caret the browser just placed,
+                    // which redrew the old selection instead (often the end of the list). Commit the click first.
+                    if (!event.shiftKey) {
+                      view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(pos))));
+                    }
                     onSelectTaskRef.current(targetId);
                   }
                 }
@@ -963,6 +1133,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                         e.stopPropagation();
                       });
                       checkbox.addEventListener('click', toggleParentTask);
+                      container.addEventListener('mousedown', (e) => placeCaretBesideWidget(view, container, e, 'right'));
 
                       container.appendChild(checkbox);
                       return container;
@@ -1020,6 +1191,10 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                       const container = document.createElement('div');
                       container.className = 'card-actions-wrapper';
                       container.setAttribute('contenteditable', 'false');
+                      // The buttons stay hidden until hover, but this box still covers the end of the task's first line.
+                      container.addEventListener('mousedown', (e) => {
+                        if (!(e.target as HTMLElement).closest('button, .card-dropdown-menu')) placeCaretBesideWidget(view, container, e, 'left');
+                      });
 
                       // Running status pill
                       if (isCardRunning) {
@@ -1112,31 +1287,15 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                           },
                           ...(isBetaEnabledRef.current ? [
                             {
-                              label: 'Tasks in sequence...',
-                              tip: 'Run this and X number of following tasks in this list in order',
+                              label: 'Several tasks...',
+                              tip: 'Pick tasks in this list to run one after another, or all at once',
                               icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="10" y1="6" x2="21" y2="6"></line><line x1="10" y1="12" x2="21" y2="12"></line><line x1="10" y1="18" x2="21" y2="18"></line><path d="M4 6h1v4"></path><path d="M4 10h2"></path><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"></path></svg>`,
                               action: () => {
                                 if (!matchedTask) return;
+                                // This task and the not-done ones after it, ready to trim.
                                 const idx = laneTasksRef.current.findIndex((t) => t.id === matchedTask.id);
-                                setBatchModalRef.current({
-                                  mode: 'sequence',
-                                  task: matchedTask,
-                                  remaining: idx >= 0 ? laneTasksRef.current.slice(idx + 1) : [],
-                                });
-                              },
-                            },
-                            {
-                              label: 'Tasks in parallel...',
-                              tip: 'Run this and X number of following tasks in this list at once',
-                              icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="12" r="2.5"></circle><circle cx="18" cy="6" r="2"></circle><circle cx="18" cy="12" r="2"></circle><circle cx="18" cy="18" r="2"></circle><path d="M8.5 12h7.5"></path><path d="M8.5 11c3 0 5-3.5 7.5-4.5"></path><path d="M8.5 13c3 0 5 3.5 7.5 4.5"></path></svg>`,
-                              action: () => {
-                                if (!matchedTask) return;
-                                const idx = laneTasksRef.current.findIndex((t) => t.id === matchedTask.id);
-                                setBatchModalRef.current({
-                                  mode: 'parallel',
-                                  task: matchedTask,
-                                  remaining: idx >= 0 ? laneTasksRef.current.slice(idx + 1) : [],
-                                });
+                                const after = idx >= 0 ? laneTasksRef.current.slice(idx + 1).filter((t) => !t.isDone) : [];
+                                setBatchModalRef.current({ selectedIds: [matchedTask.id, ...after.map((t) => t.id)], openedAt: Date.now() });
                               },
                             },
                           ] : []),
@@ -1638,21 +1797,31 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   onMarkdownChangeRef.current = onMarkdownChange;
   const markdownDebounceTimerRef = useRef<any>(null);
   const editorInstanceRef = useRef<any>(null);
+  // What the app last saw of this lane: the markdown string and the document it came from. Lets the sync below tell
+  // its own edits coming back from changes made outside the editor.
+  const syncedMarkdownRef = useRef<string>(stripHeaderComments(lane.markdown));
+  const syncedDocRef = useRef<PMNode | null>(null);
+
+  const emitMarkdownChange = useCallback(() => {
+    const currentEd = editorInstanceRef.current;
+    if (currentEd && !currentEd.isDestroyed) {
+      const storage = (currentEd as unknown as WithMarkdownStorage).storage;
+      const md = storage?.markdown?.getMarkdown();
+      if (typeof md === 'string') {
+        syncedMarkdownRef.current = md;
+        syncedDocRef.current = currentEd.state.doc;
+        onMarkdownChangeRef.current(lane.id, md);
+      }
+    }
+  }, [lane.id]);
 
   const flushMarkdownChange = useCallback(() => {
     if (markdownDebounceTimerRef.current) {
       clearTimeout(markdownDebounceTimerRef.current);
       markdownDebounceTimerRef.current = null;
     }
-    const currentEd = editorInstanceRef.current;
-    if (currentEd && !currentEd.isDestroyed) {
-      const storage = (currentEd as unknown as WithMarkdownStorage).storage;
-      const md = storage?.markdown?.getMarkdown();
-      if (typeof md === 'string') {
-        onMarkdownChangeRef.current(lane.id, md);
-      }
-    }
-  }, [lane.id]);
+    emitMarkdownChange();
+  }, [emitMarkdownChange]);
 
   useEffect(() => {
     return () => {
@@ -1667,16 +1836,9 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
     // Debounce markdown serialization, AST parsing, and autosave until 800ms of user typing idle
     markdownDebounceTimerRef.current = setTimeout(() => {
       markdownDebounceTimerRef.current = null;
-      const currentEd = editorInstanceRef.current;
-      if (currentEd && !currentEd.isDestroyed) {
-        const storage = (currentEd as unknown as WithMarkdownStorage).storage;
-        const md = storage?.markdown?.getMarkdown();
-        if (typeof md === 'string') {
-          onMarkdownChangeRef.current(lane.id, md);
-        }
-      }
+      emitMarkdownChange();
     }, 800);
-  }, [lane.id]);
+  }, [emitMarkdownChange]);
 
   // Extension: Pop up markdown formatting characters (e.g. backticks around code) on hover,
   // allowing user to click to delete them, while keeping formatting clean the rest of the time.
@@ -2115,6 +2277,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         transformCopiedText: true,
       }),
       AutoJoinListsExtension,
+      TitledTasksExtension,
       CustomListKeymapExtension,
       TaskCheckboxDecorationExtension,
       AutoSurroundExtension,
@@ -2173,6 +2336,9 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         }
         return false;
       },
+    },
+    onCreate: ({ editor: createdEditor }) => {
+      syncedDocRef.current = createdEditor.state.doc;
     },
     onFocus: () => {
       onActivate();
@@ -2470,19 +2636,18 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
     }
   }, [editor, lane.id, onEditorReady]);
 
-  // Synchronize editor content when external lane.markdown changes
+  // Synchronize editor content when external lane.markdown changes. Only the changed part is replaced, so the caret
+  // stays put (a whole-document setContent threw it to the end of the list), and typing the app hasn't seen is kept.
   useEffect(() => {
-    if (editor) {
-      const stripped = stripHeaderComments(lane.markdown);
-      const storage = (editor as unknown as WithMarkdownStorage).storage;
-      const currentMd = storage.markdown?.getMarkdown();
-      if (currentMd !== stripped) {
-        // If the editor is focused, check whether focus is actually inside the ProseMirror dom
-        // When clicking dropdown action buttons (e.g. Archive Task), the editor may have had focus
-        // but external state changes should win.
-        editor.commands.setContent(stripped, { emitUpdate: false });
-      }
-    }
+    if (!editor || editor.isDestroyed) return;
+    const stripped = stripHeaderComments(lane.markdown);
+    // Our own last edit coming back: the editor may already be ahead of it, and nothing changed outside.
+    if (stripped === syncedMarkdownRef.current) return;
+    syncedMarkdownRef.current = stripped;
+    const currentMd = (editor as unknown as WithMarkdownStorage).storage.markdown?.getMarkdown();
+    syncedDocRef.current = currentMd === stripped
+      ? editor.state.doc
+      : applyExternalMarkdown(editor, stripped, syncedDocRef.current);
   }, [lane.markdown, editor]);
 
   // Toolbar action helpers
@@ -2587,6 +2752,22 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+          {/* Run the lane's tasks (opens the picker with every task not done yet ticked) */}
+          {isBetaEnabled && onRunTasks && laneTasks.length > 0 && (
+            <button
+              type="button"
+              className="swimlane-menu-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setBatchModal({ selectedIds: laneTasks.filter((t) => !t.isDone).map((t) => t.id), openedAt: Date.now() });
+              }}
+              title="Run this lane's tasks..."
+              aria-label="Run this lane's tasks"
+            >
+              <Play size={14} />
+            </button>
+          )}
+
           {/* Styles Toolbar Toggle folded into lane header */}
           <button
             type="button"
@@ -2833,6 +3014,15 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
             overflowY: 'auto',
             // Room below the last task so the add-task button never covers it.
             paddingBottom: `${(isActive && isAssistantOpen ? assistantDrawerHeight : 0) + 72}px`,
+          }}
+          onMouseDown={(e) => {
+            // Empty space around the tasks belongs to the editor: a click there puts the caret at the end, so typing
+            // and Backspace never land on the page itself. (Clicks on the scrollbar are left alone.)
+            const container = e.currentTarget;
+            const onScrollbar = e.clientX - container.getBoundingClientRect().left >= container.clientWidth;
+            if (!editor || onScrollbar || (e.target as HTMLElement).closest('.ProseMirror')) return;
+            e.preventDefault();
+            editor.commands.focus('end');
           }}
         >
           <EditorContent editor={editor} className="tiptap-editor-root" />
@@ -3119,16 +3309,12 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
 
       {batchModal && (
         <BatchRunModal
-          key={`${batchModal.mode}_${batchModal.task.id}`}
+          key={batchModal.openedAt}
           isOpen
-          mode={batchModal.mode}
-          startTask={batchModal.task}
-          remainingTasks={batchModal.remaining}
+          tasks={laneTasks}
+          initialSelectedIds={batchModal.selectedIds}
           onClose={() => setBatchModal(null)}
-          onConfirm={(selected, mode) => {
-            if (mode === 'sequence') onRunTasksSequence?.(selected, lane.id, lane.title);
-            else onRunTasksParallel?.(selected, lane.id, lane.title);
-          }}
+          onConfirm={(selected, mode) => onRunTasks?.(selected, lane.id, lane.title, mode)}
         />
       )}
       {scheduleModalTask && (
@@ -3172,8 +3358,8 @@ interface TaskPaneProps {
   onDeleteSwimLane?: (laneId: string) => void;
   onSwimLaneMarkdownChange?: (laneId: string, newMarkdown: string) => void;
   onCreateTaskFromSelection?: (selectedText: string, laneId: string, laneTitle: string, sourceTask?: TaskItemType) => void;
-  onRunTasksSequence?: (tasks: TaskItemType[], laneId: string, laneTitle: string) => void;
-  onRunTasksParallel?: (tasks: TaskItemType[], laneId: string, laneTitle: string) => void;
+  /** Run several tasks of a lane: one after another (queued) or all at once. */
+  onRunTasks?: (tasks: TaskItemType[], laneId: string, laneTitle: string, mode: BatchRunMode) => void;
   onScheduleTask?: (taskId: string | number, scheduledIso: string, cronExpr?: string) => void;
   autocompleteSettings?: import('../types').AutocompleteSettings;
   onUpdateTaskMcpTools?: (taskId: string | number, toolNames: string[]) => void;
@@ -3203,8 +3389,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   onDeleteSwimLane,
   onSwimLaneMarkdownChange,
   onCreateTaskFromSelection,
-  onRunTasksSequence,
-  onRunTasksParallel,
+  onRunTasks,
   onScheduleTask,
   autocompleteSettings = { enabled: true, keybinding: 'Tab' },
   onUpdateTaskMcpTools: _onUpdateTaskMcpTools,
@@ -3353,8 +3538,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
               archivedTasksCount={archivedTasks.length}
               onArchiveTask={onArchiveTask}
               onCreateTaskFromSelection={onCreateTaskFromSelection}
-              onRunTasksSequence={onRunTasksSequence}
-              onRunTasksParallel={onRunTasksParallel}
+              onRunTasks={onRunTasks}
               onScheduleTask={onScheduleTask}
               assistantDrawerHeight={assistantDrawerHeight}
               onEditorReady={handleEditorReady}

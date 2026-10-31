@@ -20,8 +20,10 @@
  *      Optional: with an older bridge nothing is learned and runs get no rules (insights.ts).
  *  6 — /api/pty/activity: what a CLI agent is doing, in plain words (the status line above the task prompt box).
  *      Optional: with an older bridge the line only shows that the agent is working (AgentLiveStatus.tsx).
+ *  7 — task agents' terminals are saved on disk: /api/pty/history (list), /api/pty/history/delete, replay of a saved
+ *      terminal on attach, spawn `taskTitle`. Optional: with an older bridge terminals live only in its memory.
  */
-export const BRIDGE_PROTOCOL = 6;
+export const BRIDGE_PROTOCOL = 7;
 
 /** First protocol whose bridge stores learned rules (namespace `insights`). */
 export const INSIGHTS_PROTOCOL = 5;
@@ -33,7 +35,7 @@ export const ACTIVITY_PROTOCOL = 6;
 export const QUESTION_SIGNAL_PROTOCOL = 3;
 
 /** The oldest bridge this web app works with; an older one is updated (automatically where it can be). */
-export const MIN_BRIDGE_PROTOCOL = 2;
+export const MIN_BRIDGE_PROTOCOL = 7;
 
 export type BridgeUpdateStatus =
   | 'idle'

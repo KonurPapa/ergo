@@ -682,6 +682,92 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     return `Summarizes older context at ${k(at)} tokens (window ${k(window)}${setting?.mode === 'manual' ? '' : ', 80%'}). The newest 4 tool exchanges stay word for word.`;
   };
 
+  // Context compaction: under the Ollama settings for Ollama profiles (its small windows are where it matters, and it's
+  // on by default there), in Advanced Settings for the rest.
+  const compactionCard = (
+    <div
+      style={{
+        background: 'var(--bg-card)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 'var(--radius-sm)',
+        padding: '1rem',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.7rem'
+      }}
+    >
+      <div>
+        <div style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--text-bright)' }}>Context Compaction</div>
+        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.15rem', lineHeight: 1.45 }}>
+          When an agent's conversation nears the model's context window, the same model summarizes the older part so the run can
+          continue. {providerId === 'ollama'
+            ? 'On by default for local models: their windows are small, and past the window Ollama silently drops the start of the prompt.'
+            : 'Matters most for Ollama, whose windows are small. CLI agents (Claude Code, Codex, Gemini CLI) use their own compaction.'}
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+        {([
+          ['auto', 'Automatic (near the window)'],
+          ['manual', 'Custom size'],
+          ['off', 'Off']
+        ] as const).map(([mode, label]) => (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => setCompactMode(mode)}
+            style={{
+              padding: '0.3rem 0.7rem',
+              fontSize: '0.74rem',
+              borderRadius: 'var(--radius-sm)',
+              cursor: 'pointer',
+              border: `1.5px solid ${compactMode === mode ? 'var(--accent-cyan)' : 'rgba(255, 255, 255, 0.08)'}`,
+              background: compactMode === mode ? 'rgba(6, 182, 212, 0.12)' : 'transparent',
+              color: compactMode === mode ? 'var(--accent-cyan)' : 'var(--text-muted)',
+              fontWeight: compactMode === mode ? 700 : 500
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {compactMode === 'manual' && (
+        <div>
+          <label style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>
+            Compact when the conversation reaches (tokens):
+          </label>
+          <input
+            type="text"
+            inputMode="numeric"
+            className="input-text"
+            value={compactTokensText}
+            onChange={(e) => setCompactTokensText(e.target.value)}
+            placeholder="e.g. 60000"
+            style={{ width: '12rem', fontSize: '0.82rem', fontFamily: 'monospace' }}
+          />
+        </div>
+      )}
+      {compactMode !== 'off' && (
+        <div>
+          <label style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>
+            {providerId === 'ollama' ? 'Model context window (tokens, also sent to Ollama as num_ctx):' : 'Model context window (tokens, only if Ergo doesn\'t know your model):'}
+          </label>
+          <input
+            type="text"
+            inputMode="numeric"
+            className="input-text"
+            value={windowTokensText}
+            onChange={(e) => setWindowTokensText(e.target.value)}
+            placeholder={providerId === 'ollama' ? String(DEFAULT_OLLAMA_CONTEXT) : 'auto'}
+            style={{ width: '12rem', fontSize: '0.82rem', fontFamily: 'monospace' }}
+          />
+        </div>
+      )}
+      <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', lineHeight: 1.5 }}>
+        {compactionPreview()}
+      </div>
+    </div>
+  );
+
   const openSubTerminalLogin = () => {
     const agent = detectedCliAgents.find((a) => a.id === selectedCliId);
     const isAgy = subPreset?.command === 'agy';
@@ -1160,6 +1246,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 />
               </div>
             )}
+
+            {providerId === 'ollama' && <div style={{ marginBottom: '0.85rem' }}>{compactionCard}</div>}
 
             {/* One-click subscription connection (same flow as onboarding) */}
             {authMode === 'cli_subscription' && providerId !== 'ollama' && (() => {
@@ -1960,86 +2048,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                     gap: '1.25rem'
                   }}
                 >
-                  {/* Context compaction */}
-                  <div
-                    style={{
-                      background: 'var(--bg-card)',
-                      border: '1px solid var(--border-subtle)',
-                      borderRadius: 'var(--radius-sm)',
-                      padding: '1rem',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.7rem'
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#fff' }}>Context Compaction</div>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.15rem', lineHeight: 1.45 }}>
-                        When an agent's conversation nears the model's context window, the same model summarizes the older part so the run can
-                        continue. Matters most for Ollama, whose windows are small. CLI agents (Claude Code, Codex, Gemini CLI) use their own compaction.
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                      {([
-                        ['auto', 'Automatic (near the window)'],
-                        ['manual', 'Custom size'],
-                        ['off', 'Off']
-                      ] as const).map(([mode, label]) => (
-                        <button
-                          key={mode}
-                          type="button"
-                          onClick={() => setCompactMode(mode)}
-                          style={{
-                            padding: '0.3rem 0.7rem',
-                            fontSize: '0.74rem',
-                            borderRadius: 'var(--radius-sm)',
-                            cursor: 'pointer',
-                            border: `1.5px solid ${compactMode === mode ? 'var(--accent-cyan)' : 'rgba(255, 255, 255, 0.08)'}`,
-                            background: compactMode === mode ? 'rgba(6, 182, 212, 0.12)' : 'transparent',
-                            color: compactMode === mode ? 'var(--accent-cyan)' : 'var(--text-muted)',
-                            fontWeight: compactMode === mode ? 700 : 500
-                          }}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                    {compactMode === 'manual' && (
-                      <div>
-                        <label style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>
-                          Compact when the conversation reaches (tokens):
-                        </label>
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          className="input-text"
-                          value={compactTokensText}
-                          onChange={(e) => setCompactTokensText(e.target.value)}
-                          placeholder="e.g. 60000"
-                          style={{ width: '12rem', fontSize: '0.82rem', fontFamily: 'monospace' }}
-                        />
-                      </div>
-                    )}
-                    {compactMode !== 'off' && (
-                      <div>
-                        <label style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>
-                          {providerId === 'ollama' ? 'Model context window (tokens, also sent to Ollama as num_ctx):' : 'Model context window (tokens, only if Ergo doesn\'t know your model):'}
-                        </label>
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          className="input-text"
-                          value={windowTokensText}
-                          onChange={(e) => setWindowTokensText(e.target.value)}
-                          placeholder={providerId === 'ollama' ? String(DEFAULT_OLLAMA_CONTEXT) : 'auto'}
-                          style={{ width: '12rem', fontSize: '0.82rem', fontFamily: 'monospace' }}
-                        />
-                      </div>
-                    )}
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', lineHeight: 1.5 }}>
-                      {compactionPreview()}
-                    </div>
-                  </div>
+                  {providerId !== 'ollama' && compactionCard}
 
                   {/* CLI Terminal Coding Agent Configuration */}
                   <div

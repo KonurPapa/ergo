@@ -1,10 +1,10 @@
 {
   "name": "ergo-bridge",
   "productName": "Ergo Bridge",
-  "version": "0.2.0",
+  "version": "0.7.0",
   "description": "Connects the Ergo web app to this computer.",
   "author": "KonurPapa",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "private": true,
   "main": "dist/main.cjs",
   "scripts": {

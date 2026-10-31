@@ -52,6 +52,14 @@ export function compactionThreshold(input: CompactionInput): number | null {
   return Math.floor(window * AUTO_WINDOW_SHARE);
 }
 
+/**
+ * Rough size of a request in tokens, counted before it is sent: ~3.5 characters a token, the dense end for code and
+ * JSON, so it errs toward compacting a little early rather than overflowing.
+ */
+export function estimatePromptTokens(messages: any[], tools?: any[]): number {
+  return Math.ceil((JSON.stringify(messages).length + (tools ? JSON.stringify(tools).length : 0)) / 3.5);
+}
+
 // ─── Summarizing ────────────────────────────────────────────────────────────
 
 export const SUMMARY_SYSTEM = 'You summarize a coding agent\'s conversation so the agent can continue its work from the summary alone.';
@@ -148,31 +156,36 @@ function stub(chars: number): string {
   return `[earlier tool output cleared to save context (${chars} chars) — run the tool again if you need it]`;
 }
 
-/**
- * Replaces the content of all but the newest tool results with a one-line stub, in place. Used when the summary call
- * fails. Handles Anthropic tool_result blocks, OpenAI / Ollama "tool" messages and Gemini functionResponse parts.
- * Returns how many results were cleared.
- */
-export function clearOldToolResults(messages: any[]): number {
-  type Slot = { size: number; clear: () => void };
-  const slots: Slot[] = [];
+/** Each tool result's text in a conversation, readable and replaceable in place. Handles Anthropic tool_result blocks,
+ * OpenAI / Ollama "tool" messages and Gemini functionResponse parts. */
+function toolResultSlots(messages: any[]): Array<{ text: () => string; set: (text: string) => void }> {
+  const slots: Array<{ text: () => string; set: (text: string) => void }> = [];
   for (const msg of messages) {
     if (msg?.role === 'tool' && typeof msg.content === 'string') {
-      slots.push({ size: msg.content.length, clear: () => { msg.content = stub(msg.content.length); } });
+      slots.push({ text: () => msg.content, set: (t) => { msg.content = t; } });
     } else if (msg?.role === 'user' && Array.isArray(msg.content)) {
       for (const block of msg.content) {
         if (block?.type === 'tool_result' && typeof block.content === 'string') {
-          slots.push({ size: block.content.length, clear: () => { block.content = stub(block.content.length); } });
+          slots.push({ text: () => block.content, set: (t) => { block.content = t; } });
         }
       }
     } else if (msg?.role === 'user' && Array.isArray(msg.parts)) {
       for (const part of msg.parts) {
         const response = part?.functionResponse?.response;
         const key = typeof response?.content === 'string' ? 'content' : typeof response?.error === 'string' ? 'error' : null;
-        if (key) slots.push({ size: response[key].length, clear: () => { response[key] = stub(response[key].length); } });
+        if (key) slots.push({ text: () => response[key], set: (t) => { response[key] = t; } });
       }
     }
   }
+  return slots;
+}
+
+/**
+ * Replaces the content of all but the newest tool results with a one-line stub, in place. Used when the summary call
+ * fails. Returns how many results were cleared.
+ */
+export function clearOldToolResults(messages: any[]): number {
+  const slots = toolResultSlots(messages).map((slot) => ({ size: slot.text().length, clear: () => slot.set(stub(slot.text().length)) }));
   let cleared = 0;
   for (const slot of slots.slice(0, Math.max(0, slots.length - KEEP_RECENT_EXCHANGES))) {
     if (slot.size < MIN_CLEAR_CHARS) continue;
@@ -180,4 +193,32 @@ export function clearOldToolResults(messages: any[]): number {
     cleared++;
   }
   return cleared;
+}
+
+/** What a cut tool result keeps at least, so the agent still sees what kind of output it was. */
+const MIN_KEPT_RESULT_CHARS = 1_500;
+
+/**
+ * Last resort for small windows (Ollama), after compaction: the newest tool results stay verbatim through a compaction,
+ * so one huge result can still overflow the window, and Ollama would then drop the start of the prompt (the system
+ * prompt and task first). Cuts the middle out of the largest results, keeping their start and end, until the request
+ * fits `maxTokens`. Returns true when anything was cut.
+ */
+export function clipToolResultsToFit(messages: any[], tools: any[] | undefined, maxTokens: number): boolean {
+  let overChars = Math.ceil((estimatePromptTokens(messages, tools) - maxTokens) * 3.5);
+  if (overChars <= 0) return false;
+  let clipped = false;
+  const slots = toolResultSlots(messages).sort((a, b) => b.text().length - a.text().length);
+  for (const slot of slots) {
+    if (overChars <= 0) break;
+    const text = slot.text();
+    const cut = Math.min(text.length - MIN_KEPT_RESULT_CHARS, overChars + 200);
+    if (cut <= 0) continue;
+    const keep = text.length - cut;
+    const head = Math.ceil(keep * 0.6);
+    slot.set(`${text.slice(0, head)}\n…[${cut} chars cut to fit the model's context window — narrow the request to see them]…\n${text.slice(text.length - (keep - head))}`);
+    overChars -= cut;
+    clipped = true;
+  }
+  return clipped;
 }

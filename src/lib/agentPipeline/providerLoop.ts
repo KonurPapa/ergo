@@ -37,6 +37,8 @@ import {
   SUMMARY_INSTRUCTIONS,
   SUMMARY_SYSTEM,
   tailStart,
+  estimatePromptTokens,
+  clipToolResultsToFit,
   type ConversationShape
 } from './compaction';
 import { peekModelCatalog } from '../modelCatalog/catalog';
@@ -615,8 +617,17 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
 
   for (let round = 1; round <= req.maxRounds; round++) {
     throwIfAborted(req.signal);
-    if (compactAt && lastPromptTokens >= compactAt && round > lastCompactRound + 1) {
+    // Ollama: also count what is about to be sent. Its reported prompt size is the last round's, without the tool
+    // output just added (and can leave out cached tokens), and an overflow isn't an error: it drops the start of the prompt.
+    const promptTokens = isOllama ? Math.max(lastPromptTokens, estimatePromptTokens(messages, oaTools)) : lastPromptTokens;
+    if (compactAt && promptTokens >= compactAt && round > lastCompactRound + 1) {
       if (await compactConversation(req, messages, 'openai', usage)) lastCompactRound = round;
+    }
+    if (isOllama && compactAt) {
+      // Still too big (the newest tool results stay verbatim through a compaction): cut the largest down so the prompt
+      // plus the reply fit in num_ctx.
+      const ctxWindow = contextWindowFor({ provider: 'ollama', model: activeModel, setting: req.compaction, models: [] });
+      clipToolResultsToFit(messages, oaTools, ctxWindow - Math.min(req.maxTokens || 4096, Math.floor(ctxWindow / 4)));
     }
     // Round boundary: the user's mid-run messages join the end of the conversation.
     const steering = takeSteering(req);

@@ -1,5 +1,6 @@
 import { type AIProviderConfig } from '../types';
 import { bridgeClient } from './bridgeClient';
+import { contextWindowFor } from './agentPipeline/compaction';
 
 /**
  * Generic API call handler for Bring-Your-Own-AI providers (OpenAI, Anthropic, Gemini, Ollama)
@@ -234,7 +235,7 @@ export async function callAiEngine(
       ],
       stream: false,
       options: {
-        num_ctx: 16384,
+        num_ctx: contextWindowFor({ provider: 'ollama', model: targetModel, setting: config.contextCompaction, models: [] }),
         num_predict: 4096,
         temperature: 0.2
       }

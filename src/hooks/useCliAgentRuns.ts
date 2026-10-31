@@ -35,7 +35,9 @@ import {
   agentProjectKey,
   agentSessionId,
   applyPermissionPolicy,
+  deleteSavedTerminals,
   fetchAgentTranscript,
+  fetchSavedTerminals,
   fetchCliSessionId,
   killAgentSessions,
   parseAgentSessionId,
@@ -211,7 +213,8 @@ export interface CliAgentRunsApi {
   restoreAgentSessions: (taskIds: Iterable<string | number>) => Promise<void>;
   hasActiveCliRun: (taskId: string | number) => boolean;
   /** Kill the task's agents and drop its sessions and run without writing a completion log (task purged). */
-  forgetTask: (taskId: string | number) => void;
+  /** Stops and forgets a task's agents and deletes their saved terminals (also any saved under the task's title). */
+  forgetTask: (taskId: string | number, taskTitle?: string) => void;
   /**
    * A new launch of the task is being prepared: detach its previous run if that run has finished or is only
    * finalizing (e.g. a Stop still flushing), so that late finalize can't reset the new launch's state.
@@ -1064,6 +1067,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       rows: 40,
       // The manager applies the invoked skills; only it gets the workspace tools.
       ...(role === 'manager' && run.workspaceTools ? { workspaceTools: true } : {}),
+      taskTitle: run.taskTitle,
     });
 
     if (!res.success) {
@@ -3078,6 +3082,47 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       return [...prev.filter((p) => !ids.has(p.ptySessionId)), ...merged];
     });
 
+    // Agents that ended a while ago, or before the bridge restarted: their saved terminals come back as tabs to read
+    // (they take no part in rebuilding runs below). Task ids are lane positions, so a terminal saved under another task
+    // title belongs to a task that has since moved, and stays hidden.
+    const titleKey = (title?: string) => (title || '').replace(/[~*`_]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const known = new Set([...relevant.map((r) => r.id), ...sessionsRef.current.map((s) => s.ptySessionId)]);
+    const savedTabs: SpawnedSession[] = (await fetchSavedTerminals(projectId))
+      .filter((m) => {
+        const taskKey = String(m.taskId);
+        if (!wanted.has(taskKey) || known.has(m.id)) return false;
+        if (parseAgentSessionId(m.id).projectKey && parseAgentSessionId(m.id).projectKey !== projectKey) return false;
+        if (!m.taskTitle) return true;
+        const task = depsRef.current.tasksRef.current.find((t) => String(t.id) === taskKey);
+        const briefsNow = depsRef.current.briefsRef.current;
+        const brief = briefsNow[findBriefIndex(briefsNow, task?.id ?? m.taskId, task?.title ?? m.taskTitle)];
+        return [task?.title, brief?.title].some((t) => t && titleKey(t) === titleKey(m.taskTitle));
+      })
+      .map((m) => {
+        const role: AgentSessionRole = m.role || 'manager';
+        // Workers are stopped once they report, so their exit code doesn't say how they did; the run's record does.
+        const workerStatus = m.runId && m.pieceId ? loadRunState(m.runId)?.workers.find((w) => w.ptySessionId === m.id)?.status : undefined;
+        const status: AgentSessionStatus = workerStatus === 'done' || workerStatus === 'failed' ? workerStatus : m.exitCode === 0 ? 'done' : 'failed';
+        return {
+          session: { taskId: m.taskId, taskTitle: m.taskTitle || `Task ${m.taskId}`, isActive: false, exitCode: m.exitCode ?? -1, spawnedAt: m.startedAt },
+          role,
+          label: m.label || defaultLabel(role, m.pieceId),
+          ...(m.pieceId ? { pieceId: m.pieceId } : {}),
+          ptySessionId: m.id,
+          runId: m.runId || '',
+          status,
+          pendingPrompt: null,
+          cwd: m.cwd,
+          cmd: m.cmd,
+          args: m.args,
+          ...(m.endedAt ? { endedAt: m.endedAt } : {}),
+        };
+      });
+    if (savedTabs.length > 0) {
+      const ids = new Set(savedTabs.map((s) => s.ptySessionId));
+      commitSessions((prev) => [...prev.filter((p) => !ids.has(p.ptySessionId)), ...savedTabs]);
+    }
+
     // Rebuild run state for the restored runs.
     const tasks = depsRef.current.tasksRef.current;
     const briefs = depsRef.current.briefsRef.current;
@@ -3819,9 +3864,11 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       return Boolean(run && !run.finalized && !run.paused);
     };
 
-    const forgetTask = (taskId: string | number) => {
+    const forgetTask = (taskId: string | number, taskTitle?: string) => {
       const taskKey = String(taskId);
       const projectId = depsRef.current.projectId;
+      // The task left the AI workspace: its saved terminals on this machine go with it.
+      if (projectId) void deleteSavedTerminals(projectId, [taskKey], taskTitle ? [taskTitle] : []);
       const run = runsRef.current.get(runKeyOf(projectId, taskKey));
       if (run) {
         if (run.question) {

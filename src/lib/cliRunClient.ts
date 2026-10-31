@@ -27,6 +27,8 @@ export interface SpawnAgentRequest {
   rows?: number;
   /** List Ergo's workspace tools on the agent's ergo-memory server (claude, codex; bridge protocol 4). */
   workspaceTools?: boolean;
+  /** Kept with the agent's saved terminal (bridge protocol 7), which is only shown again under a task of this title. */
+  taskTitle?: string;
 }
 
 export interface SpawnAgentResponse {
@@ -143,6 +145,40 @@ export function spawnAgentSession(req: SpawnAgentRequest): Promise<SpawnAgentRes
   return postJson<SpawnAgentResponse>('/api/pty/spawn', { ...req, role: toWireRole(req.role) }).then(
     (r) => r ?? { success: false, error: 'Bridge unreachable' }
   );
+}
+
+/** A task agent's terminal saved on the user's machine (bridge protocol 7): replayable after a reload or restart. */
+export interface SavedTerminalInfo {
+  id: string;
+  taskId: string | number;
+  taskTitle?: string;
+  role?: AgentSessionRole;
+  label?: string;
+  pieceId?: string;
+  runId?: string;
+  cmd: string;
+  args: string[];
+  cwd: string;
+  startedAt: string;
+  endedAt?: string;
+  exitCode: number | null;
+}
+
+/** The project's saved terminals that /api/pty/sessions doesn't list. Empty with an older bridge. */
+export async function fetchSavedTerminals(projectId: string): Promise<SavedTerminalInfo[]> {
+  try {
+    const res = await bridgeClient.fetch(`/api/pty/history?projectId=${encodeURIComponent(projectId)}`);
+    if (!res.ok) return [];
+    const json = await res.json();
+    return Array.isArray(json?.sessions) ? json.sessions.map(fromWireRole) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Deletes the saved terminals of tasks that left the AI workspace (by id, and by title: ids are lane positions). */
+export async function deleteSavedTerminals(projectId: string, taskIds: Array<string | number>, titles: string[] = []): Promise<void> {
+  await postJson('/api/pty/history/delete', { projectId, taskIds: taskIds.map(String), titles });
 }
 
 /** Claims a relayed workspace-tool call; false when another Ergo window took it (or it timed out). */

@@ -516,8 +516,10 @@ function App() {
       .catch(() => { });
   }, []);
 
-  // Sync secrets (config/secrets.json)
+  // Sync secrets (config/secrets.json). Not before they were read from disk: this browser's copy (empty in a new
+  // browser) would overwrite the user's saved AI profiles.
   useEffect(() => {
+    if (!settingsLoaded) return;
     storageManager.saveSecrets({
       version: 1,
       updatedAt: new Date().toISOString(),
@@ -528,7 +530,7 @@ function App() {
       activeCliAgentId,
       modelData: modelDataReadyRef.current ? modelData : undefined,
     });
-  }, [userApiKeys, mcpSecrets, cliAgentConfig, cliAgents, activeCliAgentId, modelData]);
+  }, [userApiKeys, mcpSecrets, cliAgentConfig, cliAgents, activeCliAgentId, modelData, settingsLoaded]);
 
 
   // Active AI Provider Config
@@ -694,6 +696,8 @@ function App() {
   const [runningJobs, setRunningJobs] = useState<RunningJobInfo[]>([]);
 
   const queuedTaskIdsRef = useRef<(string | number)[]>([]);
+  /** Tasks the user stopped (Stop button): a run queue halts when the task it waits on was stopped. */
+  const stoppedByUserRef = useRef<Set<string>>(new Set());
   queuedTaskIdsRef.current = queuedTaskIds;
 
   const runningJobsRef = useRef<RunningJobInfo[]>([]);
@@ -1075,6 +1079,7 @@ function App() {
         )
       );
       setQueuedTaskIds(runningJobsDoc.queuedTaskIds || []);
+      queuedTaskIdsRef.current = runningJobsDoc.queuedTaskIds || [];
       if (runningJobsDoc.taskExecutionSteps && Object.keys(runningJobsDoc.taskExecutionSteps).length > 0) {
         setTaskExecutionSteps(runningJobsDoc.taskExecutionSteps);
       }
@@ -1100,6 +1105,8 @@ function App() {
         console.warn('[Ergo] Failed to restore agent sessions on load:', ptyErr);
       }
       if (!isMounted) return;
+      // Tasks left queued (the page reloaded mid-line) carry on, after the run they were waiting on if it's still going.
+      if (queuedTaskIdsRef.current.length > 0) void runQueueRef.current();
 
       if (activeBriefs.length > 0) {
         const firstBrief = activeBriefs[0];
@@ -1733,6 +1740,18 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [aiUndoSnapshot, handleUndoAiChanges]);
 
+  // Backspace outside a text field is "Back" in some browsers, which left the workspace. It never navigates here.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Backspace') return;
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (target && (target.isContentEditable || target.closest('input, textarea, select'))) return;
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   // Apply result from Human AI Workspace Assistant (create, refine, aggregate, organize, delete with permission)
   const handleApplyAssistantResult = (
     result: HumanAiAssistantResult,
@@ -1888,6 +1907,7 @@ function App() {
   const syncAndSaveProjectRef = useRef(syncAndSaveProject);
   syncAndSaveProjectRef.current = syncAndSaveProject;
   const handleTerminateAgent = useCallback(async (taskId: string | number) => {
+    stoppedByUserRef.current.add(String(taskId));
     // 1. Abort controller (exact match or stringified match) — also cancels a CLI launch still preparing its overview
     let foundController: AbortController | undefined;
     for (const [key, ctrl] of abortControllersRef.current.entries()) {
@@ -2160,7 +2180,7 @@ function App() {
           onAction: () => setIsAiScreenOpen(true),
           duration: 6000,
         });
-        return;
+        return false;
       }
     }
 
@@ -2181,7 +2201,7 @@ function App() {
       if (!resumed.ok) {
         showToast({ type: 'error', title: 'Could Not Resume Task', message: `"${task.title}": ${resumed.error}`, duration: 8000 });
       }
-      return;
+      return resumed.ok;
     }
 
     if (effectiveCli?.command) {
@@ -2486,6 +2506,7 @@ function App() {
       } finally {
         finishCliLaunch(task.id, cliLaunched);
       }
+      return cliLaunched;
     } else {
       // In-Place AI Task Execution
       setExecutingTaskId(task.id);
@@ -2939,8 +2960,11 @@ function App() {
           return next;
         });
       }
+      return true;
     }
   };
+  const handleExecuteTaskRef = useRef(handleExecuteTask);
+  handleExecuteTaskRef.current = handleExecuteTask;
 
   /** Add a step to a task's run, or merge into the one with the same id (latest state, persisted with the jobs doc). */
   const upsertTaskStep = (taskId: string | number, step: Partial<ExecutionStep> & { id: string }) => {
@@ -3142,137 +3166,101 @@ function App() {
     return currentBriefsList;
   };
 
-  // Run tasks sequentially one after another
-  const handleRunTasksSequence = async (
-    taskList: TaskItem[],
-    laneId: string,
-    laneTitle: string
-  ) => {
-    if (!taskList || taskList.length === 0) return;
+  // ── Running several tasks ("Several tasks…" in a task's run menu, the lane header's Run) ──
+  // One after another, queuedTaskIds is the line: saved with the project, shown as "Queued" on the cards, and worked
+  // through in order by runQueue. Taking a card out of the line (Stop, archive, remove, running it now) drops its id.
+  const queueBusyRef = useRef(false);
+  const persistRunningJobsDocRef = useRef(persistRunningJobsDoc);
+  persistRunningJobsDocRef.current = persistRunningJobsDoc;
 
-    // Ensure AI Workspace panel is open so user sees the task execution cards
-    setIsAiPanelOpen(true);
-    const updatedBriefs = ensureBriefsForTasks(taskList, laneId, laneTitle);
+  const setQueue = (ids: (string | number)[]) => {
+    queuedTaskIdsRef.current = ids;
+    setQueuedTaskIds(ids);
+    persistRunningJobsDocRef.current(runningJobsRef.current, ids);
+  };
 
-    const allIds = taskList.map((t) => t.id);
-    const initialQueued = allIds.slice(1);
-    setQueuedTaskIds(initialQueued);
-    queuedTaskIdsRef.current = initialQueued;
+  /** The task a queued id stands for: its human-workspace task, or its AI card when it has none. */
+  const queuedTaskFor = (id: string | number): TaskItem | null => {
+    const task = tasksRef.current.find((t) => String(t.id) === String(id));
+    if (task) return task;
+    const brief = briefsRef.current.find((b) => String(b.sourceTaskId ?? b.id) === String(id));
+    if (!brief) return null;
+    return { id, title: brief.title, category: brief.sourceLaneTitle || 'AI Workspace', status: 'not_started', isDone: false, subtasks: [], swimLaneId: brief.sourceLaneId } as TaskItem;
+  };
 
-    // Create or update initial runningJobs entries
-    const initialJobs: RunningJobInfo[] = taskList.map((t, idx) => ({
-      id: `job_${t.id}_${Date.now()}_${idx}`,
-      taskId: t.id,
-      taskTitle: t.title,
-      type: cliAgentConfig?.command ? 'cli' : 'in_place',
-      status: idx === 0 ? 'in_progress' : 'queued',
-      startedAt: new Date().toISOString(),
-      laneId,
-      laneTitle,
-    }));
-
-    setRunningJobs((prev) => {
-      const existingIds = new Set(initialJobs.map((j) => String(j.taskId)));
-      const filtered = prev.filter((j) => !existingIds.has(String(j.taskId)));
-      const combined = [...filtered, ...initialJobs];
-      runningJobsRef.current = combined;
-      persistRunningJobsDoc(combined, initialQueued, updatedBriefs, taskExecutionStepsRef.current);
-      return combined;
-    });
-
-    showToast({
-      type: 'info',
-      title: 'Sequential Execution Started',
-      message: `Running ${taskList.length} tasks in sequence.`,
-      duration: 3500,
-    });
-
-    for (let i = 0; i < taskList.length; i++) {
-      const task = taskList[i];
-      const remainingQueued = allIds.slice(i + 1);
-      setQueuedTaskIds(remainingQueued);
-      queuedTaskIdsRef.current = remainingQueued;
-
-      // Update this job to in_progress if not already
-      setRunningJobs((prev) => {
-        const updated = prev.map((j) =>
-          String(j.taskId) === String(task.id)
-            ? { ...j, status: 'in_progress' as const }
-            : remainingQueued.map(String).includes(String(j.taskId))
-              ? { ...j, status: 'queued' as const }
-              : j
-        );
-        runningJobsRef.current = updated;
-        persistRunningJobsDoc(updated, remainingQueued, briefsRef.current, taskExecutionStepsRef.current);
-        return updated;
-      });
-
-      // CLI runs return once the agents are launched: wait for the run's completion log before the next task.
-      try {
-        await handleExecuteTask(task);
-        await cliRuns.waitForCliRun(task.id);
-      } catch (err) {
-        console.error(`[Sequence] Error running task ${task.title}:`, err);
+  /** Works through the line, one task at a time, until it's empty, or a task is stopped or can't start. */
+  const runQueue = async () => {
+    if (queueBusyRef.current) return;
+    queueBusyRef.current = true;
+    const projectId = loadedProjectIdRef.current;
+    try {
+      // After a reload: the task the line was waiting on may still be running on the bridge.
+      for (const t of tasksRef.current) {
+        if (cliRunsRef.current.hasActiveCliRun(t.id)) await cliRunsRef.current.waitForCliRun(t.id);
       }
+      while (queuedTaskIdsRef.current.length > 0 && loadedProjectIdRef.current === projectId) {
+        const [nextId, ...rest] = queuedTaskIdsRef.current;
+        setQueue(rest);
+        const task = queuedTaskFor(nextId);
+        if (!task) continue;
+        stoppedByUserRef.current.delete(String(task.id));
+        const started = await handleExecuteTaskRef.current(task);
+        if (started) await cliRunsRef.current.waitForCliRun(task.id);
+        const stopped = stoppedByUserRef.current.has(String(task.id));
+        if (loadedProjectIdRef.current !== projectId || (started && !stopped)) continue;
+        // Stopped by the user, or it couldn't start (e.g. no AI profile): the rest of the line waits for the user.
+        const left = queuedTaskIdsRef.current.length;
+        if (left === 0) break;
+        setQueue([]);
+        showToast({
+          type: 'info',
+          title: 'Queue Stopped',
+          message: `"${task.title}" ${stopped ? 'was stopped' : "couldn't start"}, so the ${left === 1 ? 'task' : `${left} tasks`} queued after it ${left === 1 ? 'was' : 'were'} taken out of the queue.`,
+          duration: 6000,
+        });
+        break;
+      }
+    } finally {
+      queueBusyRef.current = false;
+    }
+  };
+  const runQueueRef = useRef(runQueue);
+  runQueueRef.current = runQueue;
+
+  /** Runs several tasks: one after another (the rest wait as Queued), or all at once. */
+  const handleRunTasks = (taskList: TaskItem[], laneId: string, laneTitle: string, mode: 'sequence' | 'parallel') => {
+    // A task already running keeps going; it isn't started again.
+    const runnable = taskList.filter((t) => !cliRunsRef.current.hasActiveCliRun(t.id) && String(executingTaskId) !== String(t.id));
+    if (runnable.length === 0) return;
+    setIsAiPanelOpen(true);
+    ensureBriefsForTasks(runnable, laneId, laneTitle);
+
+    if (mode === 'parallel') {
+      const chosen = new Set(runnable.map((t) => String(t.id)));
+      setQueue(queuedTaskIdsRef.current.filter((id) => !chosen.has(String(id))));
+      for (const task of runnable) void handleExecuteTaskRef.current(task);
+      showToast({ type: 'info', title: 'Tasks Started', message: `Running ${runnable.length} tasks at once.`, duration: 3500 });
+      return;
     }
 
-    setQueuedTaskIds([]);
-    queuedTaskIdsRef.current = [];
-    persistRunningJobsDoc(undefined, [], undefined, undefined);
-  };
-
-  // Run tasks in parallel / concurrently (agentic mode)
-  const handleRunTasksParallel = async (
-    taskList: TaskItem[],
-    laneId: string,
-    laneTitle: string
-  ) => {
-    if (!taskList || taskList.length === 0) return;
-
-    // Ensure AI Workspace panel is open so user sees all task execution cards
-    setIsAiPanelOpen(true);
-    const updatedBriefs = ensureBriefsForTasks(taskList, laneId, laneTitle);
-
-    setQueuedTaskIds([]);
-    queuedTaskIdsRef.current = [];
-
-    const parallelJobs: RunningJobInfo[] = taskList.map((t, idx) => ({
-      id: `job_parallel_${t.id}_${Date.now()}_${idx}`,
-      taskId: t.id,
-      taskTitle: t.title,
-      type: cliAgentConfig?.command ? 'cli' : 'in_place',
-      status: 'in_progress',
-      startedAt: new Date().toISOString(),
-      laneId,
-      laneTitle,
-    }));
-
-    setRunningJobs((prev) => {
-      const existingIds = new Set(parallelJobs.map((j) => String(j.taskId)));
-      const filtered = prev.filter((j) => !existingIds.has(String(j.taskId)));
-      const combined = [...filtered, ...parallelJobs];
-      runningJobsRef.current = combined;
-      persistRunningJobsDoc(combined, [], updatedBriefs, taskExecutionStepsRef.current);
-      return combined;
-    });
-
+    // They join the end of the line; a task already in it keeps its place.
+    const inLine = new Set(queuedTaskIdsRef.current.map(String));
+    setQueue([...queuedTaskIdsRef.current, ...runnable.map((t) => t.id).filter((id) => !inLine.has(String(id)))]);
     showToast({
       type: 'info',
-      title: 'Parallel Execution Started',
-      message: `Running ${taskList.length} tasks in parallel agentically.`,
+      title: 'Tasks Queued',
+      message: `${runnable.length} tasks will run one after another. The ones waiting show as Queued.`,
       duration: 3500,
     });
-
-    await Promise.allSettled(
-      taskList.map(async (task) => {
-        await handleExecuteTask(task);
-        await cliRuns.waitForCliRun(task.id);
-      })
-    );
-
-    persistRunningJobsDoc(undefined, [], undefined, undefined);
+    void runQueue();
   };
 
+  /** A queued card's button: run it now, alongside whatever is running, instead of waiting its turn. */
+  const handleRunQueuedTaskNow = (taskId: string | number) => {
+    setQueue(queuedTaskIdsRef.current.filter((id) => String(id) !== String(taskId)));
+    const task = queuedTaskFor(taskId);
+    if (task) void handleExecuteTaskRef.current(task);
+  };
 
   // Finds the human task and AI execution card an archive request refers to.
   // Takes the live title string read from the editor node, matching by title is immune to stale indices.
@@ -3355,13 +3343,15 @@ function App() {
     // 2. Remove task from active human workspace
     const nextActiveTasks = taskToArchive ? tasks.filter((t) => t !== taskToArchive) : tasks;
 
-    // 3. Remove brief from AI workspace
+    // 3. Remove brief from AI workspace; its agents stop and their saved terminals are deleted
     let nextActiveBriefs = briefs;
     if (matchingBrief) {
       const matchClean = cleanAndUnescapeMarkdown(matchingBrief.title).trim().toLowerCase();
       nextActiveBriefs = briefs.filter(
         (b) => b !== matchingBrief && cleanAndUnescapeMarkdown(b.title).trim().toLowerCase() !== matchClean
       );
+      const cardIds = [sourceTask?.id, matchingBrief.sourceTaskId, matchingBrief.id].filter((id) => id != null && id !== '');
+      for (const id of new Set(cardIds.map(String))) cliRuns.forgetTask(id, taskTitle);
     }
 
     if (
@@ -3605,6 +3595,10 @@ function App() {
     setBriefs(nextBriefs);
     syncAndSaveProject(tasks, nextBriefs, true);
 
+    // Its agents stop and their saved terminals are deleted
+    const cardIds = [targetId, briefToRemove.sourceTaskId, briefToRemove.id].filter((id) => id != null && id !== '');
+    for (const id of new Set(cardIds.map(String))) cliRuns.forgetTask(id, briefToRemove.title);
+
     showToast({
       type: 'info',
       title: 'Task Removed from AI Workspace',
@@ -3678,8 +3672,8 @@ function App() {
       return next;
     });
 
-    // Stop and forget the task's CLI agents (no completion log for a purged task)
-    for (const k of new Set(idKeys.map((k) => String(k)))) cliRuns.forgetTask(k);
+    // Stop and forget the task's CLI agents (no completion log for a purged task) and delete their saved terminals
+    for (const k of new Set(idKeys.map((k) => String(k)))) cliRuns.forgetTask(k, briefToRemove?.title);
 
     // 3. Delete completely from local vector DB
     try {
@@ -3867,10 +3861,10 @@ function App() {
         }
       },
       runTasksSequence: (taskList, laneId, laneTitle) => {
-        handleRunTasksSequence(taskList, laneId, laneTitle);
+        handleRunTasks(taskList, laneId, laneTitle, 'sequence');
       },
       runTasksParallel: (taskList, laneId, laneTitle) => {
-        handleRunTasksParallel(taskList, laneId, laneTitle);
+        handleRunTasks(taskList, laneId, laneTitle, 'parallel');
       },
       scheduleTask: (taskId, iso, cron) => {
         handleScheduleTask(taskId, iso, cron);
@@ -4641,8 +4635,7 @@ function App() {
             onDeleteSwimLane={handleDeleteSwimLane}
             onSwimLaneMarkdownChange={handleSwimLaneMarkdownChange}
             onCreateTaskFromSelection={handleCreateTaskFromSelection}
-            onRunTasksSequence={handleRunTasksSequence}
-            onRunTasksParallel={handleRunTasksParallel}
+            onRunTasks={handleRunTasks}
             onScheduleTask={(id, iso, cron) => {
               setIsAiPanelOpen(true);
               handleScheduleTask(id, iso, cron);
@@ -4685,6 +4678,7 @@ function App() {
             selectedTaskId={selectedTaskId}
             runningTaskIds={runningTaskIds}
             queuedTaskIds={queuedTaskIds}
+            onRunQueuedTaskNow={handleRunQueuedTaskNow}
             mcpServers={mcpServers}
             onUpdateTaskMcpTools={handleUpdateTaskMcpTools}
             onSelectTask={(id) => setSelectedTaskId(id)}

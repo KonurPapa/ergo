@@ -1279,7 +1279,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </span>
                 </div>
                 <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: '1.45' }}>
-                  Provides inline suggestions pulled from vector memory & lightweight models. Immediate completion after 1s for words (4+ chars), and delayed completion after 3s for full sentences.
+                  Suggests the rest of a task as you type, after you pause on a space, using your AI profile's small model. Suggestions from the local AI model are a beta feature.
                 </p>
               </div>
 

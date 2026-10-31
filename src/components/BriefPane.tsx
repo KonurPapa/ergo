@@ -1,5 +1,6 @@
 import { resolveHeaderColor } from '../lib/headerColors';
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   type TaskItem,
   type TaskStatus,
@@ -240,6 +241,8 @@ interface BriefPaneProps {
   // Scheduling props
   scheduledJobs?: ScheduledJob[];
   queuedTaskIds?: (string | number)[];
+  /** A queued card's button: run the task now instead of waiting its turn in the queue. */
+  onRunQueuedTaskNow?: (taskId: string | number) => void;
   onScheduleTask?: (taskId: string | number, scheduledIso: string, cronExpr?: string) => void;
   onCancelScheduleTask?: (taskId: string | number) => void;
   // Popout Panel Controls
@@ -289,6 +292,7 @@ interface AiTaskCardProps {
   onArchiveTask?: (taskTitle: string) => void;
   onRemoveAiTask?: (targetId: string | number) => void;
   onPurgeTaskFromAi?: (targetId: string | number) => void;
+  onRunQueuedNow?: () => void;
   mcpServers?: MCPServer[];
   onUpdateTaskMcpTools?: (taskId: string | number, toolNames: string[]) => void;
   /** Related Tasks card: whether a related task has a card to open, and opening (selecting) it. */
@@ -451,6 +455,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   isSelected,
   isWorking,
   isQueued = false,
+  onRunQueuedNow,
   agentSessions,
   permissionLevel,
   isExecuting,
@@ -482,6 +487,8 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   onOpenRelatedTask,
 }) => {
   const [isTaskCollapsed, setIsTaskCollapsed] = useState(!isSelected);
+  // The Queued button asks before running the task out of turn.
+  const [confirmRunNow, setConfirmRunNow] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [overviewText, setOverviewText] = useState('');
   const [buildVerificationText, setBuildVerificationText] = useState('');
@@ -1410,6 +1417,10 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                         : ''
                   }`}
                 onClick={() => {
+                  if (isQueued) {
+                    setConfirmRunNow(true);
+                    return;
+                  }
                   setIsTaskCollapsed(false);
                   onExecuteTask(task);
                 }}
@@ -1417,14 +1428,14 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   isWorking
                     ? 'Agent is working on this task...'
                     : isQueued
-                      ? 'Task is currently queued for execution'
+                      ? 'Queued: it runs when the tasks before it finish. Click to run it now instead.'
                       : isStoppedPartway
                         ? 'Resume this task where it was left off'
                         : hasRunBefore
                           ? 'Rerun this task'
                           : 'Start the AI on this task'
                 }
-                disabled={isWorking || isQueued}
+                disabled={isWorking || (isQueued && !onRunQueuedNow)}
               >
                 {isWorking ? (
                   <>
@@ -1453,6 +1464,36 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   </>
                 )}
               </button>
+              {confirmRunNow && createPortal(
+                <div className="modal-overlay" onClick={() => setConfirmRunNow(false)} style={{ zIndex: 130 }}>
+                  <div className="modal-content" style={{ maxWidth: '420px', width: '95vw' }} onClick={(e) => e.stopPropagation()}>
+                    <div className="modal-header">
+                      <h3 style={{ margin: 0, fontSize: '0.98rem', fontWeight: 650, color: 'var(--text-bright)' }}>Run it now?</h3>
+                    </div>
+                    <div className="modal-body" style={{ fontSize: '0.86rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                      This task is already queued. Do you want to run it now, in parallel with the task that's running? It
+                      leaves the queue.
+                    </div>
+                    <div className="modal-footer">
+                      <button type="button" className="btn btn-secondary" onClick={() => setConfirmRunNow(false)}>
+                        Keep it queued
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => {
+                          setConfirmRunNow(false);
+                          setIsTaskCollapsed(false);
+                          onRunQueuedNow?.();
+                        }}
+                      >
+                        Run in parallel
+                      </button>
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )}
 
               {/* Stop active running agent or active terminal session */}
               {isWorking && (onTerminateAgent || onKillSession) && (
@@ -2267,6 +2308,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   onArchiveTask,
   onRemoveAiTask,
   onPurgeTaskFromAi,
+  onRunQueuedTaskNow,
   scheduledJobs = [],
   onScheduleTask,
   onCancelScheduleTask,
@@ -2529,6 +2571,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                     isSelected={isSelected}
                     isWorking={isWorking}
                     isQueued={isQueued}
+                    onRunQueuedNow={onRunQueuedTaskNow ? () => onRunQueuedTaskNow(effectiveTask.id) : undefined}
                     agentSessions={agentSessions}
                     permissionLevel={agentPipelineOptions?.permissionLevel}
                     isExecuting={isExecuting}
