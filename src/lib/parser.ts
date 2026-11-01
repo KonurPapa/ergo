@@ -1,5 +1,6 @@
 import { type TaskItem, type AgentContextItem, type SwimLaneDoc } from '../types';
 import { splitHeaderColor, stripTextColorTokens } from './headerColors';
+import { splitAnchor, taskIdFor, withAnchor } from './taskAnchors';
 
 /**
  * Strips leading HTML comments and blank lines to provide clean markdown body for UI editor
@@ -77,7 +78,7 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
     // Subtask bullet lines (indented bullet or numbered item under currentTask)
     const subtaskMatch = line.match(/^(\t+|\s{2,})([*+-]|\d+\.)\s+(.*)$/);
     if (subtaskMatch && currentTask) {
-      let subtext = subtaskMatch[3].trim();
+      let subtext = splitAnchor(subtaskMatch[3]).text.trim();
       // Check if item is marked done via unescaped strikethrough or checkbox
       const isDone = isUnescapedDone(subtext);
       const subHuman = isUnescapedHumanReview(subtext);
@@ -99,7 +100,9 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
     }
 
     // Top-level numbered task item line (e.g. 1. Run bash terminal script or 1. ~~Run bash terminal script~~)
-    const numberedMatch = line.match(/^(\d+)\.\s+(.*)$/);
+    // One leading space is the editor right-aligning numbers in a list of 10+ (" 9." above "10."), not nesting:
+    // nested items are indented by their parent's marker width (2+ spaces) and handled above.
+    const numberedMatch = line.match(/^ ?(\d+)\.\s+(.*)$/);
     if (numberedMatch) {
       const parsedNum = parseInt(numberedMatch[1], 10);
       if (parsedNum === 1) {
@@ -114,7 +117,8 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
         categoryCounter += 1;
       }
 
-      let rawTitle = numberedMatch[2].trim();
+      const numberedSplit = splitAnchor(numberedMatch[2]);
+      let rawTitle = numberedSplit.text.trim();
       const isDone = isUnescapedDone(rawTitle);
       const isHumanReview = isUnescapedHumanReview(rawTitle);
 
@@ -138,7 +142,8 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
         isHumanReview,
         mcpRequired: extractMcpTags(cleanedTitle),
         isArchived,
-        sourceLine: i
+        sourceLine: i,
+        anchorId: numberedSplit.id ?? undefined
       };
       items.push(currentTask);
       continue;
@@ -158,7 +163,8 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
         categoryCounter += 1;
       }
 
-      let rawTitle = bulletMatch[1].trim();
+      const bulletSplit = splitAnchor(bulletMatch[1]);
+      let rawTitle = bulletSplit.text.trim();
       const isDone = isUnescapedDone(rawTitle);
       const isHumanReview = isUnescapedHumanReview(rawTitle);
 
@@ -181,7 +187,8 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
         isHumanReview,
         mcpRequired: extractMcpTags(cleanedTitle),
         isArchived,
-        sourceLine: i
+        sourceLine: i,
+        anchorId: bulletSplit.id ?? undefined
       };
       items.push(currentTask);
       continue;
@@ -256,7 +263,8 @@ export function parseSwimLaneMarkdown(
 
   const items = result.items.map((item, idx) => ({
     ...item,
-    id: `${swimLane.id}_task_${idx + 1}`,
+    // A task's id comes from its line's hidden anchor (taskAnchors.ts), so it survives moves and edits.
+    id: taskIdFor(swimLane.id, item.anchorId, idx),
     swimLaneId: swimLane.id,
     sourceFileName: fileName
   }));
@@ -303,9 +311,9 @@ function serializeTaskListMarkdown(items: TaskItem[]): string {
     for (const item of catItems) {
       const titleFormatted = item.isDone ? `~~${item.title}~~` : item.title;
       if (item.isUnordered) {
-        md += `- ${titleFormatted}\n`;
+        md += `- ${withAnchor(titleFormatted, item.anchorId ?? null)}\n`;
       } else {
-        md += `${catIndex}. ${titleFormatted}\n`;
+        md += `${catIndex}. ${withAnchor(titleFormatted, item.anchorId ?? null)}\n`;
         catIndex++;
       }
 
@@ -387,13 +395,16 @@ export function serializeTodoMarkdownPreserving(
   for (const [lineIdx, done] of patches) {
     const m = lines[lineIdx]?.match(/^(\s*(?:[-*+]|\d+\.)\s+)(.*?)(\s*)$/);
     if (!m) return fallback();
-    const [, prefix, content, trailing] = m;
+    const [, prefix, rawContent, trailing] = m;
+    // The task's anchor stays outside the ~~done~~ wrap.
+    const { text, id } = splitAnchor(rawContent);
+    const content = text.trimEnd();
     if (done) {
-      lines[lineIdx] = `${prefix}~~${content}~~${trailing}`;
+      lines[lineIdx] = `${prefix}${withAnchor(`~~${content}~~`, id)}${trailing}`;
     } else {
       const unwrapped = content.match(/^~~(.*)~~$/s);
       if (!unwrapped) return fallback();
-      lines[lineIdx] = `${prefix}${unwrapped[1]}${trailing}`;
+      lines[lineIdx] = `${prefix}${withAnchor(unwrapped[1], id)}${trailing}`;
     }
   }
 

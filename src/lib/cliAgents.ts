@@ -241,6 +241,8 @@ export interface CliRunPromptContext {
    * off the task's checklist with workspace_update_subtask (CHECKLIST IN ERGO).
    */
   workspaceTools?: boolean;
+  /** The project reviews by hand (reviewMode.ts): no checking off the checklist, so the prompt leaves it out. */
+  manualReview?: boolean;
   /**
    * The project's learned rules for this task (formatProjectRules, a few hundred tokens): every agent of the run gets
    * them as a PROJECT RULES section, and verifier checks them.
@@ -460,8 +462,8 @@ function buildProjectRulesSection(ctx: Pick<CliRunPromptContext, 'projectRules'>
  * CHECKLIST IN ERGO: a manager with the workspace tools checks off the task's open checklist items in Ergo as it
  * finishes them (the user sees them struck through on the board); the run's completion checks off the rest.
  */
-function buildChecklistToolSection(task: TaskItem, ctx: Pick<CliRunPromptContext, 'workspaceTools'>): string[] {
-  if (!ctx.workspaceTools) return [];
+function buildChecklistToolSection(task: TaskItem, ctx: Pick<CliRunPromptContext, 'workspaceTools' | 'manualReview'>): string[] {
+  if (!ctx.workspaceTools || ctx.manualReview) return [];
   const open = (task.subtasks || []).map((s, i) => ({ s, i })).filter(({ s }) => !s.isDone && !s.isHumanReview);
   if (open.length === 0) return [];
   return [

@@ -165,3 +165,5 @@ Maybe the implementation looks something like the AI drafting its plan and build
         - `@file` / `/skill` chips and the model chip inside the composer
         - "add only the checked items" currently diffs the assistant's new TODO.md against the old one; revisit once the assistant returns structured items
     - Sub-items always render with checkboxes; the design shows plain bullets for "- " items and checkboxes only for "- [ ]" items (needs a change to how done/not-done is stored)
+    - **Interactive MCP widgets inside tasks** (deferred): the design reserves a slot in the Overview and Notes tabs (a surface-1 well, radius-md, the integration's name in its header). Needs a sandboxing decision first (e.g. iframe with an allow-list) before any visual work.
+    - **Run queue: flexible multi-task assignment** (to revisit). Today each project has its own queue (stored in its RUNNING_JOBS.json) that runs tasks one after another and only advances while that project is open in Ergo. Planned: more flexible ways to assign and run several tasks at once.

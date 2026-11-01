@@ -75,6 +75,8 @@ import { BridgeUpdateBanner } from './components/BridgeUpdateBanner';
 import { loadMcpServers, markMcpServerToggled, saveMcpServers } from './lib/mcpConfigStore';
 import { loadPrefs, subscribePrefs } from './lib/userPrefs';
 import { withDisplayNames } from './lib/projectNames';
+import { ensureAnchors, markdownForExport, taskIdFor } from './lib/taskAnchors';
+import { applyReviewMode } from './lib/reviewMode';
 import { FolderPickerModal } from './components/FolderPickerModal';
 import { OnboardingModal } from './components/OnboardingModal';
 import { ToastContainer, type ToastMessage } from './components/Toast';
@@ -113,6 +115,7 @@ import { setLocalModelMode, type LocalModelMode } from './lib/localModel/prefere
 import {
   type ScheduledJob,
   getScheduledJobs,
+  saveScheduledJobs,
   addScheduledJob,
   cancelScheduledJob,
   markJobCompleted
@@ -1031,12 +1034,65 @@ function App() {
         }
       }
 
-      const effectiveSwimLanes = currentLanes.map((lane) => {
+      const diskLanes = currentLanes.map((lane) => {
         if (diskFiles[lane.filePath] !== null && diskFiles[lane.filePath] !== undefined) {
           return { ...lane, markdown: diskFiles[lane.filePath]! };
         }
         return lane;
       });
+
+      // Task anchors: every task line carries a hidden <!-- ergo:id --> its id is built from (taskAnchors.ts). Lines
+      // without one (a file from before anchors, or one edited outside Ergo) get one now, and anything that pointed at
+      // the task's old positional id — its brief, its place in the queue, its run steps, its schedule — moves to the
+      // new id before anything reads it.
+      const anchorIdMap = new Map<string, string>();
+      const effectiveSwimLanes = diskLanes.map((lane) => {
+        const anchored = ensureAnchors(lane.markdown);
+        if (!anchored.changed) return lane;
+        for (const { index, legacyIndex, id } of anchored.assigned) {
+          if (legacyIndex != null) anchorIdMap.set(`${lane.id}_task_${legacyIndex + 1}`, taskIdFor(lane.id, id, index));
+        }
+        return { ...lane, markdown: anchored.markdown };
+      });
+      if (effectiveSwimLanes.some((lane, i) => lane !== diskLanes[i])) {
+        const remap = <T extends string | number | undefined | null>(id: T): T =>
+          (id != null && anchorIdMap.has(String(id)) ? anchorIdMap.get(String(id)) : id) as T;
+        if (anchorIdMap.size > 0) {
+          runningJobsDoc = {
+            ...runningJobsDoc,
+            tasks: (runningJobsDoc.tasks || []).map((b) => ({ ...b, sourceTaskId: remap(b.sourceTaskId) })),
+            queuedTaskIds: (runningJobsDoc.queuedTaskIds || []).map((id) => remap(id)),
+            runningJobs: (runningJobsDoc.runningJobs || []).map((j) => ({ ...j, taskId: remap(j.taskId) })),
+            taskExecutionSteps: Object.fromEntries(
+              Object.entries(runningJobsDoc.taskExecutionSteps || {}).map(([k, v]) => [String(remap(k)), v])
+            ),
+          };
+          const jobs = getScheduledJobs();
+          if (jobs.some((j) => anchorIdMap.has(String(j.taskId)))) {
+            saveScheduledJobs(jobs.map((j) => ({ ...j, taskId: remap(j.taskId) })));
+            setScheduledJobs(getScheduledJobs());
+          }
+        }
+        const changedLanes = effectiveSwimLanes.filter((lane, i) => lane !== diskLanes[i]);
+        // A superseded load (project switched, or React's dev double-run) leaves the writing to the current one.
+        if (!isMounted) return;
+        writeFilesToDisk([
+          ...changedLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
+          ...(runningJobsPath && anchorIdMap.size > 0 ? [{ filePath: runningJobsPath, content: serializeRunningJobsDoc(runningJobsDoc) }] : []),
+        ]);
+        const loadedId = activeProject.id;
+        setProjects((prev) =>
+          prev.map((p) =>
+            p.id !== loadedId
+              ? p
+              : {
+                  ...p,
+                  swimLanes: p.swimLanes?.map((l) => effectiveSwimLanes.find((e) => e.id === l.id) ?? l),
+                  todoMarkdown: effectiveSwimLanes[0]?.markdown ?? p.todoMarkdown,
+                }
+          )
+        );
+      }
 
       let allActiveTasks: TaskItem[] = [];
       let allArchivedTasks: TaskItem[] = [];
@@ -1074,7 +1130,29 @@ function App() {
         writeFilesToDisk(cleanedLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })));
       }
 
-      const activeBriefs: AgentContextItem[] = runningJobsDoc && Array.isArray(runningJobsDoc.tasks) ? runningJobsDoc.tasks : [];
+      let activeBriefs: AgentContextItem[] = runningJobsDoc && Array.isArray(runningJobsDoc.tasks) ? runningJobsDoc.tasks : [];
+
+      // A brief whose task id matches no task (its line was re-anchored, or edited outside Ergo) goes back to the task
+      // with the same title, when exactly one has it.
+      {
+        const ids = new Set(allActiveTasks.map((t) => String(t.id)));
+        const norm = (t: string) => cleanAndUnescapeMarkdown(t).replace(/^~~|~~$/g, '').trim().toLowerCase();
+        const byTitle = new Map<string, TaskItem[]>();
+        for (const t of allActiveTasks) byTitle.set(norm(t.title), [...(byTitle.get(norm(t.title)) ?? []), t]);
+        let relinked = 0;
+        activeBriefs = activeBriefs.map((b) => {
+          if (b.sourceTaskId == null || ids.has(String(b.sourceTaskId))) return b;
+          const match = byTitle.get(norm(b.title));
+          if (!match || match.length !== 1) return b;
+          relinked++;
+          return { ...b, sourceTaskId: match[0].id };
+        });
+        if (relinked > 0 && isMounted) {
+          runningJobsDoc = { ...runningJobsDoc, tasks: activeBriefs };
+          if (runningJobsPath) writeFilesToDisk([{ filePath: runningJobsPath, content: serializeRunningJobsDoc(runningJobsDoc) }]);
+          console.info(`[Ergo] Relinked ${relinked} brief${relinked === 1 ? '' : 's'} to their tasks by title.`);
+        }
+      }
 
       setTasks(allActiveTasks);
       setArchivedTasks([]);
@@ -2834,7 +2912,7 @@ function App() {
         // Completed execution: apply results to the LATEST tasks/briefs & persist to TODO.md and vector memory
         const latestTasks = tasksRef.current;
         const nextTasks = latestTasks.some((t) => String(t.id) === String(res.updatedTask.id))
-          ? latestTasks.map((t) => (String(t.id) === String(res.updatedTask.id) ? keepCheckedSubtasks(res.updatedTask, t) : t))
+          ? latestTasks.map((t) => (String(t.id) === String(res.updatedTask.id) ? applyReviewMode(loadedProjectIdRef.current, t, keepCheckedSubtasks(res.updatedTask, t)) : t))
           : latestTasks;
         const latestBriefs = briefsRef.current;
         const existingBriefIdx = latestBriefs.findIndex(
@@ -4017,8 +4095,9 @@ function App() {
         markdown: activeProject.todoMarkdown || ''
       }];
 
+    // Lines that arrive without their anchor (an AI rewrite) get back the one their title had.
     const updatedLanes = currentLanes.map((lane) =>
-      lane.id === laneId ? { ...lane, markdown: newBodyMd } : lane
+      lane.id === laneId ? { ...lane, markdown: ensureAnchors(newBodyMd, lane.markdown).markdown } : lane
     );
 
     // Re-parse all tasks across all swim lanes
@@ -4326,15 +4405,21 @@ function App() {
 
   // Save Raw Markdown Editing (from Raw Markdown modal - Flushes immediately)
   const handleSaveRawMarkdown = (newTodoMd: string, updatedSwimLanes?: SwimLaneDoc[]) => {
+    // Hand-edited markdown keeps its tasks' anchors: a line whose anchor was deleted gets back the one its title had.
+    const previousLanes = activeProject?.swimLanes ?? [];
+    const reanchor = (lane: SwimLaneDoc): SwimLaneDoc => ({
+      ...lane,
+      markdown: ensureAnchors(lane.markdown, previousLanes.find((l) => l.id === lane.id)?.markdown ?? activeProject?.todoMarkdown).markdown,
+    });
     const currentLanes: SwimLaneDoc[] = updatedSwimLanes && updatedSwimLanes.length > 0
-      ? updatedSwimLanes
+      ? updatedSwimLanes.map(reanchor)
       : (activeProject?.swimLanes && activeProject.swimLanes.length > 0
         ? activeProject.swimLanes
         : [{
           id: 'lane-default',
           title: 'Human Workspace',
           filePath: activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`,
-          markdown: newTodoMd
+          markdown: ensureAnchors(newTodoMd, activeProject?.todoMarkdown).markdown
         }]);
 
     let allActiveTasks: TaskItem[] = [];
@@ -4391,7 +4476,7 @@ function App() {
       setTimeout(() => {
         const rawFileName = lane.filePath.split('/').pop() || `${folderSlug}_TODO.md`;
         const fileName = rawFileName.endsWith('.md') ? rawFileName : `${rawFileName}.md`;
-        const blob = new Blob([lane.markdown], { type: 'text/markdown' });
+        const blob = new Blob([markdownForExport(lane.markdown)], { type: 'text/markdown' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = `${folderSlug}_${fileName}`;
@@ -4768,6 +4853,9 @@ function App() {
         onToggleDetail={handleToggleAiPanel}
         isSettingsOpen={settingsPage !== null}
         onOpenSettings={() => (settingsPage !== null ? closeSettings() : openSettings('general'))}
+        onOpenWelcome={() => setIsOnboardingOpen(true)}
+        theme={theme}
+        onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
       />
 
       <div className="eg-frame-body">

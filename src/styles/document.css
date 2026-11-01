@@ -325,3 +325,7 @@ body.eg-is-dragging-line, body.eg-is-dragging-line * { cursor: grabbing !importa
 .task-command-label { font-family: var(--font-mono); font-size: calc(12px * var(--type-scale)) !important; color: var(--ink) !important; font-weight: 400 !important; }
 .task-command-detail { color: var(--ink-subtle) !important; font-size: calc(12px * var(--type-scale)) !important; }
 .task-command-menu-foot { border-top: 1px solid var(--line-strong) !important; background: none !important; color: var(--ink-subtle) !important; font-size: calc(11px * var(--type-scale)) !important; }
+
+/* Needs review: a finished run the user hasn't checked off — a faint amber outline and an eye in the run state */
+.eg-docscroll .tiptap-editor-root .tiptap :is(ol, ul:not(li ul)) > li.is-needs-review { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 45%, transparent) !important; }
+.eg-docscroll .tiptap .eg-runstate-review .eg-icon { width: 14px; height: 14px; color: var(--warning); }

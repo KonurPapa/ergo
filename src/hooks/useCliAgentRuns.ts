@@ -9,6 +9,7 @@
  * overwrite edits made while it was working.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { applyReviewMode, getReviewMode } from '../lib/reviewMode';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type {
   AIProviderConfig,
@@ -919,6 +920,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     ...(run.likelyFiles?.length ? { likelyFiles: run.likelyFiles } : {}),
     ...(run.references ? { references: run.references } : {}),
     ...(run.workspaceTools ? { workspaceTools: true } : {}),
+    ...(getReviewMode(run.projectId) === 'manual' ? { manualReview: true } : {}),
     // Managers ask through question.md only when the bridge reports it (protocol 3); else the old way.
     ...((bridgeClient.getStatus().bridgeInfo?.protocol ?? 0) >= QUESTION_SIGNAL_PROTOCOL ? { questionFile: true } : {}),
   });
@@ -1730,7 +1732,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         ...(createdFiles.length ? { createdFiles } : {}),
         ...(hasUsage(totalUsage) ? { totalUsage } : {}),
       };
-      nextTasks = tasks.map((t, i) => (i === taskIdx ? updatedTask : t));
+      // Manual review (the project default): the run doesn't check anything off; the user does after reviewing.
+      nextTasks = tasks.map((t, i) => (i === taskIdx ? applyReviewMode(run.projectId, baseTask, updatedTask) : t));
     }
 
     // Brief
@@ -2965,7 +2968,11 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     if (!(await claimWorkspaceCall(ev.callId))) return;
     const d = depsRef.current;
     // Without a skill that needs the board, the tools are there only to check off this task's checklist.
-    const denied = run.references?.skills.some((sk) => sk.usesWorkspaceTools) ? null : checklistOnlyError(run.taskKey, ev.tool, ev.args || {});
+    const denied = run.references?.skills.some((sk) => sk.usesWorkspaceTools)
+      ? null
+      : getReviewMode(run.projectId) === 'manual' && ev.tool === 'workspace_update_subtask'
+        ? "This project reviews work by hand: leave the checklist as it is; the user checks items off after reviewing."
+        : checklistOnlyError(run.taskKey, ev.tool, ev.args || {});
     const result = denied
       ? { success: false, error: denied }
       : run.projectId && run.projectId !== d.projectId

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { stripAnchors } from '../lib/taskAnchors';
 import {
   type ProjectData,
   type AIProviderConfig,
@@ -310,16 +311,18 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
     setEditingLine(null);
 
     try {
+      // The assistant sees the list without its hidden task anchors; Ergo puts them back by title when it's applied.
+      const plainMarkdown = stripAnchors(todoMarkdown);
       const res = await runHumanAiAssistant(
         trimmed,
         intent,
-        todoMarkdown,
+        plainMarkdown,
         project,
         aiConfig,
         connectedServers,
         skillDocContent || null
       );
-      setBaseMarkdown(todoMarkdown);
+      setBaseMarkdown(plainMarkdown);
       setDraftedPrompt(trimmed);
       setAssistantResult(res);
     } catch (err) {

@@ -9,6 +9,54 @@ import '@xterm/xterm/css/xterm.css';
 const launchedSpawnIds = new Set<string>();
 
 /** True if this mount may launch the process; false if it should only attach to what already ran. */
+/** The terminal's colors in each app theme (kept in step with the theme while it's open). */
+const TERMINAL_LIGHT = {
+            background:          '#ffffff',
+            foreground:          '#3d4047',
+            cursor:              '#3C7758',
+            cursorAccent:        '#ffffff',
+            selectionBackground: '#3C775833',
+            black:               '#f1f5f9',
+            red:                 '#ef4444',
+            green:               '#059669',
+            yellow:              '#d97706',
+            blue:                '#2563eb',
+            magenta:             '#8b5cf6',
+            cyan:                '#0891b2',
+            white:               '#18181b',
+            brightBlack:         '#94a3b8',
+            brightRed:           '#f43f5e',
+            brightGreen:         '#10b981',
+            brightYellow:        '#f59e0b',
+            brightBlue:          '#3b82f6',
+            brightMagenta:       '#a78bfa',
+            brightCyan:          '#06b6d4',
+            brightWhite:         '#09090b',
+          };
+const TERMINAL_DARK = {
+            background:          '#0e0f11',
+            foreground:          '#b3b7bf',
+            cursor:              '#52A278',
+            cursorAccent:        '#0e0f11',
+            selectionBackground: '#52A27847',
+            black:               '#0e0f11',
+            red:                 '#ef4444',
+            green:               '#4cb782',
+            yellow:              '#eab308',
+            blue:                '#2563eb',
+            magenta:             '#a78bfa',
+            cyan:                '#06b6d4',
+            white:               '#e4e4e7',
+            brightBlack:         '#52525b',
+            brightRed:           '#f87171',
+            brightGreen:         '#34d399',
+            brightYellow:        '#fde047',
+            brightBlue:          '#60a5fa',
+            brightMagenta:       '#c4b5fd',
+            brightCyan:          '#67e8f9',
+            brightWhite:         '#fafafa',
+          };
+
 export function claimPtyLaunch(spawnId: string | undefined, attachOnly: boolean | undefined): boolean {
   if (attachOnly) return false;
   if (!spawnId) return true;
@@ -100,57 +148,17 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
       fontFamily: "'Geist Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace",
       fontSize: 14,
       lineHeight: 1.5,
-      theme: isLightTheme
-        ? {
-            background:          '#ffffff',
-            foreground:          '#3d4047',
-            cursor:              '#3C7758',
-            cursorAccent:        '#ffffff',
-            selectionBackground: '#3C775833',
-            black:               '#f1f5f9',
-            red:                 '#ef4444',
-            green:               '#059669',
-            yellow:              '#d97706',
-            blue:                '#2563eb',
-            magenta:             '#8b5cf6',
-            cyan:                '#0891b2',
-            white:               '#18181b',
-            brightBlack:         '#94a3b8',
-            brightRed:           '#f43f5e',
-            brightGreen:         '#10b981',
-            brightYellow:        '#f59e0b',
-            brightBlue:          '#3b82f6',
-            brightMagenta:       '#a78bfa',
-            brightCyan:          '#06b6d4',
-            brightWhite:         '#09090b',
-          }
-        : {
-            background:          '#0e0f11',
-            foreground:          '#b3b7bf',
-            cursor:              '#52A278',
-            cursorAccent:        '#0e0f11',
-            selectionBackground: '#52A27847',
-            black:               '#0e0f11',
-            red:                 '#ef4444',
-            green:               '#4cb782',
-            yellow:              '#eab308',
-            blue:                '#2563eb',
-            magenta:             '#a78bfa',
-            cyan:                '#06b6d4',
-            white:               '#e4e4e7',
-            brightBlack:         '#52525b',
-            brightRed:           '#f87171',
-            brightGreen:         '#34d399',
-            brightYellow:        '#fde047',
-            brightBlue:          '#60a5fa',
-            brightMagenta:       '#c4b5fd',
-            brightCyan:          '#67e8f9',
-            brightWhite:         '#fafafa',
-          },
+      theme: isLightTheme ? TERMINAL_LIGHT : TERMINAL_DARK,
       allowProposedApi: true,
       scrollback: 5000,
       convertEol: true,
     });
+
+    // Follow the app theme while open.
+    const themeObserver = new MutationObserver(() => {
+      term.options.theme = document.documentElement.getAttribute('data-theme') === 'light' ? TERMINAL_LIGHT : TERMINAL_DARK;
+    });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
@@ -275,6 +283,7 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
 
     // ── Cleanup ───────────────────────────────────────────────────────────
     return () => {
+      themeObserver.disconnect();
       isDisposed = true;
       ro.disconnect();
       if (killOnUnmount && ws.readyState === WebSocket.OPEN) {

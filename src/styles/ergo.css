@@ -513,3 +513,14 @@ button.eg-agent:hover { background: var(--surface-2); }
 .eg-brand-name { font-family: 'Sixtyfour', var(--font-sans); font-weight: 400; font-size: calc(14px * var(--type-scale)); letter-spacing: -0.02em; text-transform: uppercase; color: var(--ink); line-height: 1; }
 .eg-runs-sort { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-4); }
 .eg-runs-sort-label { color: var(--ink-subtle); font-size: calc(12px * var(--type-scale)); }
+.eg-export-toggle { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-muted); font-size: calc(12px * var(--type-scale)); cursor: pointer; white-space: nowrap; }
+button.eg-brand { border: 0; background: transparent; color: inherit; font: inherit; height: var(--size-control); border-radius: var(--radius-sm); cursor: pointer; }
+button.eg-brand:hover { background: var(--surface-2); }
+
+/* Runs view: each task is an outlined card */
+.eg-runs-group .eg-runs { gap: var(--space-2); }
+.eg-runs-group .eg-run-btn { padding: var(--space-2) var(--space-3); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--canvas); transition: border-color var(--duration-fast) var(--ease-out), background-color var(--duration-fast) var(--ease-out); }
+.eg-runs-group .eg-run-btn:hover { background: var(--surface-2); border-color: var(--line-control); }
+.eg-runs-group .eg-run-btn.is-live { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.eg-runs-group .eg-run-btn.is-active { border-color: var(--accent); background: var(--accent-subtle); }
+.eg-run-meta { overflow: hidden; text-overflow: ellipsis; }

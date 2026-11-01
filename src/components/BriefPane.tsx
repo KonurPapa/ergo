@@ -336,11 +336,11 @@ const NO_AGENT_SESSIONS: SpawnedSession[] = [];
 /** A document heading as plain text: no markdown marks or {color=…} tags. */
 const cleanHeading = (h: string) => h.replace(/\{color=[^}]*\}/g, '').replace(/[*_`]+/g, '').replace(/:\s*$/, '').trim();
 
-type RunsSort = 'status' | 'category' | 'alpha';
+type RunsSort = 'status' | 'category' | 'date' | 'alpha';
 const RUNS_SORT_PREF = 'ai_runs_sort';
 const readRunsSort = (): RunsSort => {
   const v = getPref(RUNS_SORT_PREF);
-  return v === 'category' || v === 'alpha' ? v : 'status';
+  return v === 'category' || v === 'date' || v === 'alpha' ? v : 'status';
 };
 
 /** Brief list order: by the document's headings and task numbers, or newest added first. */
@@ -2430,9 +2430,13 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
     const GROUP_STATUS = Object.fromEntries(GROUPS.map((g) => [g.key, g.status])) as Record<(typeof rows)[number]['group'], DesignTaskStatus>;
     const GROUP_LABEL = Object.fromEntries(GROUPS.map((g) => [g.key, g.label])) as Record<(typeof rows)[number]['group'], string>;
     type Row = (typeof rows)[number];
-    // Run status: one section per state. Category: one per document heading, in document order. A–Z: one list.
+    // Run status: one section per state. Category: one per document heading, in document order. Date: newest
+    // activity first (the last run, else when the task got its brief). A–Z: one list.
+    const activityAt = (r: Row) => Date.parse(r.brief.lastRunOutcome?.at || r.started || r.brief.addedAt || '') || 0;
     const sections: Array<{ key: string; label: string | null; rows: Row[] }> =
-      runsSort === 'alpha'
+      runsSort === 'date'
+        ? [{ key: 'date', label: null, rows: [...rows].sort((x, y) => activityAt(y) - activityAt(x)) }]
+        : runsSort === 'alpha'
         ? [{ key: 'alpha', label: null, rows: [...rows].sort((x, y) => x.brief.title.localeCompare(y.brief.title, undefined, { sensitivity: 'base', numeric: true })) }]
         : runsSort === 'category'
           ? (() => {
@@ -2452,7 +2456,12 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
             })).filter((sec) => sec.rows.length > 0);
     const counts = { running: rows.filter((r) => r.group === 'running' || r.group === 'waiting').length, queued: rows.filter((r) => r.group === 'queued').length };
     const metaFor = (r: (typeof rows)[number]) =>
-      r.group === 'running'
+      runsSort === 'date' && r.group !== 'running' && r.group !== 'queued'
+        ? (() => {
+            const at = r.brief.lastRunOutcome?.at || r.brief.addedAt;
+            return at ? new Date(at).toLocaleDateString([], { month: 'short', day: 'numeric' }) : 'No date';
+          })()
+        : r.group === 'running'
         ? r.started ? `since ${new Date(r.started).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Running'
         : r.group === 'waiting'
           ? 'Needs you'
@@ -2503,6 +2512,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                   options={[
                     { id: 'status', label: 'Run status' },
                     { id: 'category', label: 'Category' },
+                    { id: 'date', label: 'Date' },
                     { id: 'alpha', label: 'A–Z' },
                   ]}
                 />

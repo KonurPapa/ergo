@@ -13,7 +13,7 @@ import {
   type SwimLaneDoc
 } from '../types';
 import { useEditor, EditorContent } from '@tiptap/react';
-import ListItem from '@tiptap/extension-list-item';
+import { AnchoredListItem } from '../lib/listItemAnchor';
 import StarterKit from '@tiptap/starter-kit';
 import Strike from '@tiptap/extension-strike';
 import CodeMark from '@tiptap/extension-code';
@@ -49,9 +49,8 @@ import { TaskCommandMenu, type TaskCommandMenuHandle } from './TaskCommandMenu';
 import { getWorkspaceSkills, subscribeWorkspaceSkills } from '../lib/skillsManager';
 import { projectWorkingFolder, skillsBySlug } from '../lib/taskReferences';
 
-const CustomListItem = ListItem.extend({
-  content: 'block+',
-});
+// List items carry their task's hidden anchor (listItemAnchor.ts), so briefs stay with a line as it moves.
+const CustomListItem = AnchoredListItem;
 
 // A checked-off task is struck through as a whole, so strikethrough ranks outside every other mark. Ranked inside bold
 // (StarterKit's order) it was closed around bold words, "~~one ~~**~~two~~** ~~three~~", which markdown can't read
@@ -794,6 +793,7 @@ const GUTTER_ICONS = {
   more: lucideSvg('<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>'),
   listOrdered: lucideSvg('<path d="M10 12h11"/><path d="M10 18h11"/><path d="M10 6h11"/><path d="M4 10h2"/><path d="M4 6h1v4"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>'),
   calendar: lucideSvg('<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/>'),
+  eye: lucideSvg('<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>'),
   archive: lucideSvg('<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>'),
 };
 const QUEUED_GLYPH =
@@ -1573,6 +1573,10 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                           : outcome === 'passed' || outcome === 'completed' || outcome === 'unverified'
                             ? 'review'
                             : null;
+                  // Finished, not checked off yet: the whole line reads as waiting for the user's review.
+                  if (runKind === 'review') {
+                    decorations.push(Decoration.node(pos, pos + node.nodeSize, { class: 'is-needs-review' }));
+                  }
                   const cardActionsWidget = Decoration.widget(
                     pos + 1,
                     (view, getPos) => {
@@ -1598,7 +1602,8 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                           state.innerHTML = `${QUEUED_GLYPH}Queued ${queuePos + 1}`;
                         } else if (runKind === 'review') {
                           state.className = 'eg-runstate eg-runstate-review';
-                          state.innerHTML = '<span class="eg-dot eg-dot-warning"></span>Review';
+                          state.title = 'The agent finished. Review the work, then check the task off.';
+                          state.innerHTML = `<span class="eg-icon eg-icon-sm">${GUTTER_ICONS.eye}</span>Needs review`;
                         } else {
                           state.className = 'eg-runstate eg-runstate-failed';
                           state.innerHTML = '<span class="eg-dot eg-dot-danger"></span>Failed';

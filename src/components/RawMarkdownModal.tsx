@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { ExportFormattingToggle } from './ExportFormattingToggle';
 import { Download } from 'lucide-react';
 import { Button, Dialog, Tabs } from './ui';
 import { handleMarkdownAutoWrap } from '../lib/markdownEditorUtils';
@@ -88,9 +89,12 @@ export const RawMarkdownModal: React.FC<RawMarkdownModalProps> = ({
             Cancel
           </Button>
           {onExportProject && (
-            <Button size="lg" icon={Download} onClick={onExportProject}>
-              Download all files
-            </Button>
+            <>
+              <ExportFormattingToggle />
+              <Button size="lg" icon={Download} onClick={onExportProject}>
+                Download all files
+              </Button>
+            </>
           )}
           <Button variant="primary" size="lg" onClick={handleSave}>
             Save files

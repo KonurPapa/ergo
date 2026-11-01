@@ -3,6 +3,9 @@ import { askConfirm } from './ui/askDialogs';
 import { type ProjectData, type FolderMetadata, type AgentPipelineOptions, type ModelDataSettings, type AutocompleteSettings } from '../types';
 import { Button, IconButton, Input, Switch, SegmentedControl, SettingsGroup, SettingsRow, StatusDot } from './ui';
 import { setProjectDisplayName } from '../lib/projectNames';
+import { getReviewMode, setReviewMode, type ReviewMode } from '../lib/reviewMode';
+import { subscribePrefs } from '../lib/userPrefs';
+import { ExportFormattingToggle } from './ExportFormattingToggle';
 import { type AutosaveStatus } from '../hooks/useAutosave';
 import {
   Settings,
@@ -1722,6 +1725,38 @@ const ACCEPT_KEYS: Array<{ id: AutocompleteSettings['keybinding']; label: string
 
 const numberInputStyle: React.CSSProperties = { width: 80, fontVariantNumeric: 'tabular-nums' };
 
+/** Settings › General › Review: who checks off a task when its run finishes, for this project. */
+const ReviewModeRow: React.FC<{ projectId: string }> = ({ projectId }) => {
+  const [mode, setMode] = useState<ReviewMode>(() => getReviewMode(projectId));
+  useEffect(() => {
+    setMode(getReviewMode(projectId));
+    return subscribePrefs(() => setMode(getReviewMode(projectId)));
+  }, [projectId]);
+  return (
+    <SettingsRow
+      title="Review"
+      help={
+        mode === 'manual'
+          ? 'You check tasks off. A finished run marks its task "Needs review" in the document instead.'
+          : 'The agent checks off the task and its checklist when the run finishes.'
+      }
+    >
+      <SegmentedControl<ReviewMode>
+        label="Review"
+        value={mode}
+        onChange={(m) => {
+          setMode(m);
+          setReviewMode(projectId, m);
+        }}
+        options={[
+          { id: 'manual', label: 'Manual' },
+          { id: 'auto', label: 'Automatic' },
+        ]}
+      />
+    </SettingsRow>
+  );
+};
+
 /** Settings › General › Name: the project's display name (its folder and id don't change). */
 const ProjectNameRow: React.FC<{ projectId: string; name: string }> = ({ projectId, name }) => {
   const [draft, setDraft] = useState(name);
@@ -1922,6 +1957,7 @@ const EmbeddedSettingsSection: React.FC<EmbeddedSettingsSectionProps> = (p) => {
     <>
       <SettingsGroup title="Project">
         <ProjectNameRow projectId={p.activeProject.id} name={p.activeProject.name || p.activeProject.id} />
+        <ReviewModeRow projectId={p.activeProject.id} />
         <SettingsRow
           title="Folder"
           help="Renaming the folder isn't available yet: briefs and memory are keyed by it."
@@ -1950,6 +1986,12 @@ const EmbeddedSettingsSection: React.FC<EmbeddedSettingsSectionProps> = (p) => {
             </div>
           </SettingsRow>
         )}
+        <SettingsRow
+          title="Include Ergo formatting in exports"
+          help="Hidden task anchors and color tags. Leave them out when the file is going to another tool; Ergo's own copy always keeps them."
+        >
+          <ExportFormattingToggle compact />
+        </SettingsRow>
       </SettingsGroup>
 
       <SettingsGroup title="Editor">

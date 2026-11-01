@@ -32,6 +32,8 @@ export interface TaskItem {
   sourceFileName?: string; // e.g. "TODO.md", "BACKLOG.md"
   totalUsage?: TokenUsage; // Running or final token accounting for this task
   sourceLine?: number; // 0-based line of this task in the markdown it was parsed from
+  /** The line's hidden `<!-- ergo:… -->` anchor (taskAnchors.ts); the task id is built from it. */
+  anchorId?: string;
 }
 
 export interface SwimLaneDoc {

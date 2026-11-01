@@ -450,8 +450,14 @@ export const RunRow: React.FC<{
     <>
       {live ? <StatusDot state="live" /> : <StatusIcon status={status} />}
       <div style={{ minWidth: 0 }}>
-        <div className="eg-run-title">{title}</div>
-        {detail && <div className="eg-run-meta">{detail}</div>}
+        <div className="eg-run-title" title={typeof title === 'string' ? title : undefined}>
+          {title}
+        </div>
+        {detail && (
+          <div className="eg-run-meta" title={typeof detail === 'string' ? detail : undefined}>
+            {detail}
+          </div>
+        )}
       </div>
       <span className="eg-run-meta">{meta}</span>
     </>

@@ -1,6 +1,6 @@
 import React from 'react';
 import { type ProjectData } from '../types';
-import { ChevronDown, Download, FileCode, FolderGit2, FolderOpen, ListPlus, PanelRight, Plus, Search, Settings } from 'lucide-react';
+import { ChevronDown, Download, FileCode, FolderGit2, FolderOpen, ListPlus, Moon, PanelRight, Plus, Search, Settings, Sun } from 'lucide-react';
 import { Button, IconButton, Icon, Kbd, MenuButton, type MenuItem } from './ui';
 import { MOD, SHIFT } from '../lib/shortcuts';
 import ergoIcon from '../assets/ergo_icon_2.png';
@@ -21,6 +21,10 @@ interface NavbarProps {
   onToggleDetail: () => void;
   isSettingsOpen: boolean;
   onOpenSettings: () => void;
+  /** The logo: opens the welcome / onboarding screen. */
+  onOpenWelcome: () => void;
+  theme: 'light' | 'dark';
+  onToggleTheme: () => void;
 }
 
 /**
@@ -41,6 +45,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   onToggleDetail,
   isSettingsOpen,
   onOpenSettings,
+  onOpenWelcome,
+  theme,
+  onToggleTheme,
 }) => {
   const projectItems: MenuItem[] = [
     { section: 'Projects' },
@@ -61,10 +68,10 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className="eg-topbar">
-      <span className="eg-brand" title="Ergo">
+      <button type="button" className="eg-brand" onClick={onOpenWelcome} title="Welcome to Ergo: set up and tour">
         <img src={ergoIcon} alt="" className="eg-brand-logo" aria-hidden="true" />
         <span className="eg-brand-name eg-hide-sm">Ergo</span>
-      </span>
+      </button>
       <span className="eg-crumb-sep">/</span>
       <MenuButton
         items={projectItems}
@@ -94,6 +101,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         onClick={onToggleDetail}
         disabled={isSettingsOpen}
       />
+      <IconButton icon={theme === 'dark' ? Sun : Moon} label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} onClick={onToggleTheme} />
       <IconButton icon={Settings} label="Settings" aria-pressed={isSettingsOpen} onClick={onOpenSettings} />
     </header>
   );
