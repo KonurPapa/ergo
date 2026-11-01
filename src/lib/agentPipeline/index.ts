@@ -531,7 +531,7 @@ export async function executeTaskWithAi(
       ctx.emit({
         id: 'step-terminated',
         stage: 'terminating',
-        title: 'Agent Terminated',
+        title: 'Agent stopped',
         detail: 'The agent was stopped by the user. Any completed tool calls are preserved in the build log' + (bible ? ` and in ${bible.filePath}` : '') + '.',
         status: 'cancelled'
       });
@@ -567,7 +567,7 @@ export async function executeTaskWithAi(
     ctx.emit({
       id: 'step-pipeline-error',
       stage: 'execution',
-      title: 'Pipeline Error',
+      title: 'The run stopped',
       detail: `${message}${bible ? ` — details preserved in ${bible.filePath}` : ''}`,
       status: 'error'
     });

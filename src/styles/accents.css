@@ -1,0 +1,50 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   Selected states use the green accent: the current tab, nav item, toggled
+   buttons, checked boxes, the highlighted row. Fills and marks use --accent (the
+   standard darker green); labels use --accent-text, which is the same green in light
+   and a lighter step in dark so small text stays readable on the dark surfaces.
+   Loaded last so it wins over the component sheets.
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* Tabs */
+.eg-tab[aria-selected="true"] { color: var(--accent-text); }
+.eg-tab[aria-selected="true"]::after { background: var(--accent); }
+.eg-tab[aria-selected="true"] .eg-count { color: var(--accent-text); }
+.tab-btn.active, .tab-btn[aria-selected="true"] { color: var(--accent-text); }
+.tab-btn.active::after, .tab-btn[aria-selected="true"]::after { background: var(--accent); }
+
+/* Segmented controls */
+.eg-seg-item[aria-checked="true"],
+.eg-taskdetail .steps-notes-segment.active { background: var(--accent); color: var(--on-accent); }
+
+/* Toggled buttons: toolbar formats, Hide done, the detail-pane and settings toggles */
+.eg-tb-btn[aria-pressed="true"],
+.eg-btn[aria-pressed="true"],
+.eg-doc-head .eg-btn.is-pressed { background: var(--accent-subtle); color: var(--accent-text); }
+.eg-tb-btn[aria-pressed="true"]:hover,
+.eg-btn[aria-pressed="true"]:hover { background: var(--accent-subtle); color: var(--accent-text); }
+.dlg-chip[aria-pressed="true"] { background: var(--accent-subtle); border-color: var(--accent); color: var(--accent-text); }
+
+/* Navigation and lists: the current item */
+.eg-snav-item[aria-current="page"] { background: var(--accent-subtle); color: var(--accent-text); }
+.eg-snav-item[aria-current="page"] .eg-icon { color: var(--accent-text); }
+.eg-menu-item[data-active="true"],
+.task-command-item.is-active { background: var(--accent-subtle) !important; color: var(--ink) !important; }
+.eg-menu-item[aria-checked="true"] { color: var(--ink); }
+.eg-menu-check { color: var(--accent-text); }
+.eg-run-btn.is-active { background: var(--accent-subtle); }
+.eg-run-btn.is-active .eg-run-title { color: var(--accent-text); }
+.dlg-step[aria-current="step"] { color: var(--accent-text); }
+.dlg-step[aria-current="step"] .dlg-step-num { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.dlg-provider[aria-checked="true"] { background: var(--accent-subtle); border-color: var(--accent); box-shadow: none; }
+.eg-swatch[aria-checked="true"] { outline-color: var(--accent-text); }
+
+/* Checkboxes: checked fills with the accent */
+.eg-tcheck:checked { background: var(--accent); border-color: var(--accent); }
+.eg-tcheck:checked::after { border-color: var(--on-accent); }
+.eg-docscroll .task-ui-checkbox.checked { background: var(--accent) !important; border-color: var(--accent) !important; color: var(--on-accent) !important; }
+.eg-docscroll .task-ui-checkbox.checked:hover { background: var(--accent-hover) !important; border-color: var(--accent-hover) !important; }
+
+/* The current task line in the document: a faint green wash */
+.eg-docscroll .tiptap-editor-root .tiptap ol > li.is-active-card,
+.eg-docscroll .tiptap-editor-root .tiptap ul:not(li ul) > li.is-active-card { background: color-mix(in srgb, var(--accent) 12%, transparent) !important; }

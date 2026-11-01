@@ -1,14 +1,6 @@
 import React, { useState, useRef } from 'react';
-import {
-  FolderPlus,
-  X,
-  Folder,
-  CheckSquare,
-  AlertCircle,
-  CheckCircle2,
-  FolderOpen,
-  FileText
-} from 'lucide-react';
+import { CircleCheck, CircleX, FolderOpen, FileText } from 'lucide-react';
+import { Button, Dialog, Field, Icon, Input } from './ui';
 import { createSlug } from '../lib/demoData';
 import { importedLanes, type ImportedLane } from '../lib/markdownImport';
 import { type ProjectData } from '../types';
@@ -90,7 +82,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
     if (!found) return;
 
     if (!found.todoMarkdown) {
-      setDuplicateError(`Selected project "${found.name}" is missing required markdown content.`);
+      setDuplicateError(`“${found.name}” has no TODO.md content to copy.`);
       setDuplicatedSource(null);
       return;
     }
@@ -135,7 +127,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
 
     if (!todoFile) {
       setDuplicateError(
-        "Selection rejected: Selected folder is missing 'TODO.md'. A 'TODO.md' file must exist to duplicate."
+        "That folder has no TODO.md, so there is nothing to copy. Choose a folder that contains one."
       );
       setDuplicatedSource(null);
       e.target.value = '';
@@ -161,7 +153,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
         }
       }
     } catch (err: any) {
-      setDuplicateError(`Failed to read files from selected folder: ${err?.message}`);
+      setDuplicateError(`Ergo couldn’t read that folder (${err?.message}).`);
       setDuplicatedSource(null);
     }
 
@@ -188,7 +180,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
               todoText = await todoFile.text();
             } catch {
               setDuplicateError(
-                `Selection rejected: Selected folder "${handle.name}" is missing TODO.md. A 'TODO.md' file must exist to duplicate.`
+                `“${handle.name}” has no TODO.md, so there is nothing to copy. Choose a folder that contains one.`
               );
               setDuplicatedSource(null);
               return;
@@ -243,7 +235,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
         if (!isFolderTouched) setFolderName(createSlug(lanes[0].title));
       }
     } catch (err: any) {
-      setImportError(`Couldn't read the files: ${err?.message || err}`);
+      setImportError(`Ergo couldn’t read those files (${err?.message || err}).`);
     }
   };
 
@@ -272,347 +264,161 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
     onClose();
   };
 
+  const formId = 'create-project-form';
+
   return (
-    <div
-      className="modal-overlay"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+    <Dialog
+      title="New project"
+      description="A project is a folder with its own TODO.md."
+      onClose={onClose}
+      width={600}
+      footer={
+        <>
+          <span className="eg-spacer" />
+          <Button variant="ghost" size="lg" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" size="lg" type="submit" form={formId} disabled={!name.trim()}>
+            Create project
+          </Button>
+        </>
+      }
     >
-      <div className="modal-content" style={{ maxWidth: '640px' }} onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            <FolderPlus size={22} color="var(--accent-cyan)" />
-            <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Create New Project</h3>
+      <form id={formId} onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+        <Field label="Name">
+          <Input
+            type="text"
+            placeholder="Client portal, takeoff engine…"
+            value={name}
+            onChange={handleNameChange}
+            required
+            autoFocus
+            style={{ height: 'var(--size-control-lg)' }}
+          />
+        </Field>
+
+        <label className="eg-field">
+          <span className="eg-field-label">Folder</span>
+          <span className="dlg-prefix-input">
+            <span className="dlg-prefix-input-prefix">{mountPrefix}</span>
+            <input type="text" placeholder="project-folder" value={folderName} onChange={handleFolderChange} spellCheck={false} />
+          </span>
+          <span className="eg-field-help">
+            Projects live under <span className="eg-mono" style={{ fontSize: 'calc(11px * var(--type-scale))' }}>{mountPoint}</span>
+          </span>
+        </label>
+
+        <div>
+          <div className="eg-section-label" style={{ marginTop: 'var(--space-2)' }}>Import from markdown (optional)</div>
+          <p style={{ margin: '0 0 var(--space-2)', fontSize: 'calc(12px * var(--type-scale))', lineHeight: 'calc(16px * var(--type-scale))' }}>
+            Start from your own <code className="eg-mono" style={{ fontSize: 'calc(11px * var(--type-scale))' }}>.md</code> files: the first becomes the task list, each other file
+            a swim lane. Checklists (<code className="eg-mono" style={{ fontSize: 'calc(11px * var(--type-scale))' }}>- [ ]</code>,{' '}
+            <code className="eg-mono" style={{ fontSize: 'calc(11px * var(--type-scale))' }}>- [x]</code>) become tasks, done ones checked off.
+          </p>
+          <div className="eg-hstack">
+            <Button icon={FileText} onClick={() => importInputRef.current?.click()}>
+              {imported ? 'Choose other files…' : 'Choose markdown files…'}
+            </Button>
+            {imported && (
+              <Button variant="ghost" onClick={() => setImported(null)}>
+                Clear
+              </Button>
+            )}
           </div>
-          <button className="btn btn-secondary" style={{ padding: '0.3rem 0.5rem' }} onClick={onClose}>
-            <X size={16} />
-          </button>
+          <input
+            type="file"
+            ref={importInputRef}
+            accept=".md,.markdown,.txt,text/markdown,text/plain"
+            multiple
+            onChange={handleImportFiles}
+            style={{ display: 'none' }}
+          />
+          {importError && (
+            <div className="eg-field-error" style={{ marginTop: 'var(--space-2)' }} role="alert">
+              <Icon icon={CircleX} size="sm" />
+              {importError}
+            </div>
+          )}
         </div>
 
-        <form onSubmit={handleSubmit}>
-          <div className="modal-body" style={{ gap: '1.2rem', display: 'flex', flexDirection: 'column' }}>
-            <div>
-              {/* <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-bright)', marginBottom: '0.4rem' }}>
-                Project Name
-              </label> */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                <h4
-                  style={{
-                    fontSize: '0.85rem',
-                    fontWeight: 700,
-                    color: 'var(--text-muted)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.05em',
-                    margin: 0
-                  }}
-                >
-                  Project Name
-                </h4>
-              </div>
-              <input
-                type="text"
-                className="input-text"
-                placeholder="e.g. Next.js SaaS Platform, Client Portal, Takeoff Engine..."
-                value={name}
-                onChange={handleNameChange}
-                required
-                autoFocus
-              />
-            </div>
-
-            <div>
-              {/* <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
-                <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-bright)' }}>
-                  Folder Path
-                </label>
-                <span style={{ fontSize: '0.72rem', color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>
-                  Mount: {mountPoint}
-                </span>
-              </div> */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                <h4
-                  style={{
-                    fontSize: '0.85rem',
-                    fontWeight: 700,
-                    color: 'var(--text-muted)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.05em',
-                    margin: 0
-                  }}
-                >
-                  Project Path
-                </h4>
-                <span style={{ fontSize: '0.72rem', color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>
-                  Mount: {mountPoint}
-                </span>
-              </div>
-
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  background: 'var(--bg-darkest)',
-                  border: '1px solid var(--border-subtle)',
-                  borderRadius: '6px',
-                  padding: '0.4rem 0.75rem',
-                  gap: '0.45rem'
-                }}
-              >
-                <Folder size={16} color="var(--accent-amber)" />
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                  {mountPrefix}
-                </span>
-                <input
-                  type="text"
-                  style={{
-                    flex: 1,
-                    background: 'transparent',
-                    border: 'none',
-                    outline: 'none',
-                    color: 'var(--accent-cyan)',
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: '0.88rem',
-                    minWidth: '80px'
-                  }}
-                  placeholder="project-folder-slug"
-                  value={folderName}
-                  onChange={handleFolderChange}
-                />
-              </div>
-            </div>
-
-            {/* Optional Markdown Import */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '-0.5rem' }}>
-              <h4 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: 0 }}>
-                Import from Markdown (Optional)
-              </h4>
-            </div>
-            <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '0.85rem' }}>
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0 0 0.65rem', lineHeight: '1.4' }}>
-                Start from your own <code style={{ color: 'var(--accent-cyan)' }}>.md</code> files: the first becomes the task list, each other file a
-                swim lane. Checklists (<code>- [ ]</code>, <code>- [x]</code>) become tasks, done ones checked off.
-              </p>
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.4rem 0.8rem', fontSize: '0.82rem' }}
-                  onClick={() => importInputRef.current?.click()}
-                >
-                  <FileText size={15} color="var(--accent-cyan)" />
-                  <span>{imported ? 'Choose other files...' : 'Choose markdown files...'}</span>
-                </button>
-                {imported && (
-                  <button type="button" className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem' }} onClick={() => setImported(null)}>
-                    Clear
-                  </button>
-                )}
-              </div>
-              <input
-                type="file"
-                ref={importInputRef}
-                accept=".md,.markdown,.txt,text/markdown,text/plain"
-                multiple
-                onChange={handleImportFiles}
-                style={{ display: 'none' }}
-              />
-              {importError && (
-                <div style={{ color: '#f87171', fontSize: '0.78rem', marginTop: '0.65rem', display: 'flex', gap: '0.45rem' }}>
-                  <AlertCircle size={15} style={{ flexShrink: 0 }} />
-                  <span>{importError}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Optional Project Duplication Section */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '-0.5rem' }}>
-              <h4
-                style={{
-                  fontSize: '0.85rem',
-                  fontWeight: 700,
-                  color: 'var(--text-muted)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                  margin: 0
-                }}
-              >
-                Duplicate from Existing Project (Optional)
-              </h4>
-            </div>
-            <div
-              style={{
-                background: 'rgba(255, 255, 255, 0.02)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: '8px',
-                padding: '0.85rem',
-                paddingTop: '0.25rem'
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                {duplicatedSource && (
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem' }}
-                    onClick={handleClearDuplicate}
-                  >
-                    Clear Selection
-                  </button>
-                )}
-              </div>
-
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.65rem', lineHeight: '1.4' }}>
-                Select an existing project to copy its exact <code style={{ color: 'var(--accent-cyan)' }}>TODO.md</code> task file into the new project.
-              </p>
-
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                {existingProjects.length > 0 && (
-                  <select
-                    className="input-text"
-                    style={{ flex: 1, fontSize: '0.82rem', padding: '0.4rem 0.6rem' }}
-                    value=""
-                    onChange={(e) => handleSelectWorkspaceProject(e.target.value)}
-                  >
-                    <option value="" disabled>
-                      Select from workspace projects...
-                    </option>
-                    {existingProjects.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name} ({p.folderPath})
-                      </option>
-                    ))}
-                  </select>
-                )}
-
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.45rem',
-                    padding: '0.4rem 0.8rem',
-                    fontSize: '0.82rem',
-                    whiteSpace: 'nowrap'
-                  }}
-                  onClick={handleBrowseFilesystemDuplicate}
-                  disabled={isPicking}
-                  title="Browse local project folder from filesystem to duplicate"
-                >
-                  <FolderOpen size={15} color="var(--accent-cyan)" />
-                  <span>{isPicking ? 'Opening...' : 'Browse...'}</span>
-                </button>
-              </div>
-
-              {/* Hidden Native Directory Input */}
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileInputChange}
-                style={{ display: 'none' }}
-                {...({ webkitdirectory: '', directory: '', multiple: true } as any)}
-              />
-
-              {/* Error Notice if missing TODO.md */}
-              {duplicateError && (
-                <div
-                  style={{
-                    background: 'rgba(239, 68, 68, 0.1)',
-                    border: '1px solid rgba(239, 68, 68, 0.3)',
-                    padding: '0.6rem 0.8rem',
-                    borderRadius: '6px',
-                    color: '#f87171',
-                    fontSize: '0.78rem',
-                    marginTop: '0.65rem',
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: '0.45rem'
-                  }}
-                >
-                  <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '0.1rem' }} />
-                  <span>{duplicateError}</span>
-                </div>
-              )}
-
-              {/* Active Duplication Badge */}
-              {duplicatedSource && (
-                <div
-                  style={{
-                    background: 'rgba(16, 185, 129, 0.08)',
-                    border: '1px solid rgba(16, 185, 129, 0.25)',
-                    padding: '0.55rem 0.8rem',
-                    borderRadius: '6px',
-                    color: '#fff',
-                    fontSize: '0.78rem',
-                    marginTop: '0.65rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem'
-                  }}
-                >
-                  <CheckCircle2 size={15} color="var(--accent-emerald)" />
-                  <div style={{ flex: 1 }}>
-                    <span style={{ color: 'var(--accent-emerald)', fontWeight: 600 }}>
-                      Duplicating from: {duplicatedSource.name}
-                    </span>
-                    <span style={{ color: 'var(--text-muted)', marginLeft: '0.4rem', fontSize: '0.72rem' }}>
-                      (TODO.md verified)
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Generated Directory & File Linking Preview */}
-            <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '1rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.6rem' }}>
-                <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--accent-emerald)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  Files to be created
-                </span>
-                {duplicatedSource && (
-                  <span style={{ fontSize: '0.72rem', color: 'var(--accent-violet)', fontWeight: 600 }}>
-                    Cloning {duplicatedSource.name}
-                  </span>
-                )}
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-bright)' }}>
-                  <Folder size={14} color="var(--accent-amber)" />
-                  <span>{displayFolderPath}/</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-cyan)', paddingLeft: '1.2rem' }}>
-                  <CheckSquare size={13} color="var(--accent-cyan)" />
-                  <span>{todoPath}</span>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                    {imported ? `(Imported: ${imported[0].title})` : duplicatedSource ? '(Copied from source)' : '(Human Tasks List)'}
-                  </span>
-                </div>
-                {imported?.slice(1).map((lane) => (
-                  <div key={lane.fileName} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-cyan)', paddingLeft: '1.2rem' }}>
-                    <CheckSquare size={13} color="var(--accent-cyan)" />
-                    <span>{displayFolderPath}/{lane.fileName}</span>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>(Swim lane: {lane.title})</span>
-                  </div>
+        <div>
+          <div className="eg-section-label" style={{ marginTop: 'var(--space-2)' }}>
+            Copy an existing project (optional)
+            <span className="eg-spacer" />
+            {duplicatedSource && (
+              <Button variant="ghost" size="sm" onClick={handleClearDuplicate}>
+                Clear
+              </Button>
+            )}
+          </div>
+          <p style={{ margin: '0 0 var(--space-2)', fontSize: 'calc(12px * var(--type-scale))', lineHeight: 'calc(16px * var(--type-scale))' }}>
+            Copies that project’s <code className="eg-mono" style={{ fontSize: 'calc(11px * var(--type-scale))' }}>TODO.md</code> into the new project.
+          </p>
+          <div className="eg-hstack">
+            {existingProjects.length > 0 && (
+              <select className="eg-input" style={{ flex: 1 }} value="" onChange={(e) => handleSelectWorkspaceProject(e.target.value)}>
+                <option value="" disabled>
+                  Choose a project…
+                </option>
+                {existingProjects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.folderPath})
+                  </option>
                 ))}
-              </div>
-            </div>
+              </select>
+            )}
+            <Button icon={FolderOpen} onClick={handleBrowseFilesystemDuplicate} disabled={isPicking} title="Choose a project folder on disk to copy">
+              {isPicking ? 'Opening…' : 'Browse…'}
+            </Button>
           </div>
 
-          <div className="modal-footer">
-            <button type="button" className="btn btn-secondary" onClick={onClose}>
-              Cancel
-            </button>
-            <button type="submit" className="btn btn-primary" disabled={!name.trim()}>
-              <FolderPlus size={16} />
-              <span>Create Project</span>
-            </button>
+          {/* Hidden native directory input */}
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileInputChange}
+            style={{ display: 'none' }}
+            {...({ webkitdirectory: '', directory: '', multiple: true } as any)}
+          />
+
+          {duplicateError && (
+            <div className="eg-field-error" style={{ marginTop: 'var(--space-2)', alignItems: 'flex-start' }} role="alert">
+              <Icon icon={CircleX} size="sm" style={{ marginTop: 1 }} />
+              {duplicateError}
+            </div>
+          )}
+
+          {duplicatedSource && (
+            <div className="eg-hstack" style={{ marginTop: 'var(--space-2)', fontSize: 'calc(12px * var(--type-scale))' }}>
+              <Icon icon={CircleCheck} size="sm" style={{ color: 'var(--success)' }} />
+              <span style={{ color: 'var(--ink)' }}>Copying {duplicatedSource.name}</span>
+              <span className="eg-subtle">TODO.md found</span>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div className="eg-section-label" style={{ marginTop: 'var(--space-2)' }}>Files to create</div>
+          <div className="dlg-tree">
+            <div style={{ color: 'var(--ink)' }}>{displayFolderPath}/</div>
+            <div style={{ paddingLeft: 18 }}>
+              <span style={{ color: 'var(--ink-muted)' }}>{todoPath}</span>
+              <span style={{ color: 'var(--ink-subtle)' }}>
+                {'  '}
+                {imported ? `imported from ${imported[0].title}` : duplicatedSource ? `copied from ${duplicatedSource.name}` : 'your task list'}
+              </span>
+            </div>
+            {imported?.slice(1).map((lane) => (
+              <div key={lane.fileName} style={{ paddingLeft: 18 }}>
+                <span style={{ color: 'var(--ink-muted)' }}>
+                  {displayFolderPath}/{lane.fileName}
+                </span>
+                <span style={{ color: 'var(--ink-subtle)' }}>{'  '}swim lane: {lane.title}</span>
+              </div>
+            ))}
           </div>
-        </form>
-      </div>
-    </div>
+        </div>
+      </form>
+    </Dialog>
   );
 };
-
-

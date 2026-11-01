@@ -356,7 +356,7 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
 
                 {/* The working brief the Summary step wrote (the manager's spec) */}
                 {step.stage === 'overview' && step.status === 'success' && step.overviewDocument?.raw && (
-                  <div style={{ marginTop: '0.6rem', padding: '0.6rem 0.75rem', background: 'rgba(56, 189, 248, 0.06)', border: '1px solid rgba(56, 189, 248, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+                  <div style={{ marginTop: '0.6rem', padding: '0.6rem 0.75rem', background: 'color-mix(in srgb, var(--accent-text) 6%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-text) 20%, transparent)', borderRadius: 'var(--radius-sm)', fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
                     <div style={{ fontWeight: 700, color: 'var(--accent-cyan)', marginBottom: '0.35rem', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                       Working Brief
                     </div>
@@ -398,7 +398,7 @@ function renderMcpAppWidget(type: string, data: any) {
             <Code size={16} color="var(--accent-cyan)" />
             <span>VS Code Editor MCP Live Stream ({data.editorFile || 'TODO.md'})</span>
           </div>
-          <span style={{ fontSize: '0.72rem', color: 'var(--accent-emerald)', background: 'rgba(16, 185, 129, 0.15)', padding: '0.15rem 0.5rem', borderRadius: '4px' }}>
+          <span style={{ fontSize: '0.72rem', color: 'var(--accent-emerald)', background: 'color-mix(in srgb, var(--accent-text) 15%, transparent)', padding: '0.15rem 0.5rem', borderRadius: '4px' }}>
             {data.connectionStatus || 'Stdio IPC Connected'}
           </span>
         </div>

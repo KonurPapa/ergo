@@ -1,10 +1,11 @@
 /**
- * Learned rules — the Archives & Learnings tab where the user sees and steers what Ergo learned from their feedback
+ * Learned rules — Settings › Rules (and the old Archives modal's Learnings tab) where the user sees and steers what Ergo learned from their feedback
  * (memory/insights.ts): edit, delete, choose whether a rule applies to every task. The last change can
  * be undone. Every run of the project gets these rules.
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { Check, Pencil, Trash2, Undo2, X } from 'lucide-react';
+import { Check, Pencil, ScrollText, Trash2, Undo2, X } from 'lucide-react';
+import { Banner, Button, EmptyState, IconButton, Input, SegmentedControl } from './ui';
 import {
   applyInsightOps,
   insightsSupported,
@@ -15,8 +16,6 @@ import {
   type InsightOp,
   type ProjectInsight,
 } from '../lib/memory/insights';
-
-const smallBtn: React.CSSProperties = { fontSize: '0.75rem', padding: '0.2rem 0.45rem', display: 'flex', alignItems: 'center', gap: '0.3rem' };
 
 export const LearnedRulesSection: React.FC<{ projectId: string }> = ({ projectId }) => {
   const supported = insightsSupported();
@@ -80,112 +79,90 @@ export const LearnedRulesSection: React.FC<{ projectId: string }> = ({ projectId
   };
 
   return (
-    <div>
-      <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0 0 0.75rem', lineHeight: 1.45 }}>
-        When you correct the AI, it saves what should apply to future tasks here, and every run follows these rules. "Every
-        task" rules always apply; topical ones guide related work.
+    <div className="eg-settings-rules">
+      <p className="eg-settings-groupdesc">
+        When you correct the agent, Ergo saves what should apply to future tasks here, and every run follows
+        these rules. "Every task" rules always apply; topical ones guide related work.
       </p>
 
       {!supported ? (
-        <p style={{ fontSize: '0.8rem', color: 'var(--accent-amber)' }}>Update the Ergo bridge to use learned rules.</p>
+        <Banner tone="warning" title="Rules need a newer bridge" text="Update Ergo Bridge to see and edit learned rules." />
       ) : (
         <>
-          {error && <p style={{ fontSize: '0.78rem', color: 'var(--accent-rose)', marginBottom: '0.5rem' }}>{error}</p>}
-          {rules === null && !error && <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Loading…</p>}
+          {error && <Banner tone="danger" title="Couldn't load rules" text={error} />}
+          {rules === null && !error && <p className="eg-srow-help">Loading…</p>}
           {rules && rules.length === 0 && (
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic', marginBottom: '0.6rem' }}>
-              Nothing learned yet. Rules appear here when you correct a run (for example "we use pnpm, never npm"), or add your own with New Knowledge.
-            </p>
+            <EmptyState icon={ScrollText} title="No rules yet" text="Rules appear here when you correct the agent, or when you add your own." />
           )}
           {rules && rules.length > 0 && (
-            <ul style={{ listStyle: 'none', margin: '0 0 0.6rem', padding: 0, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+            <div className="eg-srows">
               {rules.map((rule) => (
-                <li
-                  key={rule.id}
-                  style={{ border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '0.45rem 0.55rem', background: 'rgba(255,255,255,0.02)' }}
-                >
-                  {editingId === rule.id ? (
-                    <div style={{ display: 'flex', gap: '0.35rem' }}>
-                      <input
-                        className="input-text"
-                        autoFocus
-                        value={draft}
-                        onChange={(e) => setDraft(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') saveEdit(rule);
-                          if (e.key === 'Escape') setEditingId(null);
-                        }}
-                        style={{ flex: 1, fontSize: '0.8rem' }}
-                        maxLength={400}
-                      />
-                      <button type="button" className="btn btn-secondary" style={smallBtn} onClick={() => saveEdit(rule)} title="Save">
-                        <Check size={12} />
-                      </button>
-                      <button type="button" className="btn btn-secondary" style={smallBtn} onClick={() => setEditingId(null)} title="Cancel">
-                        <X size={12} />
-                      </button>
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: '0.82rem', color: 'var(--text-bright)', lineHeight: 1.4 }}>{rule.text}</div>
-                  )}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.35rem', flexWrap: 'wrap' }}>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      style={{ ...smallBtn, color: rule.scope === 'always' ? 'var(--accent-emerald)' : 'var(--text-muted)' }}
-                      disabled={busy}
-                      title={rule.scope === 'always' ? 'Applies to every task. Click to apply only to related work.' : 'Applies to related work. Click to apply to every task.'}
-                      onClick={() =>
-                        void apply([{ op: 'update', id: rule.id, scope: rule.scope === 'always' ? 'topical' : 'always' }], 'Scope changed.')
-                      }
-                    >
-                      {rule.scope === 'always' ? 'Every task' : 'Topical'}
-                    </button>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                      {rule.origin === 'user' ? 'Yours' : 'Learned'}
-                      {rule.confirms > 1 ? ` · said ${rule.confirms}×` : ''}
+                <div key={rule.id} className="eg-srow eg-settings-top">
+                  <div className="eg-srow-text">
+                    {editingId === rule.id ? (
+                      <div className="eg-settings-actions">
+                        <Input
+                          autoFocus
+                          value={draft}
+                          onChange={(e) => setDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') saveEdit(rule);
+                            if (e.key === 'Escape') setEditingId(null);
+                          }}
+                          aria-label="Rule"
+                          style={{ flex: 1 }}
+                          maxLength={400}
+                        />
+                        <IconButton icon={Check} label="Save rule" size="sm" onClick={() => saveEdit(rule)} />
+                        <IconButton icon={X} label="Cancel" size="sm" onClick={() => setEditingId(null)} />
+                      </div>
+                    ) : (
+                      <div className="eg-srow-title">{rule.text}</div>
+                    )}
+                    <div className="eg-srow-help">
+                      {rule.origin === 'user' ? 'Added by you' : 'Learned from a correction'}
+                      {rule.confirms > 1 ? ` · said ${rule.confirms} times` : ''}
                       {rule.taskTitle ? ` · from "${rule.taskTitle}"` : ''}
-                    </span>
-                    <span style={{ flex: 1 }} />
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      style={smallBtn}
+                    </div>
+                  </div>
+                  <div className="eg-settings-actions">
+                    <SegmentedControl
+                      label="Applies to"
                       disabled={busy}
-                      title="Edit"
+                      options={[
+                        { id: 'always', label: 'Every task' },
+                        { id: 'topical', label: 'Related work' },
+                      ]}
+                      value={rule.scope === 'always' ? 'always' : 'topical'}
+                      onChange={(v) => {
+                        if ((v === 'always') !== (rule.scope === 'always')) void apply([{ op: 'update', id: rule.id, scope: v }], 'Scope changed.');
+                      }}
+                    />
+                    <IconButton
+                      icon={Pencil}
+                      label="Edit rule"
+                      size="sm"
+                      disabled={busy}
                       onClick={() => {
                         setEditingId(rule.id);
                         setDraft(rule.text);
                       }}
-                    >
-                      <Pencil size={12} />
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      style={{ ...smallBtn, color: 'var(--accent-rose)' }}
-                      disabled={busy}
-                      title="Delete"
-                      onClick={() => void apply([{ op: 'delete', id: rule.id }], 'Rule deleted.')}
-                    >
-                      <Trash2 size={12} />
-                    </button>
+                    />
+                    <IconButton icon={Trash2} label="Delete rule" size="sm" disabled={busy} onClick={() => void apply([{ op: 'delete', id: rule.id }], 'Rule deleted.')} />
                   </div>
-                </li>
+                </div>
               ))}
-            </ul>
-          )}
-
-          {lastChange && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-              <span>{lastChange.label}</span>
-              <button type="button" className="btn btn-secondary" style={smallBtn} disabled={busy} onClick={() => void undo()}>
-                <Undo2 size={12} />
-                <span>Undo</span>
-              </button>
             </div>
           )}
 
+          {lastChange && (
+            <div className="eg-settings-actions eg-settings-undo">
+              <span className="eg-srow-help">{lastChange.label}</span>
+              <Button size="sm" variant="ghost" icon={Undo2} disabled={busy} onClick={() => void undo()}>
+                Undo
+              </Button>
+            </div>
+          )}
         </>
       )}
     </div>

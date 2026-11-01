@@ -1,0 +1,14 @@
+<!-- @dsCard group="Tasks" height=260 subtitle="Task input with @file and /skill references" -->
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="root" style="padding:20px"></div>
+<script>
+var E = window.Ergo, h = React.createElement, F = React.Fragment;
+
+ReactDOM.createRoot(document.getElementById("root")).render(h("div",{style:{display:"flex",gap:16,alignItems:"flex-start"}},
+  h("div",{style:{width:520}}, h(E.Composer,{model:"Auto",parts:["Make bullet toggling work per item in ",{file:"src/editor/Bullet.tsx"}," and add tests with ",{skill:"tdd"},{caret:true}]})),
+  h("div",{className:"eg-suggest"}, h(E.Menu,{style:{boxShadow:"none",padding:0,background:"transparent",minWidth:0},items:[{section:"Files"},{label:"src/editor/Bullet.tsx",icon:"file",active:true,hint:"edited 2h ago"},{label:"src/editor/ListItem.tsx",icon:"file"},{label:"src/editor/",icon:"folder"},{separator:true},{section:"Skills"},{label:"/tdd",icon:"slash",hint:"Write tests first"},{label:"/remember",icon:"slash",hint:"Save a rule"}]}))
+));
+</script>
+</body></html>

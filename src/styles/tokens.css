@@ -1,0 +1,109 @@
+/* Ergo design tokens — generated from public/design/ergo-design/tokens.json. Dark is the primary theme. */
+@font-face { font-family: "Geist"; src: url("./fonts/Geist-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Geist"; src: url("./fonts/Geist-Medium.woff2") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: "Geist"; src: url("./fonts/Geist-SemiBold.woff2") format("woff2"); font-weight: 600; font-style: normal; font-display: swap; }
+@font-face { font-family: "Geist Mono"; src: url("./fonts/GeistMono-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Geist Mono"; src: url("./fonts/GeistMono-Medium.woff2") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+
+:root {
+  --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* Every text size in the app is multiplied by this (the design sizes ×1.15). */
+  --type-scale: 1.15;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+  --size-control-sm: 24px;
+  --size-control: 28px;
+  --size-control-lg: 32px;
+  --size-row: 34px;
+  --size-topbar: 44px;
+  --size-statusbar: 28px;
+  --size-detail: 480px;
+  --duration-fast: 100ms;
+  --duration-base: 160ms;
+  --duration-slow: 220ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --z-sticky: 10;
+  --z-popover: 30;
+  --z-dialog: 40;
+  --z-toast: 50;
+}
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #0e0f11;
+  --surface-1: #141518;
+  --surface-2: #1a1b1f;
+  --surface-3: #212328;
+  --line: #25272c;
+  --line-strong: #34373e;
+  --line-control: #666a74;
+  --ink: #ededef;
+  --ink-muted: #b3b7bf;
+  --ink-subtle: #8b909a;
+  --ink-disabled: #6b707a;
+  --accent: #3C7758;
+  --accent-hover: #468a66;
+  --on-accent: #ffffff;
+  --accent-text: #52A278;
+  --accent-subtle: #52A27829;
+  --focus: #52A278;
+  --selection: #52A27847;
+  --success: #4cb782;
+  --warning: #e0a33a;
+  --danger: #f0675f;
+  --success-subtle: #4cb7821f;
+  --warning-subtle: #e0a33a1f;
+  --danger-subtle: #f0675f1f;
+  --overlay: #000000a6;
+  --shadow-popover: 0 0 0 1px #34373e, 0 8px 24px #00000080;
+  --shadow-dialog: 0 0 0 1px #34373e, 0 24px 64px #000000a6;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --canvas: #ffffff;
+  --surface-1: #f7f7f8;
+  --surface-2: #efeff1;
+  --surface-3: #e6e7ea;
+  --line: #e3e4e8;
+  --line-strong: #cfd1d6;
+  --line-control: #868b94;
+  --ink: #16171a;
+  --ink-muted: #3d4047;
+  --ink-subtle: #5a5f69;
+  --ink-disabled: #9599a1;
+  --accent: #3C7758;
+  --accent-hover: #33664b;
+  --on-accent: #ffffff;
+  --accent-text: #3C7758;
+  --accent-subtle: #3C77581a;
+  --focus: #3C7758;
+  --selection: #3C775833;
+  --success: #17704a;
+  --warning: #7f5400;
+  --danger: #b8322b;
+  --success-subtle: #17704a14;
+  --warning-subtle: #7f540014;
+  --danger-subtle: #b8322b14;
+  --overlay: #0e0f1166;
+  --shadow-popover: 0 0 0 1px #cfd1d6, 0 8px 24px #0e0f111f;
+  --shadow-dialog: 0 0 0 1px #cfd1d6, 0 24px 64px #0e0f1129;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --duration-fast: 0ms; --duration-base: 0ms; --duration-slow: 0ms; }
+}

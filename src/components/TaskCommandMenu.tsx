@@ -1,6 +1,6 @@
 import React, { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { FileText, Folder, FolderOpen, Loader2, Sparkles } from 'lucide-react';
+import { FileText, Folder, FolderOpen, Loader2, Slash } from 'lucide-react';
 import type { WorkspaceSkill } from '../types';
 import { bridgeClient } from '../lib/bridgeClient';
 import { bridgeSupportsTaskReferences, skillsBySlug } from '../lib/taskReferences';
@@ -192,7 +192,7 @@ export const TaskCommandMenu = React.forwardRef<TaskCommandMenuHandle, TaskComma
                   onMouseEnter={() => setActive(i)}
                   onClick={() => choose(item)}
                 >
-                  <Sparkles size={13} className="task-command-icon is-skill" />
+                  <Slash size={13} strokeWidth={1.75} className="task-command-icon is-skill" />
                   <span className="task-command-main">
                     <span className="task-command-label">/{item.slug}</span>
                     <span className="task-command-detail">{item.skill.description}</span>

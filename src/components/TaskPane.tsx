@@ -1,7 +1,10 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { askText } from './ui/askDialogs';
 import { createPortal } from 'react-dom';
 import {
   type TaskItem as TaskItemType,
+  type AgentContextItem,
+  type SpawnedSession,
   type ProjectData,
   type AIProviderConfig,
   type MCPServer,
@@ -20,18 +23,17 @@ import Image from '@tiptap/extension-image';
 import Typography from '@tiptap/extension-typography';
 import { Markdown } from 'tiptap-markdown';
 import { stripHeaderComments, parseSwimLaneMarkdown } from '../lib/parser';
-import { HEADER_COLORS, randomHeaderColorId, resolveHeaderColor } from '../lib/headerColors';
 import { ColorHeading } from '../lib/headingColorNode';
 import { Highlight, MarkdownUnderline } from '../lib/delimitedMarks';
 import { TextColor } from '../lib/textColorMark';
-import { LineSpacingParagraph, LINE_SPACINGS } from '../lib/lineSpacingMark';
+import { LineSpacingParagraph } from '../lib/lineSpacingMark';
 import { storageManager } from '../lib/storageManager';
 import { getPref, setPref, subscribePrefs } from '../lib/userPrefs';
 import { bridgeClient } from '../lib/bridgeClient';
 import { HumanAiAssistantModal } from './HumanAiAssistantModal';
 import { BatchRunModal, type BatchRunMode } from './BatchRunModal';
 import { ScopedRulesModal } from './ScopedRulesModal';
-import { BetaFeature, useBeta } from '../context/BetaContext';
+import { useBeta } from '../context/BetaContext';
 import { ScheduleTaskModal } from './ScheduleTaskModal';
 import { getAutocompleteSuggestion, listContextAround } from '../lib/autocompleteService';
 
@@ -62,8 +64,7 @@ const StrikeableCode = CodeMark.extend({ excludes: 'bold italic underline highli
 
 import {
   Plus,
-  FileText,
-  Sparkles,
+
   Bold,
   Italic,
   Strikethrough,
@@ -72,8 +73,11 @@ import {
   Heading3,
   List,
   ListOrdered,
+  ListChecks,
+  ListPlus,
   Code,
-  FileCode,
+  SquareCode,
+  Pilcrow,
   Quote,
   Minus,
   Link as LinkIcon,
@@ -84,22 +88,23 @@ import {
   ChevronDown,
   Archive,
   Trash2,
-  AlertTriangle,
-  AlertCircle,
-  X,
   Edit2,
   MoreHorizontal,
-  CornerDownRight,
-  Palette,
-  Underline as UnderlineIcon,
-  Highlighter,
+  Play,
+  ScrollText,
+  IndentDecrease,
+  IndentIncrease,
   Baseline,
   RemoveFormatting,
-  IndentIncrease,
-  IndentDecrease,
-  Play,
-  ScrollText
+  X,
+  type LucideIcon,
 } from 'lucide-react';
+import { Button, Dialog, IconButton, MenuButton, Popover, RunState } from './ui';
+import { HEADER_COLORS, getHeaderColor } from '../lib/headerColors';
+import { isAgentWorking } from './AgentSessionTabs';
+import { useAgentActivity, useTick } from '../hooks/useAgentActivity';
+import { formatElapsed } from '../lib/agentDisplay';
+import { MOD, SHIFT, matches } from '../lib/shortcuts';
 
 interface WithMarkdownStorage {
   storage: {
@@ -129,6 +134,7 @@ function saveCollapsedCards() {
 
 const FORMATTING_BAR_PREF = 'human_formatting_bar';
 const readShowFormattingBar = () => getPref(FORMATTING_BAR_PREF) !== 'hidden';
+const HIDE_DONE_PREF = 'human_hide_done';
 
 // Collapsed group headers, remembered across reloads: { [lane file]: ["<level>:<header name>", ...] }.
 const COLLAPSED_HEADERS_KEY = 'ergo_collapsed_headers';
@@ -775,28 +781,302 @@ const CustomListKeymapExtension = Extension.create({
   },
 });
 
-// ── Toolbar button component ────────────────────────────────────
+// ── Task-line gutter and actions (TaskLine in the design) ──────────
+// Lucide glyphs as markup: the line widgets are plain DOM built inside ProseMirror decorations.
+const lucideSvg = (body: string) =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+const GUTTER_ICONS = {
+  plus: lucideSvg('<path d="M5 12h14"/><path d="M12 5v14"/>'),
+  grip: lucideSvg('<circle cx="9" cy="12" r="1"/><circle cx="9" cy="5" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="19" r="1"/>'),
+  brief: lucideSvg('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>'),
+  play: lucideSvg('<polygon points="6 3 20 12 6 21 6 3"/>'),
+  stop: lucideSvg('<rect width="18" height="18" x="3" y="3" rx="2"/>'),
+  more: lucideSvg('<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>'),
+  listOrdered: lucideSvg('<path d="M10 12h11"/><path d="M10 18h11"/><path d="M10 6h11"/><path d="M4 10h2"/><path d="M4 6h1v4"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>'),
+  calendar: lucideSvg('<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/>'),
+  archive: lucideSvg('<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>'),
+};
+const QUEUED_GLYPH =
+  '<span class="eg-status eg-status-queued" aria-hidden="true"><svg viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2.2 2.2"/></svg></span>';
+
+/** Inserts an empty task right after the top-level task at `listItemPos` and puts the caret in it. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function insertTaskBelow(view: any, listItemPos: number) {
+  const { state } = view;
+  const node = state.doc.nodeAt(listItemPos);
+  if (!node || node.type.name !== 'listItem') return;
+  const { listItem, paragraph } = state.schema.nodes;
+  const at = listItemPos + node.nodeSize;
+  const tr = state.tr.insert(at, listItem.create(null, paragraph.create()));
+  tr.setSelection(TextSelection.near(tr.doc.resolve(at + 2)));
+  tr.setStoredMarks([]);
+  view.dispatch(tr.scrollIntoView());
+  view.focus();
+}
+
+/** The document's top-level task lines (DOM) with their positions, in order. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function topLevelTaskLines(view: any): Array<{ el: HTMLElement; pos: number }> {
+  const out: Array<{ el: HTMLElement; pos: number }> = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  view.state.doc.descendants((node: any, pos: number) => {
+    if (node.type.name !== 'listItem') return true;
+    if (isTopLevelListItemNode(view.state.doc, pos)) {
+      const el = view.nodeDOM(pos) as HTMLElement | null;
+      if (el && el.offsetParent !== null) out.push({ el, pos });
+    }
+    return false;
+  });
+  return out;
+}
+
+/**
+ * Drag a task line by its handle: a drop line follows the pointer between task lines, and dropping moves the task
+ * (with its sub-items) there in one undoable change. Escape cancels.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function startTaskDrag(view: any, fromPos: number, down: MouseEvent) {
+  const source = view.nodeDOM(fromPos) as HTMLElement | null;
+  if (!source) return;
+  const indicator = document.createElement('div');
+  indicator.className = 'eg-drop-line';
+  document.body.appendChild(indicator);
+  let target: { pos: number; before: boolean } | null = null;
+  let moved = false;
+
+  const update = (y: number) => {
+    const lines = topLevelTaskLines(view).filter((l) => l.pos !== fromPos);
+    if (!lines.length) return;
+    let best = lines[0];
+    let bestDist = Infinity;
+    for (const l of lines) {
+      const r = l.el.getBoundingClientRect();
+      const d = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0;
+      if (d < bestDist) {
+        bestDist = d;
+        best = l;
+      }
+    }
+    const r = best.el.getBoundingClientRect();
+    // Only the task's own first row decides above/below, so a long task with sub-items is easy to drop past.
+    const before = y < r.top + Math.min(r.height, 32) / 2;
+    target = { pos: best.pos, before };
+    indicator.style.top = `${(before ? r.top : r.bottom) - 1}px`;
+    indicator.style.left = `${r.left}px`;
+    indicator.style.width = `${r.width}px`;
+    indicator.style.display = 'block';
+  };
+  const cleanup = () => {
+    indicator.remove();
+    source.classList.remove('is-dragging');
+    document.body.classList.remove('eg-is-dragging-line');
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    document.removeEventListener('keydown', onKey, true);
+  };
+  const onMove = (e: MouseEvent) => {
+    if (!moved && Math.abs(e.clientY - down.clientY) < 4) return;
+    if (!moved) {
+      moved = true;
+      source.classList.add('is-dragging');
+      document.body.classList.add('eg-is-dragging-line');
+    }
+    update(e.clientY);
+  };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      cleanup();
+    }
+  };
+  const onUp = () => {
+    cleanup();
+    if (!moved || !target) return;
+    const { state } = view;
+    const node = state.doc.nodeAt(fromPos);
+    const targetNode = state.doc.nodeAt(target.pos);
+    if (!node || !targetNode) return;
+    const insertAt = target.before ? target.pos : target.pos + targetNode.nodeSize;
+    if (insertAt === fromPos || insertAt === fromPos + node.nodeSize) return;
+    const tr = state.tr.delete(fromPos, fromPos + node.nodeSize);
+    const mapped = tr.mapping.map(insertAt, target.before ? -1 : 1);
+    tr.insert(mapped, node);
+    tr.setSelection(TextSelection.near(tr.doc.resolve(mapped + 2)));
+    view.dispatch(tr.scrollIntoView());
+    view.focus();
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+  document.addEventListener('keydown', onKey, true);
+}
+
+/**
+ * Hide done: where the caret should go instead when it sits in a hidden (done) task or sub-item — just past the
+ * outermost hidden list item around it, in `dir` (1 forward, -1 back). Null when the caret is on a visible line.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function caretPastHiddenDone(state: any, dir: 1 | -1): number | null {
+  const isHiddenItem = (node: PMNode) => {
+    if (node.type.name !== 'listItem') return false;
+    let first: PMNode | null = null;
+    node.forEach((child) => {
+      if (!first && child.type.name !== 'bulletList' && child.type.name !== 'orderedList') first = child;
+    });
+    return isNodeChecked(first);
+  };
+  let pos: number = state.selection.from;
+  for (let guard = 0; guard < 200; guard++) {
+    const $pos = state.doc.resolve(pos);
+    let hiddenDepth = -1;
+    for (let d = 1; d <= $pos.depth; d++) {
+      if (isHiddenItem($pos.node(d))) {
+        hiddenDepth = d;
+        break;
+      }
+    }
+    if (hiddenDepth < 0) return guard === 0 ? null : pos;
+    const next = dir > 0 ? $pos.after(hiddenDepth) : $pos.before(hiddenDepth);
+    const sel = Selection.near(state.doc.resolve(Math.max(0, Math.min(state.doc.content.size, next))), dir);
+    if (sel.from === pos) return null;
+    pos = sel.from;
+  }
+  return null;
+}
+
+/** One running task's line state: what its agent is doing, and for how long. */
+const LiveRunState: React.FC<{ session: SpawnedSession }> = ({ session }) => {
+  const { activity } = useAgentActivity(session.ptySessionId);
+  const now = useTick();
+  const started = Date.parse(session.session.spawnedAt) || now;
+  const doing = activity?.doing || (session.status === 'starting' ? 'Starting' : 'Working');
+  return <RunState state="live" label={doing} meta={formatElapsed(now - started)} title={activity?.said || doing} />;
+};
+
+/**
+ * Fills each running task line's run-state placeholder (rendered by the line decorations) with its LiveRunState.
+ * Re-reads the placeholders every second, since ProseMirror rebuilds widgets as the document changes.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const LineRunStates: React.FC<{ editor: any; sessions: Map<string, SpawnedSession> }> = ({ editor, sessions }) => {
+  useTick(sessions.size > 0);
+  if (sessions.size === 0 || editor.isDestroyed) return null;
+  const slots = Array.from(editor.view.dom.querySelectorAll('[data-live-task]') as NodeListOf<HTMLElement>);
+  return (
+    <>
+      {slots.map((el) => {
+        const session = sessions.get(el.dataset.liveTask || '');
+        if (!session) return null;
+        if (!el.dataset.portaled) {
+          el.textContent = '';
+          el.dataset.portaled = '1';
+          el.className = 'eg-line-live';
+        }
+        return createPortal(<LiveRunState session={session} />, el, `${el.dataset.liveTask}`);
+      })}
+    </>
+  );
+};
+
+/** Text color: a swatch menu over the shared palette, plus No color. Applies the textColor mark to the selection. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const TextColorButton: React.FC<{ editor: any; className?: string }> = ({ editor }) => {
+  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null);
+  const current: string | undefined = editor?.getAttributes('textColor')?.color || undefined;
+  const apply = (id: string | null) => {
+    if (!editor) return;
+    if (id) editor.chain().focus().setMark('textColor', { color: id }).run();
+    else editor.chain().focus().unsetMark('textColor').run();
+    setOpen(false);
+  };
+  return (
+    <>
+      <button
+        ref={setAnchor}
+        type="button"
+        className="eg-tb-btn eg-tb-color"
+        title="Text color"
+        aria-label="Text color"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-pressed={editor?.isActive('textColor') ? true : undefined}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="eg-icon" aria-hidden="true">
+          <Baseline strokeWidth={1.75} />
+        </span>
+        <span className="eg-tb-color-bar" style={{ background: getHeaderColor(current)?.hex ?? 'var(--ink-subtle)' }} />
+      </button>
+      <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} width={196}>
+        <div className="eg-menu eg-swatches" role="menu" onMouseDown={(e) => e.preventDefault()}>
+          {HEADER_COLORS.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={current === c.id}
+              title={c.label}
+              aria-label={c.label}
+              className="eg-swatch"
+              style={{ background: c.hex }}
+              onClick={() => apply(c.id)}
+            />
+          ))}
+          <button type="button" role="menuitem" className="eg-menu-item eg-swatch-clear" onClick={() => apply(null)}>
+            <span className="eg-icon" aria-hidden="true"><X strokeWidth={1.75} /></span>
+            No color
+          </button>
+        </div>
+      </Popover>
+    </>
+  );
+};
+
+// ── Toolbar button (EditorToolbar: ghost icon buttons) ──────────
 interface ToolbarBtnProps {
+  icon: LucideIcon;
   onClick: () => void;
   active?: boolean;
   disabled?: boolean;
   title: string;
-  children: React.ReactNode;
 }
 
-const ToolbarBtn: React.FC<ToolbarBtnProps> = ({ onClick, active, disabled, title, children }) => (
+const ToolbarBtn: React.FC<ToolbarBtnProps> = ({ icon: I, onClick, active, disabled, title }) => (
   <button
     type="button"
     title={title}
+    aria-label={title}
+    aria-pressed={active ? true : undefined}
     disabled={disabled}
+    onMouseDown={(e) => e.preventDefault()}
     onClick={onClick}
-    className={`tiptap-toolbar-btn ${active ? 'is-active' : ''}`}
+    className="eg-tb-btn"
   >
-    {children}
+    <span className="eg-icon" aria-hidden="true">
+      <I strokeWidth={1.75} />
+    </span>
   </button>
 );
 
-const Sep = () => <div className="tiptap-toolbar-sep" />;
+const Sep = () => <span className="eg-tb-sep" aria-hidden="true" />;
+
+/** The block-type menu at the caret: the toolbar shows the current one ("Task", "Heading 2", "Text"…). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const BLOCK_TYPES: ReadonlyArray<{ label: string; icon: LucideIcon; isActive: (ed: any) => boolean; apply: (ed: any) => void }> = [
+  { label: 'Heading 1', icon: Heading1, isActive: (ed) => ed?.isActive('heading', { level: 1 }), apply: (ed) => ed?.chain().focus().toggleHeading({ level: 1 }).run() },
+  { label: 'Heading 2', icon: Heading2, isActive: (ed) => ed?.isActive('heading', { level: 2 }), apply: (ed) => ed?.chain().focus().toggleHeading({ level: 2 }).run() },
+  { label: 'Heading 3', icon: Heading3, isActive: (ed) => ed?.isActive('heading', { level: 3 }), apply: (ed) => ed?.chain().focus().toggleHeading({ level: 3 }).run() },
+  { label: 'Task', icon: ListOrdered, isActive: (ed) => innermostListType(ed) === 'orderedList', apply: (ed) => toggleListTypeForSelection(ed, 'orderedList') },
+  { label: 'Bullet', icon: List, isActive: (ed) => innermostListType(ed) === 'bulletList', apply: (ed) => toggleListTypeForSelection(ed, 'bulletList') },
+  { label: 'Quote', icon: Quote, isActive: (ed) => ed?.isActive('blockquote'), apply: (ed) => ed?.chain().focus().toggleBlockquote().run() },
+  { label: 'Code block', icon: SquareCode, isActive: (ed) => ed?.isActive('codeBlock'), apply: (ed) => ed?.chain().focus().toggleCodeBlock().run() },
+  { label: 'Text', icon: Pilcrow, isActive: () => true, apply: (ed) => ed?.chain().focus().setParagraph().run() },
+];
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const currentBlockLabel = (ed: any): string => (ed ? BLOCK_TYPES.find((b) => b.isActive(ed))?.label ?? 'Text' : 'Text');
 
 // ── Individual SwimLane Column Component ────────────────────────
 interface SwimLaneColumnProps {
@@ -807,9 +1087,17 @@ interface SwimLaneColumnProps {
   onActivate: () => void;
   selectedTaskId?: string | number | null;
   runningTaskIds?: (string | number)[];
+  queuedTaskIds?: (string | number)[];
+  briefs?: AgentContextItem[];
+  terminalSessions?: SpawnedSession[];
   pendingHumanInputs?: Record<string | number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>;
   showStyles: boolean;
   onToggleStyles: () => void;
+  hideDone: boolean;
+  onToggleHideDone: () => void;
+  onOpenTaskDetail?: (taskId: string | number) => void;
+  onRunTask?: (task: TaskItemType) => void;
+  onStopTask?: (task: TaskItemType) => void;
   onSelectTask?: (taskId: string | number) => void;
   onMarkdownChange: (laneId: string, newMarkdown: string) => void;
   onRenameSwimLane?: (laneId: string, newTitle: string) => void;
@@ -846,9 +1134,17 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   onActivate,
   selectedTaskId,
   runningTaskIds = [],
+  queuedTaskIds = [],
+  briefs = [],
+  terminalSessions = [],
   pendingHumanInputs,
   showStyles,
   onToggleStyles,
+  hideDone,
+  onToggleHideDone,
+  onOpenTaskDetail,
+  onRunTask,
+  onStopTask,
   onSelectTask,
   onMarkdownChange,
   onRenameSwimLane,
@@ -863,7 +1159,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   assistantDrawerHeight,
   onEditorReady,
   isAssistantOpen = false,
-  onOpenAssistant,
+  onOpenAssistant: _onOpenAssistant,
   onCloseAssistant,
   project,
   aiConfig,
@@ -881,6 +1177,27 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
 
   const runningTaskIdsRef = useRef(runningTaskIds);
   runningTaskIdsRef.current = runningTaskIds;
+
+  const queuedTaskIdsRef = useRef(queuedTaskIds);
+  queuedTaskIdsRef.current = queuedTaskIds;
+  const hideDoneRef = useRef(hideDone);
+  hideDoneRef.current = hideDone;
+  const lastCaretRef = useRef(0);
+  const briefsRef = useRef(briefs);
+  briefsRef.current = briefs;
+  // Tasks whose agent is stopped on a prompt only the user can answer.
+  const awaitingTaskIds = useMemo(
+    () => new Set(terminalSessions.filter((x) => x.session.isActive && x.status === 'awaiting_approval').map((x) => String(x.session.taskId))),
+    [terminalSessions],
+  );
+  const awaitingTaskIdsRef = useRef(awaitingTaskIds);
+  awaitingTaskIdsRef.current = awaitingTaskIds;
+  const onOpenTaskDetailRef = useRef(onOpenTaskDetail);
+  onOpenTaskDetailRef.current = onOpenTaskDetail;
+  const onRunTaskRef = useRef(onRunTask);
+  onRunTaskRef.current = onRunTask;
+  const onStopTaskRef = useRef(onStopTask);
+  onStopTaskRef.current = onStopTask;
 
   const pendingHumanInputsRef = useRef(pendingHumanInputs);
   pendingHumanInputsRef.current = pendingHumanInputs;
@@ -982,6 +1299,9 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                     if (!event.shiftKey) {
                       view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(pos))));
                     }
+                    onSelectTaskRef.current(targetId);
+                  } else {
+                    // Clicking the current task again reopens its card (e.g. after going back to the runs view).
                     onSelectTaskRef.current(targetId);
                   }
                 }
@@ -1198,278 +1518,223 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                     decorations.push(chevronWidget);
                   }
 
-                  // 4. Add Top-Right Card Actions Widget (+ Subtask, Archive)
+                  // 4. The line's gutter: insert a task below, and the drag handle (hover / current line)
+                  decorations.push(
+                    Decoration.widget(
+                      pos + 1,
+                      (view, getPos) => {
+                        const grip = document.createElement('span');
+                        grip.className = 'eg-line-grip';
+                        grip.setAttribute('contenteditable', 'false');
+                        const insert = document.createElement('button');
+                        insert.type = 'button';
+                        insert.title = 'Insert a task below';
+                        insert.setAttribute('aria-label', 'Insert a task below');
+                        insert.innerHTML = GUTTER_ICONS.plus;
+                        insert.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
+                        insert.addEventListener('click', (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const at = typeof getPos === 'function' ? getPos() : null;
+                          if (at != null) insertTaskBelow(view, at - 1);
+                        });
+                        const drag = document.createElement('button');
+                        drag.type = 'button';
+                        drag.className = 'eg-line-drag';
+                        drag.title = 'Drag to move';
+                        drag.setAttribute('aria-label', 'Drag to move');
+                        drag.innerHTML = GUTTER_ICONS.grip;
+                        drag.addEventListener('mousedown', (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const at = typeof getPos === 'function' ? getPos() : null;
+                          if (at != null) startTaskDrag(view, at - 1, e);
+                        });
+                        grip.append(insert, drag);
+                        return grip;
+                      },
+                      { side: -2, stopEvent: () => true, key: `${lane.id}|grip|${cardKey}` }
+                    )
+                  );
+
+                  // 5. The right end of the line: its run state, and on hover (or the current line) Open brief · Run · More
+                  const queuePos = queuedTaskIdsRef.current.findIndex((qid) => String(qid) === String(cardTaskId));
+                  const lineBrief = briefsRef.current.find((b) => b.sourceTaskId != null && String(b.sourceTaskId) === String(cardTaskId));
+                  const outcome = lineBrief?.lastRunOutcome?.outcome;
+                  const awaiting = isNeedsInput || awaitingTaskIdsRef.current.has(String(cardTaskId));
+                  const runKind: 'live' | 'waiting' | 'queued' | 'review' | 'failed' | null = isCardRunning
+                    ? awaiting ? 'waiting' : 'live'
+                    : queuePos >= 0
+                      ? 'queued'
+                      : isParentChecked
+                        ? null
+                        : outcome === 'failed' || outcome === 'verifier_failed'
+                          ? 'failed'
+                          : outcome === 'passed' || outcome === 'completed' || outcome === 'unverified'
+                            ? 'review'
+                            : null;
                   const cardActionsWidget = Decoration.widget(
                     pos + 1,
                     (view, getPos) => {
-                      const container = document.createElement('div');
-                      container.className = 'card-actions-wrapper';
+                      const container = document.createElement('span');
+                      container.className = 'eg-line-side card-actions-wrapper';
                       container.setAttribute('contenteditable', 'false');
-                      // The buttons stay hidden until hover, but this box still covers the end of the task's first line.
                       container.addEventListener('mousedown', (e) => {
                         if (!(e.target as HTMLElement).closest('button, .card-dropdown-menu')) placeCaretBesideWidget(view, container, e, 'left');
                       });
 
-                      // Running status pill
-                      if (isCardRunning) {
-                        const runningPill = document.createElement('div');
-                        runningPill.className = 'task-running-badge-pill';
-                        runningPill.innerHTML = `<span class="live-pulse-dot-working"></span><span>RUNNING</span>`;
-                        container.appendChild(runningPill);
+                      if (runKind) {
+                        const state = document.createElement('span');
+                        if (runKind === 'live') {
+                          // Filled in by <LineRunStates> with what the agent is doing right now.
+                          state.className = 'eg-runstate eg-runstate-live';
+                          state.dataset.liveTask = String(cardTaskId);
+                          state.innerHTML = '<span class="eg-dot eg-dot-live"></span>Running';
+                        } else if (runKind === 'waiting') {
+                          state.className = 'eg-runstate eg-runstate-review';
+                          state.innerHTML = '<span class="eg-dot eg-dot-warning"></span>Waiting for you';
+                        } else if (runKind === 'queued') {
+                          state.className = 'eg-runstate';
+                          state.innerHTML = `${QUEUED_GLYPH}Queued ${queuePos + 1}`;
+                        } else if (runKind === 'review') {
+                          state.className = 'eg-runstate eg-runstate-review';
+                          state.innerHTML = '<span class="eg-dot eg-dot-warning"></span>Review';
+                        } else {
+                          state.className = 'eg-runstate eg-runstate-failed';
+                          state.innerHTML = '<span class="eg-dot eg-dot-danger"></span>Failed';
+                        }
+                        container.appendChild(state);
                       }
 
-
-                      // Run Task button
-                      const addBtn = document.createElement('button');
-                      addBtn.className = 'card-action-btn card-add-task-btn card-add-subtask-btn';
-                      addBtn.setAttribute('contenteditable', 'false');
-                      addBtn.type = 'button';
-                      addBtn.title = 'Run task...';
-                      addBtn.setAttribute('aria-label', 'Run task...');
-                      addBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 10 20 15 15 20"></polyline><path d="M4 4v7a4 4 0 0 0 4 4h12"></path></svg>`;
-
-                      addBtn.addEventListener('mousedown', (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                      });
-
-                      const runWrapper = document.createElement('div');
-                      runWrapper.style.position = 'relative';
-                      let runDropdownEl: HTMLElement | null = null;
-
-                      const getTaskContextText = () => {
-                        let taskContextText = '';
-                        const currentTask = laneTasksRef.current[orderedItemCounter - 1] || matchedTask;
-                        if (currentTask) {
-                          taskContextText = currentTask.title;
-                          if (currentTask.subtasks && currentTask.subtasks.length > 0) {
-                            taskContextText += '\n' + currentTask.subtasks.map((st) => `- ${st.text}`).join('\n');
-                          }
-                        }
-                        if (!taskContextText) {
-                          const currentPos = typeof getPos === 'function' ? getPos() : null;
-                          if (currentPos != null) {
-                            const liveNode = view.state.doc.nodeAt(currentPos - 1);
-                            if (liveNode) return liveNode.textContent.trim();
-                          }
-                          taskContextText = node.textContent.trim();
-                        }
-                        return taskContextText;
+                      const acts = document.createElement('span');
+                      acts.className = 'eg-line-acts';
+                      const iconBtn = (icon: string, label: string, onClick: (e: MouseEvent) => void) => {
+                        const btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = 'eg-btn eg-btn-ghost eg-btn-icon eg-btn-sm card-action-btn';
+                        btn.title = label;
+                        btn.setAttribute('aria-label', label);
+                        btn.innerHTML = `<span class="eg-icon">${icon}</span>`;
+                        btn.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
+                        btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); onClick(e); });
+                        return btn;
                       };
+                      const liveTask = () => laneTasksRef.current[orderedItemCounter - 1] || matchedTask;
 
-                      const closeRunMenu = () => {
-                        if (runDropdownEl && runDropdownEl.parentNode) {
-                          runDropdownEl.parentNode.removeChild(runDropdownEl);
-                        }
-                        runDropdownEl = null;
-                        addBtn.classList.remove('active');
-                        document.removeEventListener('mousedown', handleRunOutside);
-                        document.removeEventListener('keydown', handleRunKey);
-                      };
-                      const handleRunOutside = (ev: MouseEvent) => {
-                        if (runDropdownEl && !runWrapper.contains(ev.target as Node)) closeRunMenu();
-                      };
-                      const handleRunKey = (ev: KeyboardEvent) => {
-                        if (ev.key === 'Escape') closeRunMenu();
-                      };
+                      acts.appendChild(iconBtn(GUTTER_ICONS.brief, `Open brief (${MOD}J)`, () => onOpenTaskDetailRef.current?.(cardTaskId)));
+                      acts.appendChild(
+                        isCardRunning
+                          ? iconBtn(GUTTER_ICONS.stop, 'Stop run', () => {
+                              const t = liveTask();
+                              if (t) onStopTaskRef.current?.(t);
+                            })
+                          : iconBtn(GUTTER_ICONS.play, `Run (${SHIFT}${MOD}↵)`, () => {
+                              const t = liveTask();
+                              if (t) onRunTaskRef.current?.(t);
+                            })
+                      );
 
-                      addBtn.addEventListener('click', (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-
-                        if (runDropdownEl) {
-                          closeRunMenu();
-                          return;
-                        }
-
-                        addBtn.classList.add('active');
-                        runDropdownEl = document.createElement('div');
-                        runDropdownEl.className = 'card-dropdown-menu';
-                        runDropdownEl.setAttribute('contenteditable', 'false');
-
-                        const items: { label: string; tip: string; icon: string; action: () => void }[] = [
-                          {
-                            label: 'Single task',
-                            tip: 'Run this task',
-                            icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>`,
-                            action: () => {
-                              const text = getTaskContextText();
-                              if (text && onCreateTaskFromSelectionRef.current) {
-                                onCreateTaskFromSelectionRef.current(text, lane.id, lane.title, matchedTask);
-                              }
-                            },
-                          },
-                          ...(isBetaEnabledRef.current ? [
-                            {
-                              label: 'Several tasks...',
-                              tip: 'Pick tasks in this list to run one after another, or all at once',
-                              icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="10" y1="6" x2="21" y2="6"></line><line x1="10" y1="12" x2="21" y2="12"></line><line x1="10" y1="18" x2="21" y2="18"></line><path d="M4 6h1v4"></path><path d="M4 10h2"></path><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"></path></svg>`,
-                              action: () => {
-                                if (!matchedTask) return;
-                                // This task and the not-done ones after it, ready to trim.
-                                const idx = laneTasksRef.current.findIndex((t) => t.id === matchedTask.id);
-                                const after = idx >= 0 ? laneTasksRef.current.slice(idx + 1).filter((t) => !t.isDone) : [];
-                                setBatchModalRef.current({ selectedIds: [matchedTask.id, ...after.map((t) => t.id)], openedAt: Date.now() });
-                              },
-                            },
-                          ] : []),
-                          {
-                            label: 'Schedule task...',
-                            tip: 'Set this task to run on a schedule',
-                            icon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>`,
-                            action: () => {
-                              if (!matchedTask) return;
-                              // Create the AI execution card first so it is visible in the AI workspace
-                              const text = getTaskContextText();
-                              if (text && onCreateTaskFromSelectionRef.current) {
-                                onCreateTaskFromSelectionRef.current(text, lane.id, lane.title, matchedTask);
-                              }
-                              setScheduleModalTaskRef.current(matchedTask);
-                            },
-                          },
-                        ];
-
-                        for (const it of items) {
-                          const btn = document.createElement('button');
-                          btn.type = 'button';
-                          btn.className = 'card-dropdown-item';
-                          btn.title = it.tip;
-                          btn.innerHTML = `${it.icon}<span>${it.label}</span>`;
-                          btn.addEventListener('mousedown', (ev) => {
-                            ev.preventDefault();
-                            ev.stopPropagation();
-                          });
-                          btn.addEventListener('click', (ev) => {
-                            ev.preventDefault();
-                            ev.stopPropagation();
-                            closeRunMenu();
-                            it.action();
-                          });
-                          runDropdownEl.appendChild(btn);
-                        }
-
-                        runWrapper.appendChild(runDropdownEl);
-                        setTimeout(() => {
-                          document.addEventListener('mousedown', handleRunOutside);
-                          document.addEventListener('keydown', handleRunKey);
-                        }, 0);
-                      });
-                      runWrapper.appendChild(addBtn);
-
-                      // Task Options menu button with nested Archive functionality
-                      const menuWrapper = document.createElement('div');
+                      // More: run several, schedule, archive
+                      const menuWrapper = document.createElement('span');
                       menuWrapper.style.position = 'relative';
-
-                      const menuBtn = document.createElement('button');
-                      menuBtn.className = 'card-action-btn card-menu-btn';
-                      menuBtn.setAttribute('contenteditable', 'false');
-                      menuBtn.type = 'button';
-                      menuBtn.title = 'Task options';
-                      menuBtn.setAttribute('aria-label', 'Task options');
-                      menuBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="2.2"></circle><circle cx="19" cy="12" r="2.2"></circle><circle cx="5" cy="12" r="2.2"></circle></svg>`;
-
                       let dropdownEl: HTMLElement | null = null;
-
                       const closeMenu = () => {
-                        if (dropdownEl && dropdownEl.parentNode) {
-                          dropdownEl.parentNode.removeChild(dropdownEl);
-                          dropdownEl = null;
-                          menuBtn.classList.remove('active');
-                        }
+                        dropdownEl?.remove();
+                        dropdownEl = null;
                         document.removeEventListener('mousedown', handleOutside);
                         document.removeEventListener('keydown', handleKey);
                       };
-
                       const handleOutside = (ev: MouseEvent) => {
-                        if (dropdownEl && !menuWrapper.contains(ev.target as Node)) {
-                          closeMenu();
-                        }
+                        if (dropdownEl && !menuWrapper.contains(ev.target as Node)) closeMenu();
                       };
-
                       const handleKey = (ev: KeyboardEvent) => {
-                        if (ev.key === 'Escape') {
-                          closeMenu();
-                        }
+                        if (ev.key === 'Escape') closeMenu();
                       };
-
-                      menuBtn.addEventListener('mousedown', (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                      });
-
-                      menuBtn.addEventListener('click', (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-
+                      const menuBtn = iconBtn(GUTTER_ICONS.more, 'More', () => {
                         if (dropdownEl) {
                           closeMenu();
                           return;
                         }
-
-                        menuBtn.classList.add('active');
                         dropdownEl = document.createElement('div');
-                        dropdownEl.className = 'card-dropdown-menu';
-                        dropdownEl.setAttribute('contenteditable', 'false');
-
-                        if (onArchiveTaskRef.current) {
-                          const archiveItem = document.createElement('button');
-                          archiveItem.type = 'button';
-                          archiveItem.className = 'card-dropdown-item';
-                          archiveItem.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg><span>Archive Task</span>`;
-
-                          archiveItem.addEventListener('mousedown', (ev) => {
-                            ev.preventDefault();
-                            ev.stopPropagation();
-                          });
-
-                          archiveItem.addEventListener('click', (ev) => {
+                        dropdownEl.className = 'eg-menu card-dropdown-menu';
+                        dropdownEl.setAttribute('role', 'menu');
+                        const items: { label: string; icon: string; danger?: boolean; action: () => void }[] = [
+                          ...(isBetaEnabledRef.current && matchedTask
+                            ? [{
+                                label: 'Run several tasks…',
+                                icon: GUTTER_ICONS.listOrdered,
+                                action: () => {
+                                  const idx = laneTasksRef.current.findIndex((t) => t.id === matchedTask.id);
+                                  const after = idx >= 0 ? laneTasksRef.current.slice(idx + 1).filter((t) => !t.isDone) : [];
+                                  setBatchModalRef.current({ selectedIds: [matchedTask.id, ...after.map((t) => t.id)], openedAt: Date.now() });
+                                },
+                              }]
+                            : []),
+                          ...(matchedTask
+                            ? [{
+                                label: 'Schedule…',
+                                icon: GUTTER_ICONS.calendar,
+                                action: () => {
+                                  const t = liveTask();
+                                  if (t && onCreateTaskFromSelectionRef.current) onCreateTaskFromSelectionRef.current(t.title, lane.id, lane.title, t);
+                                  setScheduleModalTaskRef.current(matchedTask);
+                                },
+                              }]
+                            : []),
+                          ...(onArchiveTaskRef.current
+                            ? [{
+                                label: 'Archive',
+                                icon: GUTTER_ICONS.archive,
+                                action: () => {
+                                  collapsedCardsState.delete(cardKey);
+                                  saveCollapsedCards();
+                                  let liveTitle = '';
+                                  const currentPos = typeof getPos === 'function' ? getPos() : null;
+                                  if (currentPos != null) {
+                                    const liveNode = view.state.doc.nodeAt(currentPos - 1);
+                                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                    liveNode?.forEach((child: any) => {
+                                      if (!liveTitle && child.type.name !== 'bulletList' && child.type.name !== 'orderedList') {
+                                        liveTitle = child.textContent?.trim() || '';
+                                      }
+                                    });
+                                  }
+                                  if (!liveTitle) liveTitle = firstBlockNode?.textContent?.trim() || '';
+                                  onArchiveTaskRef.current?.(liveTitle);
+                                },
+                              }]
+                            : []),
+                        ];
+                        for (const it of items) {
+                          const btn = document.createElement('button');
+                          btn.type = 'button';
+                          btn.className = `eg-menu-item card-dropdown-item${it.danger ? ' eg-menu-item-danger' : ''}`;
+                          btn.setAttribute('role', 'menuitem');
+                          btn.innerHTML = `<span class="eg-icon">${it.icon}</span><span class="eg-menu-text">${it.label}</span>`;
+                          btn.addEventListener('mousedown', (ev) => { ev.preventDefault(); ev.stopPropagation(); });
+                          btn.addEventListener('click', (ev) => {
                             ev.preventDefault();
                             ev.stopPropagation();
                             closeMenu();
-                            collapsedCardsState.delete(cardKey);
-                            saveCollapsedCards();
-
-                            if (onArchiveTaskRef.current) {
-                              let liveTitle = '';
-                              const currentPos = typeof getPos === 'function' ? getPos() : null;
-                              if (currentPos != null) {
-                                const liveNode = view.state.doc.nodeAt(currentPos - 1);
-                                if (liveNode) {
-                                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                  liveNode.forEach((child: any) => {
-                                    if (!liveTitle && child.type.name !== 'bulletList' && child.type.name !== 'orderedList') {
-                                      liveTitle = child.textContent?.trim() || '';
-                                    }
-                                  });
-                                }
-                              }
-                              if (!liveTitle) liveTitle = firstBlockNode?.textContent?.trim() || '';
-                              onArchiveTaskRef.current(liveTitle);
-                            }
+                            it.action();
                           });
-
-                          dropdownEl.appendChild(archiveItem);
+                          dropdownEl.appendChild(btn);
                         }
-
-
                         menuWrapper.appendChild(dropdownEl);
-
                         setTimeout(() => {
                           document.addEventListener('mousedown', handleOutside);
                           document.addEventListener('keydown', handleKey);
                         }, 0);
                       });
-
                       menuWrapper.appendChild(menuBtn);
-                      container.appendChild(runWrapper);
-                      container.appendChild(menuWrapper);
-
+                      acts.appendChild(menuWrapper);
+                      container.appendChild(acts);
                       return container;
                     },
                     {
                       side: 1,
                       stopEvent: () => true,
-                      key: `${lane.id}|act|${cardKey}|${isCardRunning}`,
+                      key: `${lane.id}|act|${cardKey}|${isCardRunning}|${runKind}|${queuePos}|${isParentChecked}`,
                     }
                   );
                   decorations.push(cardActionsWidget);
@@ -1499,6 +1764,8 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                         })
                       );
                     }
+                    // Done sub-items: Hide done collapses them like done tasks.
+                    if (isSubChecked) decorations.push(Decoration.node(pos, pos + node.nodeSize, { class: 'is-sub-done' }));
 
                     const subtaskCheckboxWidget = Decoration.widget(
                       pos + 1,
@@ -2135,58 +2402,45 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
     }
   });
 
-  // Header color menu state (right-click on a group header in the editor)
-  const [colorPaletteOpen, setColorPaletteOpen] = useState(false);
-  // The selection tooltip starts as a small chip and only expands to the full toolbar on hover.
+  // The selection toolbar starts as a small chip and expands to the full toolbar on hover.
   const [selectionToolsExpanded, setSelectionToolsExpanded] = useState(false);
-  // Text / header color palette in the formatting bar
-  const [toolbarColorOpen, setToolbarColorOpen] = useState(false);
-  const toolbarColorRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!toolbarColorOpen) return;
-    const handleOutside = (e: MouseEvent) => {
-      if (toolbarColorRef.current && !toolbarColorRef.current.contains(e.target as Node)) setToolbarColorOpen(false);
-    };
-    document.addEventListener('mousedown', handleOutside);
-    return () => document.removeEventListener('mousedown', handleOutside);
-  }, [toolbarColorOpen]);
+    if (!selectionTooltip) setSelectionToolsExpanded(false);
+  }, [selectionTooltip]);
   const headerCollapseKey = lane.filePath || lane.id;
   const collapsedHeadersRef = useRef<Set<string> | null>(null);
   if (!collapsedHeadersRef.current) collapsedHeadersRef.current = loadCollapsedHeaders(headerCollapseKey);
 
-  const setHeadingColor = useCallback((view: any, pos: number, colorId: string) => {
-    const node = view.state.doc.nodeAt(pos);
-    if (!node || node.type.name !== 'heading') return;
-    view.dispatch(view.state.tr.setNodeAttribute(pos, 'color', colorId));
-    flushMarkdownChange();
-  }, [flushMarkdownChange]);
-
-  // Extension: group header colors (the heading's `color` attribute, see headingColorNode.ts) — tints the heading
-  // and gives every header a color the moment it's created, so it stays the same while its name is typed out.
+  // Extension: header sections — fold a header's section, and show "N of M open" on hover (DocHeading). Headers are
+  // neutral: per-header colors were removed in the redesign (a stored {color=…} attribute is kept, just not shown).
   const HeaderColorExtension = Extension.create({
     name: 'headerColor',
     addProseMirrorPlugins() {
       return [
         new Plugin({
           key: new PluginKey(`headerColor_${lane.id}`),
-          appendTransaction: (transactions, _oldState, newState) => {
-            if (!transactions.some((t) => t.docChanged && !t.getMeta('preventUpdate'))) return null;
-            const tr = newState.tr;
-            newState.doc.descendants((node, pos) => {
-              if (node.type.name !== 'heading' || node.attrs.color) return;
-              // A brand-new header gets a random color; an older uncolored one keeps the color it's already showing.
-              const name = node.textContent.trim();
-              tr.setNodeAttribute(pos, 'color', name ? resolveHeaderColor(name).id : randomHeaderColorId());
-            });
-            return tr.docChanged ? tr.setMeta('addToHistory', false) : null;
-          },
           props: {
             decorations: (state) => {
               const decos: Decoration[] = [];
+              // Open/total tasks under each header, shown on hover.
+              const counts = new Map<string, { open: number; total: number }>();
+              for (const t of laneTasksRef.current) {
+                const c = counts.get(t.category) ?? { open: 0, total: 0 };
+                c.total += 1;
+                if (!t.isDone) c.open += 1;
+                counts.set(t.category, c);
+              }
               state.doc.descendants((node, pos) => {
                 if (node.type.name !== 'heading') return;
-                const color = resolveHeaderColor(node.textContent.trim(), node.attrs.color);
-                decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'hdr-colored', style: `--hdr-color: ${color.hex}` }));
+                const c = counts.get(node.textContent.trim().replace(/:$/, ''));
+                if (!c) return;
+                decos.push(Decoration.widget(pos + node.nodeSize - 1, () => {
+                  const el = document.createElement('span');
+                  el.className = 'eg-doc-h-count';
+                  el.setAttribute('contenteditable', 'false');
+                  el.textContent = `${c.open} of ${c.total} open`;
+                  return el;
+                }, { side: 1, ignoreSelection: true, key: `${lane.id}|hcount|${pos}|${c.open}/${c.total}` }));
               });
 
               // Header collapse: a collapsed header hides everything up to the next header of the same or higher level.
@@ -2478,6 +2732,16 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       }, 600);
     },
     onSelectionUpdate: ({ editor: currentEditor }) => {
+      // Hide done: the caret never rests inside a hidden line; it moves on past it in the direction it was going.
+      const lastFrom = lastCaretRef.current;
+      lastCaretRef.current = currentEditor.state.selection.from;
+      if (hideDoneRef.current && currentEditor.state.selection.empty) {
+        const skipped = caretPastHiddenDone(currentEditor.state, currentEditor.state.selection.from >= lastFrom ? 1 : -1);
+        if (skipped != null && skipped !== currentEditor.state.selection.from) {
+          currentEditor.view.dispatch(currentEditor.state.tr.setSelection(TextSelection.near(currentEditor.state.doc.resolve(skipped))));
+          return;
+        }
+      }
       updateSelectionTooltip(currentEditor);
 
       // Autocomplete should not start if the user simply moved their cursor to another task
@@ -2563,47 +2827,6 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
     }
   }, []);
 
-  // Position of the header the whole selection sits in, or null when it isn't inside a single header.
-  const selectionHeadingPos = (): number | null => {
-    if (!editor) return null;
-    const { $from, $to } = editor.state.selection;
-    for (let d = $from.depth; d > 0; d--) {
-      if ($from.node(d).type.name === 'heading') return $to.depth >= d && $to.node(d) === $from.node(d) ? $from.before(d) : null;
-    }
-    return null;
-  };
-
-  const currentSelectionColor = (): string | undefined => {
-    if (!editor) return undefined;
-    const headingPos = selectionHeadingPos();
-    if (headingPos != null) {
-      const node = editor.state.doc.nodeAt(headingPos);
-      if (!node) return undefined;
-      return resolveHeaderColor(node.textContent.trim(), node.attrs.color).id;
-    }
-    return editor.getAttributes('textColor').color || undefined;
-  };
-
-  const applySelectionColor = (colorId: string | null) => {
-    if (!editor) return;
-    const headingPos = selectionHeadingPos();
-    if (headingPos != null) {
-      if (colorId) setHeadingColor(editor.view, headingPos, colorId);
-    } else if (colorId) {
-      editor.chain().focus().setMark('textColor', { color: colorId }).run();
-    } else {
-      editor.chain().focus().unsetMark('textColor').run();
-    }
-    setColorPaletteOpen(false);
-  };
-
-  useEffect(() => {
-    if (!selectionTooltip) {
-      setColorPaletteOpen(false);
-      setSelectionToolsExpanded(false);
-    }
-  }, [selectionTooltip]);
-
   const handleRunSelection = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -2669,11 +2892,20 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   }, [lane.markdown, editor]);
 
   // Toolbar action helpers
-  const setLink = useCallback(() => {
+  const setLink = useCallback(async () => {
     if (!editor) return;
     const previousUrl = editor.getAttributes('link').href;
-    const url = window.prompt('URL', previousUrl);
-    if (url === null) return;
+    const url = await askText({
+      title: previousUrl ? 'Edit link' : 'Add link',
+      label: 'URL',
+      defaultValue: previousUrl || '',
+      placeholder: 'https://',
+      confirmLabel: previousUrl ? 'Update link' : 'Add link',
+      allowEmpty: Boolean(previousUrl),
+      text: previousUrl ? 'Leave it empty to remove the link.' : undefined,
+      mono: true,
+    });
+    if (url === null || editor.isDestroyed) return;
     if (url === '') {
       editor.chain().focus().extendMarkRange('link').unsetLink().run();
       return;
@@ -2728,6 +2960,69 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   }, [editor, skillSlugs]);
 
   const laneDoneCount = laneTasks.filter((t) => t.isDone).length;
+  // The list's human-readable name: a name the user gave it, else its file without ".md" ("TODO.md" → "TODO").
+  const laneFileName = (lane.filePath || 'TODO.md').split(/[\\/]/).pop() || 'TODO.md';
+  const laneDisplayName =
+    lane.title && lane.title !== 'Human Workspace' && lane.title !== laneFileName ? lane.title : laneFileName.replace(/\.md$/i, '');
+
+  // ⌘K "go to" a task or heading: move the caret to its line and scroll it into view.
+  useEffect(() => {
+    if (!editor) return;
+    const moveTo = (pos: number) => {
+      const tr = editor.state.tr.setSelection(TextSelection.near(editor.state.doc.resolve(pos)));
+      editor.view.dispatch(tr.scrollIntoView());
+      editor.view.focus();
+      (editor.view.domAtPos(pos).node as HTMLElement | null)?.parentElement?.scrollIntoView?.({ block: 'center' });
+    };
+    const onTask = (e: Event) => {
+      const id = String((e as CustomEvent).detail?.taskId);
+      const index = laneTasksRef.current.findIndex((t) => String(t.id) === id);
+      if (index < 0) return;
+      let n = 0;
+      let found: number | null = null;
+      editor.state.doc.descendants((node, pos) => {
+        if (found !== null) return false;
+        if (node.type.name === 'listItem' && isTopLevelListItemNode(editor.state.doc, pos)) {
+          if (n === index) found = pos + 2;
+          n++;
+        }
+        return true;
+      });
+      if (found !== null) moveTo(found);
+    };
+    const onHeading = (e: Event) => {
+      const norm = (h: string) => h.replace(/\{color=[^}]*\}/g, '').replace(/[*_`]+/g, '').replace(/:\s*$/, '').trim().toLowerCase();
+      const want = norm(String((e as CustomEvent).detail?.heading || ''));
+      let found: number | null = null;
+      editor.state.doc.descendants((node, pos) => {
+        if (found === null && node.type.name === 'heading' && norm(node.textContent) === want) found = pos + 1;
+        return found === null;
+      });
+      if (found !== null) moveTo(found);
+    };
+    window.addEventListener('ergo:focus-task', onTask);
+    window.addEventListener('ergo:focus-heading', onHeading);
+    return () => {
+      window.removeEventListener('ergo:focus-task', onTask);
+      window.removeEventListener('ergo:focus-heading', onHeading);
+    };
+  }, [editor]);
+
+  // Run states, the queue, briefs and the current task live outside the document: redraw the line decorations.
+  useEffect(() => {
+    if (editor && !editor.isDestroyed) editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false));
+  }, [editor, selectedTaskId, runningTaskIds, queuedTaskIds, briefs, awaitingTaskIds]);
+
+  // Live run states on task lines: what each running task's agent is doing, filled into its line's placeholder.
+  const liveSessions = useMemo(() => {
+    const byTask = new Map<string, SpawnedSession>();
+    for (const x of terminalSessions) {
+      if (!x.session.isActive || !isAgentWorking(x.status)) continue;
+      const key = String(x.session.taskId);
+      if (!byTask.has(key) || x.role === 'manager') byTask.set(key, x);
+    }
+    return byTask;
+  }, [terminalSessions]);
 
   return (
     <div
@@ -2735,315 +3030,151 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       onClick={() => onActivate()}
       style={width ? { width, minWidth: '260px', flex: `0 0 ${width}` } : undefined}
     >
-      {/* Column Header */}
-      <div className="swimlane-column-header">
-        <div className="swimlane-title-container">
-          <FileText size={15} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
-          {isEditingTitle ? (
-            <input
-              type="text"
-              className="swimlane-title-input"
-              value={editedTitle}
-              onChange={(e) => setEditedTitle(e.target.value)}
-              onBlur={handleTitleCommit}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleTitleCommit();
-                if (e.key === 'Escape') {
-                  setEditedTitle(lane.title);
-                  setIsEditingTitle(false);
-                }
-              }}
-              autoFocus
-            />
-          ) : (
-            <div
-              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', minWidth: 0 }}
-              onClick={() => setIsEditingTitle(true)}
-              title="Click to rename swim lane"
-            >
-              <span className="swimlane-title-text">{lane.title}</span>
-            </div>
-          )}
-          <span className="swimlane-done-badge">
-            {laneDoneCount}/{laneTasks.length} done
+      {/* Document header: list name, open/done count, Hide done, toolbar toggle, list menu */}
+      <div className="eg-doc-head">
+        {isEditingTitle ? (
+          <input
+            type="text"
+            className="eg-input eg-doc-title-input"
+            value={editedTitle}
+            onChange={(e) => setEditedTitle(e.target.value)}
+            onBlur={handleTitleCommit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleTitleCommit();
+              if (e.key === 'Escape') {
+                setEditedTitle(lane.title);
+                setIsEditingTitle(false);
+              }
+            }}
+            aria-label="Lane name"
+            autoFocus
+          />
+        ) : (
+          <span className="eg-doc-name" onDoubleClick={() => setIsEditingTitle(true)} title={`${lane.filePath} — double-click to rename`}>
+            {laneDisplayName}
           </span>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-          {/* Run the lane's tasks (opens the picker with every task not done yet ticked) */}
-          {isBetaEnabled && onRunTasks && laneTasks.length > 0 && (
-            <button
-              type="button"
-              className="swimlane-menu-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                setBatchModal({ selectedIds: laneTasks.filter((t) => !t.isDone).map((t) => t.id), openedAt: Date.now() });
-              }}
-              title="Run this lane's tasks..."
-              aria-label="Run this lane's tasks"
-            >
-              <Play size={14} />
-            </button>
-          )}
-
-          {/* Styles Toolbar Toggle folded into lane header */}
-          <button
-            type="button"
-            className={`swimlane-menu-btn ${showStyles ? 'active' : ''}`}
+        )}
+        <span className="eg-spacer" />
+        <span className="eg-hide-sm eg-doc-count">
+          {laneTasks.length - laneDoneCount} open · {laneDoneCount} done
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={ListChecks}
+          aria-pressed={hideDone}
+          className={hideDone ? 'is-pressed' : undefined}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleHideDone();
+          }}
+          title={hideDone ? 'Show done tasks' : 'Hide done tasks'}
+        >
+          {hideDone ? 'Show done' : 'Hide done'}
+        </Button>
+        {isBetaEnabled && onRunTasks && laneTasks.length > 0 && (
+          <IconButton
+            icon={Play}
+            size="sm"
+            label="Run this list's tasks"
             onClick={(e) => {
               e.stopPropagation();
-              onToggleStyles();
+              setBatchModal({ selectedIds: laneTasks.filter((t) => !t.isDone).map((t) => t.id), openedAt: Date.now() });
             }}
-            title={showStyles ? 'Hide formatting bar' : 'Show formatting bar'}
-          >
-            <Type size={14} />
-          </button>
-
-          {/* Lane Options Menu */}
-          <div style={{ position: 'relative' }} ref={menuRef}>
-            <button
-              type="button"
-              className={`swimlane-menu-btn ${isMenuOpen ? 'active' : ''}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsMenuOpen((prev) => !prev);
-              }}
-              title="Swim lane options"
-            >
-              <MoreHorizontal size={15} />
-            </button>
-
-            {isMenuOpen && (
-              <div className="swimlane-dropdown-menu" onClick={(e) => e.stopPropagation()}>
-                <button
-                  type="button"
-                  className="swimlane-dropdown-item"
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    onAddSwimLaneAfter?.(lane.id);
-                  }}
-                >
-                  <Plus size={13} style={{ color: 'var(--accent-cyan)' }} />
-                  <span>Create New Swim Lane</span>
-                </button>
-
-                <button
-                  type="button"
-                  className="swimlane-dropdown-item"
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    onOpenArchivedTasks?.();
-                  }}
-                >
-                  <Archive size={13} style={{ color: '#f59e0b' }} />
-                  <span>Archives &amp; Learnings</span>
-                  {archivedTasksCount > 0 && (
-                    <span className="dropdown-item-badge" style={{ marginLeft: 'auto', fontSize: '0.7rem', padding: '0.05rem 0.35rem', borderRadius: '8px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.35)', color: '#f59e0b', fontWeight: 600 }}>
-                      {archivedTasksCount}
-                    </span>
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  className="swimlane-dropdown-item"
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    setIsRulesOpen(true);
-                  }}
-                >
-                  <ScrollText size={13} style={{ color: 'var(--accent-violet)' }} />
-                  <span>Skills &amp; Rules</span>
-                </button>
-
-                <div className="swimlane-dropdown-divider" />
-
-                <button
-                  type="button"
-                  className="swimlane-dropdown-item"
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    setIsEditingTitle(true);
-                  }}
-                >
-                  <Edit2 size={13} />
-                  <span>Rename Lane</span>
-                </button>
-
-                {totalLanes > 1 && (
-                  <button
-                    type="button"
-                    className="swimlane-dropdown-item is-danger"
-                    onClick={() => {
-                      setIsMenuOpen(false);
-                      setIsDeleteLaneModalOpen(true);
-                    }}
-                  >
-                    <Trash2 size={13} />
-                    <span>Delete Lane</span>
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+          />
+        )}
+        <IconButton
+          icon={Type}
+          size="sm"
+          label={showStyles ? `Hide formatting toolbar (${SHIFT}${MOD}T)` : `Show formatting toolbar (${SHIFT}${MOD}T)`}
+          aria-pressed={showStyles}
+          className={showStyles ? 'is-pressed' : undefined}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleStyles();
+          }}
+        />
+        <MenuButton
+          align="end"
+          width={220}
+          items={[
+            {
+              label: 'New task at the end',
+              icon: ListPlus,
+              onSelect: () => {
+                onActivate();
+                if (editor) {
+                  editor.commands.focus();
+                  handleAddNewCard(editor);
+                }
+              },
+            },
+            { label: 'New list beside this one', icon: Plus, onSelect: () => onAddSwimLaneAfter?.(lane.id) },
+            { label: 'Rules for this list', icon: ScrollText, onSelect: () => setIsRulesOpen(true) },
+            {
+              label: 'Archived tasks',
+              icon: Archive,
+              hint: archivedTasksCount > 0 ? String(archivedTasksCount) : undefined,
+              onSelect: () => onOpenArchivedTasks?.(),
+            },
+            { separator: true },
+            { label: 'Rename list', icon: Edit2, onSelect: () => setIsEditingTitle(true) },
+            ...(totalLanes > 1 ? [{ label: 'Remove list', icon: Trash2, danger: true, onSelect: () => setIsDeleteLaneModalOpen(true) }] : []),
+          ]}
+          trigger={(p) => <IconButton {...p} icon={MoreHorizontal} size="sm" label="List options" />}
+        />
       </div>
 
-      {/* Formatting Toolbar (when Styles is toggled) */}
+      {/* Formatting toolbar: one row of ghost icons in five groups (⇧⌘T toggles it) */}
       {showStyles && (
-        <div className="tiptap-toolbar" style={{ flexShrink: 0 }}>
-          <div className="tiptap-toolbar-group">
-            <ToolbarBtn onClick={() => editor?.chain().focus().undo().run()} disabled={!editor?.can().undo()} title="Undo (Ctrl+Z)">
-              <Undo2 size={13} />
-            </ToolbarBtn>
-            <ToolbarBtn onClick={() => editor?.chain().focus().redo().run()} disabled={!editor?.can().redo()} title="Redo (Ctrl+Y)">
-              <Redo2 size={13} />
-            </ToolbarBtn>
-          </div>
-
+        <div className="eg-toolbar" role="toolbar" aria-label="Formatting">
+          <ToolbarBtn icon={Undo2} onClick={() => editor?.chain().focus().undo().run()} disabled={!editor?.can().undo()} title={`Undo ${MOD}Z`} />
+          <ToolbarBtn icon={Redo2} onClick={() => editor?.chain().focus().redo().run()} disabled={!editor?.can().redo()} title={`Redo ${SHIFT}${MOD}Z`} />
           <Sep />
-
-          <div className="tiptap-toolbar-group">
-            <ToolbarBtn onClick={() => editor?.chain().focus().toggleBold().run()} active={editor?.isActive('bold')} title="Bold (**text**)">
-              <Bold size={13} />
-            </ToolbarBtn>
-            <ToolbarBtn onClick={() => editor?.chain().focus().toggleItalic().run()} active={editor?.isActive('italic')} title="Italic (*text*)">
-              <Italic size={13} />
-            </ToolbarBtn>
-            <ToolbarBtn onClick={() => editor?.chain().focus().toggleUnderline().run()} active={editor?.isActive('underline')} title="Underline (Ctrl+U, ++text++)">
-              <UnderlineIcon size={13} />
-            </ToolbarBtn>
-            <ToolbarBtn onClick={() => editor?.chain().focus().toggleStrike().run()} active={editor?.isActive('strike')} title="Strike (~~text~~)">
-              <Strikethrough size={13} />
-            </ToolbarBtn>
-            <ToolbarBtn onClick={() => editor?.chain().focus().toggleCode().run()} active={editor?.isActive('code')} title="Inline Code (`code`)">
-              <Code size={13} />
-            </ToolbarBtn>
-            <ToolbarBtn onClick={setLink} active={editor?.isActive('link')} title="Link ([text](url))">
-              <LinkIcon size={13} />
-            </ToolbarBtn>
-            <ToolbarBtn onClick={triggerImageUpload} title="Attach Image / Screenshot">
-              <ImageIcon size={13} />
-            </ToolbarBtn>
-          </div>
-
+          <MenuButton
+            width={200}
+            items={BLOCK_TYPES.map((bt) => ({
+              label: bt.label,
+              icon: bt.icon,
+              checked: bt.label === currentBlockLabel(editor),
+              onSelect: () => bt.apply(editor),
+            }))}
+            trigger={(p) => (
+              <button {...p} type="button" className="eg-tb-select" aria-label="Block type" onMouseDown={(e) => e.preventDefault()}>
+                {currentBlockLabel(editor)}
+                <ChevronDown size={14} strokeWidth={1.75} className="eg-icon" />
+              </button>
+            )}
+          />
           <Sep />
-
-          <div className="tiptap-toolbar-group">
-            <ToolbarBtn onClick={() => editor?.chain().focus().toggleHighlight().run()} active={editor?.isActive('highlight')} title="Highlight (Ctrl+Shift+H, ==text==)">
-              <Highlighter size={13} />
-            </ToolbarBtn>
-            <div className="toolbar-color-wrapper" ref={toolbarColorRef}>
-              <ToolbarBtn onClick={() => setToolbarColorOpen((o) => !o)} active={toolbarColorOpen || editor?.isActive('textColor')} title={selectionHeadingPos() != null ? 'Header color' : 'Text color'}>
-                <Baseline size={13} />
-              </ToolbarBtn>
-              {toolbarColorOpen && (
-                <div className="selection-color-palette toolbar-color-palette" role="menu">
-                  {HEADER_COLORS.map((c) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      role="menuitem"
-                      title={c.label}
-                      aria-label={c.label}
-                      className={`hdr-color-swatch ${currentSelectionColor() === c.id ? 'is-active' : ''}`}
-                      style={{ background: c.hex }}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => { applySelectionColor(c.id); setToolbarColorOpen(false); }}
-                    />
-                  ))}
-                  {selectionHeadingPos() == null && (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      title="Remove color"
-                      aria-label="Remove color"
-                      className="hdr-color-swatch is-clear"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => { applySelectionColor(null); setToolbarColorOpen(false); }}
-                    >
-                      <X size={11} />
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-            <ToolbarBtn onClick={() => editor?.chain().focus().unsetAllMarks().run()} title="Clear formatting">
-              <RemoveFormatting size={13} />
-            </ToolbarBtn>
-          </div>
-
+          <ToolbarBtn icon={Bold} onClick={() => editor?.chain().focus().toggleBold().run()} active={editor?.isActive('bold')} title={`Bold ${MOD}B`} />
+          <ToolbarBtn icon={Italic} onClick={() => editor?.chain().focus().toggleItalic().run()} active={editor?.isActive('italic')} title={`Italic ${MOD}I`} />
+          <ToolbarBtn icon={Strikethrough} onClick={() => editor?.chain().focus().toggleStrike().run()} active={editor?.isActive('strike')} title="Strikethrough" />
+          <ToolbarBtn icon={Code} onClick={() => editor?.chain().focus().toggleCode().run()} active={editor?.isActive('code')} title={`Inline code ${MOD}E`} />
+          <ToolbarBtn icon={LinkIcon} onClick={setLink} active={editor?.isActive('link')} title="Link" />
+          <TextColorButton editor={editor} />
+          <ToolbarBtn icon={RemoveFormatting} onClick={() => editor?.chain().focus().unsetAllMarks().run()} title="Clear formatting" />
           <Sep />
-
-          <div className="tiptap-toolbar-group">
-            <ToolbarBtn onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()} active={editor?.isActive('heading', { level: 1 })} title="Heading 1 (# Text)">
-              <Heading1 size={13} />
-            </ToolbarBtn>
-            <ToolbarBtn onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()} active={editor?.isActive('heading', { level: 2 })} title="Heading 2 (## Text)">
-              <Heading2 size={13} />
-            </ToolbarBtn>
-            <ToolbarBtn onClick={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()} active={editor?.isActive('heading', { level: 3 })} title="Heading 3 (### Text)">
-              <Heading3 size={13} />
-            </ToolbarBtn>
-          </div>
-
+          <ToolbarBtn icon={ListOrdered} onClick={() => toggleListTypeForSelection(editor, 'orderedList')} active={innermostListType(editor) === 'orderedList'} title="Numbered task list" />
+          <ToolbarBtn icon={List} onClick={() => toggleListTypeForSelection(editor, 'bulletList')} active={innermostListType(editor) === 'bulletList'} title="Bulleted list" />
+          <ToolbarBtn icon={IndentDecrease} onClick={() => editor?.chain().focus().liftListItem('listItem').run()} disabled={!editor?.can().liftListItem('listItem')} title={`Outdent ${SHIFT}Tab`} />
+          <ToolbarBtn icon={IndentIncrease} onClick={() => editor?.chain().focus().sinkListItem('listItem').run()} disabled={!editor?.can().sinkListItem('listItem')} title="Indent Tab" />
           <Sep />
-
-          <div className="tiptap-toolbar-group">
-            <select
-              className="line-spacing-select"
-              title="Line spacing"
-              value={editor?.getAttributes('paragraph').lineSpacing || ''}
-              onMouseDown={(e) => e.stopPropagation()}
-              onChange={(e) => {
-                const v = e.target.value || null;
-                editor?.chain().focus().updateAttributes('paragraph', { lineSpacing: v }).run();
-              }}
-            >
-              <option value="">Spacing</option>
-              {LINE_SPACINGS.map((v) => (
-                <option key={v} value={v}>{v === '1' ? '1.0' : v}</option>
-              ))}
-            </select>
-          </div>
-
-          <Sep />
-
-          <div className="tiptap-toolbar-group">
-            <ToolbarBtn onClick={() => toggleListTypeForSelection(editor, 'orderedList')} active={innermostListType(editor) === 'orderedList'} title="Task List / Numbered List (1. Task)">
-              <ListOrdered size={13} />
-            </ToolbarBtn>
-            <ToolbarBtn onClick={() => toggleListTypeForSelection(editor, 'bulletList')} active={innermostListType(editor) === 'bulletList'} title="Subtask / Bullet List (- Subtask)">
-              <List size={13} />
-            </ToolbarBtn>
-            <ToolbarBtn onClick={() => editor?.chain().focus().liftListItem('listItem').run()} disabled={!editor?.can().liftListItem('listItem')} title="Outdent (Shift+Tab)">
-              <IndentDecrease size={13} />
-            </ToolbarBtn>
-            <ToolbarBtn onClick={() => editor?.chain().focus().sinkListItem('listItem').run()} disabled={!editor?.can().sinkListItem('listItem')} title="Indent: make a subtask of the item above (Tab)">
-              <IndentIncrease size={13} />
-            </ToolbarBtn>
-            <ToolbarBtn onClick={() => editor?.chain().focus().toggleBlockquote().run()} active={editor?.isActive('blockquote')} title="Blockquote (> quote)">
-              <Quote size={13} />
-            </ToolbarBtn>
-            <ToolbarBtn onClick={() => editor?.chain().focus().toggleCodeBlock().run()} active={editor?.isActive('codeBlock')} title="Code Block (```)">
-              <FileCode size={13} />
-            </ToolbarBtn>
-            <ToolbarBtn onClick={() => editor?.chain().focus().setHorizontalRule().run()} title="Horizontal Rule (---)">
-              <Minus size={13} />
-            </ToolbarBtn>
-          </div>
+          <ToolbarBtn icon={Quote} onClick={() => editor?.chain().focus().toggleBlockquote().run()} active={editor?.isActive('blockquote')} title="Quote" />
+          <ToolbarBtn icon={SquareCode} onClick={() => editor?.chain().focus().toggleCodeBlock().run()} active={editor?.isActive('codeBlock')} title="Code block" />
+          <ToolbarBtn icon={Minus} onClick={() => editor?.chain().focus().setHorizontalRule().run()} title="Divider" />
+          <ToolbarBtn icon={ImageIcon} onClick={triggerImageUpload} title="Attach image" />
         </div>
       )}
 
       <div className="swimlane-editor-area">
         {/* Editor Scroll Container */}
         <div
-          className="obsidian-editor-container obsidian-scroll-area"
+          className={`obsidian-editor-container obsidian-scroll-area eg-docscroll ${hideDone ? 'is-hide-done' : ''}`}
           style={{
             flex: 1,
             overflowY: 'auto',
-            // Room below the last task so the add-task button never covers it.
-            paddingBottom: `${(isActive && isAssistantOpen ? assistantDrawerHeight : 0) + 72}px`,
+            paddingBottom: `${(isActive && isAssistantOpen ? assistantDrawerHeight : 0) + 48}px`,
           }}
           onMouseDown={(e) => {
             // Empty space around the tasks belongs to the editor: a click there puts the caret at the end, so typing
@@ -3056,26 +3187,8 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
           }}
         >
           <EditorContent editor={editor} className="tiptap-editor-root" />
+          {editor && <LineRunStates editor={editor} sessions={liveSessions} />}
         </div>
-
-        {/* Add a new task to the end of this lane's task list */}
-        <button
-          type="button"
-          className="add-task-fab"
-          style={{ bottom: `${(isActive && isAssistantOpen ? assistantDrawerHeight : 0) + 16}px` }}
-          onClick={(e) => {
-            e.stopPropagation();
-            onActivate();
-            if (editor) {
-              editor.commands.focus();
-              handleAddNewCard(editor);
-            }
-          }}
-          title="Add new task"
-          aria-label="Add new task"
-        >
-          <Plus size={20} strokeWidth={2.5} />
-        </button>
       </div>
 
       {/* ── Human AI Assistant Slide-up Bar / Drawer (rendered only within selected lane) ── */}
@@ -3097,64 +3210,34 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         />
       )}
 
-      {/* ── Action Buttons Footer at bottom of selected lane only (Gated behind Beta features toggle) ── */}
-      {isActive && (
-        <BetaFeature>
-          <div className="swimlane-footer">
-            <button
-              type="button"
-              className={`new-task-btn ai-assistant-footer-btn ${isAssistantOpen ? 'active' : ''}`}
-              onClick={isAssistantOpen ? onCloseAssistant : onOpenAssistant}
-              title={isAssistantOpen ? 'Close Task Assistant' : 'Activate Task Assistant: Task mode or Architect mode'}
+      {/* Remove-list confirmation */}
+      <Dialog
+        open={isDeleteLaneModalOpen}
+        title={`Remove ${lane.title}?`}
+        description="The list leaves your workspace view. Its file stays on disk."
+        onClose={() => setIsDeleteLaneModalOpen(false)}
+        width={420}
+        footer={
+          <>
+            <span className="eg-spacer" />
+            <Button onClick={() => setIsDeleteLaneModalOpen(false)}>Cancel</Button>
+            <Button
+              variant="danger"
+              icon={Trash2}
+              onClick={() => {
+                onDeleteSwimLane?.(lane.id);
+                setIsDeleteLaneModalOpen(false);
+              }}
             >
-              {isAssistantOpen ? <ChevronDown size={15} /> : <Sparkles size={15} />}
-              <span>{isAssistantOpen ? 'Hide Assistant' : 'Task Assistant'}</span>
-            </button>
-          </div>
-        </BetaFeature>
-      )}
-
-      {/* Swim Lane Delete Confirmation Modal */}
-      {isDeleteLaneModalOpen && (
-        <div className="modal-overlay" onClick={() => setIsDeleteLaneModalOpen(false)}>
-          <div className="modal-card archive-delete-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-rose)' }}>
-                <AlertTriangle size={18} />
-                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Delete Swim Lane?</h3>
-              </div>
-              <button type="button" className="btn-icon" onClick={() => setIsDeleteLaneModalOpen(false)}>
-                <X size={16} />
-              </button>
-            </div>
-            <div className="modal-body" style={{ padding: '1rem 1.25rem', fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
-              <p style={{ margin: 0, marginBottom: '0.75rem' }}>
-                Are you sure you want to remove swim lane <strong>"{lane.title}"</strong>?
-              </p>
-              <div className="archive-delete-warning-box">
-                <AlertCircle size={15} style={{ flexShrink: 0, color: 'var(--accent-rose)' }} />
-                <span>The file content in this lane will no longer appear in your active workspace view.</span>
-              </div>
-            </div>
-            <div className="modal-footer" style={{ padding: '0.75rem 1.25rem', display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => setIsDeleteLaneModalOpen(false)}>
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn btn-danger"
-                style={{ background: 'var(--accent-rose)', color: '#fff' }}
-                onClick={() => {
-                  onDeleteSwimLane?.(lane.id);
-                  setIsDeleteLaneModalOpen(false);
-                }}
-              >
-                Delete Swim Lane
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+              Remove list
+            </Button>
+          </>
+        }
+      >
+        <p style={{ margin: 0 }}>
+          <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{lane.filePath}</strong> won't appear here anymore.
+        </p>
+      </Dialog>
 
       {/* Hidden file input for uploading images/screenshots */}
       <input
@@ -3180,26 +3263,25 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         onClose={() => setTaskCommand(null)}
       />
 
-      {/* Freeform Selection "Run" & Style Controls Floating Tooltip */}
+      {/* Selection toolbar: starts as a small caret chip; hovering it pops out the formats and "Add as task" */}
       {selectionTooltip && selectionTooltip.visible && typeof document !== 'undefined' && createPortal(
         <div
-          className={`selection-run-tooltip ${selectionToolsExpanded ? '' : 'is-chip'}`}
-          style={{
-            top: `${selectionTooltip.y}px`,
-            left: `${selectionTooltip.x}px`,
-          }}
+          className={`eg-seltb selection-run-tooltip ${selectionToolsExpanded ? '' : 'is-chip'}`}
+          role="toolbar"
+          aria-label="Selection"
+          style={{ top: `${selectionTooltip.y}px`, left: `${selectionTooltip.x}px` }}
           onMouseDown={(e) => {
             e.preventDefault();
             e.stopPropagation();
           }}
           onMouseLeave={() => {
-            if (!colorPaletteOpen) setSelectionToolsExpanded(false);
+            if (!document.querySelector('.eg-swatches')) setSelectionToolsExpanded(false);
           }}
         >
           {!selectionToolsExpanded ? (
             <button
               type="button"
-              className="selection-tools-chip"
+              className="eg-seltb-chip"
               title="Selection tools"
               aria-label="Show selection tools"
               aria-expanded="false"
@@ -3207,132 +3289,24 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
               onFocus={() => setSelectionToolsExpanded(true)}
               onClick={() => setSelectionToolsExpanded(true)}
             >
-              <ChevronDown size={12} strokeWidth={2.5} />
+              <ChevronDown size={14} strokeWidth={1.75} />
             </button>
-          ) : (<>
-          {/* Add Task Action */}
-          <button
-            type="button"
-            className="selection-tooltip-run-btn"
-            onClick={handleRunSelection}
-            title="Add as task to AI Workspace"
-          >
-            <CornerDownRight size={12} strokeWidth={2.5} />
-            <span>Add Task</span>
-          </button>
-
-          <div className="selection-tooltip-divider" />
-
-          {/* Bold */}
-          <button
-            type="button"
-            className={`selection-tooltip-btn ${editor?.isActive('bold') ? 'is-active' : ''}`}
-            onClick={() => editor?.chain().focus().toggleBold().run()}
-            title="Bold (**text**)"
-          >
-            <Bold size={13} />
-          </button>
-
-          {/* Italic */}
-          <button
-            type="button"
-            className={`selection-tooltip-btn ${editor?.isActive('italic') ? 'is-active' : ''}`}
-            onClick={() => editor?.chain().focus().toggleItalic().run()}
-            title="Italic (*text*)"
-          >
-            <Italic size={13} />
-          </button>
-
-          {/* Strikethrough */}
-          <button
-            type="button"
-            className={`selection-tooltip-btn ${editor?.isActive('strike') ? 'is-active' : ''}`}
-            onClick={() => editor?.chain().focus().toggleStrike().run()}
-            title="Strikethrough (~~text~~)"
-          >
-            <Strikethrough size={13} />
-          </button>
-
-          {/* Inline Code */}
-          <button
-            type="button"
-            className={`selection-tooltip-btn ${editor?.isActive('code') ? 'is-active' : ''}`}
-            onClick={() => editor?.chain().focus().toggleCode().run()}
-            title="Inline Code (`code`)"
-          >
-            <Code size={13} />
-          </button>
-
-          {/* Link */}
-          <button
-            type="button"
-            className={`selection-tooltip-btn ${editor?.isActive('link') ? 'is-active' : ''}`}
-            onClick={setLink}
-            title="Link ([text](url))"
-          >
-            <LinkIcon size={13} />
-          </button>
-
-          {/* Photo / Screenshot */}
-          <button
-            type="button"
-            className="selection-tooltip-btn"
-            onClick={triggerImageUpload}
-            title="Attach Image / Screenshot"
-          >
-            <ImageIcon size={13} />
-          </button>
-
-          {/* Color: a header's color when the selection is in a header, otherwise the selected text's */}
-          <div className="selection-color-wrapper">
-            <button
-              type="button"
-              className={`selection-tooltip-btn ${colorPaletteOpen || editor?.isActive('textColor') ? 'is-active' : ''}`}
-              onClick={() => setColorPaletteOpen((o) => !o)}
-              title={selectionHeadingPos() != null ? 'Header color' : 'Text color'}
-            >
-              <Palette size={13} />
-            </button>
-            {colorPaletteOpen && (
-              <div className="selection-color-palette" role="menu">
-                {HEADER_COLORS.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    role="menuitem"
-                    title={c.label}
-                    aria-label={c.label}
-                    className={`hdr-color-swatch ${currentSelectionColor() === c.id ? 'is-active' : ''}`}
-                    style={{ background: c.hex }}
-                    onClick={() => applySelectionColor(c.id)}
-                  />
-                ))}
-                {selectionHeadingPos() == null && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    title="Remove color"
-                    aria-label="Remove color"
-                    className="hdr-color-swatch is-clear"
-                    onClick={() => applySelectionColor(null)}
-                  >
-                    <X size={11} />
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Subtask (Bullet) */}
-          <button
-            type="button"
-            className={`selection-tooltip-btn ${innermostListType(editor) === 'bulletList' ? 'is-active' : ''}`}
-            onClick={() => toggleListTypeForSelection(editor, 'bulletList')}
-            title="Subtask / Bullet List (- item)"
-          >
-            <List size={13} />
-          </button>
-          </>)}
+          ) : (
+            <>
+              <ToolbarBtn icon={Bold} onClick={() => editor?.chain().focus().toggleBold().run()} active={editor?.isActive('bold')} title={`Bold ${MOD}B`} />
+              <ToolbarBtn icon={Italic} onClick={() => editor?.chain().focus().toggleItalic().run()} active={editor?.isActive('italic')} title={`Italic ${MOD}I`} />
+              <ToolbarBtn icon={Strikethrough} onClick={() => editor?.chain().focus().toggleStrike().run()} active={editor?.isActive('strike')} title="Strikethrough" />
+              <ToolbarBtn icon={Code} onClick={() => editor?.chain().focus().toggleCode().run()} active={editor?.isActive('code')} title={`Inline code ${MOD}E`} />
+              <ToolbarBtn icon={LinkIcon} onClick={setLink} active={editor?.isActive('link')} title="Link" />
+              <TextColorButton editor={editor} />
+              <ToolbarBtn icon={RemoveFormatting} onClick={() => editor?.chain().focus().unsetAllMarks().run()} title="Clear formatting" />
+              <ToolbarBtn icon={List} onClick={() => toggleListTypeForSelection(editor, 'bulletList')} active={innermostListType(editor) === 'bulletList'} title="Bulleted list" />
+              <span className="eg-tb-sep" aria-hidden="true" />
+              <Button variant="ghost" size="sm" icon={ListPlus} onClick={handleRunSelection} title="Add the selected text as a task with its own brief">
+                Add as task
+              </Button>
+            </>
+          )}
         </div>,
         document.body
       )}
@@ -3370,8 +3344,15 @@ interface TaskPaneProps {
   archivedTasks?: TaskItemType[];
   selectedTaskId?: string | number | null;
   runningTaskIds?: (string | number)[];
+  queuedTaskIds?: (string | number)[];
+  briefs?: AgentContextItem[];
+  terminalSessions?: SpawnedSession[];
   pendingHumanInputs?: Record<string | number, { prompt: HumanInputPrompt; resolve: (answer: string) => void }>;
   onSelectTask?: (taskId: string | number) => void;
+  /** Open brief: selects the task and shows the detail pane. */
+  onOpenTaskDetail?: (taskId: string | number) => void;
+  onRunTask?: (task: TaskItemType) => void;
+  onStopTask?: (task: TaskItemType) => void;
   onMarkdownChange: (newMarkdown: string) => void;
   onOpenDraftModal: () => void;
   isAssistantOpen?: boolean;
@@ -3402,8 +3383,14 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   archivedTasks = [],
   selectedTaskId,
   runningTaskIds = [],
+  queuedTaskIds = [],
+  briefs = [],
+  terminalSessions = [],
   pendingHumanInputs,
   onSelectTask,
+  onOpenTaskDetail,
+  onRunTask,
+  onStopTask,
   onMarkdownChange,
   onOpenDraftModal,
   isAssistantOpen = false,
@@ -3429,11 +3416,30 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   const [showStyles, setShowStyles] = useState(readShowFormattingBar);
   useEffect(() => subscribePrefs(() => setShowStyles(readShowFormattingBar())), []);
   const toggleStyles = () => {
-    setShowStyles((prev) => {
-      setPref(FORMATTING_BAR_PREF, prev ? 'hidden' : 'shown');
-      return !prev;
-    });
+    const next = getPref(FORMATTING_BAR_PREF) === 'hidden';
+    setShowStyles(next);
+    setPref(FORMATTING_BAR_PREF, next ? 'shown' : 'hidden');
   };
+  // Hide done: a view option only; the document keeps every line.
+  const [hideDone, setHideDone] = useState(() => getPref(HIDE_DONE_PREF) === 'hidden');
+  useEffect(() => subscribePrefs(() => setHideDone(getPref(HIDE_DONE_PREF) === 'hidden')), []);
+  // The preference write notifies other components, so it stays out of the state updater (no setState-in-render).
+  const toggleHideDone = () => {
+    const next = getPref(HIDE_DONE_PREF) !== 'hidden';
+    setHideDone(next);
+    setPref(HIDE_DONE_PREF, next ? 'hidden' : 'shown');
+  };
+  // ⇧⌘T toggles the formatting toolbar.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!matches(e, 't', { mod: true, shift: true })) return;
+      e.preventDefault();
+      toggleStyles();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [assistantDrawerHeight, setAssistantDrawerHeight] = useState<number>(0);
   const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
   const headerMenuRef = useRef<HTMLDivElement>(null);
@@ -3542,7 +3548,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   }, [isResizingLane]);
 
   return (
-    <div className="pane pane-left obsidian-pane">
+    <div className="pane pane-left obsidian-pane eg-docpane-root">
 
 
       {/* ── Swim Lanes Container ── */}
@@ -3557,9 +3563,17 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
               onActivate={() => setActiveSwimLaneId(lane.id)}
               selectedTaskId={selectedTaskId}
               runningTaskIds={runningTaskIds}
+              queuedTaskIds={queuedTaskIds}
+              briefs={briefs}
+              terminalSessions={terminalSessions}
               pendingHumanInputs={pendingHumanInputs}
               showStyles={showStyles}
               onToggleStyles={toggleStyles}
+              hideDone={hideDone}
+              onToggleHideDone={toggleHideDone}
+              onOpenTaskDetail={onOpenTaskDetail}
+              onRunTask={onRunTask}
+              onStopTask={onStopTask}
               onSelectTask={onSelectTask}
               onMarkdownChange={handleLaneMarkdownChange}
               onRenameSwimLane={onRenameSwimLane}

@@ -97,16 +97,16 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
 
     // ── Create xterm terminal ─────────────────────────────────────────────
     const term = new Terminal({
-      fontFamily: "'Intel One Mono', 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Menlo', monospace",
-      fontSize: 16,
-      lineHeight: 1.4,
+      fontFamily: "'Geist Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace",
+      fontSize: 14,
+      lineHeight: 1.5,
       theme: isLightTheme
         ? {
-            background:          '#f8fafc',
-            foreground:          '#18181b',
-            cursor:              '#059669',
+            background:          '#ffffff',
+            foreground:          '#3d4047',
+            cursor:              '#3C7758',
             cursorAccent:        '#ffffff',
-            selectionBackground: 'rgba(0, 212, 146, 0.2)',
+            selectionBackground: '#3C775833',
             black:               '#f1f5f9',
             red:                 '#ef4444',
             green:               '#059669',
@@ -125,14 +125,14 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
             brightWhite:         '#09090b',
           }
         : {
-            background:          '#12141a',
-            foreground:          '#e4e4e7',
-            cursor:              '#00d492',
-            cursorAccent:        '#12141a',
-            selectionBackground: 'rgba(0, 212, 146, 0.25)',
-            black:               '#12141a',
+            background:          '#0e0f11',
+            foreground:          '#b3b7bf',
+            cursor:              '#52A278',
+            cursorAccent:        '#0e0f11',
+            selectionBackground: '#52A27847',
+            black:               '#0e0f11',
             red:                 '#ef4444',
-            green:               '#00d492',
+            green:               '#4cb782',
             yellow:              '#eab308',
             blue:                '#2563eb',
             magenta:             '#a78bfa',

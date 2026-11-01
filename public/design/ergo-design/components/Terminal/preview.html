@@ -1,0 +1,16 @@
+<!-- @dsCard group="Execution" height=360 subtitle="Live agent output and the run queue" -->
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="root" style="padding:20px"></div>
+<script>
+var E = window.Ergo, h = React.createElement, F = React.Fragment;
+
+ReactDOM.createRoot(document.getElementById("root")).render(h("div",{style:{display:"flex",flexDirection:"column",gap:12,width:560}},
+  h(E.Terminal,{title:"claude · ERG-142",live:true,height:220,actions:h(F,null,h(E.IconButton,{icon:"copy",label:"Copy output",size:"sm"}),h(E.IconButton,{icon:"arrow-up-right",label:"Open in full terminal",size:"sm"})),
+    lines:[{t:"● Reading src/editor/Bullet.tsx (212 lines)",k:"dim"},{t:"● Editing toggleList() to act on the selection only",k:"acc"},{t:"  src/editor/Bullet.tsx  +18 −7",k:"ok"},{t:"$ pnpm vitest run src/editor",k:"cmd"},{t:" ✓ bullet.test.ts (6)",k:"ok"},{t:" ✗ ordered.test.ts > keeps ordered type on indent",k:"err"},{t:"● Fixing indent() so children inherit list type…",k:"acc"}],
+    prompt:h("span",{className:"eg-subtle"},"Send a message to the agent")}),
+  h("div",{className:"eg-runs"}, h(E.RunRow,{live:true,title:"ERG-142 Fix bullet toggling",detail:"Claude Code · Sonnet",meta:"2m 14s"}), h(E.RunRow,{status:"queued",title:"ERG-145 Enter on a collapsed task",detail:"Waits for ERG-142",meta:"#1"}), h(E.RunRow,{status:"queued",title:"ERG-150 Master list of project files",meta:"#2"}))
+));
+</script>
+</body></html>

@@ -12,7 +12,7 @@ export const CLI_AGENT_PRESETS: CliAgentPreset[] = [
     defaultArgs: '',
     docsUrl: 'https://docs.anthropic.com/claude/docs/claude-code',
     description: "Anthropic's official agentic coding assistant in the CLI. Run `npm install -g @anthropic-ai/claude-code` to install.",
-    badgeColor: '#d97706',
+    badgeColor: '#3C7758',
   },
   {
     id: 'codex',
@@ -21,7 +21,7 @@ export const CLI_AGENT_PRESETS: CliAgentPreset[] = [
     defaultArgs: '',
     docsUrl: 'https://github.com/openai/codex',
     description: "OpenAI's command-line coding agent. Run `npm install -g @openai/codex` to install.",
-    badgeColor: '#7c3aed',
+    badgeColor: '#3C7758',
   },
   {
     id: 'antigravity',
@@ -30,7 +30,7 @@ export const CLI_AGENT_PRESETS: CliAgentPreset[] = [
     defaultArgs: '',
     docsUrl: 'https://antigravity.dev',
     description: "Google Deepmind's Advanced Agentic Coding assistant. Powered by Gemini, invoked via `agy`.",
-    badgeColor: '#2563eb',
+    badgeColor: '#3C7758',
   },
   {
     id: 'cursor-cli',
@@ -39,7 +39,7 @@ export const CLI_AGENT_PRESETS: CliAgentPreset[] = [
     defaultArgs: '',
     docsUrl: 'https://cursor.com',
     description: 'Cursor IDE agent CLI integration.',
-    badgeColor: '#06b6d4',
+    badgeColor: '#3C7758',
   },
   {
     id: 'grok-cli',
@@ -48,7 +48,7 @@ export const CLI_AGENT_PRESETS: CliAgentPreset[] = [
     defaultArgs: '',
     docsUrl: 'https://x.ai',
     description: 'xAI Grok terminal coding agent.',
-    badgeColor: '#e11d48',
+    badgeColor: '#3C7758',
   },
   {
     id: 'aider',
@@ -57,7 +57,7 @@ export const CLI_AGENT_PRESETS: CliAgentPreset[] = [
     defaultArgs: '--model gpt-4o',
     docsUrl: 'https://aider.chat',
     description: 'Open-source terminal pair programming AI. Run `pip install aider-chat` to install.',
-    badgeColor: '#059669',
+    badgeColor: '#3C7758',
   },
 ];
 

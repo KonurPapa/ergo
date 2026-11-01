@@ -3,9 +3,9 @@ import { ShieldCheck, Gauge, AlertTriangle, Cpu } from 'lucide-react';
 import { type AgentPipelineOptions, type EffortLevel, type ModelSelectionMode, type PermissionLevel } from '../types';
 import { EFFORT_LABELS, EFFORT_LEVELS } from '../lib/agentPipeline/modelRouter';
 
-const PERMISSION_LEVELS: PermissionLevel[] = ['plan', 'ask', 'acceptEdits', 'bypass'];
+export const PERMISSION_LEVELS: PermissionLevel[] = ['plan', 'ask', 'acceptEdits', 'bypass'];
 
-const PERMISSION_COPY: Record<PermissionLevel, { label: string; detail: string }> = {
+export const PERMISSION_COPY: Record<PermissionLevel, { label: string; detail: string }> = {
   plan: { label: 'Plan', detail: "Read-only. The agent can look around but won't edit files or run commands." },
   ask: { label: 'Ask', detail: 'Asks before every file edit, command, and external tool.' },
   acceptEdits: {
@@ -16,7 +16,7 @@ const PERMISSION_COPY: Record<PermissionLevel, { label: string; detail: string }
 };
 
 /** Effort in Auto: the quality-vs-cost balance of the picked models, plus reasoning depth. */
-const EFFORT_DETAIL_AUTO: Record<EffortLevel, string> = {
+export const EFFORT_DETAIL_AUTO: Record<EffortLevel, string> = {
   low: 'Cheapest models that can handle each stage, minimal reasoning.',
   medium: "Balanced: models matched to the task's difficulty, standard reasoning.",
   high: 'A step above what the task needs, deeper reasoning.',
@@ -25,7 +25,7 @@ const EFFORT_DETAIL_AUTO: Record<EffortLevel, string> = {
 };
 
 /** Effort in Manual: reasoning depth only (the models are the AI profile's). */
-const EFFORT_DETAIL_MANUAL: Record<EffortLevel, string> = {
+export const EFFORT_DETAIL_MANUAL: Record<EffortLevel, string> = {
   low: 'Minimal reasoning. Fastest and cheapest.',
   medium: 'Standard reasoning.',
   high: 'Deeper reasoning for planning and implementation.',
@@ -33,7 +33,7 @@ const EFFORT_DETAIL_MANUAL: Record<EffortLevel, string> = {
   max: 'Maximum reasoning at every core stage. Highest cost.'
 };
 
-const MODEL_SELECTION_COPY: Record<ModelSelectionMode, { label: string; detail: string }> = {
+export const MODEL_SELECTION_COPY: Record<ModelSelectionMode, { label: string; detail: string }> = {
   auto: {
     label: 'Auto',
     detail: "Picks each stage's model for the task from your provider's models, live prices and model strengths. Effort sets the quality/cost balance."
@@ -44,7 +44,7 @@ const MODEL_SELECTION_COPY: Record<ModelSelectionMode, { label: string; detail: 
   }
 };
 
-interface ExecutionSettingsBarProps {
+export interface ExecutionSettingsBarProps {
   options: AgentPipelineOptions;
   onChange: (next: AgentPipelineOptions) => void;
 }

@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { type ProjectData, type FolderMetadata, type AgentPipelineOptions, type ModelDataSettings } from '../types';
+import { askConfirm } from './ui/askDialogs';
+import { type ProjectData, type FolderMetadata, type AgentPipelineOptions, type ModelDataSettings, type AutocompleteSettings } from '../types';
+import { Button, IconButton, Input, Switch, SegmentedControl, SettingsGroup, SettingsRow, StatusDot } from './ui';
+import { setProjectDisplayName } from '../lib/projectNames';
 import { type AutosaveStatus } from '../hooks/useAutosave';
 import {
   Settings,
@@ -40,13 +43,19 @@ import { buildSummary, CALIBRATION_FILE_PATH, type CalibrationFile } from '../li
 import { bridgeClient, type BridgeStatus, BRIDGE_LAUNCH_URL, getBridgeDownload } from '../lib/bridgeClient';
 import { BridgeDownloadButton } from './BridgeDownloadButton';
 import { useBeta } from '../context/BetaContext';
-import { LocalModelSettingsSection, useLocalModelInstall, type LocalModelMode } from './LocalModelSetup';
+import { LocalModelSettingsSection, useLocalModelInstall, type LocalModelMode, type LocalModelInstallController } from './LocalModelSetup';
 import { getModelCatalog, formatCatalogAge, snapshotDate, usesArtificialAnalysis } from '../lib/modelCatalog/catalog';
 import type { ModelCatalog } from '../lib/modelCatalog/types';
 import { BUILTIN_STRENGTHS_AS_OF } from '../lib/modelCatalog/builtinStrengths';
 
-interface SettingsModalProps {
+/** Which part of the workspace settings a Settings page shows when the modal is embedded. */
+export type SettingsModalSection = 'general' | 'bridge' | 'appearance' | 'models' | 'memory';
+
+export interface SettingsModalProps {
   isOpen: boolean;
+  /** Render one section's body inline (Settings page) instead of the modal. */
+  embedded?: boolean;
+  section?: SettingsModalSection;
   onClose: () => void;
   activeProject: ProjectData;
   folderMetadata: FolderMetadata;
@@ -97,7 +106,8 @@ function priceSourceText(catalog: ModelCatalog): string {
 const ModelDataSettingsSection: React.FC<{
   modelData: ModelDataSettings;
   onSetModelData?: (next: ModelDataSettings) => void;
-}> = ({ modelData, onSetModelData }) => {
+  embedded?: boolean;
+}> = ({ modelData, onSetModelData, embedded }) => {
   const savedKey = modelData.artificialAnalysisKey || '';
   const [draftKey, setDraftKey] = useState(savedKey);
   const [showKey, setShowKey] = useState(false);
@@ -150,6 +160,65 @@ const ModelDataSettingsSection: React.FC<{
         ? `Artificial Analysis unavailable (${catalog.sources.benchmarksError}). Using built-in strengths.`
         : 'Using live benchmark scores when available, and live prices.'
     : `Using built-in strengths${BUILTIN_STRENGTHS_AS_OF ? ` (as of ${BUILTIN_STRENGTHS_AS_OF})` : ''} and live prices.`;
+
+  if (embedded) {
+    return (
+      <>
+        <SettingsGroup title="Model data">
+          <SettingsRow
+            title="Artificial Analysis key"
+            help={
+              checkResult ? (
+                <span className={checkResult.ok ? 'eg-settings-ok' : 'eg-settings-bad'}>{checkResult.text}</span>
+              ) : (
+                'Optional. With a free key, Auto uses live benchmark scores to pick models.'
+              )
+            }
+          >
+            <div className="eg-settings-actions">
+              <Input
+                id="settings-aa-key"
+                type={showKey ? 'text' : 'password'}
+                mono
+                value={draftKey}
+                placeholder="Paste your key"
+                autoComplete="off"
+                spellCheck={false}
+                aria-label="Artificial Analysis key"
+                style={{ width: 180 }}
+                onChange={(e) => {
+                  setDraftKey(e.target.value);
+                  setCheckResult(null);
+                }}
+                onBlur={() => commitKey(draftKey)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void handleCheck();
+                }}
+              />
+              <IconButton icon={showKey ? EyeOff : Eye} label={showKey ? 'Hide key' : 'Show key'} size="sm" onClick={() => setShowKey((v) => !v)} />
+              <Button size="sm" icon={checking ? Loader2 : RefreshCw} onClick={() => void handleCheck()} disabled={checking}>
+                {checking ? 'Checking…' : 'Check'}
+              </Button>
+            </div>
+          </SettingsRow>
+          <SettingsRow
+            title="Sources"
+            help={
+              <>
+                {strengthsText} {catalog ? priceSourceText(catalog) : ''}{' '}
+                <a href={AA_URL} target="_blank" rel="noopener noreferrer">
+                  Benchmark data: Artificial Analysis
+                </a>
+              </>
+            }
+          />
+        </SettingsGroup>
+        <SettingsGroup title="What Auto has learned">
+          <LearnedModelsPanel embedded />
+        </SettingsGroup>
+      </>
+    );
+  }
 
   return (
     <div className="lm-settings">
@@ -223,7 +292,7 @@ const STAGE_WORDS: Record<string, string> = { manager: 'Manager', worker: 'Worke
 const EFFORT_SHORT: Record<string, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra High', max: 'Max' };
 
 /** What Auto mode has learned from past runs (config/model-calibration.json), with a reset. */
-const LearnedModelsPanel: React.FC = () => {
+const LearnedModelsPanel: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
   const [file, setFile] = useState<CalibrationFile | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
   useEffect(() => {
@@ -238,9 +307,9 @@ const LearnedModelsPanel: React.FC = () => {
   const rows = file ? buildSummary(file) : [];
   const runCount = file ? file.runs.filter((r) => r.outcome).length : 0;
   return (
-    <div className="md-learned">
+    <div className={embedded ? 'md-learned eg-settings-learned' : 'md-learned'}>
       <div className="md-learned-head">
-        <span className="md-learned-title">What Ergo has learned</span>
+        {!embedded && <span className="md-learned-title">What Ergo has learned</span>}
         <span className="md-learned-meta">
           {runCount === 0 ? 'No runs recorded yet' : `${runCount} run${runCount === 1 ? '' : 's'} recorded`} · <code>{CALIBRATION_FILE_PATH}</code>
         </span>
@@ -311,7 +380,7 @@ const pipelineInputBoxStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: '0.6rem',
-  background: 'rgba(0, 0, 0, 0.3)',
+  background: 'var(--canvas)',
   padding: '0.5rem 0.85rem',
   borderRadius: '6px',
   border: '1px solid var(--border-subtle)',
@@ -365,8 +434,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSetLocalModelMode,
   tinyCloudModelLabel,
   modelData = {},
-  onSetModelData
+  onSetModelData,
+  embedded = false,
+  section = 'general'
 }) => {
+  const active = isOpen || embedded;
   const [isScanning, setIsScanning] = useState(false);
   const [storagePathInput, setStoragePathInput] = useState(
     folderMetadata.storageDirectory || '~/.ergo'
@@ -384,7 +456,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [bridgeNotice, setBridgeNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   // Installing from Settings switches to the local model once it finishes (even if the modal was closed).
   const localModel = useLocalModelInstall({
-    enabled: isOpen,
+    enabled: active,
     onInstalled: () => onSetLocalModelMode?.('local')
   });
 
@@ -411,7 +483,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   React.useEffect(() => {
-    if (!isOpen) return;
+    if (!active) return;
     let mounted = true;
     void getChunkCount(undefined, activeProject.id).then((c) => {
       if (mounted) setProjectChunkCount(c);
@@ -422,17 +494,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     return () => {
       mounted = false;
     };
-  }, [isOpen, activeProject.id]);
+  }, [active, activeProject.id]);
 
   const handleClearProjectMemoryClick = async () => {
     if (!onClearProjectMemory) return;
-    if (
-      !window.confirm(
-        `Clear vector memory for "${activeProject.name || activeProject.id}"? All task summaries and learnings for this project will be removed.`
-      )
-    ) {
-      return;
-    }
+    const ok = await askConfirm({
+      title: `Clear memory for ${activeProject.name || activeProject.id}?`,
+      text: 'All task summaries and learnings for this project are removed. Other projects keep theirs.',
+      confirmLabel: 'Clear memory',
+      danger: true,
+    });
+    if (!ok) return;
     setIsClearingProjectMemory(true);
     try {
       await onClearProjectMemory();
@@ -449,13 +521,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleClearAllMemoryClick = async () => {
     if (!onClearAllMemory) return;
-    if (
-      !window.confirm(
-        'Reset ALL vector memory across all projects? This will completely wipe the local vector database.'
-      )
-    ) {
-      return;
-    }
+    const ok = await askConfirm({
+      title: 'Reset memory for every project?',
+      text: "This deletes Ergo's whole local memory database.",
+      confirmLabel: 'Reset all memory',
+      danger: true,
+    });
+    if (!ok) return;
     setIsClearingAllMemory(true);
     try {
       await onClearAllMemory();
@@ -468,7 +540,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  if (!isOpen) return null;
+  if (!active) return null;
 
   const todoPath = activeProject?.todoFilePath || `${activeProject?.folderPath}/TODO.md`;
 
@@ -518,6 +590,63 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  if (embedded) {
+    return (
+      <EmbeddedSettingsSection
+        section={section}
+        activeProject={activeProject}
+        todoPath={todoPath}
+        folderMetadata={folderMetadata}
+        onOpenFolderPicker={onOpenFolderPicker}
+        isScanning={isScanning}
+        onScan={handleScan}
+        storagePathInput={storagePathInput}
+        setStoragePathInput={setStoragePathInput}
+        isSavingPath={isSavingPath}
+        pathSaveSuccess={pathSaveSuccess}
+        onSaveStoragePath={handleSaveStoragePath}
+        onResetStoragePath={handleResetStoragePath}
+        canSaveStoragePath={!!onUpdateStorageDirectory}
+        autosaveStatus={autosaveStatus}
+        autosaveDelaySec={autosaveDelaySec}
+        isAutosaveEnabled={isAutosaveEnabled}
+        lastSavedAt={lastSavedAt}
+        onSetAutosaveDelay={onSetAutosaveDelay}
+        onToggleAutosave={onToggleAutosave}
+        onSaveImmediately={onSaveImmediately}
+        theme={theme}
+        onThemeChange={onThemeChange}
+        agentPipelineOptions={agentPipelineOptions}
+        setPipelineOption={setPipelineOption}
+        setPipelineNumber={setPipelineNumber}
+        autocompleteSettings={autocompleteSettings}
+        onSetAutocompleteSettings={onSetAutocompleteSettings}
+        isBetaEnabled={isBetaEnabled}
+        setIsBetaEnabled={setIsBetaEnabled}
+        onExportProject={onExportProject}
+        onOpenRawMarkdownModal={onOpenRawMarkdownModal}
+        bridgeStatus={bridgeStatus}
+        bridgeUrlInput={bridgeUrlInput}
+        setBridgeUrlInput={setBridgeUrlInput}
+        isTestingBridge={isTestingBridge}
+        bridgeNotice={bridgeNotice}
+        onTestBridge={handleTestBridge}
+        localModel={localModel}
+        localModelMode={localModelMode}
+        onSetLocalModelMode={onSetLocalModelMode}
+        tinyCloudModelLabel={tinyCloudModelLabel}
+        modelData={modelData}
+        onSetModelData={onSetModelData}
+        projectChunkCount={projectChunkCount}
+        totalChunkCount={totalChunkCount}
+        isClearingProjectMemory={isClearingProjectMemory}
+        isClearingAllMemory={isClearingAllMemory}
+        onClearProjectMemory={onClearProjectMemory ? handleClearProjectMemoryClick : undefined}
+        onClearAllMemory={onClearAllMemory ? handleClearAllMemoryClick : undefined}
+      />
+    );
+  }
+
   return (
     <div
       className="modal-overlay"
@@ -531,7 +660,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <Settings size={22} color="var(--accent-cyan)" />
             <div>
-              <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Workspace Settings</h3>
+              <h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Workspace Settings</h3>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.1rem' }}>
                 Appearance theme, local directory, secrets storage, and disk synchronization
               </p>
@@ -551,7 +680,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             return (
               <div
                 style={{
-                  background: 'rgba(255, 255, 255, 0.025)',
+                  background: 'var(--surface-1)',
                   border: '1px solid var(--border-subtle)',
                   borderRadius: '8px',
                   padding: '1.1rem'
@@ -564,7 +693,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                   <span
                     className={`badge ${bridgeStatus.isConnected ? 'badge-done' : 'badge-warning'}`}
-                    style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', textTransform: 'uppercase' }}
+                    style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', textTransform: 'none' }}
                   >
                     {bridgeStatus.isConnected ? 'Connected' : 'Not connected'}
                   </span>
@@ -597,7 +726,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Section 0: Appearance & Theme */}
           <div
             style={{
-              background: 'rgba(255, 255, 255, 0.025)',
+              background: 'var(--surface-1)',
               border: '1px solid var(--border-subtle)',
               borderRadius: '8px',
               padding: '1.1rem'
@@ -610,7 +739,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
               <span
                 className="badge badge-done"
-                style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', textTransform: 'uppercase' }}
+                style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', textTransform: 'none' }}
               >
                 {theme === 'light' ? 'Light Mode (Default)' : 'Dark Mode'}
               </span>
@@ -632,11 +761,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   padding: '0.75rem 0.9rem',
                   borderRadius: 'var(--radius-md, 8px)',
                   border: theme === 'light' ? '2px solid var(--accent-primary)' : '1px solid var(--border-subtle)',
-                  background: theme === 'light' ? 'rgba(99, 102, 241, 0.12)' : 'var(--bg-darkest, rgba(0, 0, 0, 0.2))',
+                  background: theme === 'light' ? 'var(--accent-subtle)' : 'var(--bg-darkest)',
                   cursor: 'pointer',
                   textAlign: 'left',
                   transition: 'all 0.2s ease',
-                  boxShadow: theme === 'light' ? '0 0 14px rgba(99, 102, 241, 0.2)' : 'none'
+                  boxShadow: 'none'
                 }}
               >
                 <div
@@ -644,11 +773,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     width: '32px',
                     height: '32px',
                     borderRadius: '6px',
-                    background: theme === 'light' ? 'var(--accent-amber)' : 'rgba(245, 158, 11, 0.15)',
+                    background: theme === 'light' ? 'var(--accent-amber)' : 'var(--warning-subtle)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    color: theme === 'light' ? '#fff' : 'var(--accent-amber)',
+                    color: theme === 'light' ? 'var(--ink)' : 'var(--accent-amber)',
                     flexShrink: 0
                   }}
                 >
@@ -656,8 +785,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                    <span style={{ fontSize: '0.86rem', fontWeight: 700, color: 'var(--text-main)' }}>Light Mode</span>
-                    <span style={{ fontSize: '0.65rem', background: 'rgba(99, 102, 241, 0.15)', color: 'var(--accent-primary)', padding: '0.05rem 0.3rem', borderRadius: '3px', fontWeight: 600 }}>Default</span>
+                    <span style={{ fontSize: '0.86rem', fontWeight: 600, color: 'var(--text-main)' }}>Light Mode</span>
+                    <span style={{ fontSize: '0.65rem', background: 'var(--accent-subtle)', color: 'var(--accent-primary)', padding: '0.05rem 0.3rem', borderRadius: '3px', fontWeight: 600 }}>Default</span>
                   </div>
                   <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Crisp, clean high-contrast</span>
                 </div>
@@ -675,11 +804,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   padding: '0.75rem 0.9rem',
                   borderRadius: 'var(--radius-md, 8px)',
                   border: theme === 'dark' ? '2px solid var(--accent-primary)' : '1px solid var(--border-subtle)',
-                  background: theme === 'dark' ? 'rgba(99, 102, 241, 0.12)' : 'var(--bg-darkest, rgba(0, 0, 0, 0.2))',
+                  background: theme === 'dark' ? 'var(--accent-subtle)' : 'var(--bg-darkest)',
                   cursor: 'pointer',
                   textAlign: 'left',
                   transition: 'all 0.2s ease',
-                  boxShadow: theme === 'dark' ? '0 0 14px rgba(99, 102, 241, 0.2)' : 'none'
+                  boxShadow: 'none'
                 }}
               >
                 <div
@@ -687,18 +816,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     width: '32px',
                     height: '32px',
                     borderRadius: '6px',
-                    background: theme === 'dark' ? 'var(--accent-violet)' : 'rgba(139, 92, 246, 0.15)',
+                    background: theme === 'dark' ? 'var(--accent-violet)' : 'var(--surface-2)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    color: theme === 'dark' ? '#fff' : 'var(--accent-violet)',
+                    color: theme === 'dark' ? 'var(--ink)' : 'var(--accent-violet)',
                     flexShrink: 0
                   }}
                 >
                   <Moon size={18} />
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ fontSize: '0.86rem', fontWeight: 700, color: 'var(--text-main)', display: 'block' }}>Dark Mode</span>
+                  <span style={{ fontSize: '0.86rem', fontWeight: 600, color: 'var(--text-main)', display: 'block' }}>Dark Mode</span>
                   <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Sleek deep navy aesthetic</span>
                 </div>
                 {theme === 'dark' && <Check size={16} color="var(--accent-primary)" style={{ flexShrink: 0 }} />}
@@ -709,7 +838,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Section 1: Local Directory & Storage Location */}
           <div
             style={{
-              background: 'rgba(255, 255, 255, 0.025)',
+              background: 'var(--surface-1)',
               border: '1px solid var(--border-subtle)',
               borderRadius: '8px',
               padding: '1.1rem'
@@ -808,7 +937,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             <div
               style={{
-                background: 'rgba(0, 0, 0, 0.1)',
+                background: 'var(--canvas)',
                 padding: '0.65rem 0.85rem',
                 borderRadius: '6px',
                 border: '1px solid var(--border-subtle)',
@@ -901,7 +1030,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div
                   style={{
                     fontSize: '0.75rem',
-                    color: bridgeNotice.type === 'success' ? 'var(--accent-emerald)' : '#f87171',
+                    color: bridgeNotice.type === 'success' ? 'var(--accent-emerald)' : 'var(--danger)',
                     marginTop: '0.2rem',
                     display: 'flex',
                     alignItems: 'center',
@@ -918,7 +1047,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Section 2: Sync to Local Files Toggle */}
           <div
             style={{
-              background: 'rgba(255, 255, 255, 0.025)',
+              background: 'var(--surface-1)',
               border: '1px solid var(--border-subtle)',
               borderRadius: '8px',
               padding: '1.1rem'
@@ -934,7 +1063,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     style={{
                       fontSize: '0.65rem',
                       padding: '0.1rem 0.4rem',
-                      background: isAutosaveEnabled ? undefined : 'rgba(255,255,255,0.06)',
+                      background: isAutosaveEnabled ? undefined : 'var(--surface-2)',
                       color: isAutosaveEnabled ? undefined : 'var(--text-muted)'
                     }}
                   >
@@ -961,7 +1090,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Section 3: Inactivity Delay Setting */}
           <div
             style={{
-              background: 'rgba(255, 255, 255, 0.025)',
+              background: 'var(--surface-1)',
               border: '1px solid var(--border-subtle)',
               borderRadius: '8px',
               padding: '1.1rem',
@@ -983,7 +1112,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 display: 'flex',
                 alignItems: 'center',
                 gap: '0.6rem',
-                background: 'rgba(0, 0, 0, 0.3)',
+                background: 'var(--canvas)',
                 padding: '0.5rem 0.85rem',
                 borderRadius: '6px',
                 border: '1px solid var(--border-subtle)',
@@ -1019,7 +1148,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Section 3b: Agent Execution Pipeline Tuning */}
           <div
             style={{
-              background: 'rgba(255, 255, 255, 0.025)',
+              background: 'var(--surface-1)',
               border: '1px solid var(--border-subtle)',
               borderRadius: '8px',
               padding: '1.1rem'
@@ -1113,7 +1242,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       style={{
                         fontSize: '0.62rem',
                         padding: '0.05rem 0.35rem',
-                        background: agentPipelineOptions.enableCleaner ? undefined : 'rgba(255,255,255,0.06)',
+                        background: agentPipelineOptions.enableCleaner ? undefined : 'var(--surface-2)',
                         color: agentPipelineOptions.enableCleaner ? undefined : 'var(--text-muted)'
                       }}
                     >
@@ -1139,8 +1268,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Section 4: Vector Memory & Knowledge Store */}
           <div
             style={{
-              background: 'rgba(6, 182, 212, 0.025)',
-              border: '1px solid rgba(6, 182, 212, 0.2)',
+              background: 'var(--accent-subtle)',
+              border: '1px solid var(--line-strong)',
               borderRadius: '8px',
               padding: '1rem'
             }}
@@ -1156,8 +1285,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     fontSize: '0.68rem',
                     fontFamily: 'var(--font-mono)',
                     color: 'var(--accent-cyan)',
-                    background: 'rgba(6, 182, 212, 0.1)',
-                    border: '1px solid rgba(6, 182, 212, 0.25)',
+                    background: 'var(--accent-subtle)',
+                    border: '1px solid var(--line-strong)',
                     borderRadius: '4px',
                     padding: '0.1rem 0.4rem'
                   }}
@@ -1170,7 +1299,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     fontSize: '0.68rem',
                     fontFamily: 'var(--font-mono)',
                     color: 'var(--text-muted)',
-                    background: 'rgba(255, 255, 255, 0.05)',
+                    background: 'var(--surface-2)',
                     borderRadius: '4px',
                     padding: '0.1rem 0.4rem'
                   }}
@@ -1194,7 +1323,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   alignItems: 'center',
                   gap: '0.4rem',
                   color: 'var(--accent-amber)',
-                  borderColor: 'rgba(245, 158, 11, 0.3)'
+                  borderColor: 'var(--line-strong)'
                 }}
                 onClick={handleClearProjectMemoryClick}
                 disabled={isClearingProjectMemory || !onClearProjectMemory}
@@ -1212,7 +1341,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   alignItems: 'center',
                   gap: '0.4rem',
                   color: 'var(--accent-rose)',
-                  borderColor: 'rgba(244, 63, 94, 0.3)'
+                  borderColor: 'var(--line-strong)'
                 }}
                 onClick={handleClearAllMemoryClick}
                 disabled={isClearingAllMemory || !onClearAllMemory}
@@ -1226,7 +1355,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Section: Local AI model (Qwen 2.5 Coder 0.5B) — also for people who skipped it in onboarding */}
           <div
             style={{
-              background: 'rgba(255, 255, 255, 0.025)',
+              background: 'var(--surface-1)',
               border: '1px solid var(--border-subtle)',
               borderRadius: '8px',
               padding: '1.1rem'
@@ -1243,7 +1372,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Section: Model data for Auto model selection (strengths + prices) */}
           <div
             style={{
-              background: 'rgba(255, 255, 255, 0.025)',
+              background: 'var(--surface-1)',
               border: '1px solid var(--border-subtle)',
               borderRadius: '8px',
               padding: '1.1rem'
@@ -1255,7 +1384,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Section: Task Autocomplete Settings */}
           <div
             style={{
-              background: 'rgba(255, 255, 255, 0.025)',
+              background: 'var(--surface-1)',
               border: '1px solid var(--border-subtle)',
               borderRadius: '8px',
               padding: '1.1rem'
@@ -1271,7 +1400,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     style={{
                       fontSize: '0.65rem',
                       padding: '0.1rem 0.4rem',
-                      background: autocompleteSettings.enabled ? undefined : 'rgba(255,255,255,0.06)',
+                      background: autocompleteSettings.enabled ? undefined : 'var(--surface-2)',
                       color: autocompleteSettings.enabled ? undefined : 'var(--text-muted)'
                     }}
                   >
@@ -1295,7 +1424,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             {autocompleteSettings.enabled && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginTop: '0.8rem', paddingTop: '0.8rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginTop: '0.8rem', paddingTop: '0.8rem', borderTop: '1px solid var(--line)' }}>
                 <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 500 }}>Accept Keybinding:</span>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                   {(['Tab', 'ArrowRight', 'Enter'] as const).map((key) => (
@@ -1310,7 +1439,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         borderRadius: '4px',
                         border: '1px solid',
                         borderColor: autocompleteSettings.keybinding === key ? 'var(--accent-cyan)' : 'var(--border-subtle)',
-                        background: autocompleteSettings.keybinding === key ? 'rgba(6, 182, 212, 0.15)' : 'rgba(0,0,0,0.2)',
+                        background: autocompleteSettings.keybinding === key ? 'var(--accent-subtle)' : 'var(--canvas)',
                         color: autocompleteSettings.keybinding === key ? 'var(--accent-cyan)' : 'var(--text-muted)',
                         cursor: 'pointer'
                       }}
@@ -1326,8 +1455,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Section: Experimental & Beta Features */}
           <div
             style={{
-              background: isBetaEnabled ? 'rgba(234, 179, 8, 0.04)' : 'rgba(255, 255, 255, 0.025)',
-              border: isBetaEnabled ? '1px solid rgba(234, 179, 8, 0.28)' : '1px solid var(--border-subtle)',
+              background: isBetaEnabled ? 'var(--warning-subtle)' : 'var(--surface-1)',
+              border: isBetaEnabled ? '1px solid var(--line-strong)' : '1px solid var(--border-subtle)',
               borderRadius: '8px',
               padding: '1.1rem',
               transition: 'border-color 0.2s ease, background 0.2s ease'
@@ -1343,9 +1472,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     style={{
                       fontSize: '0.65rem',
                       padding: '0.1rem 0.4rem',
-                      background: isBetaEnabled ? 'rgba(234, 179, 8, 0.2)' : 'rgba(255, 255, 255, 0.06)',
-                      color: isBetaEnabled ? '#fbbf24' : 'var(--text-muted)',
-                      border: isBetaEnabled ? '1px solid rgba(234, 179, 8, 0.4)' : undefined
+                      background: isBetaEnabled ? 'var(--warning-subtle)' : 'var(--surface-2)',
+                      color: isBetaEnabled ? 'var(--warning)' : 'var(--text-muted)',
+                      border: isBetaEnabled ? '1px solid var(--line-strong)' : undefined
                     }}
                   >
                     {isBetaEnabled ? 'BETA ACTIVE' : 'OFF'}
@@ -1371,14 +1500,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Section 5: Target File Paths & Status */}
           <div
             style={{
-              background: 'rgba(255, 255, 255, 0.02)',
+              background: 'var(--surface-1)',
               border: '1px solid var(--border-subtle)',
               borderRadius: '8px',
               padding: '1rem'
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
-              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'none', letterSpacing: 'normal' }}>
                 Active Project Target Files
               </span>
 
@@ -1404,8 +1533,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 )}
                 {autosaveStatus === 'error' && (
                   <>
-                    <AlertCircle size={13} color="#ef4444" />
-                    <span style={{ color: '#ef4444', fontWeight: 600 }}>Save Error</span>
+                    <AlertCircle size={13} color="var(--danger)" />
+                    <span style={{ color: 'var(--danger)', fontWeight: 600 }}>Save Error</span>
                   </>
                 )}
                 {autosaveStatus === 'idle' && (
@@ -1426,7 +1555,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             {lastSavedAt && (
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.65rem', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '0.5rem' }}>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.65rem', borderTop: '1px solid var(--line)', paddingTop: '0.5rem' }}>
                 Last disk write: <strong>{new Date(lastSavedAt).toLocaleTimeString()}</strong> ({new Date(lastSavedAt).toLocaleDateString()})
               </div>
             )}
@@ -1436,7 +1565,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               style={{
                 marginTop: '0.85rem',
                 paddingTop: '0.75rem',
-                borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                borderTop: '1px solid var(--line)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
@@ -1521,3 +1650,426 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
 };
 
+
+/* ───────────── Embedded sections (Settings page) ───────────── */
+
+interface EmbeddedSettingsSectionProps {
+  section: SettingsModalSection;
+  activeProject: ProjectData;
+  todoPath: string;
+  folderMetadata: FolderMetadata;
+  onOpenFolderPicker: () => void;
+  isScanning: boolean;
+  onScan: () => void;
+  storagePathInput: string;
+  setStoragePathInput: (v: string) => void;
+  isSavingPath: boolean;
+  pathSaveSuccess: boolean;
+  onSaveStoragePath: () => void;
+  onResetStoragePath: () => void;
+  canSaveStoragePath: boolean;
+  autosaveStatus: AutosaveStatus;
+  autosaveDelaySec: number;
+  isAutosaveEnabled: boolean;
+  lastSavedAt: string | null;
+  onSetAutosaveDelay: (seconds: number) => void;
+  onToggleAutosave: (enabled: boolean) => void;
+  onSaveImmediately: () => void;
+  theme: 'light' | 'dark';
+  onThemeChange: (theme: 'light' | 'dark') => void;
+  agentPipelineOptions: AgentPipelineOptions;
+  setPipelineOption: <K extends keyof AgentPipelineOptions>(key: K, value: AgentPipelineOptions[K]) => void;
+  setPipelineNumber: (key: 'maxConcurrentAgents' | 'maxVerifierRetries' | 'maxToolRoundsPerAgent', raw: string) => void;
+  autocompleteSettings: AutocompleteSettings;
+  onSetAutocompleteSettings?: (next: AutocompleteSettings) => void;
+  isBetaEnabled: boolean;
+  setIsBetaEnabled: (v: boolean) => void;
+  onExportProject?: () => void;
+  onOpenRawMarkdownModal?: () => void;
+  bridgeStatus: BridgeStatus;
+  bridgeUrlInput: string;
+  setBridgeUrlInput: (v: string) => void;
+  isTestingBridge: boolean;
+  bridgeNotice: { type: 'success' | 'error'; text: string } | null;
+  onTestBridge: () => void;
+  localModel: LocalModelInstallController;
+  localModelMode: LocalModelMode;
+  onSetLocalModelMode?: (mode: 'local' | 'cloud') => void;
+  tinyCloudModelLabel?: string;
+  modelData: ModelDataSettings;
+  onSetModelData?: (next: ModelDataSettings) => void;
+  projectChunkCount: number | null;
+  totalChunkCount: number | null;
+  isClearingProjectMemory: boolean;
+  isClearingAllMemory: boolean;
+  onClearProjectMemory?: () => void;
+  onClearAllMemory?: () => void;
+}
+
+const AUTOSAVE_TEXT: Record<AutosaveStatus, string> = {
+  idle: 'Up to date.',
+  pending: 'Waiting for you to stop typing.',
+  saving: 'Saving…',
+  saved: 'Saved to TODO.md.',
+  error: "The last save didn't reach the disk. Your edits are still here; Ergo tries again on the next change."
+};
+
+const ACCEPT_KEYS: Array<{ id: AutocompleteSettings['keybinding']; label: string }> = [
+  { id: 'Tab', label: 'Tab' },
+  { id: 'ArrowRight', label: '→' },
+  { id: 'Enter', label: '↵' }
+];
+
+const numberInputStyle: React.CSSProperties = { width: 80, fontVariantNumeric: 'tabular-nums' };
+
+/** Settings › General › Name: the project's display name (its folder and id don't change). */
+const ProjectNameRow: React.FC<{ projectId: string; name: string }> = ({ projectId, name }) => {
+  const [draft, setDraft] = useState(name);
+  useEffect(() => setDraft(name), [name]);
+  const changed = draft.trim() !== '' && draft.trim() !== name;
+  const save = () => {
+    if (changed) setProjectDisplayName(projectId, draft);
+  };
+  return (
+    <SettingsRow title="Name" help="What Ergo calls this project in the top bar and project menu.">
+      <div className="eg-settings-actions">
+        <Input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save();
+            if (e.key === 'Escape') setDraft(name);
+          }}
+          aria-label="Project name"
+          style={{ width: 200 }}
+        />
+        <Button size="sm" variant={changed ? 'primary' : 'secondary'} disabled={!changed} onClick={save}>
+          Rename
+        </Button>
+      </div>
+    </SettingsRow>
+  );
+};
+
+const EmbeddedSettingsSection: React.FC<EmbeddedSettingsSectionProps> = (p) => {
+  const storageDir = p.folderMetadata.storageDirectory || '~/.ergo';
+
+  if (p.section === 'appearance') {
+    return (
+      <SettingsGroup title="Theme">
+        <SettingsRow title="Theme" help="Applies right away and is saved for every project.">
+          <SegmentedControl
+            label="Theme"
+            options={[
+              { id: 'dark', label: 'Dark' },
+              { id: 'light', label: 'Light' }
+            ]}
+            value={p.theme}
+            onChange={p.onThemeChange}
+          />
+        </SettingsRow>
+      </SettingsGroup>
+    );
+  }
+
+  if (p.section === 'bridge') {
+    const download = getBridgeDownload();
+    const connected = p.bridgeStatus.isConnected;
+    return (
+      <>
+        <SettingsGroup title="Ergo Bridge">
+          <SettingsRow
+            title={
+              <span className="eg-settings-inline">
+                <StatusDot state={connected ? 'success' : p.bridgeStatus.isChecking ? 'live' : 'warning'} />
+                {connected ? 'Connected' : p.bridgeStatus.isChecking ? 'Connecting' : 'Bridge unreachable'}
+              </span>
+            }
+            help={
+              connected
+                ? `Connected to this computer at ${p.bridgeStatus.url}. Ergo can reach your local files and run agents here.`
+                : download
+                  ? 'A small app that lets Ergo reach your files and run agents on this computer. Install it once; it starts with your computer and Ergo connects to it automatically. Tasks still save while it is away.'
+                  : 'Ergo Bridge runs on Windows, macOS and Linux. Open Ergo on one of those to connect it.'
+            }
+          >
+            {download && (
+              <div className="eg-settings-actions">
+                {!connected && (
+                  <a className="eg-btn eg-btn-ghost eg-btn-sm" href={BRIDGE_LAUNCH_URL}>
+                    Open bridge
+                  </a>
+                )}
+                <BridgeDownloadButton subtle={connected} size="sm" />
+              </div>
+            )}
+          </SettingsRow>
+          <SettingsRow
+            title="Last heard from"
+            help={p.bridgeStatus.lastHeartbeat ? new Date(p.bridgeStatus.lastHeartbeat).toLocaleTimeString() : 'No contact yet.'}
+          />
+        </SettingsGroup>
+        <SettingsGroup title="Address">
+          <SettingsRow
+            title="Bridge address"
+            help={
+              p.bridgeNotice ? (
+                <span className={p.bridgeNotice.type === 'success' ? 'eg-settings-ok' : 'eg-settings-bad'}>{p.bridgeNotice.text}</span>
+              ) : (
+                'Where Ergo looks for the bridge. Change it only if you run the bridge on another port.'
+              )
+            }
+          >
+            <div className="eg-settings-actions">
+              <Input
+                mono
+                value={p.bridgeUrlInput}
+                onChange={(e) => p.setBridgeUrlInput(e.target.value)}
+                placeholder="http://localhost:5173"
+                aria-label="Bridge address"
+                style={{ width: 220 }}
+              />
+              <Button size="sm" icon={RefreshCw} onClick={p.onTestBridge} disabled={p.isTestingBridge}>
+                {p.isTestingBridge ? 'Connecting…' : 'Test connection'}
+              </Button>
+            </div>
+          </SettingsRow>
+        </SettingsGroup>
+      </>
+    );
+  }
+
+  if (p.section === 'memory') {
+    return (
+      <SettingsGroup title="Search memory">
+        <SettingsRow
+          title={`This project · ${p.projectChunkCount ?? '…'} ${p.projectChunkCount === 1 ? 'entry' : 'entries'}`}
+          help="Task summaries and notes the agent searches before it works. Stored by the bridge on this computer."
+        >
+          <Button size="sm" variant="secondary" icon={Trash2} onClick={p.onClearProjectMemory} disabled={p.isClearingProjectMemory || !p.onClearProjectMemory}>
+            {p.isClearingProjectMemory ? 'Clearing…' : 'Clear project memory'}
+          </Button>
+        </SettingsRow>
+        <SettingsRow title={`All projects · ${p.totalChunkCount ?? '…'} ${p.totalChunkCount === 1 ? 'entry' : 'entries'}`} help="Deletes the whole local memory database. Your tasks and TODO.md are not affected.">
+          <Button size="sm" variant="danger" icon={RotateCw} onClick={p.onClearAllMemory} disabled={p.isClearingAllMemory || !p.onClearAllMemory}>
+            {p.isClearingAllMemory ? 'Resetting…' : 'Reset all memory'}
+          </Button>
+        </SettingsRow>
+      </SettingsGroup>
+    );
+  }
+
+  if (p.section === 'models') {
+    const o = p.agentPipelineOptions;
+    return (
+      <>
+        <SettingsGroup title="Runs">
+          <SettingsRow title="Parallel workers" help="1 to 8. More workers finish sooner but can hit rate limits.">
+            <Input
+              type="number"
+              min={PIPELINE_LIMITS.maxConcurrentAgents.min}
+              max={PIPELINE_LIMITS.maxConcurrentAgents.max}
+              step={1}
+              value={o.maxConcurrentAgents}
+              onChange={(e) => p.setPipelineNumber('maxConcurrentAgents', e.target.value)}
+              aria-label="Parallel workers"
+              style={numberInputStyle}
+            />
+          </SettingsRow>
+          <SettingsRow title="Verifier retries" help="0 to 5. For tasks with verification on, each failed check sends the work back once more; 0 reports and stops.">
+            <Input
+              type="number"
+              min={PIPELINE_LIMITS.maxVerifierRetries.min}
+              max={PIPELINE_LIMITS.maxVerifierRetries.max}
+              step={1}
+              value={o.maxVerifierRetries}
+              onChange={(e) => p.setPipelineNumber('maxVerifierRetries', e.target.value)}
+              aria-label="Verifier retries"
+              style={numberInputStyle}
+            />
+          </SettingsRow>
+          <SettingsRow title="Tool rounds per agent" help="5 to 120. Higher lets long jobs finish; each round re-reads the whole context.">
+            <Input
+              type="number"
+              min={PIPELINE_LIMITS.maxToolRoundsPerAgent.min}
+              max={PIPELINE_LIMITS.maxToolRoundsPerAgent.max}
+              step={5}
+              value={o.maxToolRoundsPerAgent}
+              onChange={(e) => p.setPipelineNumber('maxToolRoundsPerAgent', e.target.value)}
+              aria-label="Tool rounds per agent"
+              style={numberInputStyle}
+            />
+          </SettingsRow>
+          <SettingsRow title="Cleanup pass" help="Lints and formats new code after coding tasks. One extra agent run; skipped for other tasks.">
+            <Switch checked={!!o.enableCleaner} onChange={() => p.setPipelineOption('enableCleaner', !o.enableCleaner)} aria-label="Cleanup pass" />
+          </SettingsRow>
+        </SettingsGroup>
+        <LocalModelSettingsSection
+          embedded
+          controller={p.localModel}
+          mode={p.localModelMode}
+          cloudLabel={p.tinyCloudModelLabel?.trim() || 'a small cloud model'}
+          onSetMode={(mode) => p.onSetLocalModelMode?.(mode)}
+        />
+        <ModelDataSettingsSection embedded modelData={p.modelData} onSetModelData={p.onSetModelData} />
+      </>
+    );
+  }
+
+  // general
+  const ac = p.autocompleteSettings;
+  return (
+    <>
+      <SettingsGroup title="Project">
+        <ProjectNameRow projectId={p.activeProject.id} name={p.activeProject.name || p.activeProject.id} />
+        <SettingsRow
+          title="Folder"
+          help="Renaming the folder isn't available yet: briefs and memory are keyed by it."
+        >
+          <Input mono disabled value={p.activeProject.folderPath || 'No folder'} aria-label="Project folder" style={{ width: 260 }} />
+        </SettingsRow>
+        <SettingsRow
+          title="Task list file"
+          help="Renaming the file isn't available yet: task ids and their briefs are keyed by it."
+        >
+          <Input mono disabled value={p.todoPath} aria-label="Task list file" style={{ width: 260 }} />
+        </SettingsRow>
+        {(p.onExportProject || p.onOpenRawMarkdownModal) && (
+          <SettingsRow title="Export" help="Download the project's markdown files.">
+            <div className="eg-settings-actions">
+              {p.onOpenRawMarkdownModal && (
+                <Button size="sm" variant="ghost" icon={Eye} onClick={p.onOpenRawMarkdownModal}>
+                  Preview markdown
+                </Button>
+              )}
+              {p.onExportProject && (
+                <Button size="sm" icon={Download} onClick={p.onExportProject}>
+                  Download files
+                </Button>
+              )}
+            </div>
+          </SettingsRow>
+        )}
+      </SettingsGroup>
+
+      <SettingsGroup title="Editor">
+        <SettingsRow title="Autocomplete" help="Suggests the rest of a task after you pause on a space, using your profile's small model or the local model.">
+          <Switch
+            checked={ac.enabled}
+            onChange={() => p.onSetAutocompleteSettings?.({ ...ac, enabled: !ac.enabled })}
+            aria-label="Autocomplete"
+          />
+        </SettingsRow>
+        {ac.enabled && (
+          <SettingsRow title="Accept a suggestion with">
+            <SegmentedControl
+              label="Accept a suggestion with"
+              options={ACCEPT_KEYS}
+              value={ac.keybinding}
+              onChange={(k) => p.onSetAutocompleteSettings?.({ ...ac, keybinding: k })}
+            />
+          </SettingsRow>
+        )}
+        <SettingsRow title="Beta features" help="Preview features before they are on by default. They show up across the app while this is on.">
+          <Switch checked={p.isBetaEnabled} onChange={() => p.setIsBetaEnabled(!p.isBetaEnabled)} aria-label="Beta features" />
+        </SettingsRow>
+      </SettingsGroup>
+
+      <SettingsGroup title="Advanced">
+        <SettingsRow
+          title="Save to disk automatically"
+          help={
+            p.isAutosaveEnabled
+              ? `${AUTOSAVE_TEXT[p.autosaveStatus]}${p.lastSavedAt ? ` Last written ${new Date(p.lastSavedAt).toLocaleTimeString()}.` : ''}`
+              : 'Off. Changes stay in Ergo until you save them.'
+          }
+        >
+          <div className="eg-settings-actions">
+            {!p.isAutosaveEnabled && (
+              <Button size="sm" icon={Save} onClick={p.onSaveImmediately}>
+                Save now
+              </Button>
+            )}
+            <Switch checked={p.isAutosaveEnabled} onChange={() => p.onToggleAutosave(!p.isAutosaveEnabled)} aria-label="Save to disk automatically" />
+          </div>
+        </SettingsRow>
+        <SettingsRow title="Save delay" help="Seconds Ergo waits after you stop typing before writing TODO.md.">
+          <Input
+            type="number"
+            min={0.5}
+            max={300}
+            step={0.5}
+            value={p.autosaveDelaySec}
+            disabled={!p.isAutosaveEnabled}
+            onChange={(e) => {
+              const val = parseFloat(e.target.value);
+              if (!isNaN(val)) p.onSetAutosaveDelay(val);
+            }}
+            aria-label="Save delay in seconds"
+            style={numberInputStyle}
+          />
+        </SettingsRow>
+        <SettingsRow
+          title="Storage folder"
+          help={
+            p.pathSaveSuccess ? (
+              <span className="eg-settings-ok">Storage folder updated.</span>
+            ) : (
+              <>
+                Where Ergo keeps tasks, briefs, settings and secrets.
+                {p.folderMetadata.resolvedPath && (
+                  <>
+                    {' '}On disk: <span className="eg-settings-mono">{p.folderMetadata.resolvedPath}</span>
+                  </>
+                )}
+                {p.folderMetadata.status === 'needs_permission' && ' Ergo needs permission to use this folder again.'}
+              </>
+            )
+          }
+        >
+          <div className="eg-settings-actions">
+            <Input
+              mono
+              value={p.storagePathInput}
+              onChange={(e) => p.setStoragePathInput(e.target.value)}
+              placeholder="~/.ergo"
+              aria-label="Storage folder"
+              style={{ width: 180 }}
+            />
+            <Button
+              size="sm"
+              onClick={p.onSaveStoragePath}
+              disabled={!p.canSaveStoragePath || p.isSavingPath || p.storagePathInput === storageDir}
+            >
+              {p.isSavingPath ? 'Applying…' : 'Apply'}
+            </Button>
+          </div>
+        </SettingsRow>
+        <SettingsRow title="Choose another folder" help="Pick the storage folder with your system's folder picker, or rescan it for projects.">
+          <div className="eg-settings-actions">
+            {p.storagePathInput !== '~/.ergo' && (
+              <Button size="sm" variant="ghost" onClick={p.onResetStoragePath}>
+                Use default
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" icon={RefreshCw} onClick={p.onScan} disabled={p.isScanning}>
+              {p.isScanning ? 'Scanning…' : 'Rescan'}
+            </Button>
+            <Button size="sm" icon={FolderOpen} onClick={p.onOpenFolderPicker}>
+              Choose folder
+            </Button>
+          </div>
+        </SettingsRow>
+        <SettingsRow
+          title="Secrets"
+          help={
+            <>
+              API keys and integration tokens are stored in <span className="eg-settings-mono">{storageDir}/config/secrets.json</span>, next to{' '}
+              <span className="eg-settings-mono">config/settings.json</span> and your <span className="eg-settings-mono">projects/</span>.
+            </>
+          }
+        />
+      </SettingsGroup>
+    </>
+  );
+};

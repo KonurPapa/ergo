@@ -1,7 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { bridgeClient } from '../lib/bridgeClient';
-import { ACTIVITY_PROTOCOL } from '../lib/bridgeProtocol';
-import type { AgentActivity, AgentActivityResponse } from '../lib/agentActivity';
+import React from 'react';
+import { useAgentActivity, useTick } from '../hooks/useAgentActivity';
 import type { AgentSessionRole, AgentSessionStatus } from '../types';
 import { AgentRoleBadge } from './AgentSessionTabs';
 
@@ -18,10 +16,6 @@ export interface AgentLiveStatusProps {
   fallbackText?: string;
 }
 
-const POLL_MS = 1500;
-/** Output this recent counts as working even without a spinner on screen (CLIs without one, or between frames). */
-const WORKING_QUIET_MS = 5000;
-
 function formatElapsed(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -34,54 +28,8 @@ function formatElapsed(ms: number): string {
  * look frozen.
  */
 export const AgentLiveStatus: React.FC<AgentLiveStatusProps> = ({ ptySessionId, status, role, pieceId, label, showBadge, fallbackText }) => {
-  const [activity, setActivity] = useState<AgentActivity | null>(null);
-  const [live, setLive] = useState<{ isActive: boolean; working: boolean } | null>(null);
-  const [changedAt, setChangedAt] = useState(() => Date.now());
-  const [, setTick] = useState(0);
-  const lastKeyRef = useRef('');
-
-  const canPoll = Boolean(ptySessionId) && (bridgeClient.getStatus().bridgeInfo?.protocol ?? 0) >= ACTIVITY_PROTOCOL;
-
-  useEffect(() => {
-    setActivity(null);
-    setLive(null);
-    lastKeyRef.current = '';
-    setChangedAt(Date.now());
-    if (!canPoll || !ptySessionId) return;
-    let disposed = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const poll = async () => {
-      try {
-        const res = await bridgeClient.fetch(`/api/pty/activity?sessionId=${encodeURIComponent(ptySessionId)}`);
-        const body: AgentActivityResponse = await res.json();
-        if (disposed) return;
-        if (body.success && body.activity) {
-          const quiet = typeof body.quietMs === 'number' ? body.quietMs : Infinity;
-          setLive({ isActive: Boolean(body.isActive), working: Boolean(body.isActive) && (Boolean(body.spinner) || quiet < WORKING_QUIET_MS) });
-          const key = `${body.activity.said}\u0000${body.activity.doing}\u0000${body.activity.phase}`;
-          if (key !== lastKeyRef.current) {
-            lastKeyRef.current = key;
-            setActivity(body.activity);
-            setChangedAt(Date.now());
-          }
-        }
-      } catch {
-        // The bridge is unreachable for a moment: keep the last line.
-      }
-      if (!disposed) timer = setTimeout(poll, POLL_MS);
-    };
-    void poll();
-    return () => {
-      disposed = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [ptySessionId, canPoll]);
-
-  // The elapsed counter.
-  useEffect(() => {
-    const t = setInterval(() => setTick((n) => n + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
+  const { activity, live, changedAt } = useAgentActivity(ptySessionId);
+  useTick();
 
   const needsApproval = status === 'awaiting_approval';
   const waitingOnAgents = status === 'waiting';

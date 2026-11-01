@@ -15,6 +15,7 @@ import {
   Plus,
   AlertTriangle,
   ChevronDown,
+  ChevronUp,
   NotebookPen,
   Tag,
   Clock,
@@ -32,6 +33,7 @@ import { applyInsightOps, insightsSupported, listInsights, onInsightsChanged } f
 import { type TaskItem } from '../types';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { LearnedRulesSection } from './LearnedRulesSection';
+import { Button, Dialog, EmptyState, Field, IconButton, Input, MenuButton, SegmentedControl, Tabs } from './ui';
 
 /** The kinds of saved information the screen lists, one tab each. */
 export type ArchiveTab = 'human' | 'ai' | 'rules' | 'notes';
@@ -40,28 +42,28 @@ const TABS: Array<{ id: ArchiveTab; label: string; color: string; icon: React.Re
   {
     id: 'human',
     label: 'Human Workspace',
-    color: '#38bdf8',
+    color: 'var(--accent-text)',
     icon: <User size={13} />,
     empty: 'Tasks you archive from the human workspace show up here.',
   },
   {
     id: 'ai',
     label: 'AI Workspace',
-    color: '#34d399',
+    color: 'var(--success)',
     icon: <Bot size={13} />,
     empty: 'Execution cards you archive from the AI workspace show up here.',
   },
   {
     id: 'rules',
     label: 'Learnings',
-    color: '#a78bfa',
+    color: 'var(--ink-subtle)',
     icon: <Brain size={13} />,
     empty: '',
   },
   {
     id: 'notes',
     label: 'AI Notes',
-    color: '#f59e0b',
+    color: 'var(--warning)',
     icon: <NotebookPen size={13} />,
     empty: "Notes the AI saves while it works (plans, reports, completion records) show up here. It reads them back on later tasks.",
   },
@@ -156,8 +158,14 @@ export interface ArchiveRestorePlan {
   restoresCard: boolean;
 }
 
-interface ArchivedTasksModalProps {
+/** Which Settings page an embedded archive renders: archived tasks, learned rules, or the agent's notes. */
+export type ArchivePage = 'archive' | 'rules' | 'memory';
+
+export interface ArchivedTasksModalProps {
   isOpen: boolean;
+  /** Render one page inline (Settings) instead of the modal. */
+  embedded?: boolean;
+  page?: ArchivePage;
   onClose: () => void;
   projectId?: string;
   projectName?: string;
@@ -171,10 +179,10 @@ interface ArchivedTasksModalProps {
 
 const fieldStyle: React.CSSProperties = {
   height: '28px',
-  background: 'rgba(0, 0, 0, 0.3)',
-  border: '1px solid rgba(255, 255, 255, 0.1)',
+  background: 'var(--surface-1)',
+  border: '1px solid var(--line)',
   borderRadius: '5px',
-  color: 'var(--text-bright, #fff)',
+  color: 'var(--text-bright)',
   fontSize: '0.78rem',
   padding: '0 0.5rem',
   outline: 'none',
@@ -244,7 +252,11 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
   tasks = [],
   planRestore,
   onRestore,
+  embedded = false,
+  page = 'archive',
 }) => {
+  const active = isOpen || embedded;
+  const startTab: ArchiveTab = embedded ? (page === 'rules' ? 'rules' : page === 'memory' ? 'notes' : 'human') : initialTab;
   const [chunks, setChunks] = useState<MemoryChunk[]>([]);
   const [rulesCount, setRulesCount] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
@@ -299,16 +311,16 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
   }, [projectId]);
 
   useEffect(() => {
-    if (isOpen) {
-      setActiveTab(initialTab);
+    if (active) {
+      setActiveTab(startTab);
       setSelectedCategory('all');
       void refreshChunks();
     }
-  }, [isOpen, initialTab, refreshChunks]);
+  }, [active, startTab, refreshChunks]);
 
   // Learned rules have their own store; only the count is needed here (the tab lists them itself).
   useEffect(() => {
-    if (!isOpen || !projectId || !insightsSupported()) return;
+    if (!active || !projectId || !insightsSupported()) return;
     let alive = true;
     listInsights(projectId)
       .then((list) => alive && setRulesCount(list.length))
@@ -320,7 +332,7 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
       alive = false;
       off();
     };
-  }, [isOpen, projectId]);
+  }, [active, projectId]);
 
   // Only the active project's records; switching projects happens in the main app.
   const items = useMemo(() => {
@@ -424,7 +436,7 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
       setRulesCount(res.insights.length);
       setNewText('');
       setIsCreatingNew(false);
-      switchTab('rules');
+      if (!embedded) switchTab('rules');
     } catch (err) {
       setNewError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -458,7 +470,7 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
     }
   };
 
-  if (!isOpen) return null;
+  if (!active) return null;
 
   const currentTab = TABS.find((t) => t.id === activeTab) ?? TABS[0];
   const isRulesTab = activeTab === 'rules';
@@ -467,8 +479,8 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
     width: '26px',
     height: '26px',
     borderRadius: '5px',
-    background: 'rgba(255, 255, 255, 0.04)',
-    border: '1px solid rgba(255, 255, 255, 0.08)',
+    background: 'var(--surface-1)',
+    border: '1px solid var(--line)',
     color: 'var(--text-muted)',
     display: 'inline-flex',
     alignItems: 'center',
@@ -480,14 +492,14 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
   if (restoreTarget) {
     const { restoresTask, restoresCard } = restoreTarget.plan;
     if (restoreTarget.item.tab === 'human') {
-      restoreMessage = 'This task will go back into the human workspace and leave the archive.';
+      restoreMessage = 'This task goes back into TODO.md and leaves the archive.';
     } else if (restoresTask && restoresCard) {
       restoreMessage =
-        'Both will come back: this execution card goes to the AI workspace, and the task it was created for goes back to the human workspace.';
+        'Both come back: the run card returns to the run list, and the task it was made for goes back into TODO.md.';
     } else if (restoresCard) {
-      restoreMessage = 'This execution card will go back into the AI workspace. Its task is already in the human workspace.';
+      restoreMessage = 'The run card goes back to the run list. Its task is already in TODO.md.';
     } else {
-      restoreMessage = "This task's execution card is already in the AI workspace, so there's nothing to restore.";
+      restoreMessage = "This task's run card is already in the run list, so there's nothing to restore.";
     }
   }
   const canRestore = !!restoreTarget && (restoreTarget.plan.restoresTask || restoreTarget.plan.restoresCard);
@@ -506,8 +518,8 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
                   key={item.key}
                   className="modal-archived-card"
                   style={{
-                    background: 'var(--bg-card, #222427)',
-                    border: '1px solid rgba(255, 255, 255, 0.08)',
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--line)',
                     borderRadius: '8px',
                     padding: '0.85rem 1rem',
                     display: 'flex',
@@ -537,9 +549,9 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
                             fontWeight: 600,
                             padding: '0.1rem 0.45rem',
                             borderRadius: '4px',
-                            background: 'rgba(255, 255, 255, 0.05)',
-                            border: '1px solid rgba(255, 255, 255, 0.1)',
-                            color: 'var(--text-bright, #fff)',
+                            background: 'var(--surface-2)',
+                            border: '1px solid var(--line)',
+                            color: 'var(--text-bright)',
                             textTransform: 'capitalize',
                           }}
                         >
@@ -561,7 +573,7 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
                         className="btn-icon"
                         onClick={() => handleCopy(item.key, item.text)}
                         title="Copy text"
-                        style={{ ...iconButtonStyle, color: copiedKey === item.key ? '#10b981' : 'var(--text-muted)' }}
+                        style={{ ...iconButtonStyle, color: copiedKey === item.key ? 'var(--success)' : 'var(--text-muted)' }}
                       >
                         {copiedKey === item.key ? <Check size={13} /> : <Copy size={13} />}
                       </button>
@@ -576,9 +588,9 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
                             height: '26px',
                             padding: '0 0.5rem',
                             borderRadius: '5px',
-                            background: 'rgba(56, 189, 248, 0.08)',
-                            border: '1px solid rgba(56, 189, 248, 0.25)',
-                            color: '#38bdf8',
+                            background: 'var(--accent-subtle)',
+                            border: '1px solid var(--line-strong)',
+                            color: 'var(--accent-text)',
                             fontSize: '0.72rem',
                             fontWeight: 600,
                             display: 'inline-flex',
@@ -600,9 +612,9 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
                           title="Edit"
                           style={{
                             ...iconButtonStyle,
-                            background: isEditing ? 'rgba(99, 102, 241, 0.2)' : iconButtonStyle.background,
-                            border: isEditing ? '1px solid #6366f1' : iconButtonStyle.border,
-                            color: isEditing ? '#fff' : 'var(--text-muted)',
+                            background: isEditing ? 'var(--accent-subtle)' : iconButtonStyle.background,
+                            border: isEditing ? '1px solid var(--line-control)' : iconButtonStyle.border,
+                            color: isEditing ? 'var(--ink)' : 'var(--text-muted)',
                           }}
                         >
                           <Edit3 size={13} />
@@ -614,7 +626,7 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
                         className="btn-icon"
                         onClick={() => setItemToDelete(item)}
                         title="Delete"
-                        style={{ ...iconButtonStyle, background: 'rgba(244, 63, 94, 0.06)', border: '1px solid rgba(244, 63, 94, 0.15)', color: '#f43f5e' }}
+                        style={{ ...iconButtonStyle, background: 'var(--danger-subtle)', border: '1px solid var(--line-strong)', color: 'var(--danger)' }}
                       >
                         <Trash2 size={13} />
                       </button>
@@ -629,9 +641,9 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
                         flexDirection: 'column',
                         gap: '0.6rem',
                         padding: '0.75rem',
-                        background: 'rgba(0, 0, 0, 0.25)',
+                        background: 'var(--surface-1)',
                         borderRadius: '6px',
-                        border: '1px solid rgba(99, 102, 241, 0.3)',
+                        border: '1px solid var(--line-strong)',
                       }}
                     >
                       <textarea
@@ -641,10 +653,10 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
                         style={{
                           width: '100%',
                           padding: '0.65rem',
-                          background: 'rgba(0, 0, 0, 0.3)',
-                          border: '1px solid rgba(255, 255, 255, 0.15)',
+                          background: 'var(--surface-1)',
+                          border: '1px solid var(--line-strong)',
                           borderRadius: '4px',
-                          color: 'var(--text-bright, #fff)',
+                          color: 'var(--text-bright)',
                           fontSize: '0.82rem',
                           lineHeight: 1.5,
                           outline: 'none',
@@ -692,7 +704,7 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
                       style={{
                         fontSize: '0.84rem',
                         lineHeight: 1.6,
-                        color: 'var(--text-main, rgba(255,255,255,0.85))',
+                        color: 'var(--text-main)',
                         ...(isCollapsed
                           ? {
                               maxHeight: '4.8em',
@@ -709,13 +721,69 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
                   )}
 
                   {(item.tab === 'rules' || item.tab === 'notes') && item.taskTitle && (
-                    <div style={{ paddingTop: '0.45rem', borderTop: '1px solid rgba(255, 255, 255, 0.05)', fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                    <div style={{ paddingTop: '0.45rem', borderTop: '1px solid var(--line)', fontSize: '0.74rem', color: 'var(--text-muted)' }}>
                       From task: <span style={{ color: 'var(--text-main)' }}>{item.taskTitle}</span>
                     </div>
                   )}
                 </div>
               );
   };
+
+  if (embedded) {
+    return (
+      <EmbeddedArchive
+        page={page}
+        activeTab={activeTab}
+        onSwitchTab={switchTab}
+        counts={counts}
+        isLoading={isLoading}
+        items={displayedItems}
+        searchQuery={searchQuery}
+        onSearch={setSearchQuery}
+        categories={availableCategories}
+        selectedCategory={selectedCategory}
+        onSelectCategory={setSelectedCategory}
+        projectId={projectId}
+        expandedKeys={expandedKeys}
+        onToggleExpanded={toggleExpanded}
+        copiedKey={copiedKey}
+        onCopy={handleCopy}
+        canRestore={!!planRestore && !!onRestore}
+        onAskRestore={(item) => setRestoreTarget({ item, plan: planRestore!(item.head) })}
+        editingKey={editingKey}
+        editText={editText}
+        setEditText={setEditText}
+        editCategory={editCategory}
+        setEditCategory={setEditCategory}
+        isSavingEdit={isSavingEdit}
+        onStartEdit={handleStartEdit}
+        onCancelEdit={handleCancelEdit}
+        onSaveEdit={handleSaveEdit}
+        onAskDelete={setItemToDelete}
+        newRule={{
+          open: isCreatingNew,
+          setOpen: setIsCreatingNew,
+          text: newText,
+          setText: setNewText,
+          scope: newScope,
+          setScope: setNewScope,
+          error: newError,
+          submitting: isSubmittingNew,
+          onSubmit: handleCreateNew,
+        }}
+        restore={
+          restoreTarget
+            ? { title: restoreTarget.plan.title, message: restoreMessage, canRestore, busy: isRestoring, onConfirm: handleConfirmRestore, onCancel: () => setRestoreTarget(null) }
+            : null
+        }
+        remove={
+          itemToDelete
+            ? { text: itemToDelete.text, busy: isDeleting, onConfirm: handleConfirmDelete, onCancel: () => setItemToDelete(null) }
+            : null
+        }
+      />
+    );
+  }
 
   const modalElement = (
     <div className="modal-overlay" onClick={onClose} style={{ zIndex: 9999 }}>
@@ -728,10 +796,10 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
           maxHeight: '90vh',
           display: 'flex',
           flexDirection: 'column',
-          background: 'var(--bg-pane, #222427)',
-          border: '1px solid rgba(255, 255, 255, 0.1)',
+          background: 'var(--bg-pane)',
+          border: '1px solid var(--line)',
           borderRadius: '12px',
-          boxShadow: '0 24px 60px rgba(0,0,0,0.65)',
+          boxShadow: 'var(--shadow-dialog)',
           overflow: 'hidden',
         }}
       >
@@ -740,8 +808,8 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
           className="modal-header"
           style={{
             padding: '1rem 1.5rem',
-            background: 'var(--bg-darkest, #191a1c)',
-            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+            background: 'var(--bg-darkest)',
+            borderBottom: '1px solid var(--line)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -755,21 +823,21 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
                 height: '36px',
                 flexShrink: 0,
                 borderRadius: '8px',
-                background: 'rgba(245, 158, 11, 0.14)',
-                border: '1px solid rgba(245, 158, 11, 0.35)',
+                background: 'var(--warning-subtle)',
+                border: '1px solid var(--line-strong)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: '#f59e0b',
+                color: 'var(--warning)',
               }}
             >
               <Archive size={19} />
             </div>
             <div style={{ minWidth: 0 }}>
-              <h3 style={{ margin: 0, fontSize: '1.12rem', fontWeight: 700, color: 'var(--text-bright, #ffffff)' }}>
+              <h3 style={{ margin: 0, fontSize: '1.12rem', fontWeight: 600, color: 'var(--text-bright)' }}>
                 Archives & Learnings
               </h3>
-              <p style={{ margin: '0.2rem 0 0', fontSize: '0.78rem', color: 'var(--text-muted, rgba(255,255,255,0.5))' }}>
+              <p style={{ margin: '0.2rem 0 0', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                 Everything the AI remembers about this project, plus your archived tasks.
               </p>
             </div>
@@ -790,7 +858,7 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
               className="btn-icon"
               onClick={onClose}
               title="Close"
-              style={{ ...iconButtonStyle, width: '30px', height: '30px', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.1)' }}
+              style={{ ...iconButtonStyle, width: '30px', height: '30px', borderRadius: '6px', border: '1px solid var(--line)' }}
             >
               <X size={17} />
             </button>
@@ -802,14 +870,14 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
           <div
             style={{
               padding: '1rem 1.5rem',
-              background: 'rgba(139, 92, 246, 0.05)',
-              borderBottom: '1px solid rgba(139, 92, 246, 0.25)',
+              background: 'var(--surface-2)',
+              borderBottom: '1px solid var(--line-strong)',
               display: 'flex',
               flexDirection: 'column',
               gap: '0.65rem',
             }}
           >
-            <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#c4b5fd' }}>
+            <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--ink-muted)' }}>
               Add something the AI should always follow in this project
             </div>
             <textarea
@@ -821,10 +889,10 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
               style={{
                 width: '100%',
                 padding: '0.65rem',
-                background: 'rgba(0, 0, 0, 0.35)',
-                border: '1px solid rgba(255, 255, 255, 0.12)',
+                background: 'var(--surface-1)',
+                border: '1px solid var(--line)',
                 borderRadius: '6px',
-                color: 'var(--text-bright, #fff)',
+                color: 'var(--text-bright)',
                 fontSize: '0.84rem',
                 lineHeight: 1.5,
                 outline: 'none',
@@ -867,8 +935,8 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
         <div
           style={{
             padding: '0.85rem 1.5rem',
-            background: 'var(--bg-card, #1e2023)',
-            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+            background: 'var(--bg-card)',
+            borderBottom: '1px solid var(--line)',
             display: 'flex',
             flexDirection: 'column',
             gap: '0.75rem',
@@ -968,8 +1036,8 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
                   width: '44px',
                   height: '44px',
                   borderRadius: '12px',
-                  background: 'rgba(255, 255, 255, 0.03)',
-                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  background: 'var(--surface-1)',
+                  border: '1px solid var(--line)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -997,8 +1065,8 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
           className="modal-footer"
           style={{
             padding: '0.75rem 1.5rem',
-            background: 'var(--bg-darkest, #191a1c)',
-            borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+            background: 'var(--bg-darkest)',
+            borderTop: '1px solid var(--line)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -1025,7 +1093,7 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
         <div className="modal-overlay" onClick={() => setRestoreTarget(null)} style={{ zIndex: 120 }}>
           <div className="modal-card archive-delete-modal is-archive" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#38bdf8' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-text)' }}>
                 <RotateCcw size={18} />
                 <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Restore?</h3>
               </div>
@@ -1064,14 +1132,14 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
             onClick={(e) => e.stopPropagation()}
             style={{
               maxWidth: '460px',
-              background: 'var(--bg-card, #222427)',
-              border: '1px solid rgba(244, 63, 94, 0.3)',
+              background: 'var(--bg-card)',
+              border: '1px solid var(--line-strong)',
               borderRadius: '10px',
-              boxShadow: '0 20px 50px rgba(0,0,0,0.7)',
+              boxShadow: 'var(--shadow-dialog)',
             }}
           >
-            <div className="modal-header" style={{ padding: '0.85rem 1.25rem', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-rose, #f43f5e)' }}>
+            <div className="modal-header" style={{ padding: '0.85rem 1.25rem', borderBottom: '1px solid var(--line)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-rose)' }}>
                 <AlertTriangle size={18} />
                 <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600 }}>Delete this item?</h4>
               </div>
@@ -1087,9 +1155,9 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
               <div
                 style={{
                   padding: '0.65rem',
-                  background: 'rgba(0, 0, 0, 0.3)',
+                  background: 'var(--surface-1)',
                   borderRadius: '5px',
-                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  border: '1px solid var(--line)',
                   fontSize: '0.78rem',
                   color: 'var(--text-bright)',
                   maxHeight: '120px',
@@ -1101,7 +1169,7 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
               </div>
             </div>
 
-            <div className="modal-footer" style={{ padding: '0.75rem 1.25rem', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+            <div className="modal-footer" style={{ padding: '0.75rem 1.25rem', borderTop: '1px solid var(--line)' }}>
               <button
                 type="button"
                 className="btn btn-secondary"
@@ -1115,7 +1183,7 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
                 className="btn btn-danger"
                 onClick={handleConfirmDelete}
                 disabled={isDeleting}
-                style={{ height: '28px', padding: '0 0.75rem', fontSize: '0.76rem', background: 'var(--accent-rose, #f43f5e)', color: '#fff', border: 'none' }}
+                style={{ height: '28px', padding: '0 0.75rem', fontSize: '0.76rem', background: 'var(--accent-rose)', color: 'var(--ink)', border: 'none' }}
               >
                 {isDeleting ? 'Deleting…' : 'Delete'}
               </button>
@@ -1127,4 +1195,289 @@ export const ArchivedTasksModal: React.FC<ArchivedTasksModalProps> = ({
   );
 
   return typeof document !== 'undefined' ? createPortal(modalElement, document.body) : modalElement;
+};
+
+/* ───────────── Embedded pages (Settings › Archive, Rules, Memory) ───────────── */
+
+interface EmbeddedArchiveProps {
+  page: ArchivePage;
+  activeTab: ArchiveTab;
+  onSwitchTab: (tab: ArchiveTab) => void;
+  counts: Record<ArchiveTab, number>;
+  isLoading: boolean;
+  items: ArchiveItem[];
+  searchQuery: string;
+  onSearch: (q: string) => void;
+  categories: string[];
+  selectedCategory: string;
+  onSelectCategory: (c: string) => void;
+  projectId: string;
+  expandedKeys: Set<string>;
+  onToggleExpanded: (key: string) => void;
+  copiedKey: string | null;
+  onCopy: (key: string, text: string) => void;
+  canRestore: boolean;
+  onAskRestore: (item: ArchiveItem) => void;
+  editingKey: string | null;
+  editText: string;
+  setEditText: (v: string) => void;
+  editCategory: string;
+  setEditCategory: (v: string) => void;
+  isSavingEdit: boolean;
+  onStartEdit: (item: ArchiveItem) => void;
+  onCancelEdit: () => void;
+  onSaveEdit: (item: ArchiveItem) => void;
+  onAskDelete: (item: ArchiveItem) => void;
+  newRule: {
+    open: boolean;
+    setOpen: (v: boolean) => void;
+    text: string;
+    setText: (v: string) => void;
+    scope: string;
+    setScope: (v: string) => void;
+    error: string | null;
+    submitting: boolean;
+    onSubmit: () => void;
+  };
+  restore: { title: string; message: string; canRestore: boolean; busy: boolean; onConfirm: () => void; onCancel: () => void } | null;
+  remove: { text: string; busy: boolean; onConfirm: () => void; onCancel: () => void } | null;
+}
+
+const EMBEDDED_EMPTY: Record<ArchiveTab, { title: string; text: string }> = {
+  human: { title: 'No archived tasks', text: 'Tasks you archive from TODO.md show up here, ready to restore.' },
+  ai: { title: 'No archived runs', text: 'Run cards you archive show up here, ready to restore.' },
+  rules: { title: 'No older notes', text: '' },
+  notes: { title: 'No notes yet', text: 'Plans, reports and completion records the agent saves while it works show up here. It reads them back on later tasks.' },
+};
+
+const EmbeddedArchive: React.FC<EmbeddedArchiveProps> = (p) => {
+  const renderItem = (item: ArchiveItem) => {
+    const isEditing = p.editingKey === item.key;
+    const restorable = (item.tab === 'human' || item.tab === 'ai') && p.canRestore;
+    const editable = item.chunkIds.length === 1;
+    const showHeading = !!item.heading && item.heading !== item.category;
+    const isLong = item.text.length > LONG_CARD_CHARS || item.text.split('\n').length > LONG_CARD_LINES;
+    const isCollapsed = isLong && !isEditing && !p.expandedKeys.has(item.key);
+    const meta = [item.category, new Date(item.createdAt).toLocaleDateString(), item.taskTitle && (item.tab === 'rules' || item.tab === 'notes') ? `From "${item.taskTitle}"` : null]
+      .filter(Boolean)
+      .join(' · ');
+    return (
+      <div key={item.key} className="eg-srow eg-settings-top">
+        <div className="eg-srow-text">
+          {showHeading && <div className="eg-srow-title">{item.heading}</div>}
+          <div className="eg-srow-help">{meta}</div>
+          {isEditing ? (
+            <div className="eg-settings-sub">
+              <textarea className="eg-input eg-settings-textarea" value={p.editText} onChange={(e) => p.setEditText(e.target.value)} rows={5} aria-label="Text" />
+              <div className="eg-settings-actions">
+                {item.tab !== 'notes' && (
+                  <Input value={p.editCategory} onChange={(e) => p.setEditCategory(e.target.value)} aria-label="Category" placeholder="Category" style={{ width: 160 }} />
+                )}
+                <span className="eg-spacer" />
+                <Button size="sm" variant="ghost" onClick={p.onCancelEdit}>
+                  Cancel
+                </Button>
+                <Button size="sm" variant="primary" onClick={() => p.onSaveEdit(item)} disabled={p.isSavingEdit || !p.editText.trim()}>
+                  {p.isSavingEdit ? 'Saving…' : 'Save'}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div
+              className={`eg-md eg-settings-md${isCollapsed ? ' is-clamped' : ''}`}
+              onClick={isCollapsed ? () => p.onToggleExpanded(item.key) : undefined}
+            >
+              <MarkdownRenderer content={item.text} />
+            </div>
+          )}
+        </div>
+        {!isEditing && (
+          <div className="eg-settings-actions">
+            {isLong && (
+              <IconButton icon={isCollapsed ? ChevronDown : ChevronUp} label={isCollapsed ? 'Show all' : 'Show less'} size="sm" onClick={() => p.onToggleExpanded(item.key)} />
+            )}
+            <IconButton icon={p.copiedKey === item.key ? Check : Copy} label={p.copiedKey === item.key ? 'Copied' : 'Copy text'} size="sm" onClick={() => p.onCopy(item.key, item.text)} />
+            {editable && <IconButton icon={Edit3} label="Edit" size="sm" onClick={() => p.onStartEdit(item)} />}
+            <IconButton icon={Trash2} label="Delete" size="sm" onClick={() => p.onAskDelete(item)} />
+            {restorable && (
+              <Button size="sm" icon={RotateCcw} onClick={() => p.onAskRestore(item)}>
+                Restore
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const search = (placeholder: string) => (
+    <div className="eg-settings-filter">
+      <Input icon={Search} value={p.searchQuery} onChange={(e) => p.onSearch(e.target.value)} placeholder={placeholder} aria-label={placeholder} style={{ flex: 1 }} />
+      {p.categories.length > 0 && (
+        <MenuButton
+          align="end"
+          items={['all', ...p.categories].map((c) => ({
+            label: c === 'all' ? 'All categories' : c,
+            checked: p.selectedCategory === c,
+            onSelect: () => p.onSelectCategory(c),
+          }))}
+          trigger={(t) => (
+            <button type="button" className="eg-select" {...t}>
+              {p.selectedCategory === 'all' ? 'All categories' : p.selectedCategory}
+              <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" />
+            </button>
+          )}
+        />
+      )}
+    </div>
+  );
+
+  const list = (tab: ArchiveTab) => {
+    if (p.items.length > 0) return <div className="eg-srows">{p.items.map(renderItem)}</div>;
+    if (p.isLoading) return <p className="eg-srow-help">Loading…</p>;
+    const filtered = !!p.searchQuery || p.selectedCategory !== 'all';
+    return (
+      <EmptyState
+        icon={tab === 'notes' ? NotebookPen : Archive}
+        title={filtered ? 'No matches' : EMBEDDED_EMPTY[tab].title}
+        text={filtered ? 'Try a different search or category.' : EMBEDDED_EMPTY[tab].text}
+        actions={
+          filtered ? (
+            <Button size="sm" onClick={() => { p.onSearch(''); p.onSelectCategory('all'); }}>
+              Clear search
+            </Button>
+          ) : undefined
+        }
+      />
+    );
+  };
+
+  const nr = p.newRule;
+
+  return (
+    <div className="eg-settings-embed">
+      {p.page === 'archive' && (
+        <section className="eg-sgroup">
+          <Tabs
+            items={[
+              { id: 'human' as ArchiveTab, label: 'Tasks', count: p.counts.human },
+              { id: 'ai' as ArchiveTab, label: 'Runs', count: p.counts.ai },
+            ]}
+            value={p.activeTab === 'ai' ? 'ai' : 'human'}
+            onChange={p.onSwitchTab}
+          />
+          {search(p.activeTab === 'ai' ? 'Search archived runs' : 'Search archived tasks')}
+          {list(p.activeTab === 'ai' ? 'ai' : 'human')}
+        </section>
+      )}
+
+      {p.page === 'rules' && (
+        <>
+          <section className="eg-sgroup">
+            <div className="eg-settings-grouphead">
+              <h3 className="eg-sgroup-title">Rules</h3>
+              {!nr.open && (
+                <Button size="sm" icon={Plus} onClick={() => nr.setOpen(true)} disabled={!insightsSupported()}>
+                  Add rule
+                </Button>
+              )}
+            </div>
+            {nr.open && (
+              <div className="eg-settings-card">
+                <Field label="Rule" help={nr.error ? undefined : 'Every run of this project gets it.'} error={nr.error || undefined}>
+                  <textarea
+                    className="eg-input eg-settings-textarea"
+                    value={nr.text}
+                    onChange={(e) => nr.setText(e.target.value)}
+                    placeholder="Run npm test before saying a task is done."
+                    rows={3}
+                    autoFocus
+                  />
+                </Field>
+                <div className="eg-settings-actions">
+                  <span className="eg-srow-help">Applies to</span>
+                  <SegmentedControl label="Applies to" options={RULE_SCOPES} value={nr.scope} onChange={nr.setScope} />
+                  <span className="eg-spacer" />
+                  <Button size="sm" variant="ghost" onClick={() => nr.setOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button size="sm" variant="primary" onClick={nr.onSubmit} disabled={nr.submitting || !nr.text.trim() || !insightsSupported()}>
+                    {nr.submitting ? 'Adding…' : 'Add rule'}
+                  </Button>
+                </div>
+              </div>
+            )}
+            <LearnedRulesSection projectId={p.projectId} />
+          </section>
+          {p.items.length > 0 && (
+            <section className="eg-sgroup">
+              <h3 className="eg-sgroup-title">Older notes</h3>
+              <p className="eg-settings-groupdesc">
+                Lessons earlier versions of Ergo picked out of finished runs. The agent can still find them, but they aren't rules. Delete any that are wrong.
+              </p>
+              <div className="eg-srows">{p.items.map(renderItem)}</div>
+            </section>
+          )}
+        </>
+      )}
+
+      {p.page === 'memory' && (
+        <section className="eg-sgroup">
+          <h3 className="eg-sgroup-title">Agent notes</h3>
+          <p className="eg-settings-groupdesc">Plans, reports and completion records the agent saved for this project. It searches them before later tasks.</p>
+          {search('Search notes')}
+          {list('notes')}
+        </section>
+      )}
+
+      {p.restore && (
+        <Dialog
+          title="Restore?"
+          description={`"${p.restore.title}"`}
+          onClose={p.restore.onCancel}
+          width={440}
+          footer={
+            p.restore.canRestore ? (
+              <>
+                <Button variant="ghost" onClick={p.restore.onCancel}>
+                  Cancel
+                </Button>
+                <Button variant="primary" onClick={p.restore.onConfirm} disabled={p.restore.busy}>
+                  {p.restore.busy ? 'Restoring…' : 'Restore'}
+                </Button>
+              </>
+            ) : (
+              <Button onClick={p.restore.onCancel}>Close</Button>
+            )
+          }
+        >
+          <p className="eg-settings-dialogtext">{p.restore.message}</p>
+        </Dialog>
+      )}
+
+      {p.remove && (
+        <Dialog
+          title="Delete this item?"
+          description="It's deleted for good and the agent can't use it anymore."
+          onClose={p.remove.onCancel}
+          width={440}
+          footer={
+            <>
+              <Button variant="ghost" onClick={p.remove.onCancel}>
+                Cancel
+              </Button>
+              <Button variant="danger" onClick={p.remove.onConfirm} disabled={p.remove.busy}>
+                {p.remove.busy ? 'Deleting…' : 'Delete'}
+              </Button>
+            </>
+          }
+        >
+          <div className="eg-settings-quote">
+            {p.remove.text.slice(0, 240)}
+            {p.remove.text.length > 240 ? '…' : ''}
+          </div>
+        </Dialog>
+      )}
+    </div>
+  );
 };

@@ -1,0 +1,15 @@
+<!-- @dsCard group="Status" height=300 subtitle="No project, empty TODO.md, no runs" -->
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="root" style="padding:12px"></div>
+<script>
+var E = window.Ergo, h = React.createElement, F = React.Fragment;
+
+ReactDOM.createRoot(document.getElementById("root")).render(h("div",{style:{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:16,width:960}},
+  h(E.EmptyState,{icon:"folder-git-2",title:"Open a project",text:"Ergo keeps its tasks in a TODO.md inside your project folder.",actions:h(E.Button,{variant:"primary",icon:"folder"},"Open folder")}),
+  h(E.EmptyState,{icon:"file-text",title:"TODO.md is empty",text:"Start typing — [] makes a checklist item. Or describe the goal and let Ergo draft tasks for you to review.",actions:h(F,null,h(E.Button,{icon:"pencil"},"Start writing"),h(E.Button,{variant:"ghost",icon:"list-plus",kbd:["⇧","⌘","D"]},"Draft tasks"))}),
+  h(E.EmptyState,{icon:"history",title:"No runs yet",text:"When you run this task, the agent's output and changes are kept here.",actions:h(E.Button,{icon:"play",kbd:["⇧","⌘","↵"]},"Run task")})
+));
+</script>
+</body></html>

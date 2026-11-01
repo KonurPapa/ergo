@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   type ProjectData,
   type AIProviderConfig,
@@ -13,21 +13,10 @@ import { MarkdownRenderer } from './MarkdownRenderer';
 import { storageManager, DEFAULT_HUMAN_ASSISTANT_SKILL } from '../lib/storageManager';
 import { SUPPORTED_AI_PROVIDERS } from '../lib/aiProviders';
 import { guessRelevantToolsWithDetails, checkAllMcpUpdates } from '../lib/mcpClient';
+import { MOD, ENTER, isMod } from '../lib/shortcuts';
 import { TaskMcpToolsModal } from './TaskMcpToolsModal';
-import {
-  Sparkles,
-  X,
-  Check,
-  Loader2,
-  AlertTriangle,
-  Copy,
-  CheckCheck,
-  Layers,
-  CheckSquare,
-  Wrench,
-  RefreshCw,
-  Plus
-} from 'lucide-react';
+import { Check, Copy, Loader2, Plus, RefreshCw, RotateCcw, Wrench } from 'lucide-react';
+import { Banner, Button, Checkbox, Dialog, Icon, SegmentedControl } from './ui';
 
 interface HumanAiAssistantModalProps {
   isOpen: boolean;
@@ -40,27 +29,123 @@ interface HumanAiAssistantModalProps {
     result: HumanAiAssistantResult,
     confirmedDeletions: boolean
   ) => void;
+  /** Kept for the old slide-up drawer: the dialog floats, so it always reports 0. */
   onHeightChange?: (height: number) => void;
 }
 
-const INTENT_TABS: Array<{ id: HumanAiIntent; label: string; badge?: string; icon: any; placeholder: string; desc: string }> = [
+const INTENTS: Array<{ id: HumanAiIntent; label: string; title: string; placeholder: string }> = [
   {
     id: 'task',
-    label: 'Task',
-    badge: 'Single-Task',
-    icon: CheckSquare,
-    desc: 'e.g., Set up user authentication with OAuth and session tokens...',
-    placeholder: 'Create or modify a single task/subtasks — either the currently selected task, or a specific task you call out.'
+    label: 'One task',
+    title: 'Create or change a single task and its subtasks',
+    placeholder: 'Describe a task to add or change — the selected task, or one you name.'
   },
   {
     id: 'architect',
-    label: 'Architect',
-    badge: 'Multi-Task',
-    icon: Layers,
-    desc: 'e.g., Architect a complete billing system with Stripe integration, webhook routing, tiered plans, and invoice generation...',
-    placeholder: 'Create or modify numerous tasks. Treats all instructions as more general, high-level roadmaps.'
+    label: 'Several tasks',
+    title: 'Plan many tasks from a high-level roadmap',
+    placeholder: 'Describe a larger piece of work. Ergo breaks it into several tasks.'
   }
 ];
+
+// ── Draft review: the assistant returns a whole new TODO.md; the checklist lines it adds become proposals. ──
+
+const CHECK_LINE = /^(\s*)([-*+]|\d+[.)])\s+\[( |x|X)\]\s+(.*)$/;
+const HEADING_LINE = /^#{1,6}\s+(.*)$/;
+
+interface DraftItem {
+  /** Index of the line in the proposed markdown. */
+  line: number;
+  indent: number;
+  /** Everything before the title: indent, marker and checkbox. */
+  prefix: string;
+  title: string;
+  /** One line of context: where the task goes. */
+  where: string;
+}
+
+interface Draft {
+  lines: string[];
+  isNew: boolean[];
+  items: DraftItem[];
+  /** Lines of the current TODO.md the proposal no longer has. */
+  removed: number;
+}
+
+function buildDraft(current: string, proposed: string): Draft {
+  const counts = new Map<string, number>();
+  for (const l of current.split('\n')) {
+    const k = l.trim();
+    if (k) counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  const lines = proposed.split('\n');
+  const isNew: boolean[] = [];
+  const items: DraftItem[] = [];
+  const parents: Array<{ indent: number; title: string }> = [];
+  let heading: string | null = null;
+  lines.forEach((l, i) => {
+    const k = l.trim();
+    const left = counts.get(k) ?? 0;
+    if (k && left > 0) {
+      counts.set(k, left - 1);
+      isNew[i] = false;
+    } else {
+      isNew[i] = !!k;
+    }
+    const h = HEADING_LINE.exec(k);
+    if (h) {
+      heading = h[1];
+      parents.length = 0;
+    }
+    const m = CHECK_LINE.exec(l);
+    if (!m) return;
+    const indent = m[1].length;
+    while (parents.length && parents[parents.length - 1].indent >= indent) parents.pop();
+    const parent = parents[parents.length - 1];
+    if (isNew[i]) {
+      items.push({
+        line: i,
+        indent,
+        prefix: l.slice(0, l.length - m[4].length),
+        title: m[4],
+        where: parent ? `Subtask of “${parent.title}”` : heading ? `Under ${heading}` : 'At the top of TODO.md'
+      });
+    }
+    parents.push({ indent, title: m[4] });
+  });
+  let removed = 0;
+  counts.forEach((n) => (removed += n));
+  return { lines, isNew, items, removed };
+}
+
+/** Lines left out: each unchecked task plus the new lines nested under it. */
+function droppedLines(draft: Draft, rejected: Set<number>): Set<number> {
+  const drop = new Set<number>();
+  for (const it of draft.items) {
+    if (!rejected.has(it.line)) continue;
+    drop.add(it.line);
+    for (let j = it.line + 1; j < draft.lines.length; j++) {
+      const l = draft.lines[j];
+      if (!l.trim() || (l.match(/^\s*/)?.[0].length ?? 0) <= it.indent || !draft.isNew[j]) break;
+      drop.add(j);
+    }
+  }
+  return drop;
+}
+
+/** The proposed markdown with unchecked tasks (and the new lines nested under them) left out and edits applied. */
+function draftToMarkdown(draft: Draft, rejected: Set<number>, edits: Map<number, string>): string {
+  const drop = droppedLines(draft, rejected);
+  const byLine = new Map(draft.items.map((it) => [it.line, it]));
+  return draft.lines
+    .map((l, i) => {
+      const it = byLine.get(i);
+      const edit = edits.get(i);
+      return it && edit !== undefined ? it.prefix + edit : l;
+    })
+    .filter((_, i) => !drop.has(i))
+    .join('\n');
+}
 
 export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
   isOpen,
@@ -76,6 +161,15 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
   const [prompt, setPrompt] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [assistantResult, setAssistantResult] = useState<HumanAiAssistantResult | null>(null);
+  /** The prompt the shown draft came from: ⌘↵ adds the draft while the prompt is unchanged, else drafts again. */
+  const [draftedPrompt, setDraftedPrompt] = useState<string | null>(null);
+  /** Markdown the shown draft was compared against (TODO.md at drafting time). */
+  const [baseMarkdown, setBaseMarkdown] = useState('');
+  const [rejected, setRejected] = useState<Set<number>>(new Set());
+  const [edits, setEdits] = useState<Map<number, string>>(new Map());
+  const [editingLine, setEditingLine] = useState<number | null>(null);
+  const [editText, setEditText] = useState('');
+  const [failure, setFailure] = useState<string | null>(null);
 
   // Prompt history in sessionStorage (terminal-like Up/Down arrow recall)
   const [history, setHistory] = useState<string[]>(() => {
@@ -95,8 +189,7 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
   // Deletion confirmation permission state
   const [confirmDeletions, setConfirmDeletions] = useState(false);
   const [copiedReport, setCopiedReport] = useState(false);
-
-  // Model Name Resolvers
+  const promptRef = useRef<HTMLTextAreaElement>(null);
 
   const activeTaskModelName = useMemo(() => {
     const pMeta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === aiConfig.provider);
@@ -114,6 +207,11 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
       setConfirmDeletions(false);
     }
   }, [isOpen]);
+
+  // The dialog floats over the pane, so the pane never makes room for it.
+  useEffect(() => {
+    onHeightChange?.(0);
+  }, [isOpen, onHeightChange]);
 
   // Flatten available tools from connected MCP servers configured in global MCP page
   const connectedServers = useMemo(() => {
@@ -152,6 +250,11 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
     }
   }, [prompt, relevanceAnalysis, hasUserCustomizedTools, allAvailableTools]);
 
+  const draft = useMemo(
+    () => (assistantResult?.todoMarkdown && !assistantResult.aggregatedReport ? buildDraft(baseMarkdown, assistantResult.todoMarkdown) : null),
+    [assistantResult, baseMarkdown]
+  );
+
   const handleToggleTool = (toolName: string) => {
     setHasUserCustomizedTools(true);
     setSelectedToolNames((prev) => {
@@ -164,69 +267,30 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
 
   const handleQuickSyncTools = async () => {
     setIsSyncingTools(true);
-    setSyncFeedback('Calling tools/list…');
+    setSyncFeedback('Checking tools…');
     try {
       const res = await checkAllMcpUpdates(mcpServers);
       if (res.hasChanges) {
-        setSyncFeedback(res.summaryMessage || 'Tools updated!');
+        setSyncFeedback(res.summaryMessage || 'Tools updated.');
       } else {
         setSyncFeedback('Tools are up to date.');
       }
     } catch {
-      setSyncFeedback('Tool sync completed.');
+      setSyncFeedback('Tool check finished.');
     } finally {
       setIsSyncingTools(false);
       setTimeout(() => setSyncFeedback(null), 3000);
     }
   };
 
-  // Resizing state - default depth reduced by 30% (285 -> 220)
-  const [drawerHeight, setDrawerHeight] = useState<number>(220);
-  const [isDragging, setIsDragging] = useState(false);
-  const baseDrawerHeightRef = React.useRef<number>(220);
-
-  useEffect(() => {
-    if (onHeightChange) {
-      onHeightChange(isOpen ? drawerHeight : 0);
-    }
-  }, [isOpen, drawerHeight, onHeightChange]);
-
-  useEffect(() => {
-    if (!isDragging) return;
-
-    const handleMouseMove = (e: MouseEvent) => {
-      // Calculate new height from bottom of window / task pane
-      // The drawer sits at the bottom of the container
-      const newHeight = window.innerHeight - e.clientY - 53; // 53px is task footer height
-      const minHeight = 120;
-      const maxHeight = window.innerHeight * 0.9;
-      const clampedHeight = Math.max(minHeight, Math.min(newHeight, maxHeight));
-      setDrawerHeight(clampedHeight);
-      baseDrawerHeightRef.current = clampedHeight;
-    };
-
-    const handleMouseUp = () => {
-      setIsDragging(false);
-    };
-
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isDragging]);
-
   if (!isOpen) return null;
 
   const handleGenerate = async () => {
     const trimmed = prompt.trim();
-    if (!trimmed) return;
+    if (!trimmed || isLoading) return;
 
     // Push to sessionStorage history (terminal-like)
     setHistory((prev) => {
-      // Remove duplicate if it was immediately previous or exists
       const filtered = prev.filter((p) => p !== trimmed);
       const nextHistory = [...filtered, trimmed];
       try {
@@ -240,6 +304,10 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
     setIsLoading(true);
     setAssistantResult(null);
     setConfirmDeletions(false);
+    setFailure(null);
+    setRejected(new Set());
+    setEdits(new Map());
+    setEditingLine(null);
 
     try {
       const res = await runHumanAiAssistant(
@@ -251,14 +319,12 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
         connectedServers,
         skillDocContent || null
       );
-
+      setBaseMarkdown(todoMarkdown);
+      setDraftedPrompt(trimmed);
       setAssistantResult(res);
-
-      // Expand panel by 50% automatically when proposed changes arrive
-      const expandedHeight = Math.min(window.innerHeight * 0.9, Math.round(baseDrawerHeightRef.current * 1.5));
-      setDrawerHeight(expandedHeight);
     } catch (err) {
       console.error('Failed to run Human AI Assistant:', err);
+      setFailure(err instanceof Error ? err.message : String(err));
     } finally {
       setIsLoading(false);
     }
@@ -266,21 +332,34 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
 
   const handleDismiss = () => {
     setAssistantResult(null);
-    setDrawerHeight(baseDrawerHeightRef.current);
+    setDraftedPrompt(null);
+    setFailure(null);
     onClose();
   };
 
+  const dropped = draft ? droppedLines(draft, rejected) : new Set<number>();
+  const checkedCount = draft ? draft.items.filter((it) => !dropped.has(it.line)).length : 0;
+  const needsDeletionOk = !!assistantResult?.requiresDeletionApproval && !confirmDeletions;
+  const canApply = !!assistantResult && !needsDeletionOk && !(draft && draft.items.length > 0 && checkedCount === 0);
+
   const handleApply = () => {
-    if (assistantResult) {
-      onApplyAssistantResult({
+    if (!assistantResult || !canApply) return;
+    // A title still being edited counts too.
+    const finalEdits = new Map(edits);
+    if (editingLine !== null && editText.trim()) finalEdits.set(editingLine, editText.trim());
+    const todo = draft ? draftToMarkdown(draft, rejected, finalEdits) : assistantResult.todoMarkdown;
+    onApplyAssistantResult(
+      {
         ...assistantResult,
+        todoMarkdown: todo,
         selectedMcpTools: Array.from(selectedToolNames)
-      }, confirmDeletions);
-      setAssistantResult(null);
-      setPrompt('');
-      setDrawerHeight(baseDrawerHeightRef.current);
-      onClose();
-    }
+      },
+      confirmDeletions
+    );
+    setAssistantResult(null);
+    setDraftedPrompt(null);
+    setPrompt('');
+    onClose();
   };
 
   const handleCopyReport = () => {
@@ -291,137 +370,95 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
     }
   };
 
-  const currentTab = INTENT_TABS.find((t) => t.id === intent) || INTENT_TABS[0];
+  const toggleItem = (line: number) =>
+    setRejected((prev) => {
+      const next = new Set(prev);
+      if (next.has(line)) next.delete(line);
+      else next.add(line);
+      return next;
+    });
+
+  const startEdit = (it: DraftItem) => {
+    setEditingLine(it.line);
+    setEditText(edits.get(it.line) ?? it.title);
+  };
+
+  const commitEdit = () => {
+    if (editingLine === null) return;
+    const text = editText.trim();
+    const original = draft?.items.find((it) => it.line === editingLine)?.title;
+    setEdits((prev) => {
+      const next = new Map(prev);
+      if (!text || text === original) next.delete(editingLine);
+      else next.set(editingLine, text);
+      return next;
+    });
+    setEditingLine(null);
+  };
+
+  const currentIntent = INTENTS.find((t) => t.id === intent) || INTENTS[0];
+  const hasDraft = !!assistantResult;
+  const promptChanged = hasDraft && prompt.trim() !== draftedPrompt;
+
+  const addLabel = draft
+    ? draft.items.length > 0
+      ? `Add ${checkedCount} ${checkedCount === 1 ? 'task' : 'tasks'}`
+      : 'Apply changes'
+    : 'Apply changes';
+
+  const primary = hasDraft ? (
+    <Button variant="primary" size="lg" disabled={!canApply} onClick={handleApply} kbd={promptChanged ? undefined : [MOD, ENTER]}>
+      {addLabel}
+    </Button>
+  ) : (
+    <Button variant="primary" size="lg" disabled={isLoading || !prompt.trim()} onClick={handleGenerate} kbd={isLoading ? undefined : [MOD, ENTER]}>
+      {isLoading && <Loader2 size={14} strokeWidth={1.75} className="animate-spin" />}
+      {isLoading ? `Drafting with ${activeTaskModelName}…` : 'Draft'}
+    </Button>
+  );
+
+  const suggestedChips = allAvailableTools
+    .filter((t) => selectedToolNames.has(t.name) || relevanceAnalysis.selectedToolIds.includes(t.id))
+    .slice(0, 12);
 
   return (
-    <div className={`human-assistant-drawer-container ${isOpen ? 'is-open' : ''}`}>
-      {/* Slide-up drawer panel */}
-      <div
-        className="human-assistant-drawer-panel"
-        style={{ height: `${drawerHeight}px`, maxHeight: '90%' }}
-        onClick={(e) => e.stopPropagation()}
+    <>
+      <Dialog
+        title="Draft tasks"
+        description="Ergo proposes checklist items for TODO.md. Nothing is added or run until you approve."
+        onClose={isToolsModalOpen ? undefined : handleDismiss}
+        width={640}
+        className="dlg-draft"
+        footer={
+          <>
+            <span className="eg-subtle" style={{ fontSize: 'calc(12px * var(--type-scale))' }}>
+              {hasDraft ? 'Added as checklist lines in TODO.md.' : `${MOD}${ENTER} drafts · ↑ recalls earlier prompts`}
+            </span>
+            <span className="eg-spacer" />
+            <Button variant="ghost" size="lg" onClick={handleDismiss}>
+              {hasDraft ? 'Discard' : 'Cancel'}
+            </Button>
+            {primary}
+          </>
+        }
       >
-        {/* Resize Handle on Top Edge */}
         <div
-          className={`human-assistant-resize-handle ${isDragging ? 'is-dragging' : ''}`}
-          onMouseDown={(e) => {
-            e.preventDefault();
-            setIsDragging(true);
+          onKeyDown={(e) => {
+            // ⌘↵ outside the prompt adds the draft.
+            if (e.key === 'Enter' && isMod(e) && e.target !== promptRef.current && hasDraft) {
+              e.preventDefault();
+              handleApply();
+            }
           }}
-          title="Drag up or down to resize"
-        />
-
-        {/* Drawer Header / Bar */}
-        <div className="human-assistant-drawer-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flex: 1, minWidth: 0 }}>
-            <div
-              style={{
-                width: '26px',
-                height: '26px',
-                borderRadius: '6px',
-                background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-violet))',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0
-              }}
-            >
-              <Sparkles size={15} color="#fff" />
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-              <h3 style={{ fontSize: '0.95rem', fontWeight: 700, margin: 0, color: 'var(--text-bright)' }}>Task Assistant</h3>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <button
-              className="btn btn-primary"
-              onClick={handleGenerate}
-              disabled={isLoading || !prompt.trim()}
-              style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem', gap: '0.35rem' }}
-              title="Run AI Assistant (Ctrl+Enter)"
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 size={13} className="animate-spin" />
-                  <span>Processing ({activeTaskModelName})...</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles size={13} />
-                  <span>Run Assistant</span>
-                </>
-              )}
-            </button>
-            <button
-              className="btn btn-secondary"
-              style={{ padding: '0.25rem 0.45rem', fontSize: '0.75rem' }}
-              onClick={handleDismiss}
-              title="Close Assistant"
-            >
-              <X size={15} />
-            </button>
-          </div>
-        </div>
-
-        {/* Drawer Body */}
-        <div className="human-assistant-drawer-body">
-          {/* Mode Selection Tabs (Task vs Architect) */}
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.65rem' }}>
-            {INTENT_TABS.map((tab) => {
-              const Icon = tab.icon;
-              const isActive = intent === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setIntent(tab.id)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.45rem',
-                    padding: '0.35rem 0.75rem',
-                    borderRadius: 'var(--radius-md)',
-                    border: `1px solid ${isActive ? 'var(--accent-primary)' : 'var(--border-subtle)'}`,
-                    background: isActive ? 'rgba(99, 102, 241, 0.18)' : 'var(--bg-card)',
-                    color: isActive ? '#fff' : 'var(--text-muted)',
-                    fontWeight: isActive ? 600 : 500,
-                    fontSize: '0.8rem',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  <Icon size={14} color={isActive ? 'var(--accent-cyan)' : 'currentColor'} />
-                  <span>{tab.label}</span>
-                  {tab.badge && (
-                    <span
-                      style={{
-                        fontSize: '0.65rem',
-                        fontWeight: 600,
-                        padding: '0.1rem 0.35rem',
-                        borderRadius: '4px',
-                        background: isActive ? 'rgba(99, 102, 241, 0.3)' : 'rgba(255, 255, 255, 0.05)',
-                        color: isActive ? '#c7d2fe' : 'var(--text-dim)'
-                      }}
-                    >
-                      {tab.badge}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginBottom: '0.65rem' }}>
-            {currentTab.desc}
-          </div> */}
-
-          {/* Prompt Textarea */}
-          <div className="input-group" style={{ marginBottom: '0.75rem' }}>
+        >
+          <div className="eg-composer">
             <textarea
-              className="textarea-text"
+              ref={promptRef}
+              className="eg-composer-input dlg-composer-text"
               rows={3}
-              placeholder={currentTab.placeholder}
+              autoFocus
+              aria-label="What should Ergo draft?"
+              placeholder={currentIntent.placeholder}
               value={prompt}
               onChange={(e) => {
                 setPrompt(e.target.value);
@@ -430,16 +467,16 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
                 }
               }}
               onKeyDown={(e) => {
-                // Submit on Ctrl/Cmd + Enter
+                // ⌘↵ drafts; with a draft showing and the prompt unchanged it adds the draft.
                 if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                   e.preventDefault();
-                  handleGenerate();
+                  if (hasDraft && !promptChanged) handleApply();
+                  else handleGenerate();
                   return;
                 }
 
                 // Terminal-like Up arrow history recall
                 if (e.key === 'ArrowUp') {
-                  // Only cycle if cursor is on first line or selection is at start (or single line)
                   const target = e.currentTarget;
                   const isAtStart = target.selectionStart === 0 || !prompt.includes('\n');
                   if (isAtStart && history.length > 0) {
@@ -479,306 +516,206 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
                 handleMarkdownAutoWrap(e, setPrompt);
               }}
             />
+            <div className="eg-composer-foot">
+              <SegmentedControl<HumanAiIntent>
+                label="Draft size"
+                value={intent}
+                onChange={setIntent}
+                options={INTENTS.map((t) => ({ id: t.id, label: t.label, title: t.title }))}
+              />
+              <span className="eg-spacer" />
+              {hasDraft && (
+                <Button variant="ghost" size="sm" icon={isLoading ? undefined : RotateCcw} disabled={isLoading || !prompt.trim()} onClick={handleGenerate}>
+                  {isLoading && <Loader2 size={14} strokeWidth={1.75} className="animate-spin" />}
+                  Regenerate
+                </Button>
+              )}
+            </div>
           </div>
 
-          {/* MCP Tools Selection & Suggestion Bar */}
+          {/* Tools the new tasks may use */}
           {connectedServers.length > 0 && (
-            <div
-              style={{
-                marginBottom: '0.75rem',
-                padding: '0.55rem 0.75rem',
-                background: 'rgba(0, 0, 0, 0.22)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: 'var(--radius-md)'
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  marginBottom: '0.4rem',
-                  flexWrap: 'wrap',
-                  gap: '0.4rem'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-                  <Wrench size={13} color="var(--accent-primary)" />
-                  <span style={{ fontSize: '0.76rem', fontWeight: 600, color: 'var(--text-bright)' }}>
-                    Tools for Created Task:
-                  </span>
-                  <span
-                    style={{
-                      fontSize: '0.67rem',
-                      padding: '0.08rem 0.4rem',
-                      borderRadius: '10px',
-                      background: 'rgba(37, 99, 235, 0.15)',
-                      color: 'var(--accent-primary)',
-                      fontWeight: 600
-                    }}
-                  >
-                    {selectedToolNames.size} Enabled
-                  </span>
-                  {!hasUserCustomizedTools && relevanceAnalysis.selectedToolIds.length > 0 && (
-                    <span
-                      style={{
-                        fontSize: '0.65rem',
-                        color: 'var(--accent)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.2rem'
-                      }}
-                    >
-                      <Sparkles size={10} />
-                      Auto-Suggested from prompt
-                    </span>
-                  )}
-                  {syncFeedback && (
-                    <span style={{ fontSize: '0.68rem', color: 'var(--accent-cyan)' }}>
-                      • {syncFeedback}
-                    </span>
-                  )}
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                  <button
-                    type="button"
-                    onClick={handleQuickSyncTools}
-                    disabled={isSyncingTools}
-                    title="Run tools/list across connected MCPs"
-                    style={{
-                      fontSize: '0.7rem',
-                      padding: '0.2rem 0.45rem',
-                      borderRadius: '4px',
-                      background: 'var(--bg-card)',
-                      border: '1px solid var(--border-subtle)',
-                      color: 'var(--text-muted)',
-                      cursor: isSyncingTools ? 'not-allowed' : 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.25rem'
-                    }}
-                  >
-                    <RefreshCw size={10} className={isSyncingTools ? 'animate-spin' : ''} />
-                    <span>Sync</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setIsToolsModalOpen(true)}
-                    style={{
-                      fontSize: '0.7rem',
-                      padding: '0.2rem 0.55rem',
-                      borderRadius: '4px',
-                      background: 'var(--bg-card)',
-                      border: '1px solid var(--border-subtle)',
-                      color: 'var(--text-bright)',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.25rem'
-                    }}
-                  >
-                    <Plus size={11} />
-                    <span>All Tools ({allAvailableTools.length})</span>
-                  </button>
-                </div>
+            <div style={{ marginTop: 'var(--space-3)' }}>
+              <div className="eg-hstack" style={{ fontSize: 'calc(12px * var(--type-scale))', color: 'var(--ink-subtle)', flexWrap: 'wrap' }}>
+                <Icon icon={Wrench} size="sm" />
+                <span style={{ color: 'var(--ink-muted)', fontWeight: 500 }}>Tools for new tasks</span>
+                <span>{selectedToolNames.size} on</span>
+                {!hasUserCustomizedTools && relevanceAnalysis.selectedToolIds.length > 0 && <span>· suggested from your prompt</span>}
+                {syncFeedback && <span>· {syncFeedback}</span>}
+                <span className="eg-spacer" />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={RefreshCw}
+                  onClick={handleQuickSyncTools}
+                  disabled={isSyncingTools}
+                  title="Check connected MCP servers for new tools"
+                  className={isSyncingTools ? 'dlg-spin-icon' : undefined}
+                >
+                  Check for new tools
+                </Button>
+                <Button variant="ghost" size="sm" icon={Plus} onClick={() => setIsToolsModalOpen(true)}>
+                  All tools ({allAvailableTools.length})
+                </Button>
               </div>
-
-              {/* Tool Chips Preview */}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', maxHeight: '68px', overflowY: 'auto' }}>
-                {allAvailableTools
-                  .filter((t) => selectedToolNames.has(t.name) || relevanceAnalysis.selectedToolIds.includes(t.id))
-                  .slice(0, 12)
-                  .map((tool) => {
+              {suggestedChips.length > 0 && (
+                <div className="dlg-chips">
+                  {suggestedChips.map((tool) => {
                     const isChecked = selectedToolNames.has(tool.name);
                     const isSuggested = relevanceAnalysis.selectedToolIds.includes(tool.id);
-
                     return (
                       <button
                         key={tool.id}
                         type="button"
+                        className="dlg-chip"
+                        aria-pressed={isChecked}
+                        title={isSuggested ? 'Suggested from your prompt' : undefined}
                         onClick={() => handleToggleTool(tool.name)}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.3rem',
-                          padding: '0.18rem 0.45rem',
-                          borderRadius: '4px',
-                          fontSize: '0.7rem',
-                          fontFamily: 'var(--font-mono)',
-                          background: isChecked ? 'rgba(37, 99, 235, 0.18)' : 'rgba(255, 255, 255, 0.04)',
-                          border: `1px solid ${isChecked ? 'rgba(37, 99, 235, 0.45)' : 'rgba(255, 255, 255, 0.08)'}`,
-                          color: isChecked ? '#93c5fd' : 'var(--text-muted)',
-                          cursor: 'pointer',
-                          transition: 'all 0.12s ease'
-                        }}
                       >
-                        <span style={{ fontSize: '0.75rem', lineHeight: 1 }}>{isChecked ? '✓' : '+'}</span>
-                        <span>{tool.name}</span>
-                        {isSuggested && !isChecked && (
-                          <span style={{ fontSize: '0.6rem', color: 'var(--accent)' }}>✨</span>
-                        )}
+                        <Icon icon={isChecked ? Check : Plus} size="sm" />
+                        {tool.name}
                       </button>
                     );
                   })}
-                {allAvailableTools.length > 12 && (
-                  <button
-                    type="button"
-                    onClick={() => setIsToolsModalOpen(true)}
-                    style={{
-                      fontSize: '0.68rem',
-                      padding: '0.18rem 0.45rem',
-                      borderRadius: '4px',
-                      background: 'none',
-                      border: 'none',
-                      color: 'var(--text-dim)',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    +{allAvailableTools.length - 12} more…
-                  </button>
-                )}
-              </div>
+                  {allAvailableTools.length > 12 && (
+                    <Button variant="ghost" size="sm" onClick={() => setIsToolsModalOpen(true)}>
+                      {allAvailableTools.length - 12} more
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
-          {/* Results Preview */}
-          {assistantResult && (
-            <div style={{ background: 'var(--bg-darkest)', border: '1px solid var(--border-glow)', borderRadius: 'var(--radius-md)', padding: '1rem', marginTop: '0.75rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.65rem' }}>
-                <h4 style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
-                  <Check size={15} />
-                  <span>Assistant Plan & Preview</span>
-                </h4>
-                {assistantResult.summary && (
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                    {assistantResult.summary}
-                  </span>
-                )}
+          {failure && (
+            <div style={{ marginTop: 'var(--space-4)' }}>
+              <Banner
+                tone="warning"
+                title="Ergo couldn’t draft tasks this time"
+                text={`${failure} Your prompt is still here — try again, or check the model in Settings.`}
+              />
+            </div>
+          )}
+
+          {/* Proposed tasks */}
+          {draft && (
+            <>
+              <div className="eg-section-label" style={{ marginTop: 'var(--space-5, 20px)' }}>
+                {draft.items.length > 0
+                  ? `${draft.items.length} proposed ${draft.items.length === 1 ? 'task' : 'tasks'}`
+                  : 'Proposed changes'}
+                <span className="eg-spacer" />
+                <span>{activeTaskModelName}</span>
               </div>
-
-              {/* 1. Aggregated Report Section */}
-              {assistantResult.aggregatedReport && (
-                <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', padding: '0.85rem', marginBottom: '0.85rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.45rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.35rem' }}>
-                    <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-bright)' }}>📊 Summary Report</span>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem', gap: '0.25rem' }}
-                      onClick={handleCopyReport}
-                    >
-                      {copiedReport ? <CheckCheck size={11} color="var(--accent-emerald)" /> : <Copy size={11} />}
-                      <span>{copiedReport ? 'Copied!' : 'Copy Markdown'}</span>
-                    </button>
-                  </div>
-                  <div style={{ fontSize: '0.82rem', color: 'var(--text-normal)', maxHeight: '200px', overflowY: 'auto' }}>
-                    <MarkdownRenderer content={assistantResult.aggregatedReport} />
-                  </div>
+              {assistantResult?.summary && (
+                <p style={{ margin: '0 0 var(--space-2)', fontSize: 'calc(12px * var(--type-scale))', lineHeight: 'calc(16px * var(--type-scale))' }}>{assistantResult.summary}</p>
+              )}
+              {draft.items.length > 0 ? (
+                <div className="eg-draft">
+                  {draft.items.map((it) => {
+                    const off = dropped.has(it.line);
+                    /** Left out because a parent task is unchecked. */
+                    const offByParent = off && !rejected.has(it.line);
+                    const editing = editingLine === it.line;
+                    const title = edits.get(it.line) ?? it.title;
+                    return (
+                      <div key={it.line} className={`eg-draft-item ${off ? 'is-rejected' : ''} ${editing ? 'is-editing' : ''}`}>
+                        <Checkbox checked={!off} disabled={offByParent} onChange={() => toggleItem(it.line)} aria-label={`Include “${title}”`} />
+                        <div style={{ minWidth: 0 }}>
+                          {editing ? (
+                            <input
+                              className="dlg-draft-edit"
+                              value={editText}
+                              autoFocus
+                              aria-label="Task title"
+                              onChange={(e) => setEditText(e.target.value)}
+                              onBlur={commitEdit}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !isMod(e)) {
+                                  e.preventDefault();
+                                  commitEdit();
+                                } else if (e.key === 'Escape') {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setEditingLine(null);
+                                }
+                              }}
+                            />
+                          ) : (
+                            <div
+                              className="eg-draft-title dlg-draft-title"
+                              role="button"
+                              tabIndex={0}
+                              title="Click to edit"
+                              onClick={() => startEdit(it)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !isMod(e)) {
+                                  e.preventDefault();
+                                  startEdit(it);
+                                }
+                              }}
+                            >
+                              {title}
+                            </div>
+                          )}
+                          <div className="eg-draft-why">{offByParent ? 'Left out with its parent task' : off ? 'Left out' : it.where}</div>
+                        </div>
+                        <span />
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="dlg-code-well">
+                  <pre>{assistantResult?.todoMarkdown}</pre>
                 </div>
               )}
-
-              {/* 2. Markdown Changes Preview */}
-              {!assistantResult.aggregatedReport && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', marginBottom: '0.85rem' }}>
-
-                  {assistantResult.todoMarkdown && (
-                    <div style={{ background: 'var(--bg-card)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: 'var(--radius-sm)', padding: '0.65rem' }}>
-                      <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent-emerald)', marginBottom: '0.4rem' }}>
-                        Proposed TODO.md Changes
-                      </div>
-                      <pre style={{ margin: 0, padding: '0.45rem', background: 'var(--bg-darkest)', borderRadius: 'var(--radius-sm)', fontSize: '0.72rem', fontFamily: 'var(--font-mono)', color: 'var(--text-normal)', maxHeight: '220px', overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
-                        {assistantResult.todoMarkdown}
-                      </pre>
-                    </div>
-                  )}
-
-                </div>
+              {draft.removed > 0 && !assistantResult?.requiresDeletionApproval && (
+                <p className="eg-subtle" style={{ margin: 'var(--space-2) 0 0', fontSize: 'calc(12px * var(--type-scale))' }}>
+                  The draft also changes or removes {draft.removed} existing {draft.removed === 1 ? 'line' : 'lines'}.
+                </p>
               )}
+            </>
+          )}
 
-              {/* 3. Mandatory Deletion Confirmation Prompt */}
-              {assistantResult.requiresDeletionApproval && (
-                <div
-                  style={{
-                    background: 'rgba(239, 68, 68, 0.08)',
-                    border: '1px solid rgba(239, 68, 68, 0.4)',
-                    borderRadius: 'var(--radius-sm)',
-                    padding: '0.8rem 0.85rem',
-                    marginBottom: '0.85rem'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#f87171', fontWeight: 700, fontSize: '0.82rem', marginBottom: '0.35rem' }}>
-                    <AlertTriangle size={16} />
-                    <span>Permission Required for Deletions</span>
-                  </div>
-                  <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-                    The AI has proposed deleting tasks. Please confirm before applying.
-                    {assistantResult.deletionReason && (
-                      <div style={{ marginTop: '0.4rem', fontSize: '0.76rem', color: 'var(--text-normal)', background: 'rgba(0,0,0,0.2)', padding: '0.4rem', borderRadius: '4px' }}>
-                        <strong>Reason:</strong> {assistantResult.deletionReason}
-                      </div>
-                    )}
-                  </div>
+          {/* Report-only results */}
+          {assistantResult?.aggregatedReport && (
+            <>
+              <div className="eg-section-label" style={{ marginTop: 'var(--space-5, 20px)' }}>
+                Summary
+                <span className="eg-spacer" />
+                <Button variant="ghost" size="sm" icon={copiedReport ? Check : Copy} onClick={handleCopyReport}>
+                  {copiedReport ? 'Copied' : 'Copy markdown'}
+                </Button>
+              </div>
+              <div className="eg-md dlg-report">
+                <MarkdownRenderer content={assistantResult.aggregatedReport} />
+              </div>
+            </>
+          )}
 
-                  <label
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.45rem',
-                      cursor: 'pointer',
-                      fontSize: '0.78rem',
-                      fontWeight: 600,
-                      color: confirmDeletions ? '#f87171' : 'var(--text-normal)',
-                      background: 'rgba(239, 68, 68, 0.1)',
-                      padding: '0.35rem 0.55rem',
-                      borderRadius: 'var(--radius-sm)',
-                      width: 'fit-content'
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={confirmDeletions}
-                      onChange={(e) => setConfirmDeletions(e.target.checked)}
-                      style={{ cursor: 'pointer' }}
-                    />
-                    <span>I confirm and authorize the deletion of these tasks.</span>
+          {assistantResult && !assistantResult.todoMarkdown && !assistantResult.aggregatedReport && assistantResult.summary && (
+            <p style={{ margin: 'var(--space-4) 0 0' }}>{assistantResult.summary}</p>
+          )}
+
+          {/* Deletions need an explicit yes */}
+          {assistantResult?.requiresDeletionApproval && (
+            <div style={{ marginTop: 'var(--space-4)' }}>
+              <Banner
+                tone="warning"
+                title="This draft removes tasks from TODO.md"
+                text={assistantResult.deletionReason ? `Reason given: ${assistantResult.deletionReason}` : 'Check that you want them gone before adding the draft.'}
+                actions={
+                  <label className="eg-hstack" style={{ cursor: 'pointer', color: 'var(--ink)' }}>
+                    <Checkbox checked={confirmDeletions} onChange={(e) => setConfirmDeletions(e.target.checked)} />
+                    <span>Remove those tasks too</span>
                   </label>
-                  {!confirmDeletions && (
-                    <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)', marginTop: '0.25rem' }}>
-                      ℹ️ Check this box to proceed with deletions.
-                    </div>
-                  )}
-                </div>
-              )}
+                }
+              />
             </div>
           )}
         </div>
-
-        {/* Drawer Action Bar / Footer */}
-        <div className="human-assistant-drawer-footer">
-          {/* <button className="btn btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }} onClick={onClose}>
-            Close
-          </button> */}
-          {assistantResult && (
-            <button
-              className="btn btn-emerald"
-              style={{ padding: '0.35rem 0.85rem', fontSize: '0.8rem' }}
-              disabled={assistantResult.requiresDeletionApproval && !confirmDeletions}
-              onClick={handleApply}
-            >
-              <Check size={15} />
-              <span>
-                {assistantResult.requiresDeletionApproval
-                  ? confirmDeletions
-                    ? 'Approve & Apply All Changes'
-                    : 'Must Approve Deletions First'
-                  : 'Apply Changes'}
-              </span>
-            </button>
-          )}
-        </div>
-      </div>
+      </Dialog>
 
       {isToolsModalOpen && (
         <TaskMcpToolsModal
@@ -786,7 +723,7 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
           onClose={() => setIsToolsModalOpen(false)}
           task={{
             id: 'draft',
-            title: prompt.slice(0, 50) || 'New Draft Task',
+            title: prompt.slice(0, 50) || 'New draft task',
             category: 'Tasks',
             status: 'not_started',
             isDone: false,
@@ -800,6 +737,6 @@ export const HumanAiAssistantModal: React.FC<HumanAiAssistantModalProps> = ({
           }}
         />
       )}
-    </div>
+    </>
   );
 };

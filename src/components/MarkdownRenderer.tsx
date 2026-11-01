@@ -27,7 +27,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
 
   return (
     <div
-      className={`markdown-styled-content ${inline ? 'inline-mode' : ''} ${className}`}
+      className={`markdown-styled-content ${inline ? 'inline-mode' : 'eg-md'} ${className}`}
       style={style}
     >
       <ReactMarkdown
@@ -145,9 +145,9 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
               return (
                 <span className="md-checkbox-icon">
                   {checked ? (
-                    <CheckSquare size={14} color="var(--accent-emerald)" />
+                    <CheckSquare size={14} strokeWidth={1.75} color="var(--accent-text)" />
                   ) : (
-                    <Square size={14} color="var(--text-dim)" />
+                    <Square size={14} strokeWidth={1.75} color="var(--line-control)" />
                   )}
                 </span>
               );

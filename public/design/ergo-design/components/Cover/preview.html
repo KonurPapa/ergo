@@ -1,0 +1,35 @@
+<!-- @dsCard height=300 -->
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: var(--canvas); }
+  .cv { position: relative; width: 960px; height: 300px; overflow: hidden; background: var(--canvas); }
+  svg { position: absolute; inset: 0; }
+  .b { rx: var(--radius-md); ry: var(--radius-md); }
+  .accent { fill: var(--accent); }
+  .ink { fill: var(--ink); }
+  .s3 { fill: var(--surface-3); }
+  .tint { fill: var(--accent-text); }
+  .ok { fill: var(--success); }
+  .dot { fill: var(--line-control); }
+  .txt { position: absolute; left: 48px; bottom: 40px; max-width: 440px; }
+  .name { margin: 0; font-family: var(--font-sans); font-weight: 600; font-size: 120px; line-height: .92; letter-spacing: -4px; color: var(--ink); }
+  .tag { margin: 14px 0 0; font-family: var(--font-sans); font-size: 13px; line-height: 20px; color: var(--ink-subtle); }
+</style></head>
+<body><div class="cv">
+<svg viewBox="0 0 960 300" width="960" height="300" aria-hidden="true">
+<!--
+blocks: accent 432x48 (bleeds right), ink 240x48, surface-3 320x48, accent-text 160x48, success disc 48 (radius-full) — rows of a task list
+arrangement: a left-aligned stack of unequal bands at x=528, pitched size-row-ish 56 (48 + space-2), the top band bleeding off the right edge
+pattern: dot grid, row "precise, technical, mono, a 4px grid" — Ergo is a dense keyboard-first developer tool; dots in line-control at space-4 pitch, 6x8 = 48 units
+scales: band height space-12 (48px), gap space-2 (8px), dot pitch space-4 (16px), band corners radius-md (8px), disc radius-full
+-->
+<rect class="b accent" x="528" y="48" width="440" height="48"/>
+<rect class="b ink" x="528" y="104" width="240" height="48"/>
+<circle class="ok" cx="800" cy="128" r="24"/>
+<rect class="b s3" x="528" y="160" width="320" height="48"/>
+<rect class="b tint" x="528" y="216" width="160" height="48"/>
+<circle class="dot" cx="872" cy="176" r="1.5"/><circle class="dot" cx="872" cy="192" r="1.5"/><circle class="dot" cx="872" cy="208" r="1.5"/><circle class="dot" cx="872" cy="224" r="1.5"/><circle class="dot" cx="872" cy="240" r="1.5"/><circle class="dot" cx="872" cy="256" r="1.5"/><circle class="dot" cx="872" cy="272" r="1.5"/><circle class="dot" cx="872" cy="288" r="1.5"/><circle class="dot" cx="888" cy="176" r="1.5"/><circle class="dot" cx="888" cy="192" r="1.5"/><circle class="dot" cx="888" cy="208" r="1.5"/><circle class="dot" cx="888" cy="224" r="1.5"/><circle class="dot" cx="888" cy="240" r="1.5"/><circle class="dot" cx="888" cy="256" r="1.5"/><circle class="dot" cx="888" cy="272" r="1.5"/><circle class="dot" cx="888" cy="288" r="1.5"/><circle class="dot" cx="904" cy="176" r="1.5"/><circle class="dot" cx="904" cy="192" r="1.5"/><circle class="dot" cx="904" cy="208" r="1.5"/><circle class="dot" cx="904" cy="224" r="1.5"/><circle class="dot" cx="904" cy="240" r="1.5"/><circle class="dot" cx="904" cy="256" r="1.5"/><circle class="dot" cx="904" cy="272" r="1.5"/><circle class="dot" cx="904" cy="288" r="1.5"/><circle class="dot" cx="920" cy="176" r="1.5"/><circle class="dot" cx="920" cy="192" r="1.5"/><circle class="dot" cx="920" cy="208" r="1.5"/><circle class="dot" cx="920" cy="224" r="1.5"/><circle class="dot" cx="920" cy="240" r="1.5"/><circle class="dot" cx="920" cy="256" r="1.5"/><circle class="dot" cx="920" cy="272" r="1.5"/><circle class="dot" cx="920" cy="288" r="1.5"/><circle class="dot" cx="936" cy="176" r="1.5"/><circle class="dot" cx="936" cy="192" r="1.5"/><circle class="dot" cx="936" cy="208" r="1.5"/><circle class="dot" cx="936" cy="224" r="1.5"/><circle class="dot" cx="936" cy="240" r="1.5"/><circle class="dot" cx="936" cy="256" r="1.5"/><circle class="dot" cx="936" cy="272" r="1.5"/><circle class="dot" cx="936" cy="288" r="1.5"/><circle class="dot" cx="952" cy="176" r="1.5"/><circle class="dot" cx="952" cy="192" r="1.5"/><circle class="dot" cx="952" cy="208" r="1.5"/><circle class="dot" cx="952" cy="224" r="1.5"/><circle class="dot" cx="952" cy="240" r="1.5"/><circle class="dot" cx="952" cy="256" r="1.5"/><circle class="dot" cx="952" cy="272" r="1.5"/><circle class="dot" cx="952" cy="288" r="1.5"/>
+</svg>
+<div class="txt"><h1 class="name">Ergo</h1><p class="tag">Calm, dense UI for a human and an AI agent working from one task list.</p></div>
+</div></body></html>

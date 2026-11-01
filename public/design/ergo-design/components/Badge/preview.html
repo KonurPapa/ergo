@@ -1,0 +1,14 @@
+<!-- @dsCard group="Status" height=90 subtitle="Neutral, outline, accent and semantic tones" -->
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="root" style="padding:20px;display:flex;flex-wrap:wrap;gap:12px;align-items:center"></div>
+<script>
+var E = window.Ergo, h = React.createElement, F = React.Fragment;
+
+ReactDOM.createRoot(document.getElementById("root")).render(h(F,null,
+  h(E.Badge,null,"Frontend"), h(E.Badge,{outline:true},"Queued #2"), h(E.Badge,{tone:"accent",icon:"cpu"},"Auto"),
+  h(E.Badge,{tone:"success",icon:"check"},"Passed"), h(E.Badge,{tone:"warning",icon:"circle-pause"},"Needs approval"), h(E.Badge,{tone:"danger",icon:"circle-x"},"Failed")
+));
+</script>
+</body></html>

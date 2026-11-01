@@ -3677,7 +3677,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       const failToast = () =>
         depsRef.current.showToast({
           type: 'error',
-          title: 'Agent Failed to Start',
+          title: 'Agent failed to start',
           message: `"${task.title}": ${res.error}`,
           duration: 8000,
         });

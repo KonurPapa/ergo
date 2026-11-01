@@ -1,0 +1,16 @@
+<!-- @dsCard group="Actions" height=150 subtitle="Primary, secondary, ghost, danger; icon buttons" -->
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="root" style="padding:20px;display:flex;flex-wrap:wrap;gap:12px;align-items:center"></div>
+<script>
+var E = window.Ergo, h = React.createElement, F = React.Fragment;
+
+var col = function(){ return h.apply(null, ["div", {style:{display:"flex",gap:8,alignItems:"center"}}].concat([].slice.call(arguments))); };
+ReactDOM.createRoot(document.getElementById("root")).render(h("div",{style:{display:"flex",flexDirection:"column",gap:12}},
+  col(h(E.Button,{variant:"primary",icon:"play",kbd:["⇧","⌘","↵"]},"Run"), h(E.Button,{icon:"list-plus"},"Draft tasks"), h(E.Button,{variant:"ghost",icon:"history"},"History"), h(E.Button,{variant:"danger",icon:"square"},"Stop")),
+  col(h(E.Button,{variant:"primary",size:"sm"},"Approve 4"), h(E.Button,{size:"sm"},"Edit"), h(E.Button,{variant:"ghost",size:"sm"},"Discard"), h(E.Button,{size:"sm",disabled:true},"Disabled")),
+  col(h(E.IconButton,{icon:"ellipsis",label:"More"}), h(E.IconButton,{icon:"panel-right",label:"Toggle detail"}), h(E.IconButton,{icon:"settings",label:"Settings",variant:"secondary"}), h(E.IconButton,{icon:"x",label:"Close",size:"sm"}))
+));
+</script>
+</body></html>

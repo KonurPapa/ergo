@@ -1,0 +1,58 @@
+<!-- @dsCard group="Screens" height=760 width=1280 page subtitle="Settings as a page: Models with Auto/Manual" -->
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div class="eg-app"><header class="eg-topbar">
+  <span class="eg-brand"><span class="eg-brand-mark" aria-hidden="true">E</span>Ergo</span>
+  <span class="eg-crumb-sep">/</span>
+  <button class="eg-btn eg-btn-ghost" style="color:var(--ink)"><i data-i="folder-git-2"></i>Ergo Todos<i data-i="chevron-down"></i></button>
+  <span class="eg-spacer"></span>
+  <div class="eg-input-wrap" style="width:340px"><i data-i="search"></i><input class="eg-input" style="background:var(--canvas);border-color:var(--line-strong)" placeholder="Search tasks or run a command"><span class="eg-kbds" style="position:absolute;right:6px"><kbd class="eg-kbd">⌘</kbd><kbd class="eg-kbd">K</kbd></span></div>
+  <span class="eg-spacer"></span>
+  <button class="eg-btn eg-btn-ghost"><i data-i="list-plus"></i>Draft tasks<span class="eg-kbds"><kbd class="eg-kbd">⇧</kbd><kbd class="eg-kbd">⌘</kbd><kbd class="eg-kbd">D</kbd></span></button>
+    <button class="eg-btn eg-btn-ghost eg-btn-icon" aria-label="Toggle detail pane"><i data-i="panel-right"></i></button>
+  <button class="eg-btn eg-btn-ghost eg-btn-icon" aria-label="Settings"><i data-i="settings"></i></button>
+</header>
+<main class="eg-settings">
+  <nav class="eg-snav" aria-label="Settings">
+    <button class="eg-btn eg-btn-ghost eg-btn-sm" style="margin:0 0 8px"><i data-i="chevron-left"></i>Back to tasks</button>
+    <div class="eg-snav-label">Project · Ergo Todos</div>
+    <button class="eg-snav-item"><i data-i="settings"></i>General</button><button class="eg-snav-item"><i data-i="folder"></i>Folders</button><button class="eg-snav-item"><i data-i="scroll-text"></i>Rules</button><button class="eg-snav-item"><i data-i="library"></i>Memory</button><button class="eg-snav-item"><i data-i="archive"></i>Archive</button>
+    <div class="eg-snav-label">Agents</div>
+    <button class="eg-snav-item" aria-current="page"><i data-i="cpu"></i>Models</button><button class="eg-snav-item"><i data-i="shield"></i>Permissions</button><button class="eg-snav-item"><i data-i="slash"></i>Skills</button>
+    <div class="eg-snav-label">App</div>
+    <button class="eg-snav-item"><i data-i="puzzle"></i>Integrations</button><button class="eg-snav-item"><i data-i="plug"></i>Bridge</button><button class="eg-snav-item"><i data-i="sun"></i>Appearance</button><button class="eg-snav-item"><i data-i="keyboard"></i>Shortcuts</button>
+  </nav>
+  <section class="eg-scontent"><div class="eg-scontent-inner">
+    <h1 class="eg-spage-title">Models</h1>
+    <p class="eg-spage-desc">Which agent runs your tasks, and how Ergo picks a model for each stage.</p>
+    <div class="eg-sgroup"><h2 class="eg-sgroup-title">Agent</h2><div class="eg-srows">
+      <div class="eg-srow"><div class="eg-srow-text"><div class="eg-srow-title">Provider</div><div class="eg-srow-help">Runs through the bridge using the CLI's own login.</div></div><button class="eg-select"><span class="eg-dot eg-dot-success"></span>Claude Code · Subscription<i data-i="chevron-down"></i></button></div>
+      <div class="eg-srow"><div class="eg-srow-text"><div class="eg-srow-title">Selection</div><div class="eg-srow-help">Auto picks a model per stage from price and task difficulty.</div></div><div class="eg-seg" role="radiogroup"><button class="eg-seg-item" aria-checked="false">Auto</button><button class="eg-seg-item" aria-checked="true">Manual</button></div></div>
+      <div class="eg-srow"><div class="eg-srow-text"><div class="eg-srow-title">Effort</div><div class="eg-srow-help">Higher effort uses stronger models and more reasoning. Applies from the next run.</div></div><div class="eg-seg" role="radiogroup"><button class="eg-seg-item" aria-checked="false">Low</button><button class="eg-seg-item" aria-checked="true">Medium</button><button class="eg-seg-item" aria-checked="false">High</button><button class="eg-seg-item" aria-checked="false">Max</button></div></div>
+    </div></div>
+    <div class="eg-sgroup"><h2 class="eg-sgroup-title">Stages <span class="eg-subtle" style="font-weight:400">· Manual</span></h2>
+      <div style="border-top:1px solid var(--line)">
+        <div class="eg-stage"><span class="eg-stage-name">Plan &amp; verify</span><span class="eg-subtle" style="font-size:12px">Drafts tasks, writes briefs, checks results</span><button class="eg-select">Opus 5.5<i data-i="chevron-down"></i></button></div>
+        <div class="eg-stage"><span class="eg-stage-name">Work</span><span class="eg-subtle" style="font-size:12px">Edits code and runs commands</span><button class="eg-select">Sonnet 5.5<i data-i="chevron-down"></i></button></div>
+        <div class="eg-stage"><span class="eg-stage-name">Summarize</span><span class="eg-subtle" style="font-size:12px">Completion notes and run summaries</span><button class="eg-select">Sonnet 5.5<i data-i="chevron-down"></i></button></div>
+        <div class="eg-stage"><span class="eg-stage-name">Background</span><span class="eg-subtle" style="font-size:12px">Autocomplete, cleanup, logging</span><button class="eg-select">Haiku 5.5<i data-i="chevron-down"></i></button></div>
+      </div>
+      <p class="eg-subtle" style="font-size:12px;margin:10px 0 0">Override for one run from the model button beside Run.</p>
+    </div>
+    <div class="eg-sgroup"><h2 class="eg-sgroup-title">Other providers</h2><div class="eg-srows">
+      <div class="eg-srow"><div class="eg-srow-text"><div class="eg-srow-title">Gemini CLI</div><div class="eg-srow-help">Not set up</div></div><button class="eg-btn eg-btn-secondary eg-btn-sm">Connect</button></div>
+      <div class="eg-srow"><div class="eg-srow-text"><div class="eg-srow-title">Local model · Ollama</div><div class="eg-srow-help">llama3.3:70b on localhost:11434</div></div><input type="checkbox" role="switch" class="eg-switch" checked aria-label="Enable Ollama"></div>
+    </div></div>
+  </div></section>
+</main>
+<footer class="eg-statusbar">
+  <button class="eg-sb-item"><span class="eg-dot eg-dot-success"></span>Bridge</button>
+  <button class="eg-sb-item"><i data-i="cpu" class="eg-icon-sm"></i>Claude Code · Auto</button>
+  
+  <span class="eg-spacer"></span>
+  <button class="eg-sb-item"><i data-i="layers" class="eg-icon-sm"></i>2 queued</button>
+  <span class="eg-sb-item" style="cursor:default"><i data-i="check" class="eg-icon-sm"></i>Saved to TODO.md</span>
+</footer></div>
+<script>window.Ergo.hydrateIcons();</script>
+</body></html>

@@ -68,29 +68,14 @@ export const BridgeUpdateBanner: React.FC<{ status: BridgeStatus }> = ({ status 
   if (!outdated) return null;
   const { text, busy, offerDownload } = describe(info);
   return (
-    <div
-      role="status"
-      style={{
-        background: 'linear-gradient(90deg, rgba(59, 130, 246, 0.16) 0%, rgba(99, 102, 241, 0.12) 100%)',
-        borderBottom: '1px solid rgba(59, 130, 246, 0.35)',
-        padding: '0.45rem 1.25rem',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: '1rem',
-        zIndex: 40,
-        fontSize: '0.8rem',
-        color: 'var(--text-bright)',
-        flexWrap: 'wrap',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-        {busy ? <Loader2 size={14} className="spin-animate" color="#60a5fa" /> : <ArrowDownCircle size={14} color="#60a5fa" />}
-        <span>{text}</span>
-      </div>
-      {offerDownload && getBridgeDownload() && (
-        <BridgeDownloadButton style={{ fontSize: '0.74rem', fontWeight: 700, padding: '0.35rem 0.75rem' }} />
+    <div className={`dlg-strip ${offerDownload ? 'dlg-strip-warning' : ''}`} role="status">
+      {busy ? (
+        <Loader2 size={14} strokeWidth={1.75} className="spin-animate dlg-strip-icon" aria-hidden="true" />
+      ) : (
+        <ArrowDownCircle size={14} strokeWidth={1.75} className="dlg-strip-icon" aria-hidden="true" />
       )}
+      <span className="dlg-strip-text">{text}</span>
+      {offerDownload && getBridgeDownload() && <BridgeDownloadButton subtle size="sm" />}
     </div>
   );
 };

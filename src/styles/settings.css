@@ -1,0 +1,87 @@
+/* Settings page (SettingsScreen) — additions to the eg-settings classes in ergo.css. Tokens only. */
+
+/* Fill the app frame's body area; the nav and the content scroll on their own. */
+.eg-settings { height: 100%; min-height: 0; grid-template-rows: minmax(0, 1fr); background: var(--canvas); color: var(--ink); }
+.eg-settings .eg-snav,
+.eg-settings .eg-scontent { min-height: 0; }
+.eg-settings-back { margin: 0 0 var(--space-2); }
+.eg-settings .eg-snav-item .eg-icon svg { width: 14px; height: 14px; }
+
+/* Group header with a trailing action, and a short paragraph under a group title. */
+.eg-settings-grouphead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-2); }
+.eg-settings-grouphead .eg-sgroup-title { margin: 0; }
+.eg-settings-groupdesc { margin: 0 0 var(--space-3); color: var(--ink-subtle); font-size: calc(12px * var(--type-scale)); line-height: calc(16px * var(--type-scale)); }
+.eg-settings-after { margin: var(--space-3) 0 0; }
+.eg-settings-banner { margin-top: var(--space-6); }
+
+/* Row helpers. */
+.eg-settings-top { align-items: flex-start; }
+.eg-settings-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; flex-shrink: 0; }
+.eg-settings-end { justify-content: flex-end; }
+.eg-settings-inline { display: inline-flex; align-items: center; gap: 6px; }
+.eg-settings-note { color: var(--ink-subtle); font-weight: 400; font-size: calc(12px * var(--type-scale)); }
+.eg-settings-mono { font-family: var(--font-mono); font-size: calc(12px * var(--type-scale)); line-height: calc(18px * var(--type-scale)); overflow-wrap: anywhere; }
+.eg-srow-help .eg-settings-mono { font-size: calc(11px * var(--type-scale)); line-height: calc(16px * var(--type-scale)); }
+.eg-settings-ok { color: var(--success); }
+.eg-settings-bad { color: var(--danger); }
+.eg-settings-label { color: var(--ink-subtle); font-size: calc(12px * var(--type-scale)); font-weight: 500; margin-top: var(--space-2); }
+.eg-settings-logo { width: 16px; height: 16px; object-fit: contain; flex-shrink: 0; }
+.eg-srow .eg-srow-help a { color: var(--accent-text); }
+
+/* Nested content inside a row: tool lists, skill instructions, inline editors. */
+.eg-settings-sub { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); }
+.eg-settings-subrow { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) 0; border-top: 1px solid var(--line); }
+.eg-settings-subrow:first-child { border-top: 0; }
+.eg-settings-pre {
+  margin: 0; padding: var(--space-2) var(--space-3); max-height: 240px; overflow: auto;
+  background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius-md);
+  color: var(--ink-muted); font-family: var(--font-mono); font-size: calc(12px * var(--type-scale)); line-height: calc(18px * var(--type-scale)); white-space: pre-wrap;
+}
+
+/* Inline forms (add folder, add server, add rule). */
+.eg-settings-form { display: flex; align-items: flex-start; gap: var(--space-2); flex-wrap: wrap; padding: var(--space-3) 0; }
+.eg-settings-form > .eg-field { flex: 1; min-width: 180px; }
+.eg-settings-card {
+  display: flex; flex-direction: column; gap: var(--space-3); margin-bottom: var(--space-3); padding: var(--space-4);
+  background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius-md);
+}
+.eg-settings-card .eg-settings-form { padding: 0; }
+.eg-settings-textarea { height: auto; min-height: 72px; padding: var(--space-2); line-height: calc(20px * var(--type-scale)); resize: vertical; width: 100%; font-family: inherit; }
+.eg-settings-filter { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-3) 0; }
+.eg-settings-filter .eg-input-wrap { flex: 1; }
+.eg-settings-undo { margin-top: var(--space-2); }
+.eg-settings .eg-tabs { margin-bottom: var(--space-1); }
+
+/* Archive and notes: rendered markdown, clamped to a short preview until opened. */
+.eg-settings-md { margin-top: var(--space-1); font-size: calc(13px * var(--type-scale)); line-height: calc(20px * var(--type-scale)); }
+.eg-settings-md.is-clamped { max-height: 80px; overflow: hidden; cursor: pointer; -webkit-mask-image: linear-gradient(to bottom, var(--ink) 40%, transparent); mask-image: linear-gradient(to bottom, var(--ink) 40%, transparent); }
+
+/* Models › Stages. */
+.eg-settings-stages { border-top: 1px solid var(--line); }
+.eg-settings-stages .eg-stage { grid-template-columns: 120px 1fr auto; height: auto; min-height: 40px; padding: var(--space-1) 0; border-bottom: 1px solid var(--line); }
+.eg-settings-stagedetail { color: var(--ink-subtle); font-size: calc(12px * var(--type-scale)); }
+
+/* Older content rendered inside settings rows: the local-model status block and the Auto calibration table. */
+.eg-settings-learned { margin-top: 0; padding-top: var(--space-3); border-top: 1px solid var(--line); }
+
+/* Dialog bodies opened from Settings. */
+.eg-settings-dialogtext { margin: 0; color: var(--ink-muted); }
+.eg-settings-quote {
+  max-height: 120px; overflow: auto; padding: var(--space-2) var(--space-3);
+  background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius-md);
+  color: var(--ink-muted); font-size: calc(12px * var(--type-scale)); line-height: calc(18px * var(--type-scale)); white-space: pre-wrap;
+}
+
+@media (max-width: 640px) {
+  .eg-settings .eg-srow { flex-wrap: wrap; }
+  .eg-settings-stages .eg-stage { grid-template-columns: 1fr auto; }
+  .eg-settings-stagedetail { display: none; }
+}
+
+/* Narrow windows: ergo.css hides the side nav below 960px; a back button and a page menu take its place. */
+.eg-settings-compactnav { display: none; }
+@media (max-width: 960px) {
+  .eg-settings-compactnav { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-4); }
+}
+.eg-select.is-disabled { color: var(--ink-disabled); border-color: var(--line); background: transparent; cursor: default; }
+.is-auto-stages .eg-stage-name { color: var(--ink-subtle); }

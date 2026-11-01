@@ -1,5 +1,5 @@
 import React from 'react';
-import { Archive, AlertCircle, X } from 'lucide-react';
+import { Button, Dialog } from './ui';
 
 export type ArchiveScope = 'both' | 'brief';
 
@@ -28,60 +28,49 @@ export const ArchiveConfirmModal: React.FC<ArchiveConfirmModalProps> = ({ reques
   const fromAi = origin === 'ai';
   const canArchiveBoth = hasTask && hasBrief;
 
-  let warning: string;
+  let note: string;
   if (fromAi) {
-    warning = canArchiveBoth
+    note = canArchiveBoth
       ? 'Archive just the execution card, or the execution card and its task in the human workspace?'
-      : 'This task has no card in the human workspace, so only the execution card will be archived.';
+      : 'This task has no card in the human workspace, so only the execution card is archived.';
   } else {
-    warning = hasBrief
-      ? 'Its execution card in the AI workspace will be archived with it.'
-      : 'This task has no execution card in the AI workspace.';
+    note = hasBrief ? 'Its execution card in the AI workspace is archived with it.' : 'This task has no execution card in the AI workspace.';
   }
 
   return (
-    <div className="modal-overlay" onClick={onCancel} style={{ zIndex: 130 }}>
-      <div className="modal-card archive-delete-modal is-archive" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#f59e0b' }}>
-            <Archive size={18} />
-            <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Archive Task?</h3>
-          </div>
-          <button type="button" className="btn-icon" onClick={onCancel}>
-            <X size={16} />
-          </button>
-        </div>
-        <div className="modal-body" style={{ padding: '1rem 1.25rem', fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
-          <p style={{ margin: 0, marginBottom: '0.75rem' }}>
-            <strong>"{title}"</strong> will be removed from the workspace and kept in archived tasks.
-          </p>
-          <div className="archive-delete-warning-box">
-            <AlertCircle size={15} style={{ flexShrink: 0 }} />
-            <span>{warning}</span>
-          </div>
-        </div>
-        <div className="modal-footer" style={{ padding: '0.75rem 1.25rem', display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
-          <button type="button" className="btn btn-secondary" onClick={onCancel}>
+    <Dialog
+      title="Archive this task?"
+      onClose={onCancel}
+      width={480}
+      footer={
+        <>
+          <span className="eg-spacer" />
+          <Button variant="ghost" size="lg" onClick={onCancel}>
             Cancel
-          </button>
+          </Button>
           {fromAi ? (
             <>
-              <button type="button" className={canArchiveBoth ? 'btn btn-secondary' : 'btn btn-primary'} onClick={() => onConfirm('brief')}>
+              <Button variant={canArchiveBoth ? 'secondary' : 'primary'} size="lg" onClick={() => onConfirm('brief')} autoFocus={!canArchiveBoth}>
                 Archive execution card
-              </button>
+              </Button>
               {canArchiveBoth && (
-                <button type="button" className="btn btn-primary" onClick={() => onConfirm('both')}>
+                <Button variant="primary" size="lg" onClick={() => onConfirm('both')} autoFocus>
                   Archive both
-                </button>
+                </Button>
               )}
             </>
           ) : (
-            <button type="button" className="btn btn-primary" onClick={() => onConfirm('both')}>
+            <Button variant="primary" size="lg" onClick={() => onConfirm('both')} autoFocus>
               Archive
-            </button>
+            </Button>
           )}
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <p style={{ margin: 0 }}>
+        <span style={{ color: 'var(--ink)', fontWeight: 500 }}>“{title}”</span> is removed from the workspace and kept in archived tasks.
+      </p>
+      <p style={{ margin: 'var(--space-2) 0 0' }}>{note}</p>
+    </Dialog>
   );
 };

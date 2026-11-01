@@ -1,0 +1,14 @@
+<!-- @dsCard group="Overlays" height=300 subtitle="Confirm a destructive action" -->
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="root" style="padding:24px;display:flex;justify-content:center"></div>
+<script>
+var E = window.Ergo, h = React.createElement, F = React.Fragment;
+
+ReactDOM.createRoot(document.getElementById("root")).render(h(E.Dialog,{inline:true,width:440,title:"Stop this run?",description:"Claude Code is editing 2 files in ERG-142.",onClose:function(){},
+  footer:h(F,null,h("span",{className:"eg-spacer"}),h(E.Button,{variant:"ghost"},"Keep running"),h(E.Button,{variant:"danger",icon:"square"},"Stop and keep changes"))},
+  h("p",{style:{margin:0}},"Changes already written stay on disk. You can review them in the run's diff and rerun the task when you're ready.")
+));
+</script>
+</body></html>

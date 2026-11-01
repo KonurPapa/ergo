@@ -45,18 +45,24 @@ function commandAt(state: EditorState): Omit<TaskCommandState, 'left' | 'top'> |
 }
 
 function skillDecorations(state: EditorState, slugs: Set<string>): DecorationSet {
-  if (slugs.size === 0) return DecorationSet.empty;
   const decos: Decoration[] = [];
   state.doc.descendants((node, pos) => {
     if (!node.isTextblock) return true;
+    // @file references (inserted as inline code): shown as chips.
+    node.forEach((child, offset) => {
+      if (child.isText && child.text?.startsWith('@') && child.marks.some((m) => m.type.name === 'code')) {
+        decos.push(Decoration.inline(pos + 1 + offset, pos + 1 + offset + child.nodeSize, { class: 'eg-ref task-file-ref' }));
+      }
+    });
+    if (slugs.size === 0) return false;
     const text = node.textBetween(0, node.content.size, undefined, '￼');
     if (!text.includes('/')) return false;
     for (const r of skillTokenRanges(text, slugs)) {
-      decos.push(Decoration.inline(pos + 1 + r.from, pos + 1 + r.to, { class: 'task-skill-token' }));
+      decos.push(Decoration.inline(pos + 1 + r.from, pos + 1 + r.to, { class: 'task-skill-token eg-ref eg-ref-skill' }));
     }
     return false;
   });
-  return DecorationSet.create(state.doc, decos);
+  return decos.length ? DecorationSet.create(state.doc, decos) : DecorationSet.empty;
 }
 
 export function createTaskCommandExtension(name: string, handlersRef: { current: TaskCommandHandlers }) {

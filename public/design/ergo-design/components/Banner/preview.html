@@ -1,0 +1,16 @@
+<!-- @dsCard group="Status" height=250 subtitle="Bridge offline and review-needed banners" -->
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="root" style="padding:20px"></div>
+<script>
+var E = window.Ergo, h = React.createElement, F = React.Fragment;
+
+ReactDOM.createRoot(document.getElementById("root")).render(h("div",{style:{display:"flex",flexDirection:"column",gap:12,width:520}},
+  h(E.Banner,{icon:"unplug",title:"Ergo can't reach the bridge on this computer",text:"You can keep editing tasks. Runs will wait until the bridge is back.",
+    steps:[h(F,null,"Start it: ",h("code",{className:"eg-mono"},"ergo-bridge start")),"Or open the Ergo Bridge app from your menu bar"],
+    actions:h(F,null,h(E.Button,{size:"sm",icon:"refresh-cw"},"Try again"),h(E.Button,{size:"sm",variant:"ghost",icon:"download"},"Download bridge"))}),
+  h(E.Banner,{tone:"warning",icon:"circle-pause",title:"Claude Code finished — review before marking done",text:"3 files changed. The agent did not write a completion note.",actions:h(F,null,h(E.Button,{size:"sm",variant:"primary"},"Review changes"),h(E.Button,{size:"sm",variant:"ghost"},"Rerun"))})
+));
+</script>
+</body></html>

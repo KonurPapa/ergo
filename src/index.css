@@ -1,263 +1,118 @@
-/* @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap'); */
-@import url('https://fonts.googleapis.com/css2?family=Anta&family=Bruno+Ace+SC&family=Play:wght@400;700&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400;1,700&display=swap');
-@import url('https://cdn.jsdelivr.net/fontsource/css/intel-one-mono@latest/index.css');
-@import url('https://fonts.googleapis.com/css2?family=Bruno+Ace&family=Goldman:wght@400;700&family=Kelly+Slab&family=Michroma&family=Orbit&family=Sixtyfour&display=swap');
+/* ── Legacy variable names, mapped onto the design tokens (src/styles/tokens.css) ──
+   Older component styles still read these names; new code uses the token names directly.
+   Every competing accent (cyan, violet, emerald, mint) now resolves to the one accent or to neutral. */
+:root {
+  /* Surfaces */
+  --bg: var(--canvas);
+  --bg-darkest: var(--canvas);
+  --bg-dark: var(--canvas);
+  --bg-card: var(--surface-1);
+  --bg-card-hover: var(--surface-2);
+  --bg-pane: var(--canvas);
+  --bg-input: var(--surface-1);
+  --bg-elevated: var(--surface-2);
+  --bg-hover: var(--surface-2);
+  --card: var(--surface-1);
+  --card-fg: var(--ink);
+  --card-hl: var(--surface-2);
+  --panel: var(--surface-1);
+  --panel-strong: var(--surface-2);
+  --chrome: var(--canvas);
 
-/* ── Light Mode ────────────────────────────────────────── */
-:root,
-[data-theme="light"] {
-  /* Base Surfaces */
-  --bg: #f8fafc;
-  --bg-darkest: #f1f5f9;
-  --bg-dark: #f8fafc;
-  --bg-card: #ffffff;
-  --bg-card-hover: #f1f5f9;
-  --bg-pane: #ffffff;
-  --bg-input: #ffffff;
-  --bg-elevated: #ffffff;
-  --bg-hover: #f1f5f9;
-  --card: #ffffff;
-  --card-fg: #18181b;
-  --card-hl: rgba(0, 0, 0, 0.04);
-  --panel: #f8fafc;
-  --panel-strong: #ffffff;
-  --chrome: rgba(255, 255, 255, 0.95);
+  /* Lines */
+  --border: var(--line);
+  --border-subtle: var(--line);
+  --border-strong: var(--line-strong);
+  --border-hover: var(--line-control);
+  --border-glow: var(--line-strong);
 
-  /* Hairline Borders */
-  --border: #e2e8f0;
-  --border-subtle: #e2e8f0;
-  --border-strong: #cbd5e1;
-  --border-hover: #94a3b8;
-  --border-glow: rgba(0, 212, 146, 0.3);
+  /* One accent */
+  --accent-fg: var(--on-accent);
+  --accent-glow: transparent;
+  --ring: var(--focus);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-hover);
+  --accent-cyan: var(--accent-text);
+  --accent-violet: var(--ink-subtle);
+  --accent-emerald: var(--success);
+  --accent-amber: var(--warning);
+  --accent-rose: var(--danger);
 
-  /* Mint Accent & Palettes */
-  --accent: #00d492;
-  --accent-fg: #000000;
-  --accent-hover: #34d399;
-  --accent-subtle: rgba(0, 212, 146, 0.12);
-  --accent-glow: rgba(0, 212, 146, 0.25);
-  --ring: #10b981;
+  /* Semantic */
+  --ok: var(--success);
+  --ok-fg: var(--canvas);
+  --ok-subtle: var(--success-subtle);
+  --warn: var(--warning);
+  --warn-fg: var(--canvas);
+  --warn-subtle: var(--warning-subtle);
+  --danger-fg: var(--on-accent);
+  --info: var(--accent-text);
+  --aim: var(--accent-text);
+  --aim-subtle: var(--accent-subtle);
 
-  --accent-primary: #2563eb;
-  --accent-primary-hover: #1d4ed8;
-  --accent-cyan: #0891b2;
-  --accent-violet: #8b5cf6;
-  --accent-emerald: #059669;
-  --accent-amber: #d97706;
-  --accent-rose: #e11d48;
+  /* Text */
+  --text: var(--ink);
+  --text-main: var(--ink);
+  --text-subtask: var(--ink-muted);
+  --text-muted: var(--ink-subtle);
+  --text-dim: var(--ink-subtle);
+  --text-bright: var(--ink);
+  --text-strong: var(--ink);
+  --muted: var(--ink-subtle);
+  --muted-strong: var(--ink-muted);
 
-  --ok: #16a34a;
-  --ok-fg: #ffffff;
-  --ok-subtle: rgba(22, 163, 74, 0.12);
-  --warn: #d97706;
-  --warn-fg: #000000;
-  --warn-subtle: rgba(217, 119, 6, 0.12);
-  --danger: #dc2626;
-  --danger-fg: #ffffff;
-  --danger-subtle: rgba(220, 38, 38, 0.12);
-  --info: #0284c7;
-  --aim: #7c3aed;
-  --aim-subtle: rgba(124, 58, 237, 0.12);
+  /* Shell and panes */
+  --header-bg: var(--canvas);
+  --pane-header-bg: var(--canvas);
+  --pane-left-bg: var(--canvas);
+  --pane-right-bg: var(--surface-1);
+  --app-bg: var(--canvas);
 
-  /* Typography */
-  --text: #18181b;
-  --text-main: #18181b;
-  --text-subtask: #2d3139;
-  --text-muted: #64748b;
-  --text-dim: #94a3b8;
-  --text-bright: #09090b;
-  --text-strong: #09090b;
-  --muted: #64748b;
-  --muted-strong: #475569;
-
-  /* App Shell & Panes */
-  --header-bg: rgba(255, 255, 255, 0.92);
-  --pane-header-bg: #ffffff;
-  --pane-left-bg: #f8fafc;
-  --pane-right-bg: #f1f5f9;
-  --app-bg: #f8fafc;
-
-  /* Modals & Popovers */
-  --modal-header-bg: #ffffff;
-  --modal-footer-bg: #f8fafc;
-  --modal-bg: #ffffff;
-  --toolbar-bg: rgba(255, 255, 255, 0.95);
-  --footer-bg: rgba(255, 255, 255, 0.92);
-  --drawer-bg: #ffffff;
-  --drawer-header-bg: #ffffff;
-  --drawer-body-bg: #f8fafc;
-  --drawer-footer-bg: #f1f5f9;
-
-  --dropdown-bg: #ffffff;
-  --dropdown-header-bg: #f8fafc;
-  --dropdown-item-hover: #f1f5f9;
+  /* Dialogs and popovers */
+  --modal-header-bg: var(--surface-2);
+  --modal-footer-bg: var(--surface-2);
+  --modal-bg: var(--surface-2);
+  --toolbar-bg: var(--canvas);
+  --footer-bg: var(--canvas);
+  --drawer-bg: var(--surface-2);
+  --drawer-header-bg: var(--surface-2);
+  --drawer-body-bg: var(--surface-1);
+  --drawer-footer-bg: var(--surface-2);
+  --dropdown-bg: var(--surface-2);
+  --dropdown-header-bg: var(--surface-2);
+  --dropdown-item-hover: var(--surface-3);
 
   /* Buttons */
-  --btn-secondary-bg: #ffffff;
-  --btn-secondary-hover: #f1f5f9;
-  --btn-secondary-border: #e2e8f0;
-  --btn-secondary-text: #18181b;
+  --btn-secondary-bg: var(--surface-1);
+  --btn-secondary-hover: var(--surface-2);
+  --btn-secondary-border: var(--line-strong);
+  --btn-secondary-text: var(--ink);
 
   /* Code */
-  --code-bg: #0f172a;
-  --code-text: #f1f5f9;
-  --code-header-bg: #1e293b;
-  --code-border: #e2e8f0;
+  --code-bg: var(--canvas);
+  --code-text: var(--ink);
+  --code-header-bg: var(--surface-1);
+  --code-border: var(--line);
 
   /* Scrollbars */
-  --scrollbar-thumb: rgba(0, 0, 0, 0.15);
-  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.3);
+  --scrollbar-thumb: var(--line-strong);
+  --scrollbar-thumb-hover: var(--line-control);
 
-  /* Fonts */
-  /* --font-sans: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; */
-  --font-sans: 'Atkinson Hyperlegible', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'Intel One Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  /* Radii (radius-xs/sm/md/lg/full come from tokens) */
+  --radius-xl: var(--radius-lg);
+  --radius-pill: var(--radius-sm);
 
-  /* Corner Radii */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-pill: 9999px;
-
-  /* Clean Shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
-  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.12);
-  --shadow-glow: 0 0 20px rgba(0, 212, 146, 0.15);
-  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.05);
-}
-
-/* ── Dark Mode ──────────────── */
-[data-theme="dark"] {
-  /* Deep Matte Slate Canvas & Elevated Surfaces */
-  --bg: #12141a;
-  --bg-darkest: #12141a;
-  --bg-dark: #12141a;
-  --bg-card: #181b22;
-  --bg-card-hover: #262a35;
-  --bg-pane: #181b22;
-  --bg-input: #14161d;
-  --bg-elevated: #1a1d25;
-  --bg-hover: #262a35;
-  --card: #181b22;
-  --card-fg: #f4f4f5;
-  --card-hl: rgba(255, 255, 255, 0.05);
-  --panel: #12141a;
-  --panel-strong: #1a1d25;
-  --chrome: rgba(18, 20, 26, 0.95);
-
-  /* Hairline Borders */
-  --border: #27272a;
-  --border-subtle: #27272a;
-  --border-strong: #3f3f46;
-  --border-hover: #52525b;
-  --border-glow: rgba(0, 212, 146, 0.35);
-
-  /* Vibrant Mint (#00d492) & Status Accents */
-  --accent: #00d492;
-  --accent-fg: #000000;
-  --accent-hover: #34d399;
-  --accent-subtle: rgba(0, 212, 146, 0.12);
-  --accent-glow: rgba(0, 212, 146, 0.25);
-  --ring: #10b981;
-
-  --accent-primary: #2563eb;
-  --accent-primary-hover: #3b82f6;
-  --accent-cyan: #06b6d4;
-  --accent-violet: #a78bfa;
-  --accent-emerald: #00d492;
-  --accent-amber: #eab308;
-  --accent-rose: #ef4444;
-
-  --ok: #22c55e;
-  --ok-fg: #000000;
-  --ok-subtle: rgba(34, 197, 94, 0.12);
-  --warn: #eab308;
-  --warn-fg: #000000;
-  --warn-subtle: rgba(234, 179, 8, 0.12);
-  --danger: #ef4444;
-  --danger-fg: #000000;
-  --danger-subtle: rgba(239, 68, 68, 0.12);
-  --info: #06b6d4;
-  --aim: #a78bfa;
-  --aim-subtle: rgba(167, 139, 250, 0.15);
-
-  /* Typography */
-  --text: #e4e4e7;
-  --text-main: #e4e4e7;
-  --text-subtask: #b6b6ba;
-  --text-muted: #7f7f88;
-  --text-dim: #52525b;
-  --text-bright: #fafafa;
-  --text-strong: #fafafa;
-  --muted: #7f7f88;
-  --muted-strong: #52525b;
-
-  /* App Shell & Panes */
-  --header-bg: rgba(20, 22, 29, 0.92);
-  --pane-header-bg: rgba(26, 29, 37, 0.95);
-  --pane-left-bg: #12141a;
-  --pane-right-bg: #14161d;
-  --app-bg: #12141a;
-
-  /* Modals & Popovers */
-  --modal-header-bg: #181b22;
-  --modal-footer-bg: #14161d;
-  --modal-bg: #181b22;
-  --toolbar-bg: rgba(24, 27, 34, 0.92);
-  --footer-bg: rgba(20, 22, 29, 0.92);
-  --drawer-bg: #181b22;
-  --drawer-header-bg: #181b22;
-  --drawer-body-bg: #12141a;
-  --drawer-footer-bg: #14161d;
-
-  --dropdown-bg: #1a1d25;
-  --dropdown-header-bg: #14161d;
-  --dropdown-item-hover: #262a35;
-
-  /* Buttons */
-  --btn-secondary-bg: #1a1d25;
-  --btn-secondary-hover: #262a35;
-  --btn-secondary-border: #27272a;
-  --btn-secondary-text: #e4e4e7;
-
-  /* Code */
-  --code-bg: #12141a;
-  --code-text: #e4e4e7;
-  --code-header-bg: #181b22;
-  --code-border: #27272a;
-
-  /* Scrollbars */
-  --scrollbar-thumb: rgba(255, 255, 255, 0.12);
-  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.25);
-
-  /* Fonts */
-  /* --font-sans: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; */
-  --font-sans: 'Atkinson Hyperlegible', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'Intel One Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-
-  /* Corner Radii */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-pill: 9999px;
-
-  /* Clean Shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.06);
-  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.55);
-  --shadow-glow: 0 0 20px rgba(0, 212, 146, 0.25);
-  --shadow-card: 0 4px 14px rgba(0, 0, 0, 0.25);
+  /* Depth comes from the surface ladder; only floating things cast a shadow */
+  --shadow-sm: none;
+  --shadow-md: var(--shadow-popover);
+  --shadow-lg: var(--shadow-dialog);
+  --shadow-glow: none;
+  --shadow-card: none;
 }
 
 html {
-  font-size: 125%;
-  /* 25% larger across the board (scales all rem units proportionally from 16px to 20px) */
+  /* rem-based (older) styles scale with the type scale: 16px × 1.15 */
+  font-size: 115%;
 }
 
 * {
@@ -267,13 +122,13 @@ html {
 }
 
 body {
-  background-color: var(--bg-darkest);
-  color: var(--text-main);
+  background-color: var(--canvas);
+  color: var(--ink);
   font-family: var(--font-sans);
-  font-size: 1rem;
+  font-size: calc(13px * var(--type-scale));
   min-height: 100vh;
   overflow-x: hidden;
-  line-height: 1.5;
+  line-height: calc(20px * var(--type-scale));
   -webkit-font-smoothing: antialiased;
 }
 
@@ -358,7 +213,7 @@ body {
 
 .brand-badge {
   background: var(--accent-subtle);
-  border: 1px solid rgba(0, 212, 146, 0.3);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 30%, transparent);
   padding: 0.15rem 0.5rem;
   border-radius: var(--radius-pill);
   font-size: 0.68rem;
@@ -425,16 +280,16 @@ body {
 }
 
 .btn-primary {
-  background: var(--accent-primary, #2563eb);
+  background: var(--accent-primary, var(--accent-text));
   color: #ffffff;
   border: 1px solid rgba(255, 255, 255, 0.15);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
 }
 
 .btn-primary:hover {
-  background: var(--accent-primary-hover, #3b82f6);
+  background: var(--accent-primary-hover, var(--accent-text));
   border-color: rgba(255, 255, 255, 0.25);
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-text) 35%, transparent);
   transform: translateY(-1px);
 }
 
@@ -454,27 +309,27 @@ body {
 .btn-outline-glow {
   background: var(--accent-subtle);
   color: var(--accent);
-  border: 1px solid rgba(0, 212, 146, 0.3);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 30%, transparent);
 }
 
 .btn-outline-glow:hover {
-  background: rgba(0, 212, 146, 0.2);
+  background: color-mix(in srgb, var(--accent-text) 20%, transparent);
   border-color: var(--accent);
   color: #ffffff;
   box-shadow: 0 0 12px var(--accent-glow);
 }
 
 .btn-emerald {
-  background: var(--accent, #00d492);
+  background: var(--accent, var(--accent-text));
   color: #000000;
   border: 1px solid rgba(0, 0, 0, 0.15);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 212, 146, 0.25);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--accent-text) 25%, transparent);
 }
 
 .btn-emerald:hover {
-  background: var(--accent-hover, #34d399);
-  box-shadow: 0 2px 10px rgba(0, 212, 146, 0.4);
+  background: var(--accent-hover, var(--accent-text));
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--accent-text) 40%, transparent);
   transform: translateY(-1px);
 }
 
@@ -496,16 +351,16 @@ body {
 
 .badge-done,
 .badge-success {
-  background: var(--accent-subtle, rgba(0, 212, 146, 0.12));
-  color: var(--accent, #00d492);
-  border: 1px solid rgba(0, 212, 146, 0.3);
+  background: var(--accent-subtle, color-mix(in srgb, var(--accent-text) 12%, transparent));
+  color: var(--accent, var(--accent-text));
+  border: 1px solid color-mix(in srgb, var(--accent-text) 30%, transparent);
 }
 
 .badge-running,
 .badge-active {
-  background: rgba(6, 182, 212, 0.12);
-  color: #06b6d4;
-  border: 1px solid rgba(6, 182, 212, 0.35);
+  background: color-mix(in srgb, var(--accent-text) 12%, transparent);
+  color: var(--accent-text);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 35%, transparent);
 }
 
 .badge-warning,
@@ -621,7 +476,7 @@ body {
 
 .obsidian-mode-btn:hover,
 .obsidian-mode-btn.active {
-  background: rgba(99, 102, 241, 0.15);
+  background: color-mix(in srgb, var(--accent-text) 15%, transparent);
   color: var(--accent-primary);
   border-color: var(--accent-primary);
 }
@@ -809,7 +664,7 @@ body {
 }
 
 .tiptap-toolbar-btn.is-active {
-  background: rgba(99, 102, 241, 0.2);
+  background: color-mix(in srgb, var(--accent-text) 20%, transparent);
   color: var(--accent-primary);
   border-color: var(--accent-primary);
 }
@@ -928,11 +783,11 @@ body {
 .tiptap-editor-root .tiptap code {
   font-family: var(--font-mono);
   font-size: 0.85em;
-  background: rgba(99, 102, 241, 0.1);
+  background: color-mix(in srgb, var(--accent-text) 10%, transparent);
   color: var(--accent-cyan);
   padding: 0.1rem 0.4rem;
   border-radius: 4px;
-  border: 1px solid rgba(6, 182, 212, 0.25);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 25%, transparent);
 }
 
 /* Code block */
@@ -999,8 +854,8 @@ body {
   align-items: center;
   gap: 0.35rem;
   padding: 0.15rem 0.5rem;
-  background: rgba(6, 182, 212, 0.12);
-  border: 1px solid rgba(6, 182, 212, 0.3);
+  background: color-mix(in srgb, var(--accent-text) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 30%, transparent);
   border-radius: 4px;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -1097,7 +952,7 @@ body {
 /* Blockquote */
 .tiptap-editor-root .tiptap blockquote {
   border-left: 3px solid var(--accent-cyan);
-  background: rgba(6, 182, 212, 0.08);
+  background: color-mix(in srgb, var(--accent-text) 8%, transparent);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   padding: 0.6rem 1rem 0.6rem 1.1rem;
   margin: 0.75rem 0;
@@ -1187,50 +1042,50 @@ body {
 
 .tiptap-editor-root .tiptap ol>li.is-active-card,
 .tiptap-editor-root .tiptap ul:not(li ul)>li.is-active-card {
-  border-color: rgba(0, 212, 146, 0.55);
+  border-color: color-mix(in srgb, var(--accent-text) 55%, transparent);
   background: var(--accent-subtle);
-  box-shadow: 0 0 0 1px rgba(0, 212, 146, 0.22), 0 2px 8px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-text) 22%, transparent), 0 2px 8px rgba(0, 0, 0, 0.25);
   border-radius: var(--radius-md, 8px);
 }
 
 .tiptap-editor-root .tiptap ol>li.is-active-card:hover,
 .tiptap-editor-root .tiptap ul:not(li ul)>li.is-active-card:hover {
-  border-color: rgba(0, 212, 146, 0.75);
-  background: rgba(0, 212, 146, 0.16);
-  box-shadow: 0 0 0 1px rgba(0, 212, 146, 0.3), 0 3px 10px rgba(0, 0, 0, 0.3);
+  border-color: color-mix(in srgb, var(--accent-text) 75%, transparent);
+  background: color-mix(in srgb, var(--accent-text) 16%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-text) 30%, transparent), 0 3px 10px rgba(0, 0, 0, 0.3);
 }
 
 [data-theme="light"] .tiptap-editor-root .tiptap ol>li.is-active-card,
 [data-theme="light"] .tiptap-editor-root .tiptap ul:not(li ul)>li.is-active-card {
-  border-color: rgba(0, 212, 146, 0.5);
-  background: rgba(0, 212, 146, 0.08);
-  box-shadow: 0 0 0 1px rgba(0, 212, 146, 0.2), 0 2px 6px rgba(0, 0, 0, 0.05);
+  border-color: color-mix(in srgb, var(--accent-text) 50%, transparent);
+  background: color-mix(in srgb, var(--accent-text) 8%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-text) 20%, transparent), 0 2px 6px rgba(0, 0, 0, 0.05);
 }
 
 .tiptap-editor-root .tiptap ol>li.is-card-running,
 .tiptap-editor-root .tiptap ul:not(li ul)>li.is-card-running {
-  border-color: rgba(6, 182, 212, 0.6);
-  background: linear-gradient(135deg, rgba(6, 182, 212, 0.1) 0%, rgba(139, 92, 246, 0.06) 100%);
-  box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.25), 0 2px 8px rgba(0, 0, 0, 0.2);
+  border-color: color-mix(in srgb, var(--accent-text) 60%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent-text) 10%, transparent) 0%, color-mix(in srgb, var(--ink-subtle) 6%, transparent) 100%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-text) 25%, transparent), 0 2px 8px rgba(0, 0, 0, 0.2);
   border-radius: var(--radius-md);
   animation: cardPulseRunning 2.5s infinite ease-in-out;
 }
 
 .tiptap-editor-root .tiptap ol>li.is-card-running:hover,
 .tiptap-editor-root .tiptap ul:not(li ul)>li.is-card-running:hover {
-  border-color: rgba(6, 182, 212, 0.8);
-  box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.4), 0 3px 12px rgba(6, 182, 212, 0.2);
+  border-color: color-mix(in srgb, var(--accent-text) 80%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-text) 40%, transparent), 0 3px 12px color-mix(in srgb, var(--accent-text) 20%, transparent);
 }
 
 @keyframes cardPulseRunning {
 
   0%,
   100% {
-    box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.25), 0 2px 8px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-text) 25%, transparent), 0 2px 8px rgba(0, 0, 0, 0.2);
   }
 
   50% {
-    box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.5), 0 0 14px rgba(6, 182, 212, 0.25), 0 2px 8px rgba(0, 0, 0, 0.25);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-text) 50%, transparent), 0 0 14px color-mix(in srgb, var(--accent-text) 25%, transparent), 0 2px 8px rgba(0, 0, 0, 0.25);
   }
 }
 
@@ -1239,9 +1094,9 @@ body {
   align-items: center;
   gap: 0.35rem;
   padding: 0.15rem 0.55rem;
-  background: rgba(6, 182, 212, 0.12);
-  border: 1px solid rgba(6, 182, 212, 0.4);
-  color: var(--accent-cyan, #06b6d4);
+  background: color-mix(in srgb, var(--accent-text) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 40%, transparent);
+  color: var(--accent-cyan, var(--accent-text));
   border-radius: 9999px;
   font-size: 0.68rem;
   font-weight: 700;
@@ -1271,13 +1126,13 @@ body {
 .tiptap-editor-root .tiptap ol>li.is-card-done.is-active-card,
 .tiptap-editor-root .tiptap ul:not(li ul)>li.is-card-done.is-active-card {
   opacity: 0.92;
-  border-color: rgba(139, 92, 246, 0.4);
+  border-color: color-mix(in srgb, var(--ink-subtle) 40%, transparent);
 }
 
 .tiptap-editor-root .tiptap ol>li:focus-within,
 .tiptap-editor-root .tiptap ul:not(li ul)>li:focus-within {
-  border-color: rgba(139, 92, 246, 0.45);
-  box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.25), 0 2px 8px rgba(139, 92, 246, 0.08);
+  border-color: color-mix(in srgb, var(--ink-subtle) 45%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink-subtle) 25%, transparent), 0 2px 8px color-mix(in srgb, var(--ink-subtle) 8%, transparent);
 }
 
 .tiptap-editor-root .tiptap ol>li {
@@ -1403,19 +1258,19 @@ body {
 
 .task-ui-checkbox.parent-checkbox:hover {
   border-color: var(--accent-cyan);
-  background: rgba(6, 182, 212, 0.18);
-  box-shadow: 0 0 8px rgba(6, 182, 212, 0.35);
+  background: color-mix(in srgb, var(--accent-text) 18%, transparent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent-text) 35%, transparent);
 }
 
 .task-ui-checkbox.parent-checkbox.checked {
   background: var(--accent-emerald);
   border-color: var(--accent-emerald);
-  box-shadow: 0 0 10px rgba(16, 185, 129, 0.45);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent-text) 45%, transparent);
 }
 
 .task-ui-checkbox.parent-checkbox.checked:hover {
-  background: #059669;
-  border-color: #059669;
+  background: var(--accent-text);
+  border-color: var(--accent-text);
 }
 
 .task-ui-checkbox.subtask-checkbox {
@@ -1429,19 +1284,19 @@ body {
 
 .task-ui-checkbox.subtask-checkbox:hover {
   border-color: var(--accent-cyan);
-  background: rgba(6, 182, 212, 0.18);
-  box-shadow: 0 0 6px rgba(6, 182, 212, 0.3);
+  background: color-mix(in srgb, var(--accent-text) 18%, transparent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent-text) 30%, transparent);
 }
 
 .task-ui-checkbox.subtask-checkbox.checked {
   background: var(--accent-emerald);
   border-color: var(--accent-emerald);
-  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent-text) 40%, transparent);
 }
 
 .task-ui-checkbox.subtask-checkbox.checked:hover {
-  background: #059669;
-  border-color: #059669;
+  background: var(--accent-text);
+  border-color: var(--accent-text);
 }
 
 [data-theme="light"] .task-ui-checkbox.parent-checkbox {
@@ -1523,8 +1378,8 @@ body {
 
 .card-add-subtask-btn,
 .card-add-task-btn {
-  background: rgba(99, 102, 241, 0.15);
-  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: color-mix(in srgb, var(--accent-text) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 35%, transparent);
   color: var(--accent-primary);
 }
 
@@ -1538,14 +1393,14 @@ body {
   background: var(--accent-primary);
   border-color: var(--accent-primary-hover);
   color: #ffffff;
-  box-shadow: 0 2px 10px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--accent-text) 40%, transparent);
   transform: scale(1.08);
 }
 
 .card-mcp-tools-btn {
-  background: rgba(139, 92, 246, 0.16);
-  border: 1px solid rgba(139, 92, 246, 0.4);
-  color: #a78bfa;
+  background: color-mix(in srgb, var(--ink-subtle) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ink-subtle) 40%, transparent);
+  color: var(--ink-subtle);
   width: auto;
   min-width: 1.45rem;
   padding: 0 0.35rem;
@@ -1557,9 +1412,9 @@ body {
 }
 
 .card-mcp-tools-btn:hover {
-  background: rgba(139, 92, 246, 0.28);
-  border-color: rgba(139, 92, 246, 0.7);
-  color: #c4b5fd;
+  background: color-mix(in srgb, var(--ink-subtle) 28%, transparent);
+  border-color: color-mix(in srgb, var(--ink-subtle) 70%, transparent);
+  color: var(--ink-subtle);
   opacity: 1;
   transform: scale(1.05);
 }
@@ -1581,7 +1436,7 @@ body {
 .card-menu-btn:hover,
 .card-menu-btn.active {
   opacity: 1;
-  background: rgba(99, 102, 241, 0.18);
+  background: color-mix(in srgb, var(--accent-text) 18%, transparent);
   border-color: var(--border-glow);
   color: var(--text-bright);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
@@ -1842,7 +1697,7 @@ body {
 .tiptap-editor-root .tiptap ol>li blockquote,
 .tiptap-editor-root .tiptap ul>li blockquote {
   border-left: 3px solid var(--accent-cyan);
-  background: rgba(6, 182, 212, 0.08);
+  background: color-mix(in srgb, var(--accent-text) 8%, transparent);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   padding: 0.35rem 0.75rem 0.35rem 0.85rem;
   margin: 0.35rem 0;
@@ -2074,12 +1929,12 @@ body {
 
 .task-attached-image:hover,
 .tiptap-editor-root .tiptap img:hover {
-  border-color: rgba(0, 212, 146, 0.4);
+  border-color: color-mix(in srgb, var(--accent-text) 40%, transparent);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35), 0 0 12px var(--accent-glow);
 }
 
 .tiptap-editor-root .tiptap img.ProseMirror-selectednode {
-  outline: 2px solid var(--accent, #00d492);
+  outline: 2px solid var(--accent, var(--accent-text));
   outline-offset: 2px;
   box-shadow: 0 0 0 4px var(--accent-subtle);
 }
@@ -2144,7 +1999,7 @@ body {
   margin-top: 0;
   padding: 0 0.85rem;
   height: 32px;
-  background: var(--accent-primary, #2563eb);
+  background: var(--accent-primary, var(--accent-text));
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 6px;
   color: #ffffff;
@@ -2159,8 +2014,8 @@ body {
 }
 
 .new-task-btn:hover {
-  background: var(--accent-primary-hover, #4f46e5);
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
+  background: var(--accent-primary-hover, var(--accent-text));
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-text) 35%, transparent);
   color: #ffffff;
 }
 
@@ -2170,10 +2025,10 @@ body {
   gap: 0.45rem;
   margin-top: 0;
   padding: 0.55rem 1rem;
-  background: rgba(6, 182, 212, 0.1);
-  border: 1px dashed rgba(6, 182, 212, 0.4);
+  background: color-mix(in srgb, var(--accent-text) 10%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--accent-text) 40%, transparent);
   border-radius: var(--radius-md);
-  color: #67e8f9;
+  color: var(--accent-text);
   font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
@@ -2184,10 +2039,10 @@ body {
 }
 
 .refine-ai-btn:hover:not(:disabled) {
-  background: rgba(6, 182, 212, 0.2);
+  background: color-mix(in srgb, var(--accent-text) 20%, transparent);
   color: #ffffff;
   border-color: var(--accent-cyan);
-  box-shadow: 0 4px 12px rgba(6, 182, 212, 0.25);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-text) 25%, transparent);
 }
 
 .refine-ai-btn:disabled {
@@ -2203,7 +2058,7 @@ body {
   margin-top: 0;
   height: 26px;
   padding: 0 0.65rem;
-  background: var(--accent, #00d492);
+  background: var(--accent, var(--accent-text));
   border: 1px solid rgba(0, 0, 0, 0.15);
   border-radius: var(--radius-sm, 6px);
   color: #333333;
@@ -2211,20 +2066,20 @@ body {
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s ease;
-  box-shadow: 0 1px 3px rgba(0, 212, 146, 0.2);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--accent-text) 20%, transparent);
 }
 
 .execute-task-btn:hover:not(:disabled) {
-  background: var(--accent-hover, #34d399);
-  box-shadow: 0 2px 10px rgba(0, 212, 146, 0.35);
+  background: var(--accent-hover, var(--accent-text));
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--accent-text) 35%, transparent);
   color: #222222;
   transform: translateY(-1px);
 }
 
 .execute-task-btn.is-working {
-  background: rgba(6, 182, 212, 0.15);
-  border-color: rgba(6, 182, 212, 0.4);
-  color: var(--accent-cyan, #06b6d4);
+  background: color-mix(in srgb, var(--accent-text) 15%, transparent);
+  border-color: color-mix(in srgb, var(--accent-text) 40%, transparent);
+  color: var(--accent-cyan, var(--accent-text));
   box-shadow: none;
 }
 
@@ -2243,16 +2098,16 @@ body {
 }
 
 .execute-task-btn.is-rerun {
-  background: rgba(37, 99, 235, 0.15);
-  border-color: rgba(37, 99, 235, 0.38);
-  color: #93c5fd;
+  background: color-mix(in srgb, var(--accent-text) 15%, transparent);
+  border-color: color-mix(in srgb, var(--accent-text) 38%, transparent);
+  color: var(--accent-text);
 }
 
 .execute-task-btn.is-rerun:hover:not(:disabled) {
-  background: var(--accent-primary, #2563eb);
+  background: var(--accent-primary, var(--accent-text));
   border-color: rgba(255, 255, 255, 0.25);
   color: #ffffff;
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-text) 35%, transparent);
 }
 
 .execute-task-btn:disabled {
@@ -2311,18 +2166,18 @@ body {
 }
 
 .ai-card-btn.is-primary {
-  background: var(--accent-primary, #2563eb);
+  background: var(--accent-primary, var(--accent-text));
   border-color: rgba(255, 255, 255, 0.15);
   color: #ffffff;
 }
 
 .ai-card-btn.is-primary:hover {
-  background: var(--accent-primary-hover, #3b82f6);
+  background: var(--accent-primary-hover, var(--accent-text));
 }
 
 /* Text selection */
 .tiptap-editor-root .tiptap ::selection {
-  background: rgba(0, 212, 146, 0.25);
+  background: color-mix(in srgb, var(--accent-text) 25%, transparent);
 }
 
 .tiptap-editor-root .tiptap:focus-visible {
@@ -2500,7 +2355,7 @@ body {
 
 .exec-segment.is-active {
   border-color: var(--accent-primary);
-  background: rgba(37, 99, 235, 0.1);
+  background: color-mix(in srgb, var(--accent-text) 10%, transparent);
   color: var(--accent-primary);
   box-shadow: 0 0 0 1px var(--accent-primary) inset;
 }
@@ -2591,7 +2446,7 @@ body {
 .ai-header-text-btn.active {
   color: var(--accent);
   background: var(--accent-subtle);
-  border-color: rgba(0, 212, 146, 0.4);
+  border-color: color-mix(in srgb, var(--accent-text) 40%, transparent);
 }
 
 [data-theme="light"] .ai-header-text-btn {
@@ -2673,8 +2528,8 @@ body {
 
 .ai-workspace-vertical-rail:hover {
   background: rgba(255, 255, 255, 0.025);
-  border-left-color: rgba(139, 92, 246, 0.35);
-  box-shadow: -10px 0 28px rgba(0, 0, 0, 0.4), 0 0 12px rgba(139, 92, 246, 0.08);
+  border-left-color: color-mix(in srgb, var(--ink-subtle) 35%, transparent);
+  box-shadow: -10px 0 28px rgba(0, 0, 0, 0.4), 0 0 12px color-mix(in srgb, var(--ink-subtle) 8%, transparent);
 }
 
 [data-theme="light"] .ai-workspace-vertical-rail {
@@ -2686,7 +2541,7 @@ body {
 
 [data-theme="light"] .ai-workspace-vertical-rail:hover {
   background: #f8fafc;
-  border-left-color: rgba(99, 102, 241, 0.4);
+  border-left-color: color-mix(in srgb, var(--accent-text) 40%, transparent);
 }
 
 .ai-rail-expand-btn {
@@ -2710,15 +2565,15 @@ body {
 }
 
 .ai-rail-expand-btn:hover {
-  background: rgba(139, 92, 246, 0.15);
-  border-color: rgba(139, 92, 246, 0.4);
+  background: color-mix(in srgb, var(--ink-subtle) 15%, transparent);
+  border-color: color-mix(in srgb, var(--ink-subtle) 40%, transparent);
   color: #ffffff;
   transform: scale(1.05);
 }
 
 [data-theme="light"] .ai-rail-expand-btn:hover {
-  background: rgba(99, 102, 241, 0.12);
-  border-color: rgba(99, 102, 241, 0.4);
+  background: color-mix(in srgb, var(--accent-text) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent-text) 40%, transparent);
   color: var(--accent-primary);
 }
 
@@ -2740,15 +2595,15 @@ body {
   width: 28px;
   height: 28px;
   border-radius: 6px;
-  background: rgba(139, 92, 246, 0.1);
-  border: 1px solid rgba(139, 92, 246, 0.25);
+  background: color-mix(in srgb, var(--ink-subtle) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ink-subtle) 25%, transparent);
   transition: transform 0.15s ease, background 0.15s ease;
 }
 
 .ai-workspace-vertical-rail:hover .ai-rail-icon-wrapper {
   transform: scale(1.08);
-  background: rgba(139, 92, 246, 0.18);
-  border-color: rgba(139, 92, 246, 0.45);
+  background: color-mix(in srgb, var(--ink-subtle) 18%, transparent);
+  border-color: color-mix(in srgb, var(--ink-subtle) 45%, transparent);
 }
 
 .ai-rail-pulse {
@@ -2802,9 +2657,9 @@ body {
   gap: 0.2rem;
   font-size: 0.66rem;
   font-weight: 600;
-  color: #06b6d4;
-  background: rgba(6, 182, 212, 0.12);
-  border: 1px solid rgba(6, 182, 212, 0.35);
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent-text) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 35%, transparent);
   padding: 0.12rem 0.35rem;
   border-radius: 9999px;
   animation: subtleGlowPulse 2s infinite ease-in-out;
@@ -2814,11 +2669,11 @@ body {
 
   0%,
   100% {
-    box-shadow: 0 0 0 rgba(6, 182, 212, 0);
+    box-shadow: 0 0 0 color-mix(in srgb, var(--accent-text) 0%, transparent);
   }
 
   50% {
-    box-shadow: 0 0 8px rgba(6, 182, 212, 0.4);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--accent-text) 40%, transparent);
   }
 }
 
@@ -2934,15 +2789,15 @@ body {
 }
 
 .ai-task-card.is-selected {
-  border-color: rgba(139, 92, 246, 0.55);
-  background: rgba(139, 92, 246, 0.06);
-  box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.25), 0 4px 16px rgba(0, 0, 0, 0.25);
+  border-color: color-mix(in srgb, var(--ink-subtle) 55%, transparent);
+  background: color-mix(in srgb, var(--ink-subtle) 6%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink-subtle) 25%, transparent), 0 4px 16px rgba(0, 0, 0, 0.25);
 }
 
 .ai-task-card.is-running {
-  border-color: rgba(6, 182, 212, 0.6);
-  background: rgba(6, 182, 212, 0.06);
-  box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.3), 0 4px 16px rgba(6, 182, 212, 0.15);
+  border-color: color-mix(in srgb, var(--accent-text) 60%, transparent);
+  background: color-mix(in srgb, var(--accent-text) 6%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-text) 30%, transparent), 0 4px 16px color-mix(in srgb, var(--accent-text) 15%, transparent);
 }
 
 /* Running cards take their category's color (set inline as --card-category-color; cyan when uncategorized) */
@@ -2959,7 +2814,7 @@ body {
 
 /* Running but collapsed: a shimmer sweeps across the whole card, like the live text in the Actions tab */
 .ai-task-card.is-running.is-collapsed {
-  --shimmer-color: var(--card-category-color, #06b6d4);
+  --shimmer-color: var(--card-category-color, var(--accent-text));
   background-image: linear-gradient(100deg,
       transparent 0%,
       transparent 35%,
@@ -3033,8 +2888,8 @@ body {
 }
 
 .ai-task-card.is-running .ai-task-card-header {
-  background: rgba(6, 182, 212, 0.06);
-  border-bottom-color: rgba(6, 182, 212, 0.2);
+  background: color-mix(in srgb, var(--accent-text) 6%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--accent-text) 20%, transparent);
 }
 
 .ai-task-header-left {
@@ -3050,8 +2905,8 @@ body {
   font-weight: 600;
   font-size: 0.74rem;
   color: var(--accent-violet);
-  background: rgba(139, 92, 246, 0.12);
-  border: 1px solid rgba(139, 92, 246, 0.25);
+  background: color-mix(in srgb, var(--ink-subtle) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ink-subtle) 25%, transparent);
   padding: 0.1rem 0.35rem;
   border-radius: 4px;
   flex-shrink: 0;
@@ -3059,8 +2914,8 @@ body {
 
 .ai-task-num-badge-unordered {
   color: var(--accent-cyan);
-  background: rgba(6, 182, 212, 0.12);
-  border-color: rgba(6, 182, 212, 0.25);
+  background: color-mix(in srgb, var(--accent-text) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent-text) 25%, transparent);
 }
 
 .ai-task-title-text {
@@ -3109,19 +2964,19 @@ body {
 }
 
 .brief-card:focus-within {
-  border-color: rgba(139, 92, 246, 0.45);
-  box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.2);
+  border-color: color-mix(in srgb, var(--ink-subtle) 45%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink-subtle) 20%, transparent);
 }
 
 /* Special styling for Human Review post-execution card */
 .brief-card.card-human-review {
-  border: 1px solid rgba(139, 92, 246, 0.35);
-  background: linear-gradient(180deg, rgba(139, 92, 246, 0.06) 0%, rgba(255, 255, 255, 0.02) 40%);
-  box-shadow: 0 3px 12px rgba(139, 92, 246, 0.1);
+  border: 1px solid color-mix(in srgb, var(--ink-subtle) 35%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--ink-subtle) 6%, transparent) 0%, rgba(255, 255, 255, 0.02) 40%);
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--ink-subtle) 10%, transparent);
 }
 
 .brief-card.card-human-review:hover {
-  border-color: rgba(139, 92, 246, 0.55);
+  border-color: color-mix(in srgb, var(--ink-subtle) 55%, transparent);
 }
 
 /* ── Simplified AI Sub-Cards (Direct Children of ai-task-card) ────────── */
@@ -3410,15 +3265,15 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .related-task-badge.tone-done {
-  color: #10b981;
-  background: rgba(16, 185, 129, 0.12);
-  border-color: rgba(16, 185, 129, 0.3);
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent-text) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent-text) 30%, transparent);
 }
 
 .related-task-badge.tone-active {
-  color: #06b6d4;
-  background: rgba(6, 182, 212, 0.1);
-  border-color: rgba(6, 182, 212, 0.3);
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent-text) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent-text) 30%, transparent);
 }
 
 .related-task-badge.tone-partial {
@@ -3494,7 +3349,7 @@ button.related-task-title.is-link:focus-visible {
 }
 
 [data-theme="light"] .related-task-badge.tone-done {
-  color: #059669;
+  color: var(--accent-text);
   background: #d1fae5;
   border-color: #6ee7b7;
 }
@@ -3502,7 +3357,7 @@ button.related-task-title.is-link:focus-visible {
 [data-theme="light"] .related-task-badge.tone-active {
   color: #0e7490;
   background: #cffafe;
-  border-color: #67e8f9;
+  border-color: var(--accent-text);
 }
 
 [data-theme="light"] .related-task-badge.tone-partial {
@@ -3549,7 +3404,7 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .brief-section-header.clickable-header:hover {
-  background: rgba(139, 92, 246, 0.06);
+  background: color-mix(in srgb, var(--ink-subtle) 6%, transparent);
 }
 
 .brief-section-header .header-left {
@@ -3647,9 +3502,9 @@ button.related-task-title.is-link:focus-visible {
   border-radius: 9999px;
   font-size: 0.72rem;
   font-weight: 700;
-  background: rgba(139, 92, 246, 0.18);
-  border: 1px solid rgba(139, 92, 246, 0.4);
-  color: #c4b5fd;
+  background: color-mix(in srgb, var(--ink-subtle) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ink-subtle) 40%, transparent);
+  color: var(--ink-subtle);
   letter-spacing: 0.02em;
 }
 
@@ -3673,10 +3528,10 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .sync-with-task-btn:hover:not(:disabled) {
-  background: rgba(139, 92, 246, 0.15);
-  border-color: rgba(139, 92, 246, 0.45);
+  background: color-mix(in srgb, var(--ink-subtle) 15%, transparent);
+  border-color: color-mix(in srgb, var(--ink-subtle) 45%, transparent);
   color: #fff;
-  box-shadow: 0 0 10px rgba(139, 92, 246, 0.2);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--ink-subtle) 20%, transparent);
 }
 
 .brief-body-wrapper {
@@ -3710,7 +3565,7 @@ button.related-task-title.is-link:focus-visible {
   border-radius: 4px;
   font-size: 0.82rem;
   color: var(--accent-cyan);
-  border: 1px solid rgba(6, 182, 212, 0.15);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 15%, transparent);
 }
 
 [data-theme="light"] .brief-body code {
@@ -3771,14 +3626,14 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .task-status-pill.status-done {
-  background: rgba(16, 185, 129, 0.15);
-  border: 1px solid rgba(16, 185, 129, 0.35);
+  background: color-mix(in srgb, var(--accent-text) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 35%, transparent);
   color: var(--accent-emerald);
 }
 
 .task-status-pill.status-in-progress {
-  background: rgba(6, 182, 212, 0.15);
-  border: 1px solid rgba(6, 182, 212, 0.35);
+  background: color-mix(in srgb, var(--accent-text) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 35%, transparent);
   color: var(--accent-cyan);
 }
 
@@ -3856,8 +3711,8 @@ button.related-task-title.is-link:focus-visible {
 .resizable-terminal-height-tag.is-visible {
   opacity: 1;
   color: var(--accent-cyan);
-  border-color: rgba(6, 182, 212, 0.35);
-  background: rgba(6, 182, 212, 0.08);
+  border-color: color-mix(in srgb, var(--accent-text) 35%, transparent);
+  background: color-mix(in srgb, var(--accent-text) 8%, transparent);
 }
 
 .terminal-ctrl-btn {
@@ -3884,8 +3739,8 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .terminal-ctrl-btn.is-active {
-  background: rgba(6, 182, 212, 0.12);
-  border-color: rgba(6, 182, 212, 0.4);
+  background: color-mix(in srgb, var(--accent-text) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent-text) 40%, transparent);
   color: var(--accent-cyan);
 }
 
@@ -3926,13 +3781,13 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .terminal-resize-handle:hover {
-  background: rgba(6, 182, 212, 0.06);
-  border-top-color: rgba(6, 182, 212, 0.25);
+  background: color-mix(in srgb, var(--accent-text) 6%, transparent);
+  border-top-color: color-mix(in srgb, var(--accent-text) 25%, transparent);
 }
 
 .terminal-resize-handle.is-dragging {
-  background: rgba(6, 182, 212, 0.12);
-  border-top-color: rgba(6, 182, 212, 0.4);
+  background: color-mix(in srgb, var(--accent-text) 12%, transparent);
+  border-top-color: color-mix(in srgb, var(--accent-text) 40%, transparent);
 }
 
 .terminal-resize-grip {
@@ -3946,13 +3801,13 @@ button.related-task-title.is-link:focus-visible {
 .terminal-resize-handle:hover .terminal-resize-grip {
   width: 52px;
   background: var(--accent-cyan);
-  box-shadow: 0 0 8px rgba(6, 182, 212, 0.4);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent-text) 40%, transparent);
 }
 
 .terminal-resize-handle.is-dragging .terminal-resize-grip {
   width: 60px;
   background: var(--accent-cyan);
-  box-shadow: 0 0 12px rgba(6, 182, 212, 0.6);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent-text) 60%, transparent);
 }
 
 .terminal-resize-handle-tip {
@@ -4031,8 +3886,8 @@ button.related-task-title.is-link:focus-visible {
   font-size: 0.72rem;
   font-weight: 700;
   color: var(--accent-emerald);
-  background: rgba(16, 185, 129, 0.12);
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: color-mix(in srgb, var(--accent-text) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 30%, transparent);
   padding: 0.15rem 0.5rem;
   border-radius: 9999px;
 }
@@ -4055,8 +3910,8 @@ button.related-task-title.is-link:focus-visible {
   align-items: center;
   justify-content: space-between;
   padding: 0.35rem 0.65rem;
-  border-bottom: 1px solid rgba(168, 85, 247, 0.12);
-  background: rgba(168, 85, 247, 0.025);
+  border-bottom: 1px solid color-mix(in srgb, var(--ink-subtle) 12%, transparent);
+  background: color-mix(in srgb, var(--ink-subtle) 2%, transparent);
 }
 
 .actions-switcher-label {
@@ -4067,8 +3922,8 @@ button.related-task-title.is-link:focus-visible {
 }
 
 [data-theme="light"] .actions-view-switcher-bar {
-  border-bottom-color: rgba(168, 85, 247, 0.14);
-  background: rgba(168, 85, 247, 0.035);
+  border-bottom-color: color-mix(in srgb, var(--ink-subtle) 14%, transparent);
+  background: color-mix(in srgb, var(--ink-subtle) 4%, transparent);
 }
 
 /* ── Steps / Notes Segmented Chip ──────────────────────────────────────── */
@@ -4104,10 +3959,10 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .steps-notes-segment.active {
-  background: rgba(168, 85, 247, 0.22);
+  background: color-mix(in srgb, var(--ink-subtle) 22%, transparent);
   color: #ffffff;
   font-weight: 600;
-  border-color: rgba(168, 85, 247, 0.45);
+  border-color: color-mix(in srgb, var(--ink-subtle) 45%, transparent);
 }
 
 /* AI Workspace sort toggle (Category / Date added) and its category headings */
@@ -4153,7 +4008,7 @@ button.related-task-title.is-link:focus-visible {
 }
 
 [data-theme="light"] .steps-notes-segment.active {
-  background: #f3e8ff;
+  background: var(--ink-subtle);
   color: #7e22ce;
   border-color: #d8b4fe;
 }
@@ -4359,14 +4214,14 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .prompt-option-btn.is-default {
-  background: rgba(6, 182, 212, 0.08);
-  border-color: rgba(6, 182, 212, 0.35);
+  background: color-mix(in srgb, var(--accent-text) 8%, transparent);
+  border-color: color-mix(in srgb, var(--accent-text) 35%, transparent);
   color: #e0f2fe;
 }
 
 .prompt-option-btn.is-default:hover:not(:disabled) {
-  background: rgba(6, 182, 212, 0.18);
-  border-color: rgba(6, 182, 212, 0.55);
+  background: color-mix(in srgb, var(--accent-text) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent-text) 55%, transparent);
 }
 
 .prompt-option-btn.is-destructive {
@@ -4497,17 +4352,17 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .feed-item.is-thought .feed-item-text {
-  color: #c4b5fd;
+  color: var(--ink-subtle);
   font-style: italic;
 }
 
 .feed-item.is-user .feed-item-text {
-  color: #34d399;
+  color: var(--accent-text);
   font-weight: 600;
 }
 
 .feed-item.is-tool .feed-item-text {
-  color: #67e8f9;
+  color: var(--accent-text);
 }
 
 .feed-item-detail {
@@ -4556,7 +4411,7 @@ button.related-task-title.is-link:focus-visible {
 
 .steer-input-wrapper:focus-within {
   border-color: var(--accent-cyan);
-  box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.35);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-text) 35%, transparent);
 }
 
 .steer-input-field {
@@ -4580,7 +4435,7 @@ button.related-task-title.is-link:focus-visible {
   gap: 0.3rem;
   padding: 0.25rem 0.65rem;
   border-radius: 4px;
-  background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%);
+  background: linear-gradient(135deg, var(--accent-text) 0%, var(--accent-text) 100%);
   border: none;
   color: #ffffff;
   font-size: 0.72rem;
@@ -4604,17 +4459,17 @@ button.related-task-title.is-link:focus-visible {
 .agent-role-badge.role-manager,
 .agent-session-tab.role-manager,
 .cli-notes-bridge.role-manager {
-  --role-fg: #22d3ee;
-  --role-bg: rgba(6, 182, 212, 0.14);
-  --role-border: rgba(6, 182, 212, 0.42);
+  --role-fg: var(--accent-text);
+  --role-bg: color-mix(in srgb, var(--accent-text) 14%, transparent);
+  --role-border: color-mix(in srgb, var(--accent-text) 42%, transparent);
 }
 
 .agent-role-badge.role-worker,
 .agent-session-tab.role-worker,
 .cli-notes-bridge.role-worker {
-  --role-fg: #c4b5fd;
-  --role-bg: rgba(139, 92, 246, 0.16);
-  --role-border: rgba(139, 92, 246, 0.45);
+  --role-fg: var(--ink-subtle);
+  --role-bg: color-mix(in srgb, var(--ink-subtle) 16%, transparent);
+  --role-border: color-mix(in srgb, var(--ink-subtle) 45%, transparent);
 }
 
 .agent-role-badge.role-verifier,
@@ -4626,9 +4481,9 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .agent-role-badge.role-summary {
-  --role-fg: #93c5fd;
-  --role-bg: rgba(59, 130, 246, 0.14);
-  --role-border: rgba(59, 130, 246, 0.4);
+  --role-fg: var(--accent-text);
+  --role-bg: color-mix(in srgb, var(--accent-text) 14%, transparent);
+  --role-border: color-mix(in srgb, var(--accent-text) 40%, transparent);
 }
 
 .agent-role-badge.role-cleaner {
@@ -4639,8 +4494,8 @@ button.related-task-title.is-link:focus-visible {
 
 .agent-role-badge.role-logger {
   --role-fg: #6ee7b7;
-  --role-bg: rgba(16, 185, 129, 0.14);
-  --role-border: rgba(16, 185, 129, 0.4);
+  --role-bg: color-mix(in srgb, var(--accent-text) 14%, transparent);
+  --role-border: color-mix(in srgb, var(--accent-text) 40%, transparent);
 }
 
 .agent-role-badge.role-autocomplete {
@@ -4654,7 +4509,7 @@ button.related-task-title.is-link:focus-visible {
 [data-theme="light"] .cli-notes-bridge.role-manager {
   --role-fg: #0e7490;
   --role-bg: #ecfeff;
-  --role-border: #67e8f9;
+  --role-border: var(--accent-text);
 }
 
 [data-theme="light"] .agent-role-badge.role-worker,
@@ -4662,7 +4517,7 @@ button.related-task-title.is-link:focus-visible {
 [data-theme="light"] .cli-notes-bridge.role-worker {
   --role-fg: #6d28d9;
   --role-bg: #f5f3ff;
-  --role-border: #c4b5fd;
+  --role-border: var(--ink-subtle);
 }
 
 [data-theme="light"] .agent-role-badge.role-verifier,
@@ -4674,9 +4529,9 @@ button.related-task-title.is-link:focus-visible {
 }
 
 [data-theme="light"] .agent-role-badge.role-summary {
-  --role-fg: #1d4ed8;
+  --role-fg: var(--accent-text);
   --role-bg: #eff6ff;
-  --role-border: #93c5fd;
+  --role-border: var(--accent-text);
 }
 
 [data-theme="light"] .agent-role-badge.role-cleaner {
@@ -4742,8 +4597,8 @@ button.related-task-title.is-link:focus-visible {
 
 .agent-status-dot.status-starting,
 .agent-status-dot.status-running {
-  background: #10b981;
-  box-shadow: 0 0 6px #10b981;
+  background: var(--accent-text);
+  box-shadow: 0 0 6px var(--accent-text);
   animation: pulseDot 1.5s infinite;
 }
 
@@ -4754,12 +4609,12 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .agent-status-dot.status-waiting {
-  background: #a78bfa;
-  box-shadow: 0 0 5px rgba(167, 139, 250, 0.7);
+  background: var(--ink-subtle);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--ink-subtle) 70%, transparent);
 }
 
 .agent-status-dot.status-done {
-  background: #34d399;
+  background: var(--accent-text);
 }
 
 .agent-status-dot.status-failed {
@@ -4772,12 +4627,12 @@ button.related-task-title.is-link:focus-visible {
 }
 
 [data-theme="light"] .agent-status-dot.status-waiting {
-  background: #7c3aed;
+  background: var(--ink-subtle);
   box-shadow: none;
 }
 
 [data-theme="light"] .agent-status-dot.status-done {
-  background: #059669;
+  background: var(--accent-text);
 }
 
 /* ── Notes view: agent tabs, waiting row, switch banner ── */
@@ -4889,9 +4744,9 @@ button.related-task-title.is-link:focus-visible {
   flex-wrap: wrap;
   padding: 0.3rem 0.55rem;
   border-radius: 6px;
-  background: rgba(139, 92, 246, 0.08);
-  border: 1px dashed rgba(139, 92, 246, 0.35);
-  color: #c4b5fd;
+  background: color-mix(in srgb, var(--ink-subtle) 8%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--ink-subtle) 35%, transparent);
+  color: var(--ink-subtle);
   font-size: 0.7rem;
   font-weight: 600;
 }
@@ -4912,7 +4767,7 @@ button.related-task-title.is-link:focus-visible {
 
 [data-theme="light"] .agent-waiting-row {
   background: #f5f3ff;
-  border-color: #c4b5fd;
+  border-color: var(--ink-subtle);
   color: #6d28d9;
 }
 
@@ -4923,8 +4778,8 @@ button.related-task-title.is-link:focus-visible {
   flex-wrap: wrap;
   padding: 0.35rem 0.4rem 0.35rem 0.6rem;
   border-radius: 6px;
-  background: rgba(6, 182, 212, 0.08);
-  border: 1px solid rgba(6, 182, 212, 0.35);
+  background: color-mix(in srgb, var(--accent-text) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 35%, transparent);
   color: var(--text-bright);
   font-size: 0.72rem;
   animation: fadeIn 0.2s ease;
@@ -4977,7 +4832,7 @@ button.related-task-title.is-link:focus-visible {
 
 [data-theme="light"] .agent-switch-banner {
   background: #ecfeff;
-  border-color: #67e8f9;
+  border-color: var(--accent-text);
   color: #0f172a;
 }
 
@@ -5381,7 +5236,7 @@ button.related-task-title.is-link:focus-visible {
   gap: 0.35rem;
   font-size: 0.72rem;
   font-weight: 600;
-  color: #34d399;
+  color: var(--accent-text);
 }
 
 .prompt-auto-note.is-warning {
@@ -5498,10 +5353,10 @@ button.related-task-title.is-link:focus-visible {
 .overview-gathering-context-box {
   margin-bottom: 0.75rem;
   padding: 0.85rem 1rem;
-  background: rgba(56, 189, 248, 0.07);
-  border: 1px solid rgba(56, 189, 248, 0.28);
+  background: color-mix(in srgb, var(--accent-text) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 28%, transparent);
   border-radius: var(--radius-md);
-  box-shadow: 0 0 16px rgba(56, 189, 248, 0.08);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--accent-text) 8%, transparent);
   animation: fadeIn 0.2s ease-in-out;
 }
 
@@ -5654,7 +5509,7 @@ button.related-task-title.is-link:focus-visible {
 
 .batch-run-task.is-selected {
   border-color: var(--accent-violet);
-  background: rgba(139, 92, 246, 0.08);
+  background: color-mix(in srgb, var(--ink-subtle) 8%, transparent);
   color: var(--text-bright);
 }
 
@@ -5754,7 +5609,7 @@ button.related-task-title.is-link:focus-visible {
 
 .scoped-rules-tabs button.is-active {
   border-color: var(--accent-violet);
-  background: rgba(139, 92, 246, 0.08);
+  background: color-mix(in srgb, var(--ink-subtle) 8%, transparent);
   color: var(--text-bright);
 }
 
@@ -5892,7 +5747,7 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .mcp-card.connected {
-  border-color: rgba(0, 212, 146, 0.4);
+  border-color: color-mix(in srgb, var(--accent-text) 40%, transparent);
 }
 
 .mcp-header {
@@ -5968,9 +5823,9 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .step-card.running {
-  border-color: rgba(56, 189, 248, 0.4);
-  background: rgba(56, 189, 248, 0.03);
-  box-shadow: 0 0 8px rgba(56, 189, 248, 0.12);
+  border-color: color-mix(in srgb, var(--accent-text) 40%, transparent);
+  background: color-mix(in srgb, var(--accent-text) 3%, transparent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent-text) 12%, transparent);
 }
 
 .step-card.running[class*="overview"] {
@@ -5980,8 +5835,8 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .step-card.success {
-  border-color: rgba(16, 185, 129, 0.22);
-  background: rgba(16, 185, 129, 0.015);
+  border-color: color-mix(in srgb, var(--accent-text) 22%, transparent);
+  background: color-mix(in srgb, var(--accent-text) 2%, transparent);
 }
 
 .step-card.cancelled {
@@ -6020,8 +5875,8 @@ button.related-task-title.is-link:focus-visible {
 }
 
 [data-theme="light"] .step-card.success {
-  border-color: rgba(16, 185, 129, 0.35);
-  background: rgba(16, 185, 129, 0.03);
+  border-color: color-mix(in srgb, var(--accent-text) 35%, transparent);
+  background: color-mix(in srgb, var(--accent-text) 3%, transparent);
 }
 
 [data-theme="light"] .step-card.cancelled {
@@ -6116,15 +5971,15 @@ button.related-task-title.is-link:focus-visible {
   font-family: var(--font-mono);
   font-size: 0.68rem;
   color: var(--accent-emerald);
-  background: rgba(16, 185, 129, 0.06);
-  border: 1px solid rgba(16, 185, 129, 0.25);
+  background: color-mix(in srgb, var(--accent-text) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 25%, transparent);
   border-radius: 4px;
   cursor: pointer;
 }
 
 .bible-deep-link:hover {
-  background: rgba(16, 185, 129, 0.12);
-  border-color: rgba(16, 185, 129, 0.45);
+  background: color-mix(in srgb, var(--accent-text) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent-text) 45%, transparent);
 }
 
 /* Interactive Widget Containers */
@@ -6148,8 +6003,8 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .diff-line-add {
-  color: #34d399;
-  background: rgba(52, 211, 153, 0.1);
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent-text) 10%, transparent);
   padding: 0.1rem 0.4rem;
   border-radius: 2px;
 }
@@ -6214,14 +6069,14 @@ button.related-task-title.is-link:focus-visible {
 
 .resize-divider:hover .resize-handle-bar,
 .resize-divider.active .resize-handle-bar {
-  background: #a855f7;
-  box-shadow: 0 0 6px rgba(168, 85, 247, 0.6);
+  background: var(--ink-subtle);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--ink-subtle) 60%, transparent);
 }
 
 .resize-divider:hover+.ai-workspace-pane-wrapper .ai-workspace-column,
 .resize-divider.active+.ai-workspace-pane-wrapper .ai-workspace-column {
-  border-left-color: #a855f7;
-  box-shadow: -2px 0 8px rgba(168, 85, 247, 0.45), -10px 0 32px rgba(0, 0, 0, 0.42);
+  border-left-color: var(--ink-subtle);
+  box-shadow: -2px 0 8px color-mix(in srgb, var(--ink-subtle) 45%, transparent), -10px 0 32px rgba(0, 0, 0, 0.42);
 }
 
 /* Custom Dropdown & Header Control Formatting */
@@ -6278,25 +6133,25 @@ button.related-task-title.is-link:focus-visible {
 
 .header-actions .btn.btn-ai-panel-toggle.is-active {
   background: var(--accent-subtle);
-  border-color: rgba(0, 212, 146, 0.4);
+  border-color: color-mix(in srgb, var(--accent-text) 40%, transparent);
   color: var(--text-bright);
   box-shadow: 0 0 12px var(--accent-glow);
 }
 
 .header-actions .btn.btn-ai-panel-toggle:hover {
   border-color: var(--accent);
-  background: rgba(0, 212, 146, 0.15);
+  background: color-mix(in srgb, var(--accent-text) 15%, transparent);
   color: #ffffff;
 }
 
 [data-theme="light"] .header-actions .btn.btn-ai-panel-toggle.is-active {
-  background: rgba(37, 99, 235, 0.1);
-  border-color: rgba(37, 99, 235, 0.35);
+  background: color-mix(in srgb, var(--accent-text) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent-text) 35%, transparent);
   color: var(--accent-primary);
 }
 
 [data-theme="light"] .header-actions .btn.btn-ai-panel-toggle:hover {
-  background: rgba(37, 99, 235, 0.15);
+  background: color-mix(in srgb, var(--accent-text) 15%, transparent);
   border-color: var(--accent-primary);
   color: var(--accent-primary-hover);
 }
@@ -6399,7 +6254,7 @@ button.related-task-title.is-link:focus-visible {
   color: var(--accent-cyan);
   margin-bottom: 0.65rem;
   padding-bottom: 0.3rem;
-  border-bottom: 1px dashed rgba(6, 182, 212, 0.25);
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent-text) 25%, transparent);
   font-family: var(--font-mono);
 }
 
@@ -6428,7 +6283,7 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .bullet-item-row.selected {
-  background: rgba(99, 102, 241, 0.08);
+  background: color-mix(in srgb, var(--accent-text) 8%, transparent);
   border-color: var(--border-glow);
 }
 
@@ -6461,7 +6316,7 @@ button.related-task-title.is-link:focus-visible {
   font-size: 0.78rem;
   font-weight: 700;
   color: var(--accent-violet);
-  background: rgba(139, 92, 246, 0.12);
+  background: color-mix(in srgb, var(--ink-subtle) 12%, transparent);
   padding: 0.1rem 0.4rem;
   border-radius: 4px;
   margin-top: 0.1rem;
@@ -6503,9 +6358,9 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .bullet-badge-tools {
-  background: rgba(6, 182, 212, 0.12);
+  background: color-mix(in srgb, var(--accent-text) 12%, transparent);
   color: var(--accent-cyan);
-  border: 1px solid rgba(6, 182, 212, 0.25);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 25%, transparent);
   font-family: var(--font-mono);
 }
 
@@ -6731,19 +6586,19 @@ button.related-task-title.is-link:focus-visible {
 .md-link:hover {
   color: #fff;
   border-bottom-style: solid;
-  background: rgba(6, 182, 212, 0.15);
+  background: color-mix(in srgb, var(--accent-text) 15%, transparent);
   border-radius: 2px;
 }
 
 /* Inline Code */
 .md-inline-code {
   font-family: var(--font-mono);
-  background: rgba(99, 102, 241, 0.16);
+  background: color-mix(in srgb, var(--accent-text) 16%, transparent);
   color: var(--accent-cyan);
   padding: 0.15rem 0.45rem;
   border-radius: 4px;
   font-size: 0.85em;
-  border: 1px solid rgba(6, 182, 212, 0.25);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 25%, transparent);
   word-break: break-word;
   position: relative;
   transition: all 0.15s ease;
@@ -6885,7 +6740,7 @@ button.related-task-title.is-link:focus-visible {
   position: relative;
   margin: 0.75rem 0;
   padding: 0.65rem 1rem 0.65rem 1.25rem;
-  background: rgba(99, 102, 241, 0.08);
+  background: color-mix(in srgb, var(--accent-text) 8%, transparent);
   border-left: 3px solid var(--accent-cyan);
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
   color: var(--text-main);
@@ -7009,9 +6864,9 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .autosave-status-btn.status-saving {
-  border-color: rgba(6, 182, 212, 0.45);
-  background: rgba(6, 182, 212, 0.1);
-  color: #06b6d4;
+  border-color: color-mix(in srgb, var(--accent-text) 45%, transparent);
+  background: color-mix(in srgb, var(--accent-text) 10%, transparent);
+  color: var(--accent-text);
 }
 
 .autosave-status-btn.status-pending {
@@ -7021,7 +6876,7 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .autosave-status-btn.status-saved {
-  border-color: rgba(0, 212, 146, 0.35);
+  border-color: color-mix(in srgb, var(--accent-text) 35%, transparent);
   background: var(--accent-subtle);
   color: var(--accent);
 }
@@ -7074,7 +6929,7 @@ button.related-task-title.is-link:focus-visible {
 .toggle-switch-btn.is-active {
   background: var(--accent-emerald);
   border-color: var(--accent-emerald);
-  box-shadow: 0 0 10px rgba(16, 185, 129, 0.4);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent-text) 40%, transparent);
 }
 
 .toggle-switch-thumb {
@@ -7112,10 +6967,10 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .delay-preset-pill.selected {
-  background: rgba(6, 182, 212, 0.16);
+  background: color-mix(in srgb, var(--accent-text) 16%, transparent);
   border-color: var(--accent-cyan);
   color: var(--accent-cyan);
-  box-shadow: 0 0 8px rgba(6, 182, 212, 0.2);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent-text) 20%, transparent);
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -7238,7 +7093,7 @@ button.related-task-title.is-link:focus-visible {
 
 .toast-action-btn:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-text) 40%, transparent);
 }
 
 .toast-action-btn.toast-action-primary {
@@ -7249,14 +7104,14 @@ button.related-task-title.is-link:focus-visible {
 
 .toast-action-btn.toast-action-emerald {
   color: #ffffff;
-  background: linear-gradient(135deg, #059669 0%, #10b981 100%);
-  border-color: rgba(16, 185, 129, 0.35);
-  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.25);
+  background: linear-gradient(135deg, var(--accent-text) 0%, var(--accent-text) 100%);
+  border-color: color-mix(in srgb, var(--accent-text) 35%, transparent);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-text) 25%, transparent);
 }
 
 .toast-action-btn.toast-action-emerald:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.45);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent-text) 45%, transparent);
 }
 
 .toast-action-btn.toast-action-secondary {
@@ -7428,7 +7283,7 @@ button.related-task-title.is-link:focus-visible {
   flex-direction: column;
   background: var(--drawer-bg);
   border-top: 1.5px solid var(--border-glow);
-  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.2), 0 -2px 10px rgba(99, 102, 241, 0.15);
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.2), 0 -2px 10px color-mix(in srgb, var(--accent-text) 15%, transparent);
   transform: translateY(102%);
   transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
   overflow: hidden;
@@ -7455,7 +7310,7 @@ button.related-task-title.is-link:focus-visible {
 
 .human-assistant-resize-handle:hover,
 .human-assistant-resize-handle.is-dragging {
-  background: rgba(99, 102, 241, 0.3);
+  background: color-mix(in srgb, var(--accent-text) 30%, transparent);
 }
 
 .human-assistant-resize-handle::after {
@@ -8110,9 +7965,9 @@ button.related-task-title.is-link:focus-visible {
   border-radius: 9999px;
   font-size: 0.72rem;
   font-weight: 700;
-  background: rgba(139, 92, 246, 0.16);
-  border: 1px solid rgba(139, 92, 246, 0.4);
-  color: #c4b5fd;
+  background: color-mix(in srgb, var(--ink-subtle) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ink-subtle) 40%, transparent);
+  color: var(--ink-subtle);
   user-select: none;
 }
 
@@ -8122,7 +7977,7 @@ button.related-task-title.is-link:focus-visible {
 
 .ProseMirror .task-human-review-item {
   position: relative;
-  background: rgba(139, 92, 246, 0.05);
+  background: color-mix(in srgb, var(--ink-subtle) 5%, transparent);
   border-radius: 4px;
   padding-right: 0.5rem;
 }
@@ -8143,8 +7998,8 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .human-review-verification-card {
-  background: rgba(139, 92, 246, 0.08);
-  border: 1px solid rgba(139, 92, 246, 0.3);
+  background: color-mix(in srgb, var(--ink-subtle) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ink-subtle) 30%, transparent);
   border-radius: var(--radius-md, 8px);
   padding: 0.85rem 1rem;
   margin-bottom: 0.85rem;
@@ -8158,7 +8013,7 @@ button.related-task-title.is-link:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  border-bottom: 1px solid rgba(139, 92, 246, 0.18);
+  border-bottom: 1px solid color-mix(in srgb, var(--ink-subtle) 18%, transparent);
   padding-bottom: 0.45rem;
 }
 
@@ -8166,8 +8021,8 @@ button.related-task-title.is-link:focus-visible {
   font-size: 0.72rem;
   font-family: var(--font-mono, monospace);
   font-weight: 600;
-  color: #c4b5fd;
-  background: rgba(139, 92, 246, 0.2);
+  color: var(--ink-subtle);
+  background: color-mix(in srgb, var(--ink-subtle) 20%, transparent);
   padding: 0.12rem 0.45rem;
   border-radius: 4px;
 }
@@ -8220,21 +8075,21 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .human-review-step-status.pending {
-  background: rgba(139, 92, 246, 0.2);
-  border: 1px solid rgba(139, 92, 246, 0.45);
+  background: color-mix(in srgb, var(--ink-subtle) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ink-subtle) 45%, transparent);
   color: #ddd6fe;
 }
 
 .human-review-step-status.verified {
-  background: rgba(16, 185, 129, 0.15);
-  border: 1px solid rgba(16, 185, 129, 0.4);
+  background: color-mix(in srgb, var(--accent-text) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 40%, transparent);
   color: #6ee7b7;
 }
 
 /* ── Completed Work & Created Artifacts Interactive Links ─────────── */
 .created-artifacts-card {
-  background: rgba(6, 182, 212, 0.06);
-  border: 1px solid rgba(6, 182, 212, 0.3);
+  background: color-mix(in srgb, var(--accent-text) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 30%, transparent);
   border-radius: var(--radius-md, 8px);
   padding: 0.85rem 1rem;
   margin-top: 0.85rem;
@@ -8249,7 +8104,7 @@ button.related-task-title.is-link:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  border-bottom: 1px solid rgba(6, 182, 212, 0.18);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent-text) 18%, transparent);
   padding-bottom: 0.45rem;
 }
 
@@ -8257,8 +8112,8 @@ button.related-task-title.is-link:focus-visible {
   font-size: 0.72rem;
   font-family: var(--font-mono, monospace);
   font-weight: 600;
-  color: #67e8f9;
-  background: rgba(6, 182, 212, 0.18);
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent-text) 18%, transparent);
   padding: 0.12rem 0.45rem;
   border-radius: 4px;
 }
@@ -8282,8 +8137,8 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .created-artifact-row:hover {
-  background: rgba(6, 182, 212, 0.1);
-  border-color: rgba(6, 182, 212, 0.35);
+  background: color-mix(in srgb, var(--accent-text) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent-text) 35%, transparent);
 }
 
 .created-artifact-info {
@@ -8321,28 +8176,28 @@ button.related-task-title.is-link:focus-visible {
   cursor: pointer;
   transition: all 0.15s ease;
   user-select: none;
-  background: rgba(6, 182, 212, 0.15);
-  border: 1px solid rgba(6, 182, 212, 0.4);
-  color: #67e8f9;
+  background: color-mix(in srgb, var(--accent-text) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 40%, transparent);
+  color: var(--accent-text);
 }
 
 .created-artifact-btn:hover {
-  background: rgba(6, 182, 212, 0.28);
-  border-color: #06b6d4;
+  background: color-mix(in srgb, var(--accent-text) 28%, transparent);
+  border-color: var(--accent-text);
   color: #fff;
   transform: translateY(-1px);
-  box-shadow: 0 0 8px rgba(6, 182, 212, 0.3);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent-text) 30%, transparent);
 }
 
 .md-link.md-file-link {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  background: rgba(6, 182, 212, 0.1);
-  border: 1px solid rgba(6, 182, 212, 0.3);
+  background: color-mix(in srgb, var(--accent-text) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 30%, transparent);
   padding: 0.1rem 0.45rem;
   border-radius: 4px;
-  color: #67e8f9;
+  color: var(--accent-text);
   text-decoration: none;
   font-family: var(--font-mono, monospace);
   font-size: 0.82rem;
@@ -8351,8 +8206,8 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .md-link.md-file-link:hover {
-  background: rgba(6, 182, 212, 0.22);
-  border-color: #06b6d4;
+  background: color-mix(in srgb, var(--accent-text) 22%, transparent);
+  border-color: var(--accent-text);
   color: #fff;
   transform: translateY(-1px);
 }
@@ -8366,7 +8221,7 @@ button.related-task-title.is-link:focus-visible {
   font-size: 0.62rem;
   font-weight: 800;
   text-transform: uppercase;
-  background: rgba(6, 182, 212, 0.25);
+  background: color-mix(in srgb, var(--accent-text) 25%, transparent);
   color: #a5f3fc;
   padding: 0.05rem 0.3rem;
   border-radius: 3px;
@@ -8636,8 +8491,8 @@ button.related-task-title.is-link:focus-visible {
   font-family: var(--font-mono);
   font-size: 0.72rem;
   color: var(--accent-cyan);
-  background: rgba(6, 182, 212, 0.1);
-  border: 1px solid rgba(6, 182, 212, 0.25);
+  background: color-mix(in srgb, var(--accent-text) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 25%, transparent);
   border-radius: 4px;
   padding: 0.1rem 0.4rem;
   display: inline-flex;
@@ -8674,7 +8529,7 @@ button.related-task-title.is-link:focus-visible {
 .swimlane-menu-btn.active {
   color: var(--accent);
   background: var(--accent-subtle);
-  border-color: rgba(0, 212, 146, 0.4);
+  border-color: color-mix(in srgb, var(--accent-text) 40%, transparent);
 }
 
 /* Dropdown Menu */
@@ -8759,7 +8614,7 @@ button.related-task-title.is-link:focus-visible {
 
 .swimlane-resizer-handle:hover,
 .swimlane-resizer-handle.is-active {
-  background: rgba(99, 102, 241, 0.1);
+  background: color-mix(in srgb, var(--accent-text) 10%, transparent);
 }
 
 .swimlane-resizer-line {
@@ -8776,7 +8631,7 @@ button.related-task-title.is-link:focus-visible {
 .swimlane-resizer-handle:hover .swimlane-resizer-line,
 .swimlane-resizer-handle.is-active .swimlane-resizer-line {
   background: var(--accent-cyan);
-  box-shadow: 0 0 6px rgba(6, 182, 212, 0.5);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent-text) 50%, transparent);
   width: 2px;
 }
 
@@ -8788,7 +8643,7 @@ button.related-task-title.is-link:focus-visible {
 
 .workspace-header-menu-btn.active {
   border-color: var(--accent-primary) !important;
-  background: rgba(99, 102, 241, 0.18) !important;
+  background: color-mix(in srgb, var(--accent-text) 18%, transparent) !important;
   color: var(--text-bright, #fff) !important;
 }
 
@@ -8886,7 +8741,7 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .archive-filter-pill.active {
-  background: rgba(99, 102, 241, 0.18);
+  background: color-mix(in srgb, var(--accent-text) 18%, transparent);
   border-color: var(--accent-primary);
   color: var(--text-bright);
 }
@@ -8900,7 +8755,7 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .modal-archived-card:hover {
-  border-color: rgba(99, 102, 241, 0.35) !important;
+  border-color: color-mix(in srgb, var(--accent-text) 35%, transparent) !important;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12) !important;
 }
 
@@ -8915,7 +8770,7 @@ button.related-task-title.is-link:focus-visible {
   background: var(--bg-card);
   border: 1px solid var(--border-glow);
   border-radius: var(--radius-md);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), 0 0 14px rgba(99, 102, 241, 0.25);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), 0 0 14px color-mix(in srgb, var(--accent-text) 25%, transparent);
   transform: translateX(-50%);
   animation: runTooltipPop 0.16s cubic-bezier(0.16, 1, 0.3, 1);
   user-select: none;
@@ -8952,9 +8807,9 @@ button.related-task-title.is-link:focus-visible {
   align-items: center;
   gap: 0.32rem;
   padding: 0.22rem 0.55rem;
-  background: rgba(99, 102, 241, 0.15);
+  background: color-mix(in srgb, var(--accent-text) 15%, transparent);
   color: var(--accent-primary);
-  border: 1px solid rgba(99, 102, 241, 0.3);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 30%, transparent);
   border-radius: var(--radius-sm);
   font-family: var(--font-sans);
   font-size: 0.75rem;
@@ -8967,7 +8822,7 @@ button.related-task-title.is-link:focus-visible {
   background: var(--accent-primary);
   color: #ffffff;
   border-color: var(--accent-primary-hover);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4), 0 0 10px rgba(99, 102, 241, 0.3);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-text) 40%, transparent), 0 0 10px color-mix(in srgb, var(--accent-text) 30%, transparent);
   transform: translateY(-1px);
 }
 
@@ -9011,7 +8866,7 @@ button.related-task-title.is-link:focus-visible {
 }
 
 .selection-tooltip-btn.is-active {
-  background: rgba(99, 102, 241, 0.2);
+  background: color-mix(in srgb, var(--accent-text) 20%, transparent);
   color: var(--accent-primary);
 }
 
@@ -9052,8 +8907,8 @@ button.related-task-title.is-link:focus-visible {
   font-family: var(--font-mono);
   font-style: normal;
   border-radius: 3px;
-  background: rgba(6, 182, 212, 0.12);
-  border: 1px solid rgba(6, 182, 212, 0.28);
+  background: color-mix(in srgb, var(--accent-text) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 28%, transparent);
   color: var(--accent-cyan);
   opacity: 0.85;
 }
@@ -9109,11 +8964,11 @@ button.related-task-title.is-link:focus-visible {
 
   0%,
   100% {
-    box-shadow: 0 0 20px rgba(99, 102, 241, 0.2), 0 0 40px rgba(0, 212, 146, 0.1);
+    box-shadow: 0 0 20px color-mix(in srgb, var(--accent-text) 20%, transparent), 0 0 40px color-mix(in srgb, var(--accent-text) 10%, transparent);
   }
 
   50% {
-    box-shadow: 0 0 35px rgba(99, 102, 241, 0.4), 0 0 60px rgba(0, 212, 146, 0.25);
+    box-shadow: 0 0 35px color-mix(in srgb, var(--accent-text) 40%, transparent), 0 0 60px color-mix(in srgb, var(--accent-text) 25%, transparent);
   }
 }
 
@@ -9138,8 +8993,8 @@ button.related-task-title.is-link:focus-visible {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(6, 182, 212, 0.14);
-  border: 1px solid rgba(6, 182, 212, 0.3);
+  background: color-mix(in srgb, var(--accent-text) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 30%, transparent);
   color: var(--accent-cyan);
 }
 
@@ -9158,7 +9013,7 @@ button.related-task-title.is-link:focus-visible {
 
 .lm-card {
   background: var(--bg-card, #ffffff);
-  border: 1.5px solid rgba(6, 182, 212, 0.3);
+  border: 1.5px solid color-mix(in srgb, var(--accent-text) 30%, transparent);
   border-radius: 16px;
   padding: 1.35rem 1.4rem;
   display: flex;
@@ -9303,7 +9158,7 @@ button.related-task-title.is-link:focus-visible {
 .lm-btn-primary {
   background: var(--accent-primary);
   color: #ffffff;
-  box-shadow: 0 4px 16px rgba(37, 99, 235, 0.3);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--accent-text) 30%, transparent);
 }
 
 .lm-btn-primary:not(:disabled):hover {
@@ -9459,7 +9314,7 @@ button.related-task-title.is-link:focus-visible {
 
 .lm-notice.is-success {
   background: var(--ok-subtle);
-  border-color: rgba(16, 185, 129, 0.35);
+  border-color: color-mix(in srgb, var(--accent-text) 35%, transparent);
 }
 
 .lm-notice.is-success .lm-notice-icon {
@@ -9547,7 +9402,7 @@ button.related-task-title.is-link:focus-visible {
 
 .lm-segment.is-active {
   border-color: var(--accent-primary);
-  background: rgba(37, 99, 235, 0.1);
+  background: color-mix(in srgb, var(--accent-text) 10%, transparent);
   color: var(--accent-primary);
   box-shadow: 0 0 0 1px var(--accent-primary) inset;
 }
@@ -9849,8 +9704,8 @@ button.related-task-title.is-link:focus-visible {
   gap: 0.55rem;
   padding: 0.4rem 0.55rem;
   border-radius: 6px;
-  background: rgba(168, 85, 247, 0.06);
-  border: 1px solid rgba(168, 85, 247, 0.2);
+  background: color-mix(in srgb, var(--ink-subtle) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ink-subtle) 20%, transparent);
   min-width: 0;
   animation: fadeInBody 0.2s ease;
 }
@@ -9872,7 +9727,7 @@ button.related-task-title.is-link:focus-visible {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--accent-violet, #a855f7);
+  background: var(--accent-violet, var(--ink-subtle));
   opacity: 0.35;
 }
 
@@ -10010,8 +9865,8 @@ button.related-task-title.is-link:focus-visible {
   font-size: 0.74rem;
   padding: 0.25rem 0.45rem;
   border-radius: 5px;
-  background: rgba(16, 185, 129, 0.06);
-  border: 1px solid rgba(16, 185, 129, 0.18);
+  background: color-mix(in srgb, var(--accent-text) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text) 18%, transparent);
   min-width: 0;
 }
 

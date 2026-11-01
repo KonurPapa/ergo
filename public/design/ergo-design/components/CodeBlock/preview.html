@@ -1,0 +1,16 @@
+<!-- @dsCard group="Content" height=340 subtitle="Markdown brief with a code block" -->
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div class="eg-md" style="padding:20px;max-width:620px">
+  <h2>Approach</h2>
+  <p><code>toggleList()</code> currently rewrites the whole list. Scope it to the <strong>selected items</strong> and keep siblings untouched. See <a href="#">ERG-143</a>.</p>
+  <ul><li>Read the selection range from the editor state</li><li>Convert only those items; split the list if needed</li></ul>
+  <div class="eg-code"><div class="eg-code-head"><span>src/editor/Bullet.tsx</span><span class="eg-spacer"></span><button class="eg-btn eg-btn-ghost eg-btn-icon eg-btn-sm" aria-label="Copy code"><i data-i="copy"></i></button></div>
+<pre><code><span class="tk-k">export function</span> toggleList(state: EditorState, type: ListType) {
+  <span class="tk-k">const</span> items = selectedItems(state) <span class="tk-c">// was: allItems(state)</span>
+  <span class="tk-k">return</span> items.reduce((tr, item) =&gt; setListType(tr, item, type), state.tr)
+}</code></pre></div>
+</div>
+<script>window.Ergo.hydrateIcons();</script>
+</body></html>

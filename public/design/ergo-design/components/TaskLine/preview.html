@@ -1,0 +1,23 @@
+<!-- @dsCard group="Document" height=400 subtitle="Checklist, nesting, notes, run state, current line, collapsed" -->
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="root" style="padding:16px 32px 16px 72px"></div>
+<script>
+var E = window.Ergo, h = React.createElement, F = React.Fragment;
+ReactDOM.createRoot(document.getElementById("root")).render(h("div",{style:{width:700}},
+  h(E.DocHeading,{level:2,count:"3 of 5 open"},"General UI"),
+  h(E.TaskLine,{done:true},"Weird amount of space between headers"),
+  h(E.TaskLine,{current:true,hasChildren:true,run:{state:"live",label:"Editing",target:"Bullet.tsx",meta:"2m 14s"}},"Fix bullet toggling in nested lists"),
+  h(E.TaskLine,{depth:1,done:true},"Toggle list type per item, not the whole list"),
+  h(E.TaskLine,{depth:1},"Subtasks can switch between ordered and unordered"),
+  h(E.TaskLine,{run:{state:"queued",label:"Queued 1"}},"Enter at the end of a collapsed task creates an empty sibling"),
+  h(E.TaskLine,{run:{state:"review",label:"Review"}},"Persist token counts when a run is stopped midway"),
+  h(E.TaskLine,{kind:"text",depth:1},"Seen on long runs: the counter resets to 0 after ",h("strong",null,"Stop"),"."),
+  h(E.TaskLine,{hasChildren:true,collapsed:true,childCount:3},"A ",h("code",null,"/remember")," skill to save a rule from chat"),
+  h(E.TaskLine,{kind:"bullet",depth:1},"Seed from ",h("strong",null,"Allowed Folders"),", minus ",h("code",null,".gitignore")),
+  h(E.TaskLine,{kind:"number",num:1,depth:1},"Numbered lists work too"),
+  h(E.TaskLine,{actions:false})
+));
+</script>
+</body></html>

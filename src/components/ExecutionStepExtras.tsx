@@ -45,7 +45,7 @@ export const StepStatusIcon: React.FC<{ step: ExecutionStep; size?: number }> = 
       case 'cleaner':
         return <Sparkles size={size} color="var(--accent-amber)" className="spin-animate" />;
       case 'verifier':
-        return <FlaskConical size={size} color="#a78bfa" className="pulse-animate" />;
+        return <FlaskConical size={size} color="var(--ink-subtle)" className="pulse-animate" />;
       case 'retry':
         return <RotateCw size={size} color="var(--accent-rose)" className="spin-animate" />;
       default:
@@ -94,8 +94,8 @@ export const PieceChip: React.FC<{ pieceId?: string }> = ({ pieceId }) => {
         fontFamily: 'var(--font-mono)',
         fontWeight: 700,
         color: 'var(--accent-primary)',
-        background: 'rgba(99, 102, 241, 0.12)',
-        border: '1px solid rgba(99, 102, 241, 0.3)',
+        background: 'color-mix(in srgb, var(--accent-text) 12%, transparent)',
+        border: '1px solid color-mix(in srgb, var(--accent-text) 30%, transparent)',
         borderRadius: '4px',
         padding: '0.02rem 0.35rem'
       }}
@@ -110,7 +110,7 @@ export const BiblePreview: React.FC<{ markdown?: string; filePath?: string }> = 
   const [open, setOpen] = useState(false);
   if (!markdown && !filePath) return null;
   return (
-    <div style={{ marginTop: '0.5rem', border: '1px solid rgba(16, 185, 129, 0.25)', background: 'rgba(16, 185, 129, 0.05)', borderRadius: 'var(--radius-sm)' }}>
+    <div style={{ marginTop: '0.5rem', border: '1px solid color-mix(in srgb, var(--accent-text) 25%, transparent)', background: 'color-mix(in srgb, var(--accent-text) 5%, transparent)', borderRadius: 'var(--radius-sm)' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.4rem 0.6rem' }}>
         <button
           type="button"
@@ -169,8 +169,8 @@ export const BaselineContextPreview: React.FC<{
           alignItems: 'flex-start',
           gap: '0.45rem',
           padding: '0.45rem 0.6rem',
-          background: 'rgba(56, 189, 248, 0.04)',
-          border: '1px solid rgba(56, 189, 248, 0.18)',
+          background: 'color-mix(in srgb, var(--accent-text) 4%, transparent)',
+          border: '1px solid color-mix(in srgb, var(--accent-text) 18%, transparent)',
           borderRadius: 'var(--radius-sm)',
           fontSize: '0.72rem',
           color: 'var(--text-muted)',
@@ -216,7 +216,14 @@ export const BaselineContextPreview: React.FC<{
               onClick={async (e) => {
                 e.stopPropagation();
                 const projId = baselineContext.projectId || hits[0]?.projectId;
-                if (window.confirm(`Clear all vector memory chunks for project "${projId || 'active'}"?`)) {
+                if (
+                  await askConfirm({
+                    title: `Clear memory for ${projId || 'this project'}?`,
+                    text: 'Every stored task summary and learning for the project is removed.',
+                    confirmLabel: 'Clear memory',
+                    danger: true,
+                  })
+                ) {
                   setIsClearing(true);
                   try {
                     if (projId) {
@@ -245,9 +252,9 @@ export const BaselineContextPreview: React.FC<{
               color: 'var(--accent-emerald)',
               fontStyle: 'italic',
               padding: '0.5rem 0.65rem',
-              background: 'rgba(16, 185, 129, 0.05)',
+              background: 'color-mix(in srgb, var(--accent-text) 5%, transparent)',
               borderRadius: '4px',
-              border: '1px dashed rgba(16, 185, 129, 0.3)'
+              border: '1px dashed color-mix(in srgb, var(--accent-text) 30%, transparent)'
             }}
           >
             Project vector memory cleared. Stale memory chunks have been removed from the local store.
@@ -280,15 +287,15 @@ export const BaselineContextPreview: React.FC<{
                   : 'var(--accent-amber)';
 
               const badgeBg = isHighMatch
-                ? 'rgba(16, 185, 129, 0.12)'
+                ? 'color-mix(in srgb, var(--accent-text) 12%, transparent)'
                 : isMediumMatch
-                  ? 'rgba(6, 182, 212, 0.12)'
+                  ? 'color-mix(in srgb, var(--accent-text) 12%, transparent)'
                   : 'rgba(245, 158, 11, 0.12)';
 
               const badgeBorder = isHighMatch
-                ? 'rgba(16, 185, 129, 0.3)'
+                ? 'color-mix(in srgb, var(--accent-text) 30%, transparent)'
                 : isMediumMatch
-                  ? 'rgba(6, 182, 212, 0.3)'
+                  ? 'color-mix(in srgb, var(--accent-text) 30%, transparent)'
                   : 'rgba(245, 158, 11, 0.3)';
 
               return (
@@ -434,8 +441,8 @@ export const BaselineContextPreview: React.FC<{
     <div
       style={{
         marginTop: '0.55rem',
-        border: '1px solid rgba(6, 182, 212, 0.25)',
-        background: 'rgba(6, 182, 212, 0.035)',
+        border: '1px solid color-mix(in srgb, var(--accent-text) 25%, transparent)',
+        background: 'color-mix(in srgb, var(--accent-text) 4%, transparent)',
         borderRadius: 'var(--radius-sm)',
         overflow: 'hidden'
       }}
@@ -446,8 +453,8 @@ export const BaselineContextPreview: React.FC<{
           alignItems: 'center',
           justifyContent: 'space-between',
           padding: '0.45rem 0.65rem',
-          background: 'rgba(6, 182, 212, 0.06)',
-          borderBottom: open ? '1px solid rgba(6, 182, 212, 0.15)' : 'none',
+          background: 'color-mix(in srgb, var(--accent-text) 6%, transparent)',
+          borderBottom: open ? '1px solid color-mix(in srgb, var(--accent-text) 15%, transparent)' : 'none',
           cursor: 'pointer',
           userSelect: 'none'
         }}
@@ -472,8 +479,8 @@ export const BaselineContextPreview: React.FC<{
               fontFamily: 'var(--font-mono)',
               fontWeight: 600,
               color: 'var(--accent-emerald)',
-              background: 'rgba(16, 185, 129, 0.12)',
-              border: '1px solid rgba(16, 185, 129, 0.28)',
+              background: 'color-mix(in srgb, var(--accent-text) 12%, transparent)',
+              border: '1px solid color-mix(in srgb, var(--accent-text) 28%, transparent)',
               borderRadius: '4px',
               padding: '0.02rem 0.4rem'
             }}
@@ -486,8 +493,8 @@ export const BaselineContextPreview: React.FC<{
                 fontSize: '0.65rem',
                 fontFamily: 'var(--font-mono)',
                 color: 'var(--accent-cyan)',
-                background: 'rgba(6, 182, 212, 0.1)',
-                border: '1px solid rgba(6, 182, 212, 0.25)',
+                background: 'color-mix(in srgb, var(--accent-text) 10%, transparent)',
+                border: '1px solid color-mix(in srgb, var(--accent-text) 25%, transparent)',
                 borderRadius: '4px',
                 padding: '0.02rem 0.35rem'
               }}

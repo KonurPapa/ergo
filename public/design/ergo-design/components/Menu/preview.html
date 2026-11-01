@@ -1,0 +1,19 @@
+<!-- @dsCard group="Navigation" height=330 subtitle="Task line menu (from the drag handle) and project switcher" -->
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="root" style="padding:16px;display:flex;gap:24px;align-items:flex-start"></div>
+<script>
+var E = window.Ergo, h = React.createElement, F = React.Fragment;
+
+ReactDOM.createRoot(document.getElementById("root")).render(h(F,null,
+  h(E.Menu,{style:{width:240},items:[
+    {label:"Run",icon:"play",hint:"⇧⌘↵"},{label:"Add to queue",icon:"layers",hint:"⌥⌘↵"},{label:"Open brief",icon:"file-text",hint:"⌘J",active:true},
+    {separator:true},{label:"Set priority…",icon:"sliders-horizontal"},{label:"Blocked by…",icon:"git-branch"},{label:"Turn into text",icon:"pilcrow"},{label:"Copy link to task",icon:"link"},
+    {separator:true},{label:"Archive",icon:"archive"},{label:"Delete line",icon:"trash-2",danger:true}]}),
+  h(E.Menu,{style:{width:240},items:[
+    {section:"Projects"},{label:"Ergo",icon:"folder-git-2",checked:true},{label:"takeoffmonkey-web",icon:"folder-git-2"},{label:"bridge",icon:"folder-git-2"},
+    {separator:true},{label:"New project…",icon:"plus"},{label:"Open folder…",icon:"folder"}]})
+));
+</script>
+</body></html>

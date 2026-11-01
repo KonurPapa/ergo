@@ -9,21 +9,8 @@ import {
   guessRelevantToolsWithDetails,
   checkAllMcpUpdates
 } from '../lib/mcpClient';
-import {
-  Wrench,
-  X,
-  Check,
-  Sparkles,
-  RefreshCw,
-  Search,
-  Shield,
-  Info,
-  Folder,
-  Code,
-  Cloud,
-  Zap,
-  Cpu
-} from 'lucide-react';
+import { Wrench, RefreshCw, Search, Shield, Info, Folder, Code, Cloud, Zap, Cpu } from 'lucide-react';
+import { Button, Checkbox, Dialog, EmptyState, Icon, Input, SegmentedControl } from './ui';
 
 interface TaskMcpToolsModalProps {
   isOpen: boolean;
@@ -49,13 +36,13 @@ function renderServerMiniIcon(server: MCPServer) {
       />
     );
   }
-  const size = 13;
+  const size = 14;
   switch (server.iconName) {
-    case 'Folder': return <Folder size={size} />;
-    case 'Code': return <Code size={size} />;
-    case 'Cloud': return <Cloud size={size} />;
-    case 'Zap': return <Zap size={size} />;
-    default: return <Cpu size={size} />;
+    case 'Folder': return <Folder size={size} strokeWidth={1.75} />;
+    case 'Code': return <Code size={size} strokeWidth={1.75} />;
+    case 'Cloud': return <Cloud size={size} strokeWidth={1.75} />;
+    case 'Zap': return <Zap size={size} strokeWidth={1.75} />;
+    default: return <Cpu size={size} strokeWidth={1.75} />;
   }
 }
 
@@ -191,19 +178,19 @@ export const TaskMcpToolsModal: React.FC<TaskMcpToolsModalProps> = ({
   // Sync / Refresh tools from MCP servers
   const handleSyncAllTools = async () => {
     setIsSyncing(true);
-    setSyncStatusMessage('Querying tools/list across connected MCPs…');
+    setSyncStatusMessage('Asking connected MCP servers for their tools…');
     try {
       const res = await checkAllMcpUpdates(mcpServers);
       if (onUpdateMcpServers) {
         onUpdateMcpServers(res.updatedServers);
       }
       if (res.hasChanges) {
-        setSyncStatusMessage(res.summaryMessage || 'Discovered tool updates!');
+        setSyncStatusMessage(res.summaryMessage || 'Found tool updates.');
       } else {
-        setSyncStatusMessage('All tools are up-to-date.');
+        setSyncStatusMessage('All tools are up to date.');
       }
     } catch {
-      setSyncStatusMessage('Tool sync completed.');
+      setSyncStatusMessage('Tool check finished.');
     } finally {
       setIsSyncing(false);
       setTimeout(() => setSyncStatusMessage(null), 3500);
@@ -239,634 +226,142 @@ export const TaskMcpToolsModal: React.FC<TaskMcpToolsModalProps> = ({
     toolsByServer[s.id].tools.push(tool);
   });
 
+  const suggestedCount = relevanceAnalysis.selectedToolIds.length;
+
   return (
-    <div
-      className="modal-overlay"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.72)',
-        backdropFilter: 'blur(4px)',
-        zIndex: 1000,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '1rem'
-      }}
-    >
-      <div
-        className="modal-content"
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: '100%',
-          maxWidth: '720px',
-          maxHeight: '88vh',
-          backgroundColor: 'var(--card-bg, #181b22)',
-          border: '1px solid var(--border-subtle, #27272a)',
-          borderRadius: '10px',
-          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.45)',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden'
-        }}
-      >
-        {/* Modal Header */}
-        <div
-          style={{
-            padding: '0.85rem 1.15rem',
-            borderBottom: '1px solid var(--border-subtle, #27272a)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            background: 'var(--bg-pane, #1a1d25)'
-          }}
+    <Dialog
+      title="Tools for this task"
+      description={
+        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 520 }}>
+          {task?.id ? `#${task.id} · ` : ''}
+          {effectiveTitle}
+        </span>
+      }
+      onClose={onClose}
+      width={720}
+      className="dlg-mcp-tools"
+      headerActions={
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={RefreshCw}
+          onClick={handleSyncAllTools}
+          disabled={isSyncing}
+          className={isSyncing ? 'dlg-spin-icon' : undefined}
+          title="Ask every connected MCP server for its current tool list"
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-            <div
-              style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '8px',
-                background: 'rgba(37, 99, 235, 0.16)',
-                border: '1px solid rgba(37, 99, 235, 0.35)',
-                color: 'var(--accent-primary, #2563eb)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0
-              }}
-            >
-              <Wrench size={16} />
-            </div>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                <h3
-                  style={{
-                    fontSize: '0.95rem',
-                    fontWeight: 600,
-                    color: 'var(--text-bright, #fafafa)',
-                    fontFamily: "'Space Grotesk', sans-serif",
-                    margin: 0
-                  }}
-                >
-                  Configure MCP Tools
-                </h3>
-                <span
-                  style={{
-                    fontSize: '0.68rem',
-                    padding: '0.1rem 0.45rem',
-                    borderRadius: '12px',
-                    background: 'rgba(0, 212, 146, 0.14)',
-                    color: 'var(--accent, #00d492)',
-                    fontWeight: 600,
-                    border: '1px solid rgba(0, 212, 146, 0.25)'
-                  }}
-                >
-                  {selectedTools.size} Active
-                </span>
-              </div>
-              <p
-                style={{
-                  fontSize: '0.74rem',
-                  color: 'var(--text-muted, #71717a)',
-                  margin: '0.15rem 0 0 0',
-                  maxWidth: '520px',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis'
-                }}
-              >
-                {task?.id ? `Task #${task.id}: ` : ''}{effectiveTitle}
-              </p>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-            <button
-              type="button"
-              onClick={handleSyncAllTools}
-              disabled={isSyncing}
-              title="Query tools/list on all connected MCPs to discover new or updated tools"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.35rem',
-                fontSize: '0.72rem',
-                padding: '0.3rem 0.55rem',
-                borderRadius: '6px',
-                background: 'var(--card-hover, #262a35)',
-                border: '1px solid var(--border-subtle, #27272a)',
-                color: 'var(--text-main, #e4e4e7)',
-                cursor: isSyncing ? 'not-allowed' : 'pointer',
-                opacity: isSyncing ? 0.6 : 1
-              }}
-            >
-              <RefreshCw size={12} className={isSyncing ? 'animate-spin' : ''} />
-              <span>{isSyncing ? 'Syncing…' : 'Sync tools/list'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--text-muted, #71717a)',
-                cursor: 'pointer',
-                padding: '0.25rem',
-                borderRadius: '4px',
-                display: 'flex',
-                alignItems: 'center'
-              }}
-            >
-              <X size={16} />
-            </button>
-          </div>
-        </div>
-
-        {/* Sync notification banner */}
+          {isSyncing ? 'Checking…' : 'Check for new tools'}
+        </Button>
+      }
+      footer={
+        <>
+          <span className="eg-subtle" style={{ fontSize: 'calc(12px * var(--type-scale))' }}>
+            {selectedTools.size} {selectedTools.size === 1 ? 'tool' : 'tools'} on
+            {selectedTools.size === 0 && ' — the agent runs with read-only basics'}
+          </span>
+          <span className="eg-spacer" />
+          <Button variant="ghost" size="lg" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" size="lg" onClick={handleSave}>
+            Save tools
+          </Button>
+        </>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
         {syncStatusMessage && (
-          <div
-            style={{
-              padding: '0.4rem 1rem',
-              background: 'rgba(6, 182, 212, 0.12)',
-              borderBottom: '1px solid rgba(6, 182, 212, 0.25)',
-              fontSize: '0.73rem',
-              color: 'var(--accent-cyan, #06b6d4)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.45rem'
-            }}
-          >
-            <Info size={13} />
-            <span>{syncStatusMessage}</span>
+          <div className="eg-hstack" role="status" style={{ fontSize: 'calc(12px * var(--type-scale))', color: 'var(--ink-subtle)' }}>
+            <Icon icon={Info} size="sm" />
+            {syncStatusMessage}
           </div>
         )}
 
-        {/* Suggestion banner & Ambiguity guidance */}
-        <div
-          style={{
-            padding: '0.65rem 1.15rem',
-            background: 'rgba(0, 0, 0, 0.2)',
-            borderBottom: '1px solid var(--border-subtle, #27272a)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '0.75rem',
-            flexWrap: 'wrap'
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: '240px' }}>
-            <Sparkles size={14} color="var(--accent, #00d492)" />
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-main, #e4e4e7)' }}>
-              AI suggested{' '}
-              <strong style={{ color: 'var(--accent, #00d492)' }}>
-                {relevanceAnalysis.selectedToolIds.length} tools
-              </strong>{' '}
-              specifically for this task based on the brief.
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-            <button
-              type="button"
-              onClick={handleApplySuggested}
-              style={{
-                fontSize: '0.72rem',
-                padding: '0.28rem 0.6rem',
-                borderRadius: '6px',
-                background: 'rgba(0, 212, 146, 0.14)',
-                border: '1px solid rgba(0, 212, 146, 0.35)',
-                color: 'var(--accent, #00d492)',
-                fontWeight: 600,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.35rem'
-              }}
-            >
-              <Check size={12} />
-              <span>Select Suggested ({relevanceAnalysis.selectedToolIds.length})</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleSelectAll}
-              style={{
-                fontSize: '0.72rem',
-                padding: '0.28rem 0.55rem',
-                borderRadius: '6px',
-                background: 'var(--card-hover, #262a35)',
-                border: '1px solid var(--border-subtle, #27272a)',
-                color: 'var(--text-muted, #71717a)',
-                cursor: 'pointer'
-              }}
-            >
-              All
-            </button>
-            <button
-              type="button"
-              onClick={handleClearAll}
-              style={{
-                fontSize: '0.72rem',
-                padding: '0.28rem 0.55rem',
-                borderRadius: '6px',
-                background: 'var(--card-hover, #262a35)',
-                border: '1px solid var(--border-subtle, #27272a)',
-                color: 'var(--text-muted, #71717a)',
-                cursor: 'pointer'
-              }}
-            >
-              Clear
-            </button>
-          </div>
+        <div className="eg-hstack" style={{ flexWrap: 'wrap', fontSize: 'calc(12px * var(--type-scale))', color: 'var(--ink-muted)' }}>
+          <span>
+            {suggestedCount} {suggestedCount === 1 ? 'tool fits' : 'tools fit'} this task’s brief.
+          </span>
+          <span className="eg-spacer" />
+          <Button size="sm" onClick={handleApplySuggested} disabled={suggestedCount === 0}>
+            Use suggested ({suggestedCount})
+          </Button>
+          <Button variant="ghost" size="sm" onClick={handleSelectAll}>
+            All
+          </Button>
+          <Button variant="ghost" size="sm" onClick={handleClearAll}>
+            None
+          </Button>
         </div>
 
-        {/* Toolbar: Search, Server filter tabs, Suggested toggle */}
-        <div
-          style={{
-            padding: '0.65rem 1.15rem',
-            borderBottom: '1px solid var(--border-subtle, #27272a)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.65rem',
-            background: 'var(--bg-pane, #1a1d25)'
-          }}
-        >
-          {/* Search Input */}
-          <div
-            style={{
-              flex: 1,
-              position: 'relative',
-              display: 'flex',
-              alignItems: 'center'
-            }}
-          >
-            <Search
-              size={13}
-              style={{
-                position: 'absolute',
-                left: '0.65rem',
-                color: 'var(--text-muted, #71717a)',
-                pointerEvents: 'none'
-              }}
-            />
-            <input
-              type="text"
-              placeholder="Search tools by name or purpose…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '0.35rem 0.65rem 0.35rem 2rem',
-                fontSize: '0.76rem',
-                background: 'var(--card-bg, #181b22)',
-                border: '1px solid var(--border-subtle, #27272a)',
-                borderRadius: '6px',
-                color: 'var(--text-bright, #fafafa)',
-                outline: 'none'
-              }}
-            />
+        <div className="eg-hstack" style={{ flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <Input icon={Search} placeholder="Search tools by name or purpose" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
           </div>
-
-          {/* Server filter select */}
-          <select
-            value={selectedServerFilter}
-            onChange={(e) => setSelectedServerFilter(e.target.value)}
-            style={{
-              padding: '0.35rem 0.6rem',
-              fontSize: '0.74rem',
-              background: 'var(--card-bg, #181b22)',
-              border: '1px solid var(--border-subtle, #27272a)',
-              borderRadius: '6px',
-              color: 'var(--text-main, #e4e4e7)',
-              outline: 'none',
-              cursor: 'pointer'
-            }}
-          >
-            <option value="all">All Servers ({connectedServers.length})</option>
+          <select className="eg-input" style={{ width: 'auto' }} value={selectedServerFilter} onChange={(e) => setSelectedServerFilter(e.target.value)} aria-label="Server">
+            <option value="all">All servers ({connectedServers.length})</option>
             {connectedServers.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name} ({s.tools.length})
               </option>
             ))}
           </select>
-
-          {/* Filter suggested */}
-          <button
-            type="button"
-            onClick={() => setShowSuggestedOnly(!showSuggestedOnly)}
-            style={{
-              padding: '0.35rem 0.6rem',
-              fontSize: '0.73rem',
-              borderRadius: '6px',
-              background: showSuggestedOnly ? 'rgba(0, 212, 146, 0.18)' : 'var(--card-bg, #181b22)',
-              border: `1px solid ${showSuggestedOnly ? 'rgba(0, 212, 146, 0.4)' : 'var(--border-subtle, #27272a)'}`,
-              color: showSuggestedOnly ? 'var(--accent, #00d492)' : 'var(--text-muted, #71717a)',
-              cursor: 'pointer',
-              fontWeight: 500,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.3rem',
-              whiteSpace: 'nowrap'
-            }}
-          >
-            <Sparkles size={12} />
-            <span>Suggested Only</span>
-          </button>
+          <SegmentedControl<'all' | 'suggested'>
+            label="Show"
+            value={showSuggestedOnly ? 'suggested' : 'all'}
+            onChange={(v) => setShowSuggestedOnly(v === 'suggested')}
+            options={[
+              { id: 'all', label: 'All' },
+              { id: 'suggested', label: 'Suggested' }
+            ]}
+          />
         </div>
 
-        {/* Tools List Body */}
-        <div
-          style={{
-            flex: 1,
-            overflowY: 'auto',
-            padding: '0.85rem 1.15rem',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '1rem'
-          }}
-        >
-          {connectedServers.length === 0 ? (
-            <div
-              style={{
-                padding: '2.5rem 1rem',
-                textAlign: 'center',
-                color: 'var(--text-muted, #71717a)',
-                fontSize: '0.8rem'
-              }}
-            >
-              No MCP servers are currently connected. Connect MCP servers in the Connections hub to enable tools for your tasks.
-            </div>
-          ) : Object.keys(toolsByServer).length === 0 ? (
-            <div
-              style={{
-                padding: '2rem 1rem',
-                textAlign: 'center',
-                color: 'var(--text-muted, #71717a)',
-                fontSize: '0.8rem'
-              }}
-            >
-              No tools match your current search/filter.
-            </div>
-          ) : (
-            Object.values(toolsByServer).map(({ server, tools }) => (
-              <div
-                key={server.id}
-                style={{
-                  background: 'var(--bg-pane, #1a1d25)',
-                  border: '1px solid var(--border-subtle, #27272a)',
-                  borderRadius: '8px',
-                  overflow: 'hidden'
-                }}
-              >
-                {/* Server Section Header */}
-                <div
-                  style={{
-                    padding: '0.5rem 0.85rem',
-                    background: 'rgba(0, 0, 0, 0.15)',
-                    borderBottom: '1px solid var(--border-subtle, #27272a)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                    <span style={{ color: 'var(--accent-primary, #2563eb)' }}>
-                      {renderServerMiniIcon(server)}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: '0.78rem',
-                        fontWeight: 600,
-                        color: 'var(--text-bright, #fafafa)',
-                        fontFamily: "'Space Grotesk', sans-serif"
-                      }}
-                    >
-                      {server.name}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: '0.66rem',
-                        color: 'var(--text-muted, #71717a)',
-                        fontFamily: "'JetBrains Mono', monospace"
-                      }}
-                    >
-                      [{server.transport}]
-                    </span>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                    <span
-                      style={{
-                        fontSize: '0.67rem',
-                        color: 'var(--text-muted, #71717a)'
-                      }}
-                    >
-                      {tools.filter((t) => selectedTools.has(t.name)).length}/{tools.length} selected
-                    </span>
-                  </div>
-                </div>
-
-                {/* Tools in Server */}
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  {tools.map((tool) => {
-                    const isSelected = selectedTools.has(tool.name);
-                    const isSuggested = relevanceAnalysis.selectedToolIds.includes(tool.id);
-                    const suggestReason = relevanceAnalysis.reasons[tool.id];
-
-                    return (
-                      <div
-                        key={tool.id}
-                        onClick={() => handleToggleTool(tool.name)}
-                        style={{
-                          padding: '0.55rem 0.85rem',
-                          borderBottom: '1px solid rgba(255, 255, 255, 0.04)',
-                          display: 'flex',
-                          alignItems: 'flex-start',
-                          gap: '0.65rem',
-                          background: isSelected ? 'rgba(37, 99, 235, 0.07)' : 'transparent',
-                          cursor: 'pointer',
-                          transition: 'background 0.12s ease'
-                        }}
-                      >
-                        {/* Custom Checkbox */}
-                        <div
-                          style={{
-                            width: '16px',
-                            height: '16px',
-                            borderRadius: '4px',
-                            border: `1px solid ${isSelected ? 'var(--accent-primary, #2563eb)' : 'var(--border-strong, #3f3f46)'}`,
-                            background: isSelected ? 'var(--accent-primary, #2563eb)' : 'transparent',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            color: '#fff',
-                            marginTop: '2px',
-                            flexShrink: 0
-                          }}
-                        >
-                          {isSelected && <Check size={11} strokeWidth={3} />}
-                        </div>
-
-                        {/* Tool Details */}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-                            <span
-                              style={{
-                                fontSize: '0.78rem',
-                                fontWeight: 600,
-                                color: isSelected ? 'var(--text-bright, #fafafa)' : 'var(--text-main, #e4e4e7)',
-                                fontFamily: "'JetBrains Mono', monospace"
-                              }}
-                            >
-                              {tool.name}
-                            </span>
-
-                            {isSuggested && (
-                              <span
-                                style={{
-                                  fontSize: '0.64rem',
-                                  padding: '0.08rem 0.38rem',
-                                  borderRadius: '8px',
-                                  background: 'rgba(0, 212, 146, 0.15)',
-                                  color: 'var(--accent, #00d492)',
-                                  fontWeight: 600,
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '0.2rem'
-                                }}
-                              >
-                                <Sparkles size={9} />
-                                Suggested
-                              </span>
-                            )}
-
-                            {tool.autoApprove ? (
-                              <span
-                                style={{
-                                  fontSize: '0.62rem',
-                                  padding: '0.05rem 0.32rem',
-                                  borderRadius: '4px',
-                                  background: 'rgba(255, 255, 255, 0.05)',
-                                  color: 'var(--text-muted, #71717a)'
-                                }}
-                              >
-                                Auto-Approve
-                              </span>
-                            ) : (
-                              <span
-                                style={{
-                                  fontSize: '0.62rem',
-                                  padding: '0.05rem 0.32rem',
-                                  borderRadius: '4px',
-                                  background: 'rgba(234, 179, 8, 0.12)',
-                                  color: 'var(--warning, #eab308)',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '0.2rem'
-                                }}
-                              >
-                                <Shield size={9} />
-                                Confirm Required
-                              </span>
-                            )}
-                          </div>
-
-                          <p
-                            style={{
-                              fontSize: '0.72rem',
-                              color: 'var(--text-muted, #71717a)',
-                              margin: '0.2rem 0 0 0',
-                              lineHeight: 1.35
-                            }}
-                          >
-                            {tool.description}
-                          </p>
-
-                          {suggestReason && (
-                            <p
-                              style={{
-                                fontSize: '0.67rem',
-                                color: 'var(--accent, #00d492)',
-                                margin: '0.2rem 0 0 0',
-                                opacity: 0.9,
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.25rem'
-                              }}
-                            >
-                              <span>↳ {suggestReason}</span>
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+        {connectedServers.length === 0 ? (
+          <EmptyState icon={Wrench} title="No MCP servers connected" text="Connect a server in Settings › Integrations to give tasks more tools." />
+        ) : Object.keys(toolsByServer).length === 0 ? (
+          <EmptyState icon={Search} title="No tools match" text="Try another search or server." />
+        ) : (
+          Object.values(toolsByServer).map(({ server, tools }) => (
+            <section key={server.id}>
+              <div className="eg-section-label" style={{ margin: 'var(--space-2) 0 var(--space-1)' }}>
+                <span className="eg-icon eg-icon-sm" aria-hidden="true">{renderServerMiniIcon(server)}</span>
+                <span style={{ color: 'var(--ink-muted)' }}>{server.name}</span>
+                <span className="eg-mono" style={{ fontSize: 'calc(11px * var(--type-scale))' }}>{server.transport}</span>
+                <span className="eg-spacer" />
+                <span style={{ fontWeight: 400 }}>
+                  {tools.filter((t) => selectedTools.has(t.name)).length} of {tools.length} on
+                </span>
               </div>
-            ))
-          )}
-        </div>
-
-        {/* Modal Footer */}
-        <div
-          style={{
-            padding: '0.75rem 1.15rem',
-            borderTop: '1px solid var(--border-subtle, #27272a)',
-            background: 'var(--bg-pane, #1a1d25)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between'
-          }}
-        >
-          <div style={{ fontSize: '0.74rem', color: 'var(--text-muted, #71717a)' }}>
-            Selected: <strong style={{ color: 'var(--text-bright, #fafafa)' }}>{selectedTools.size}</strong> tools
-            {selectedTools.size === 0 && ' (Agent will run in read-only baseline mode)'}
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
-            <button
-              type="button"
-              onClick={onClose}
-              style={{
-                height: '28px',
-                padding: '0 0.75rem',
-                borderRadius: '6px',
-                background: 'var(--card-bg, #181b22)',
-                border: '1px solid var(--border-subtle, #27272a)',
-                color: 'var(--text-main, #e4e4e7)',
-                fontSize: '0.76rem',
-                cursor: 'pointer'
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleSave}
-              style={{
-                height: '28px',
-                padding: '0 0.85rem',
-                borderRadius: '6px',
-                background: 'var(--accent-primary, #2563eb)',
-                border: '1px solid rgba(255, 255, 255, 0.15)',
-                color: '#fff',
-                fontSize: '0.76rem',
-                fontWeight: 600,
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '0.35rem'
-              }}
-            >
-              <Check size={13} />
-              <span>Save & Apply Tools</span>
-            </button>
-          </div>
-        </div>
+              <div className="dlg-rows">
+                {tools.map((tool) => {
+                  const isSelected = selectedTools.has(tool.name);
+                  const isSuggested = relevanceAnalysis.selectedToolIds.includes(tool.id);
+                  const suggestReason = relevanceAnalysis.reasons[tool.id];
+                  return (
+                    <label key={tool.id} className="dlg-row">
+                      <Checkbox checked={isSelected} onChange={() => handleToggleTool(tool.name)} style={{ marginTop: 3 }} />
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span className="eg-hstack" style={{ flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+                          <span className="eg-mono" style={{ color: 'var(--ink)' }}>{tool.name}</span>
+                          {isSuggested && <span className="eg-subtle" style={{ fontSize: 'calc(12px * var(--type-scale))' }}>Suggested</span>}
+                          {!tool.autoApprove && (
+                            <span className="eg-hstack eg-subtle" style={{ fontSize: 'calc(12px * var(--type-scale))', gap: 4 }} title="Ergo asks you before each use">
+                              <Icon icon={Shield} size="sm" />
+                              Asks first
+                            </span>
+                          )}
+                        </span>
+                        {tool.description && <span className="dlg-row-text">{tool.description}</span>}
+                        {suggestReason && <span className="dlg-row-text">{suggestReason}</span>}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </section>
+          ))
+        )}
       </div>
-    </div>
+    </Dialog>
   );
 };

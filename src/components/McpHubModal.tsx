@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { askConfirm } from './ui/askDialogs';
 import {
   type MCPServer,
   type McpRootBoundary,
@@ -29,6 +30,7 @@ import {
   toggleSkill,
   subscribeWorkspaceSkills
 } from '../lib/skillsManager';
+import { Banner, Button, EmptyState, Field, IconButton, Input, SegmentedControl, SettingsGroup, StatusDot, Switch } from './ui';
 import {
   Unplug,
   Cpu,
@@ -70,8 +72,14 @@ import {
   Copy
 } from 'lucide-react';
 
-interface McpHubModalProps {
+/** Which part of Connections a Settings page shows when embedded. */
+export type McpHubSection = 'roots' | 'skills' | 'integrations';
+
+export interface McpHubModalProps {
   isOpen: boolean;
+  /** Render one section inline (Settings page) instead of the modal. */
+  embedded?: boolean;
+  section?: McpHubSection;
   onClose: () => void;
   mcpServers: MCPServer[];
   onToggleConnectServer: (serverId: string) => void;
@@ -279,7 +287,7 @@ const CodeIndexLine: React.FC<{ status?: CodeIndexStatus }> = ({ status }) => {
           </span>
           <span style={{ fontFamily: 'var(--font-mono)' }}>{status.embedded.toLocaleString()} / {status.sections.toLocaleString()} sections · {pct}%</span>
         </div>
-        <div style={{ height: 4, borderRadius: 2, background: 'rgba(255, 255, 255, 0.08)', marginTop: '0.3rem', overflow: 'hidden' }}>
+        <div style={{ height: 4, borderRadius: 2, background: 'var(--surface-2)', marginTop: '0.3rem', overflow: 'hidden' }}>
           <div style={{ width: `${pct}%`, height: '100%', background: 'var(--accent-cyan)', transition: 'width 0.6s ease' }} />
         </div>
       </div>
@@ -287,7 +295,7 @@ const CodeIndexLine: React.FC<{ status?: CodeIndexStatus }> = ({ status }) => {
   }
   return (
     <div style={row}>
-      <span style={{ color: 'var(--accent-emerald)' }}>●</span>
+      <span className="eg-dot eg-dot-success" aria-hidden="true" />
       Code index ready · {status.files.toLocaleString()} files · {status.sections.toLocaleString()} sections{status.updatedAt ? ` · updated ${ago(status.updatedAt)}` : ''}
     </div>
   );
@@ -304,7 +312,10 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   onUpdateServer,
   activeProject,
   onProjectFoldersChange,
+  embedded = false,
+  section = 'integrations',
 }) => {
+  const active = isOpen || embedded;
   const [activeTab, setActiveTab] = useState<'harnesses' | 'tools-skills' | 'roots' | 'external'>('harnesses');
 
   // Tools & Skills tab state
@@ -356,8 +367,8 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
     setIsSkillModalOpen(true);
   };
 
-  const handleDeleteCustomSkill = (skillId: string) => {
-    if (window.confirm('Are you sure you want to delete this custom skill?')) {
+  const handleDeleteCustomSkill = async (skillId: string) => {
+    if (await askConfirm({ title: 'Delete this skill?', text: 'It is removed from every project. This can’t be undone.', confirmLabel: 'Delete skill', danger: true })) {
       deleteSkill(skillId);
       const updated = getWorkspaceSkills();
       setSkills(updated);
@@ -478,7 +489,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   };
 
   useEffect(() => {
-    if (isOpen) {
+    if (active) {
       getGlobalAllowedRoots().then(setRoots);
       if (activeProject) {
         getProjectFolders(activeProject.id).then((folders) => {
@@ -496,12 +507,12 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
         })
         .catch(() => { });
     }
-  }, [isOpen, activeProject?.id]);
+  }, [active, activeProject?.id]);
 
   // Code index progress for the Allowed Folders tab: polled while it is open (fast while anything is indexing).
   const anyIndexing = codeIndex.some((c) => c.state === 'scanning' || c.state === 'indexing');
   useEffect(() => {
-    if (!isOpen || activeTab !== 'roots') return;
+    if (!active || (embedded ? section !== 'roots' : activeTab !== 'roots')) return;
     let alive = true;
     const load = () => getCodeIndexStatus().then((list) => alive && list && setCodeIndex(list));
     load();
@@ -510,9 +521,9 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
       alive = false;
       clearInterval(timer);
     };
-  }, [isOpen, activeTab, anyIndexing, roots, projectFolders]);
+  }, [active, embedded, section, activeTab, anyIndexing, roots, projectFolders]);
 
-  if (!isOpen) return null;
+  if (!active) return null;
 
   const handleAddRootSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -779,1482 +790,461 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
     .filter((s) => s.serverType === 'bundled_harness' && s.id !== 'mcp-github' && s.id !== 'mcp-slack');
   const externalServers = mcpServers.filter((s) => s.serverType !== 'bundled_harness' || s.id === 'mcp-github' || s.id === 'mcp-slack');
 
-  return (
-    <div
-      className="modal-overlay"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+  /* ───────────── Embedded sections (Settings › Folders, Skills, Integrations) ───────────── */
+
+  const toolApprovalControl = (serverId: string, tool: { id: string; name: string; autoApprove?: boolean }) => (
+    <SegmentedControl
+      label={`Approval for ${tool.name}`}
+      options={[
+        { id: 'ask', label: 'Ask first' },
+        { id: 'auto', label: 'Allow' },
+      ]}
+      value={tool.autoApprove ? 'auto' : 'ask'}
+      onChange={(v) => {
+        if ((v === 'auto') !== !!tool.autoApprove) onToggleToolAutoApprove(serverId, tool.id);
       }}
-    >
-      <div className="modal-content" style={{ maxWidth: '920px', height: '85vh', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
-        {/* Modal Header */}
-        <div className="modal-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <div
-              style={{
-                width: '38px',
-                height: '38px',
-                borderRadius: '10px',
-                background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-cyan))',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#fff',
-                boxShadow: '0 2px 8px rgba(99, 102, 241, 0.3)',
-                flexShrink: 0
-              }}
-            >
-              <Unplug size={20} />
+    />
+  );
+
+  const renderServerTools = (server: MCPServer) => {
+    const q = (toolSearchQueries[server.id] || '').toLowerCase().trim();
+    const tools = server.tools.filter((t) => !q || t.name.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q));
+    return (
+      <div className="eg-settings-sub">
+        {server.tools.length > 6 && (
+          <Input
+            icon={Search}
+            placeholder={`Filter ${server.tools.length} tools`}
+            value={toolSearchQueries[server.id] || ''}
+            onChange={(e) => setToolSearchQueries({ ...toolSearchQueries, [server.id]: e.target.value })}
+            aria-label={`Filter ${server.name} tools`}
+          />
+        )}
+        {tools.map((tool) => (
+          <div key={tool.id} className="eg-settings-subrow">
+            <div className="eg-srow-text">
+              <div className="eg-settings-mono">{tool.name}</div>
+              {tool.description && <div className="eg-srow-help">{tool.description}</div>}
             </div>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-bright)', margin: 0 }}>Connections</h3>
-              </div>
-              <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0.15rem 0 0 0' }}>
-                Manage local connections & folders, external MCPs, and cloud coding tools
-              </p>
-            </div>
+            {toolApprovalControl(server.id, tool)}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            {updateStatusMsg && (
-              <span
-                style={{
-                  fontSize: '0.74rem',
-                  color: updateStatusMsg.includes('Failed') ? 'var(--accent-red)' : 'var(--accent-emerald)',
-                  fontWeight: 500,
-                  maxWidth: '320px',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap'
-                }}
-                title={updateStatusMsg}
-              >
-                {updateStatusMsg}
-              </span>
-            )}
-            <button
-              className="btn btn-secondary"
-              style={{
-                padding: '0.35rem 0.65rem',
-                fontSize: '0.75rem',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '0.4rem',
-                borderRadius: '6px',
-                border: '1px solid var(--border-subtle)',
-                background: isCheckingUpdates ? 'rgba(99, 102, 241, 0.12)' : undefined,
-                color: isCheckingUpdates ? 'var(--accent-primary)' : 'var(--text-muted)'
-              }}
-              onClick={handleCheckAllUpdates}
-              disabled={isCheckingUpdates}
-              title="Routinely query tools/list across connected MCP servers"
-            >
-              <RefreshCw size={13} style={{ animation: isCheckingUpdates ? 'spin 1s linear infinite' : 'none' }} />
-              <span>{isCheckingUpdates ? 'Checking...' : 'Check Updates'}</span>
-            </button>
-            <button className="btn btn-secondary" style={{ padding: '0.35rem 0.6rem' }} onClick={onClose}>
-              <X size={16} />
-            </button>
+        ))}
+      </div>
+    );
+  };
+
+  const serverIcon = (server: MCPServer) =>
+    server.iconUrl ? <img src={server.iconUrl} alt="" className="eg-settings-logo" style={{ opacity: server.status === 'connected' ? 1 : 0.6 }} /> : null;
+
+  const refreshServerTools = async (server: MCPServer) => {
+    setConnectingServerId(server.id);
+    try {
+      if (server.id === 'mcp-github') {
+        const st = await getGithubMcpStatus();
+        if (st.configured && onUpdateServer) {
+          onUpdateServer({ ...server, status: 'connected', authUsername: st.username, lastSyncedAt: new Date().toISOString() });
+        }
+      } else if (server.endpoint) {
+        const disc = await discoverRemoteMcpTools(server.endpoint, server.authHeader);
+        if (disc.success && disc.tools.length > 0 && onUpdateServer) {
+          onUpdateServer({
+            ...server,
+            lastSyncedAt: new Date().toISOString(),
+            tools: disc.tools.map((t) => ({ ...t, serverId: server.id })),
+            error: undefined,
+          });
+        }
+      }
+    } finally {
+      setConnectingServerId(null);
+    }
+  };
+
+  function renderEmbeddedRoots() {
+    const folderRow = (folder: McpRootBoundary, opts: { working?: boolean; project?: boolean; index?: number }) => (
+      <div key={folder.id} className="eg-srow eg-settings-top">
+        <div className="eg-srow-text">
+          <div className="eg-srow-title">
+            {folder.name}
+            {opts.working && <span className="eg-settings-note"> · Working folder</span>}
+            {folder.isDefault && <span className="eg-settings-note"> · Ergo storage</span>}
           </div>
+          <div className="eg-srow-help eg-settings-mono">{folder.path}</div>
+          {!folder.isDefault && <CodeIndexLine status={codeIndex.find((c) => samePath(c.root, folder.path))} />}
         </div>
-
-        {/* Tab Navigation */}
-        <div style={{ display: 'flex', gap: '0.25rem', borderBottom: '1px solid var(--border-subtle)', padding: '0 1.5rem', background: 'var(--bg-darkest)' }}>
-          <button
-            className={`tab-btn ${activeTab === 'harnesses' ? 'active' : ''}`}
-            onClick={() => setActiveTab('harnesses')}
-            style={{
-              padding: '0.75rem 1rem',
-              border: 'none',
-              borderBottom: activeTab === 'harnesses' ? '2px solid var(--accent-cyan)' : '2px solid transparent',
-              color: activeTab === 'harnesses' ? 'var(--text-bright)' : 'var(--text-muted)',
-              fontWeight: 600,
-              fontSize: '0.84rem',
-              background: 'none',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.45rem',
-              transition: 'all 0.15s ease'
-            }}
-          >
-            <span>Default Connections</span>
-            <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: activeTab === 'harnesses' ? 'rgba(6, 182, 212, 0.18)' : 'rgba(255, 255, 255, 0.05)', color: activeTab === 'harnesses' ? 'var(--accent-cyan)' : 'var(--text-dim)', fontWeight: 700 }}>
-              {bundledHarnesses.length}
-            </span>
-          </button>
-
-          <button
-            className={`tab-btn ${activeTab === 'tools-skills' ? 'active' : ''}`}
-            onClick={() => setActiveTab('tools-skills')}
-            style={{
-              padding: '0.75rem 1rem',
-              border: 'none',
-              borderBottom: activeTab === 'tools-skills' ? '2px solid #a855f7' : '2px solid transparent',
-              color: activeTab === 'tools-skills' ? 'var(--text-bright)' : 'var(--text-muted)',
-              fontWeight: 600,
-              fontSize: '0.84rem',
-              background: 'none',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.45rem',
-              transition: 'all 0.15s ease'
-            }}
-          >
-            <Sparkles size={14} color="#a855f7" />
-            <span>Tools & Skills</span>
-            <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: activeTab === 'tools-skills' ? 'rgba(168, 85, 247, 0.2)' : 'rgba(255, 255, 255, 0.05)', color: activeTab === 'tools-skills' ? '#c084fc' : 'var(--text-dim)', fontWeight: 700 }}>
-              {WORKSPACE_MCP_TOOLS.length} tools / {skills.length} skills
-            </span>
-          </button>
-
-          <button
-            className={`tab-btn ${activeTab === 'roots' ? 'active' : ''}`}
-            onClick={() => setActiveTab('roots')}
-            style={{
-              padding: '0.75rem 1rem',
-              border: 'none',
-              borderBottom: activeTab === 'roots' ? '2px solid var(--accent-cyan)' : '2px solid transparent',
-              color: activeTab === 'roots' ? 'var(--text-bright)' : 'var(--text-muted)',
-              fontWeight: 600,
-              fontSize: '0.84rem',
-              background: 'none',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.45rem',
-              transition: 'all 0.15s ease'
-            }}
-          >
-            <span>Allowed Folders</span>
-            <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: activeTab === 'roots' ? 'rgba(6, 182, 212, 0.18)' : 'rgba(255, 255, 255, 0.05)', color: activeTab === 'roots' ? 'var(--accent-cyan)' : 'var(--text-dim)', fontWeight: 700 }}>
-              {roots.length}
-            </span>
-          </button>
-
-          <button
-            className={`tab-btn ${activeTab === 'external' ? 'active' : ''}`}
-            onClick={() => setActiveTab('external')}
-            style={{
-              padding: '0.75rem 1rem',
-              border: 'none',
-              borderBottom: activeTab === 'external' ? '2px solid var(--accent-cyan)' : '2px solid transparent',
-              color: activeTab === 'external' ? 'var(--text-bright)' : 'var(--text-muted)',
-              fontWeight: 600,
-              fontSize: '0.84rem',
-              background: 'none',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.45rem',
-              transition: 'all 0.15s ease'
-            }}
-          >
-            <span>External Apps</span>
-            <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: activeTab === 'external' ? 'rgba(6, 182, 212, 0.18)' : 'rgba(255, 255, 255, 0.05)', color: activeTab === 'external' ? 'var(--accent-cyan)' : 'var(--text-dim)', fontWeight: 700 }}>
-              {externalServers.length}
-            </span>
-          </button>
-        </div>
-
-        <div className="modal-body" style={{ overflowY: 'auto', flex: 1, padding: '1.25rem 1.5rem' }}>
-          {/* Header Action Bar */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            {/* <h4
-              style={{
-                fontSize: '0.85rem',
-                fontWeight: 700,
-                color: 'var(--text-muted)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-                margin: 0,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.5rem'
-              }}
-            >
-              <span>MCP Server Connections</span>
-              <span className="badge badge-done" style={{ fontSize: '0.68rem', textTransform: 'none', letterSpacing: 'normal' }}>
-                {mcpServers.filter((s) => s.status === 'connected').length} / {mcpServers.length} Active
-              </span>
-            </h4> */}
-            <span></span>
-
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              {/* <button
-                className="btn btn-secondary"
-                style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem', gap: '0.4rem' }}
-                onClick={handleSyncAllTools}
-                title="Call tools/list across all servers to discover latest tools and update signatures"
-              >
-                <RefreshCw size={13} className={isSyncing ? 'animate-spin' : ''} />
-                <span>{isSyncing ? 'Syncing tools/list...' : 'Sync tools/list'}</span>
-              </button> */}
-
-              {activeTab === 'external' && (
-                <button className="btn btn-primary" style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem', marginTop: '-0.5rem', marginBottom: '0.75rem' }} onClick={() => setShowAddForm(!showAddForm)}>
-                  <Plus size={14} />
-                  <span>Connect Other</span>
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* TAB 1: BUNDLED AGENT HARNESSES */}
-          {activeTab === 'harnesses' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              {/* <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '0.85rem 1rem', fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
-                <strong style={{ color: '#fff' }}>Open-Source Agent Harnesses:</strong> Ergo bundles standard Node.js MCP servers (<span style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>server-filesystem</span>, <span style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>server-fetch</span>, and <span style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>mcp-server-git</span>) communicating via synchronous Local Stdio IPC. These operate browser-agnostically with zero database required.
-              </div> */}
-
-              <div className="mcp-grid">
-                {bundledHarnesses.map((server) => {
-                  const isConnected = server.status === 'connected';
-                  const isExpanded = !!expandedServerIds[server.id];
-
-                  return (
-                    <div
-                      key={server.id}
-                      className={`mcp-card ${isConnected ? 'connected' : ''} ${!isExpanded ? 'collapsed' : ''}`}
-                      onClick={() => {
-                        if (!isExpanded) {
-                          toggleExpandedServer(server.id);
-                        }
-                      }}
-                    >
-                      <div className="mcp-header">
-                        <div className="mcp-title">
-                          <button
-                            type="button"
-                            className="mcp-collapse-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleExpandedServer(server.id);
-                            }}
-                            title={isExpanded ? 'Collapse card' : 'Expand permissions & details'}
-                            aria-label={isExpanded ? 'Collapse card' : 'Expand permissions & details'}
-                          >
-                            {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-                          </button>
-                          {renderServerIcon(server, isConnected)}
-                          <span>{server.name}</span>
-                          {!isExpanded && server.tools.length > 0 && (
-                            <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontWeight: 500, fontFamily: 'var(--font-mono)' }}>
-                              ({server.tools.length} {server.tools.length === 1 ? 'tool' : 'tools'})
-                            </span>
-                          )}
-                        </div>
-
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                          <button
-                            type="button"
-                            className={isConnected ? 'btn btn-secondary' : 'btn btn-primary'}
-                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem' }}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onToggleConnectServer(server.id);
-                            }}
-                          >
-                            {isConnected ? 'Disable' : 'Enable'}
-                          </button>
-                        </div>
-                      </div>
-
-                      {isExpanded && (
-                        <>
-                          <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>{server.description}</p>
-
-                          {/* Discovered Tools List & Permissions */}
-                          {isConnected && server.tools.length > 0 && (
-                            <div style={{ background: 'var(--code-bg)', border: '1px solid var(--code-border)', padding: '0.75rem 0.85rem', borderRadius: 'var(--radius-sm)', marginTop: '0.35rem', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)' }}>
-                              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                <Shield size={13} />
-                                <span>Auto-Approval & Permissions</span>
-                              </div>
-                              <p style={{ fontSize: '0.72rem', color: 'var(--text-dim)', margin: '0 0 0.5rem 0', lineHeight: 1.4 }}>
-                                Control AI action permissions globally. Toggle Auto-Approve to allow agents to run commands automatically.
-                              </p>
-
-                              {server.tools.map((tool) => (
-                                <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.35rem 0', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
-                                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--code-text)', fontSize: '0.78rem', fontWeight: 500 }}>{tool.name}</span>
-                                  <button
-                                    style={{
-                                      background: tool.autoApprove ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)',
-                                      color: tool.autoApprove ? '#34d399' : '#fbbf24',
-                                      border: '1px solid ' + (tool.autoApprove ? 'rgba(16, 185, 129, 0.45)' : 'rgba(245, 158, 11, 0.45)'),
-                                      padding: '0.2rem 0.55rem',
-                                      borderRadius: '4px',
-                                      fontSize: '0.72rem',
-                                      cursor: 'pointer',
-                                      fontWeight: 600,
-                                      transition: 'all 0.15s ease'
-                                    }}
-                                    onClick={() => onToggleToolAutoApprove(server.id, tool.id)}
-                                  >
-                                    {tool.autoApprove ? 'Auto-Approve' : 'Ask Permission'}
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+        <div className="eg-settings-actions">
+          {opts.project && !opts.working && (
+            <Button size="sm" variant="ghost" onClick={() => updateProjectFolders([folder, ...projectFolders.filter((f) => f.id !== folder.id)])}>
+              Make working folder
+            </Button>
           )}
-
-          {/* TAB: TOOLS & SKILLS */}
-          {activeTab === 'tools-skills' && (() => {
-            const getToolCategory = (name: string): 'tasks' | 'lanes' | 'execution' | 'mcp' => {
-              if (name.includes('task') && !name.includes('execute') && !name.includes('run') && !name.includes('schedule') && !name.includes('cancel') && !name.includes('move')) {
-                return 'tasks';
-              }
-              if (name.includes('swim_lane') || name.includes('move_task_lane')) {
-                return 'lanes';
-              }
-              if (name.includes('execute') || name.includes('run_') || name.includes('schedule') || name.includes('cancel') || name.includes('brief')) {
-                return 'execution';
-              }
-              return 'mcp';
-            };
-
-            const filteredWorkspaceTools = WORKSPACE_MCP_TOOLS.filter((t) => {
-              const cat = getToolCategory(t.name);
-              if (selectedToolsCategory !== 'all' && cat !== selectedToolsCategory) return false;
-              if (toolsSearchQuery.trim()) {
-                const q = toolsSearchQuery.toLowerCase();
-                return t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q);
-              }
-              return true;
-            });
-
-            return (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                {/* Header Card */}
-                <div
-                  style={{
-                    background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.08) 0%, rgba(59, 130, 246, 0.04) 100%)',
-                    border: '1px solid rgba(168, 85, 247, 0.25)',
-                    borderRadius: 'var(--radius-md)',
-                    padding: '1rem 1.25rem',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    flexWrap: 'wrap',
-                    gap: '1rem'
-                  }}
-                >
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem' }}>
-                      <Sparkles size={18} color="#c084fc" />
-                      <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#f3e8ff', margin: 0 }}>
-                        Ergo Workspace Actions & Global Skills
-                      </h3>
-                      <span style={{ fontSize: '0.68rem', fontWeight: 700, padding: '0.15rem 0.55rem', borderRadius: '12px', background: 'rgba(168, 85, 247, 0.2)', color: '#d8b4fe', border: '1px solid rgba(168, 85, 247, 0.4)' }}>
-                        Global AI Engine
-                      </span>
-                    </div>
-                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0, maxWidth: '680px', lineHeight: 1.45 }}>
-                      Built-in Ergo MCP tools enable the internal AI agent to interact directly with tasks, swim lanes, and executions.
-                      Global skills define autonomous agent behaviors. They are saved on this computer, in <code style={{ color: '#c084fc' }}>config/workspace-skills.json</code> in your Ergo folder.
-                    </p>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={handleOpenAddSkill}
-                      style={{
-                        fontSize: '0.78rem',
-                        padding: '0.45rem 0.85rem',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '0.45rem',
-                        background: 'linear-gradient(135deg, #9333ea 0%, #7c3aed 100%)',
-                        borderColor: '#a855f7'
-                      }}
-                    >
-                      <Plus size={14} />
-                      <span>New Custom Skill</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Sub-view switcher pills */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.75rem' }}>
-                  <button
-                    type="button"
-                    onClick={() => setSkillsSubView('tools')}
-                    style={{
-                      padding: '0.4rem 0.9rem',
-                      borderRadius: '20px',
-                      fontSize: '0.78rem',
-                      fontWeight: 600,
-                      border: '1px solid',
-                      cursor: 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.45rem',
-                      transition: 'all 0.15s ease',
-                      background: skillsSubView === 'tools' ? 'rgba(168, 85, 247, 0.2)' : 'rgba(255, 255, 255, 0.04)',
-                      borderColor: skillsSubView === 'tools' ? '#a855f7' : 'var(--border-subtle)',
-                      color: skillsSubView === 'tools' ? '#f3e8ff' : 'var(--text-muted)'
-                    }}
-                  >
-                    <Wrench size={13} color={skillsSubView === 'tools' ? '#c084fc' : 'currentColor'} />
-                    <span>Ergo Workspace MCP Tools ({WORKSPACE_MCP_TOOLS.length})</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setSkillsSubView('skills')}
-                    style={{
-                      padding: '0.4rem 0.9rem',
-                      borderRadius: '20px',
-                      fontSize: '0.78rem',
-                      fontWeight: 600,
-                      border: '1px solid',
-                      cursor: 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.45rem',
-                      transition: 'all 0.15s ease',
-                      background: skillsSubView === 'skills' ? 'rgba(168, 85, 247, 0.2)' : 'rgba(255, 255, 255, 0.04)',
-                      borderColor: skillsSubView === 'skills' ? '#a855f7' : 'var(--border-subtle)',
-                      color: skillsSubView === 'skills' ? '#f3e8ff' : 'var(--text-muted)'
-                    }}
-                  >
-                    <Sparkles size={13} color={skillsSubView === 'skills' ? '#c084fc' : 'currentColor'} />
-                    <span>Global Rules & Skills ({skills.length})</span>
-                  </button>
-                </div>
-
-                {/* ── SUB-VIEW A: WORKSPACE MCP TOOLS ── */}
-                {skillsSubView === 'tools' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    {/* Category Filter Pills & Search */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
-                        {[
-                          { id: 'all', label: `All Actions (${WORKSPACE_MCP_TOOLS.length})` },
-                          { id: 'tasks', label: 'Tasks & Subtasks (6)' },
-                          { id: 'lanes', label: 'Swim Lanes & Routing (5)' },
-                          { id: 'execution', label: 'Executions & Scheduler (7)' },
-                          { id: 'mcp', label: 'External MCP Inspector (3)' }
-                        ].map((cat) => (
-                          <button
-                            key={cat.id}
-                            type="button"
-                            onClick={() => setSelectedToolsCategory(cat.id as any)}
-                            style={{
-                              padding: '0.25rem 0.65rem',
-                              borderRadius: '6px',
-                              fontSize: '0.74rem',
-                              fontWeight: 600,
-                              border: '1px solid',
-                              cursor: 'pointer',
-                              background: selectedToolsCategory === cat.id ? 'rgba(168, 85, 247, 0.18)' : 'rgba(255, 255, 255, 0.03)',
-                              borderColor: selectedToolsCategory === cat.id ? 'rgba(168, 85, 247, 0.45)' : 'var(--border-subtle)',
-                              color: selectedToolsCategory === cat.id ? '#e9d5ff' : 'var(--text-muted)'
-                            }}
-                          >
-                            {cat.label}
-                          </button>
-                        ))}
-                      </div>
-
-                      <div style={{ position: 'relative', width: '240px' }}>
-                        <Search size={13} style={{ position: 'absolute', left: '0.65rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
-                        <input
-                          type="text"
-                          className="input-text"
-                          placeholder="Filter tools..."
-                          value={toolsSearchQuery}
-                          onChange={(e) => setToolsSearchQuery(e.target.value)}
-                          style={{ paddingLeft: '2rem', paddingRight: '0.5rem', height: '28px', fontSize: '0.74rem', width: '100%' }}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Security Notice */}
-                    <div
-                      style={{
-                        background: 'rgba(59, 130, 246, 0.06)',
-                        border: '1px solid rgba(59, 130, 246, 0.22)',
-                        borderRadius: 'var(--radius-sm)',
-                        padding: '0.65rem 0.95rem',
-                        display: 'flex',
-                        alignItems: 'flex-start',
-                        gap: '0.65rem',
-                        fontSize: '0.76rem',
-                        color: '#93c5fd',
-                        lineHeight: 1.45
-                      }}
-                    >
-                      <Shield size={16} color="#60a5fa" style={{ flexShrink: 0, marginTop: '2px' }} />
-                      <div>
-                        <strong style={{ color: '#dbeafe' }}>Manual Security Policy:</strong> External MCP server connections, API tokens, tool permissions, and removal are strictly manual and human-controlled in the <em>External Apps</em> tab. The AI workspace can inspect available external tools via <code>workspace_read_mcp_tools</code>, but cannot modify permissions or remove servers.
-                      </div>
-                    </div>
-
-                    {/* Tools Grid */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
-                      {filteredWorkspaceTools.map((tool) => {
-                        const isExpanded = !!expandedToolIds[tool.name];
-                        const category = getToolCategory(tool.name);
-                        const schemaProps = (tool.inputSchema as any)?.properties || {};
-                        const requiredFields: string[] = (tool.inputSchema as any)?.required || [];
-                        const propKeys = Object.keys(schemaProps);
-
-                        const categoryBadges: Record<string, { label: string; color: string; bg: string }> = {
-                          tasks: { label: 'Task CRUD', color: '#93c5fd', bg: 'rgba(59, 130, 246, 0.12)' },
-                          lanes: { label: 'Swim Lanes', color: '#67e8f9', bg: 'rgba(6, 182, 212, 0.12)' },
-                          execution: { label: 'AI Execution', color: '#6ee7b7', bg: 'rgba(16, 185, 129, 0.12)' },
-                          mcp: { label: 'MCP Reader', color: '#c4b5fd', bg: 'rgba(139, 92, 246, 0.12)' }
-                        };
-
-                        const badge = categoryBadges[category] || categoryBadges.tasks;
-
-                        return (
-                          <div
-                            key={tool.name}
-                            style={{
-                              background: '#15181e',
-                              border: '1px solid rgba(255, 255, 255, 0.07)',
-                              borderRadius: 'var(--radius-sm)',
-                              padding: '0.75rem 1rem',
-                              transition: 'all 0.15s ease'
-                            }}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                                <span
-                                  style={{
-                                    fontFamily: 'var(--font-mono, monospace)',
-                                    fontSize: '0.82rem',
-                                    fontWeight: 700,
-                                    color: '#f8fafc',
-                                    background: 'rgba(255, 255, 255, 0.05)',
-                                    padding: '0.2rem 0.55rem',
-                                    borderRadius: '4px',
-                                    border: '1px solid rgba(255, 255, 255, 0.1)'
-                                  }}
-                                >
-                                  {tool.name}
-                                </span>
-
-                                <span
-                                  style={{
-                                    fontSize: '0.66rem',
-                                    fontWeight: 700,
-                                    padding: '0.12rem 0.45rem',
-                                    borderRadius: '10px',
-                                    background: badge.bg,
-                                    color: badge.color
-                                  }}
-                                >
-                                  {badge.label}
-                                </span>
-
-                                <span
-                                  style={{
-                                    fontSize: '0.66rem',
-                                    fontWeight: 600,
-                                    padding: '0.12rem 0.45rem',
-                                    borderRadius: '10px',
-                                    background: 'rgba(16, 185, 129, 0.12)',
-                                    color: '#34d399'
-                                  }}
-                                >
-                                  Global
-                                </span>
-                              </div>
-
-                              <button
-                                type="button"
-                                className="btn btn-secondary"
-                                onClick={() =>
-                                  setExpandedToolIds((prev) => ({
-                                    ...prev,
-                                    [tool.name]: !prev[tool.name]
-                                  }))
-                                }
-                                style={{
-                                  padding: '0.2rem 0.55rem',
-                                  fontSize: '0.7rem',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '0.35rem'
-                                }}
-                              >
-                                <span>{propKeys.length} {propKeys.length === 1 ? 'param' : 'params'}</span>
-                                {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                              </button>
-                            </div>
-
-                            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: 1.45 }}>
-                              {tool.description}
-                            </div>
-
-                            {isExpanded && (
-                              <div
-                                style={{
-                                  marginTop: '0.75rem',
-                                  paddingTop: '0.65rem',
-                                  borderTop: '1px solid rgba(255, 255, 255, 0.06)',
-                                  display: 'flex',
-                                  flexDirection: 'column',
-                                  gap: '0.45rem'
-                                }}
-                              >
-                                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                                  Parameters & Schema
-                                </div>
-                                {propKeys.length === 0 ? (
-                                  <span style={{ fontSize: '0.74rem', color: 'var(--text-dim)', fontStyle: 'italic' }}>
-                                    No required parameters.
-                                  </span>
-                                ) : (
-                                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.45rem' }}>
-                                    {propKeys.map((pk) => {
-                                      const prop = schemaProps[pk] || {};
-                                      const isReq = requiredFields.includes(pk);
-                                      return (
-                                        <div
-                                          key={pk}
-                                          style={{
-                                            background: 'rgba(0, 0, 0, 0.25)',
-                                            border: '1px solid rgba(255, 255, 255, 0.05)',
-                                            borderRadius: '4px',
-                                            padding: '0.4rem 0.6rem',
-                                            fontSize: '0.72rem'
-                                          }}
-                                        >
-                                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.2rem' }}>
-                                            <code style={{ color: '#38bdf8', fontWeight: 700 }}>{pk}</code>
-                                            <span style={{ color: 'var(--text-dim)', fontSize: '0.66rem' }}>
-                                              ({prop.type || 'string'})
-                                            </span>
-                                            {isReq && (
-                                              <span style={{ color: '#f87171', fontSize: '0.64rem', fontWeight: 700 }}>
-                                                required
-                                              </span>
-                                            )}
-                                          </div>
-                                          <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', lineHeight: 1.35 }}>
-                                            {prop.description || 'No description.'}
-                                          </div>
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* ── SUB-VIEW B: GLOBAL RULES & SKILLS ── */}
-                {skillsSubView === 'skills' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    <div
-                      style={{
-                        background: 'rgba(255, 255, 255, 0.02)',
-                        border: '1px solid var(--border-subtle)',
-                        borderRadius: 'var(--radius-sm)',
-                        padding: '0.75rem 1rem',
-                        fontSize: '0.78rem',
-                        color: 'var(--text-muted)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        flexWrap: 'wrap',
-                        gap: '0.75rem'
-                      }}
-                    >
-                      <span>
-                        Skills guide the AI with specialized workflows, rules, and triggers. They are saved on this computer, so every browser you open Ergo in sees the same skills.
-                      </span>
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        onClick={handleOpenAddSkill}
-                        style={{ fontSize: '0.74rem', padding: '0.3rem 0.65rem' }}
-                      >
-                        <Plus size={12} />
-                        <span>Create New Skill</span>
-                      </button>
-                    </div>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                      {skills.map((skill) => {
-                        const isExpanded = !!expandedSkillIds[skill.id];
-                        return (
-                          <div
-                            key={skill.id}
-                            style={{
-                              background: '#15181e',
-                              border: skill.enabled ? '1px solid rgba(168, 85, 247, 0.35)' : '1px solid rgba(255, 255, 255, 0.07)',
-                              borderRadius: 'var(--radius-sm)',
-                              padding: '0.85rem 1.15rem',
-                              transition: 'all 0.15s ease'
-                            }}
-                          >
-                            {/* Header row */}
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.65rem' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                                <Sparkles size={16} color={skill.enabled ? '#c084fc' : 'var(--text-dim)'} />
-                                <span style={{ fontSize: '0.88rem', fontWeight: 700, color: '#f8fafc' }}>
-                                  {skill.name}
-                                </span>
-                                <span
-                                  style={{
-                                    fontSize: '0.66rem',
-                                    fontFamily: 'var(--font-mono, monospace)',
-                                    color: 'var(--text-dim)',
-                                    background: 'rgba(255, 255, 255, 0.04)',
-                                    padding: '0.1rem 0.4rem',
-                                    borderRadius: '4px'
-                                  }}
-                                >
-                                  {skill.id}
-                                </span>
-                                {skill.isBuiltIn ? (
-                                  <span style={{ fontSize: '0.65rem', fontWeight: 700, padding: '0.1rem 0.45rem', borderRadius: '10px', background: 'rgba(6, 182, 212, 0.15)', color: '#22d3ee' }}>
-                                    Built-in
-                                  </span>
-                                ) : (
-                                  <span style={{ fontSize: '0.65rem', fontWeight: 700, padding: '0.1rem 0.45rem', borderRadius: '10px', background: 'rgba(168, 85, 247, 0.15)', color: '#d8b4fe' }}>
-                                    Custom
-                                  </span>
-                                )}
-                              </div>
-
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                                {/* Toggle switch */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleSkill(skill.id)}
-                                  style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '0.4rem',
-                                    padding: '0.25rem 0.65rem',
-                                    borderRadius: '16px',
-                                    fontSize: '0.72rem',
-                                    fontWeight: 600,
-                                    cursor: 'pointer',
-                                    border: '1px solid',
-                                    background: skill.enabled ? 'rgba(16, 185, 129, 0.18)' : 'rgba(255, 255, 255, 0.04)',
-                                    borderColor: skill.enabled ? 'rgba(16, 185, 129, 0.4)' : 'var(--border-subtle)',
-                                    color: skill.enabled ? '#34d399' : 'var(--text-muted)'
-                                  }}
-                                >
-                                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: skill.enabled ? '#10b981' : 'var(--text-dim)' }} />
-                                  <span>{skill.enabled ? 'Active' : 'Disabled'}</span>
-                                </button>
-
-                                {!skill.isBuiltIn && (
-                                  <>
-                                    <button
-                                      type="button"
-                                      className="btn btn-secondary"
-                                      onClick={() => handleOpenEditSkill(skill)}
-                                      style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
-                                      title="Edit custom skill"
-                                    >
-                                      <Edit3 size={11} />
-                                      <span>Edit</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="btn btn-secondary"
-                                      onClick={() => handleDeleteCustomSkill(skill.id)}
-                                      style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', color: '#f87171' }}
-                                      title="Delete custom skill"
-                                    >
-                                      <Trash2 size={11} />
-                                      <span>Delete</span>
-                                    </button>
-                                  </>
-                                )}
-
-                                <button
-                                  type="button"
-                                  className="btn btn-secondary"
-                                  onClick={() =>
-                                    setExpandedSkillIds((prev) => ({
-                                      ...prev,
-                                      [skill.id]: !prev[skill.id]
-                                    }))
-                                  }
-                                  style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
-                                >
-                                  <span>{isExpanded ? 'Hide Details' : 'View Instructions'}</span>
-                                  {isExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-                                </button>
-                              </div>
-                            </div>
-
-                            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.45rem', lineHeight: 1.45 }}>
-                              {skill.description}
-                            </div>
-
-                            {/* Trigger Keywords */}
-                            {skill.triggerKeywords && skill.triggerKeywords.length > 0 && (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
-                                <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontWeight: 600 }}>Triggers:</span>
-                                {skill.triggerKeywords.map((kw) => (
-                                  <span
-                                    key={kw}
-                                    style={{
-                                      fontSize: '0.68rem',
-                                      padding: '0.1rem 0.45rem',
-                                      borderRadius: '4px',
-                                      background: 'rgba(168, 85, 247, 0.1)',
-                                      color: '#d8b4fe',
-                                      border: '1px solid rgba(168, 85, 247, 0.25)',
-                                      fontFamily: 'var(--font-mono, monospace)'
-                                    }}
-                                  >
-                                    #{kw}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-
-                            {isExpanded && (
-                              <div
-                                style={{
-                                  marginTop: '0.75rem',
-                                  paddingTop: '0.75rem',
-                                  borderTop: '1px solid rgba(255, 255, 255, 0.06)',
-                                  display: 'flex',
-                                  flexDirection: 'column',
-                                  gap: '0.65rem'
-                                }}
-                              >
-                                {skill.rules && (
-                                  <div>
-                                    <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.25rem' }}>
-                                      Rules & Constraints
-                                    </div>
-                                    <div style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(245, 158, 11, 0.2)', borderRadius: '4px', padding: '0.5rem 0.75rem', fontSize: '0.74rem', color: '#fef3c7', lineHeight: 1.45 }}>
-                                      {skill.rules}
-                                    </div>
-                                  </div>
-                                )}
-
-                                <div>
-                                  <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.25rem' }}>
-                                    Instructions & Workflow
-                                  </div>
-                                  <pre
-                                    style={{
-                                      background: 'rgba(0,0,0,0.35)',
-                                      border: '1px solid rgba(255, 255, 255, 0.05)',
-                                      borderRadius: '4px',
-                                      padding: '0.65rem 0.75rem',
-                                      fontSize: '0.72rem',
-                                      color: '#e2e8f0',
-                                      whiteSpace: 'pre-wrap',
-                                      fontFamily: 'var(--font-mono, monospace)',
-                                      margin: 0,
-                                      lineHeight: 1.45
-                                    }}
-                                  >
-                                    {skill.instructions}
-                                  </pre>
-                                </div>
-
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-
-          {/* TAB 2: SAFE DIRECTORY ROOTS */}
-          {activeTab === 'roots' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '0.85rem 1rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.35rem' }}>
-                  <Lock size={25} color="var(--accent-cyan)" />
-                  {/* <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#fff' }}>Allowed Filesystem Directories</span> */}
-                  <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.5 }}>
-                    To protect your data, the filesystem connection (<span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)' }}>server-filesystem</span>) is strictly constrained to the folders you approve. AI agents cannot read or write outside these approved boundaries.
-                  </p>
-                </div>
-
-              </div>
-
-              {/* Add Root Form */}
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                  <h4
-                    style={{
-                      fontSize: '0.85rem',
-                      fontWeight: 700,
-                      color: 'var(--text-muted)',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.05em',
-                      margin: 0
-                    }}
-                  >
-                    Add Allowed Folder
-                  </h4>
-                </div>
-                <form onSubmit={handleAddRootSubmit} style={{ display: 'flex', gap: '0.75rem' }}>
-                  <input
-                    type="text"
-                    className="input-text"
-                    placeholder="Folder Path (e.g. /home/user/my-project or ../other-repo)"
-                    value={newRootPath}
-                    onChange={(e) => setNewRootPath(e.target.value)}
-                    style={{ flex: 2 }}
-                  />
-                  <input
-                    type="text"
-                    className="input-text"
-                    placeholder="Label / Nickname (optional)"
-                    value={newRootName}
-                    onChange={(e) => setNewRootName(e.target.value)}
-                    style={{ flex: 1 }}
-                  />
-                  {activeProject && (
-                    <select
-                      className="input-text"
-                      value={addScope}
-                      onChange={(e) => setAddScope(e.target.value as 'global' | 'project')}
-                      title="Which projects may use this folder"
-                      style={{ flex: '0 1 11rem' }}
-                    >
-                      <option value="global">Every project</option>
-                      <option value="project">Only {activeProject.name}</option>
-                    </select>
-                  )}
-                  <button type="submit" className="btn btn-primary" disabled={!newRootPath.trim()} style={{ whiteSpace: 'nowrap' }}>
-                    <FolderPlus size={14} />
-                    <span>Add Folder</span>
-                  </button>
-                </form>
-              </div>
-
-              {/* The open project's own folders */}
-              {activeProject && (
-                <div>
-                  <h4 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 0.4rem' }}>
-                    Only {activeProject.name} ({projectFolders.length})
-                  </h4>
-                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0 0 0.75rem', lineHeight: 1.5 }}>
-                    {projectFolders.length > 0
-                      ? <>This project's agents use only these folders (and Ergo's storage), and start in the first one: its working folder. The folders below aren't used by this project.</>
-                      : <>None yet: this project uses the folders allowed for every project, below. Give it its own (for example its repo) with "Only {activeProject.name}" above, and its agents stop looking anywhere else.</>}
-                  </p>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-                    {projectFolders.map((folder, i) => (
-                      <div
-                        key={folder.id}
-                        style={{
-                          background: 'var(--bg-card)',
-                          border: `1px solid ${i === 0 ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
-                          borderRadius: 'var(--radius-sm)',
-                          padding: '0.75rem 1rem',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between'
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                          <Folder size={18} color="var(--accent-cyan)" />
-                          <div>
-                            <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-bright)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                              <span>{folder.name}</span>
-                              {i === 0 && <span className="badge badge-done" style={{ fontSize: '0.65rem' }}>Working folder</span>}
-                            </div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', marginTop: '0.1rem' }}>{folder.path}</div>
-                            <CodeIndexLine status={codeIndex.find((c) => samePath(c.root, folder.path))} />
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '0.4rem' }}>
-                          {i > 0 && (
-                            <button
-                              className="btn btn-secondary"
-                              style={{ padding: '0.3rem 0.55rem', fontSize: '0.72rem' }}
-                              onClick={() => updateProjectFolders([folder, ...projectFolders.filter((f) => f.id !== folder.id)])}
-                              title="Make this the folder the project's agents start in"
-                            >
-                              Make working folder
-                            </button>
-                          )}
-                          <button
-                            className="btn btn-secondary"
-                            style={{ padding: '0.3rem 0.5rem', color: 'var(--accent-rose)' }}
-                            onClick={() => updateProjectFolders(projectFolders.filter((f) => f.id !== folder.id))}
-                            title="Remove this folder from the project"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Roots List */}
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                  <h4
-                    style={{
-                      fontSize: '0.85rem',
-                      fontWeight: 700,
-                      color: 'var(--text-muted)',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.05em',
-                      margin: 0
-                    }}
-                  >
-                    {activeProject ? 'Every project' : 'Configured Folders'} ({roots.length})
-                  </h4>
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-                  {roots.map((root) => (
-                    <div
-                      key={root.id}
-                      style={{
-                        background: 'var(--bg-card)',
-                        border: '1px solid var(--border-subtle)',
-                        borderRadius: 'var(--radius-sm)',
-                        padding: '0.75rem 1rem',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between'
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                        <Folder size={18} color="var(--accent-cyan)" />
-                        <div>
-                          <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                            <span>{root.name}</span>
-                            {root.isDefault && (
-                              <span className="badge badge-done" style={{ fontSize: '0.65rem' }}>
-                                Default Storage
-                              </span>
-                            )}
-                          </div>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', marginTop: '0.1rem' }}>
-                            {root.path}
-                          </div>
-                          {!root.isDefault && <CodeIndexLine status={codeIndex.find((c) => samePath(c.root, root.path))} />}
-                        </div>
-                      </div>
-
-                      {!root.isDefault && (
-                        <button
-                          className="btn btn-secondary"
-                          style={{ padding: '0.3rem 0.5rem', color: 'var(--accent-rose)' }}
-                          onClick={() => handleRemoveRoot(root.id)}
-                          title="Remove allowed root"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
+          {opts.project ? (
+            <IconButton icon={Trash2} label="Remove from this project" size="sm" onClick={() => updateProjectFolders(projectFolders.filter((f) => f.id !== folder.id))} />
+          ) : (
+            !folder.isDefault && <IconButton icon={Trash2} label="Remove folder" size="sm" onClick={() => handleRemoveRoot(folder.id)} />
           )}
-
-          {/* TAB 3: EXTERNAL SAAS MCPS */}
-          {activeTab === 'external' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              {showAddForm && (
-                <form
-                  onSubmit={handleAddSubmit}
-                  style={{
-                    background: 'var(--bg-card)',
-                    border: '1px solid var(--accent-cyan)',
-                    boxShadow: '0 0 20px rgba(6, 182, 212, 0.15)',
-                    borderRadius: 'var(--radius-md)',
-                    padding: '1.25rem',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.85rem'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <Globe size={16} color="var(--accent-cyan)" />
-                      <h4 style={{ fontSize: '0.88rem', fontWeight: 700, color: '#fff', margin: 0 }}>
-                        Connect Other MCP
-                      </h4>
-                    </div>
-                    {/* <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                      Non-technical? Just paste your MCP URL below and click Connect
-                    </span> */}
-                  </div>
-
-                  <div>
-                    <label className="input-label" style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-                      MCP Endpoint URL <span style={{ color: 'var(--accent-rose)' }}>*</span>
-                    </label>
-                    <div style={{ display: 'flex', gap: '0.5rem' }}>
-                      <input
-                        type="text"
-                        className="input-text"
-                        placeholder="https://mcp.my-tool.com/mcp or http://localhost:3000/mcp"
-                        value={newServerEndpoint}
-                        onChange={(e) => {
-                          setNewServerEndpoint(e.target.value);
-                          setDiscoveryError(null);
-                        }}
-                        style={{ flex: 1 }}
-                      />
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        disabled={!newServerEndpoint.trim() || isDiscovering}
-                        onClick={() => handleDiscoverEndpoint(newServerEndpoint, newServerAuthHeader)}
-                        style={{ fontSize: '0.78rem', whiteSpace: 'nowrap' }}
-                      >
-                        <RefreshCw size={13} className={isDiscovering ? 'animate-spin' : ''} />
-                        <span>{isDiscovering ? 'Testing…' : 'Test Endpoint'}</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
-                    <div>
-                      <label className="input-label" style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-                        Display Name <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(auto-detected if blank)</span>
-                      </label>
-                      <input
-                        type="text"
-                        className="input-text"
-                        placeholder="e.g. Asana, Linear, Airtable"
-                        value={newServerName}
-                        onChange={(e) => setNewServerName(e.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <label className="input-label" style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-                        API Key / Bearer Token <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(optional)</span>
-                      </label>
-                      <input
-                        type="password"
-                        className="input-text"
-                        placeholder="Leave blank if public / unauthenticated"
-                        value={newServerAuthHeader}
-                        onChange={(e) => setNewServerAuthHeader(e.target.value)}
-                      />
-                    </div>
-                  </div>
-
-                  {discoveryError && (
-                    <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: 'var(--radius-sm)', padding: '0.5rem 0.75rem', color: '#f87171', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      <AlertTriangle size={14} />
-                      <span>{discoveryError}</span>
-                    </div>
-                  )}
-
-                  {discoveredPreview && (
-                    <div style={{ background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.25)', borderRadius: 'var(--radius-sm)', padding: '0.5rem 0.75rem', color: 'var(--accent-emerald)', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <CheckCircle2 size={15} />
-                      <span>
-                        Discovered <strong>{discoveredPreview.toolsCount}</strong> tools from <strong>{discoveredPreview.serverName}</strong>: {discoveredPreview.tools.slice(0, 4).map((t) => t.name).join(', ')}{discoveredPreview.toolsCount > 4 ? '…' : ''}
-                      </span>
-                    </div>
-                  )}
-
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.25rem' }}>
-                    <button type="button" className="btn btn-secondary" style={{ fontSize: '0.8rem' }} onClick={() => setShowAddForm(false)}>
-                      Cancel
-                    </button>
-                    <button type="submit" className="btn btn-primary" disabled={!newServerEndpoint.trim() || isDiscovering} style={{ fontSize: '0.8rem', gap: '0.35rem' }}>
-                      <Check size={14} />
-                      <span>{isDiscovering ? 'Connecting…' : 'Connect & Discover Tools'}</span>
-                    </button>
-                  </div>
-                </form>
-              )}
-
-              <div className="mcp-grid">
-                {externalServers.map((server) => {
-                  const isConnected = server.status === 'connected';
-                  const isConnecting = connectingServerId === server.id;
-                  const isExpanded = !!expandedServerIds[server.id];
-
-                  return (
-                    <div
-                      key={server.id}
-                      className={`mcp-card ${isConnected ? 'connected' : ''} ${!isExpanded ? 'collapsed' : ''}`}
-                      onClick={() => {
-                        if (!isExpanded) {
-                          toggleExpandedServer(server.id);
-                        }
-                      }}
-                    >
-                      <div className="mcp-header">
-                        <div className="mcp-title">
-                          <button
-                            type="button"
-                            className="mcp-collapse-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleExpandedServer(server.id);
-                            }}
-                            title={isExpanded ? 'Collapse card' : 'Expand permissions & details'}
-                            aria-label={isExpanded ? 'Collapse card' : 'Expand permissions & details'}
-                          >
-                            {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-                          </button>
-                          {renderServerIcon(server, isConnected)}
-                          <span>{server.name}</span>
-                          {server.isCustom && (
-                            <span style={{ fontSize: '0.62rem', background: 'rgba(255,255,255,0.06)', padding: '1px 5px', borderRadius: '3px', color: 'var(--accent-cyan)' }}>
-                              Custom
-                            </span>
-                          )}
-                          {!isExpanded && server.tools.length > 0 && (
-                            <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontWeight: 500, fontFamily: 'var(--font-mono)' }}>
-                              ({server.tools.length} {server.tools.length === 1 ? 'tool' : 'tools'})
-                            </span>
-                          )}
-                        </div>
-
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                          {server.id === 'mcp-github' && isConnected && (
-                            <button
-                              type="button"
-                              className="btn btn-secondary"
-                              style={{ padding: '0.25rem 0.45rem', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setGhAuthError(null);
-                                setIsGhAuthModalOpen(true);
-                              }}
-                              title="Configure GitHub Token"
-                            >
-                              <Key size={12} />
-                              <span>Key</span>
-                            </button>
-                          )}
-
-                          <button
-                            className={isConnected ? 'btn btn-secondary' : 'btn btn-primary'}
-                            style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem', minWidth: '75px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}
-                            disabled={isConnecting}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleConnectExternal(server);
-                            }}
-                          >
-                            {isConnecting ? (
-                              <>
-                                <RefreshCw size={12} className="animate-spin" />
-                                <span>Syncing…</span>
-                              </>
-                            ) : isConnected ? (
-                              <span>Disconnect</span>
-                            ) : (
-                              <span>Connect</span>
-                            )}
-                          </button>
-
-                          {server.isCustom && onDeleteCustomServer && (
-                            <button
-                              type="button"
-                              className="btn btn-secondary"
-                              style={{ padding: '0.25rem 0.45rem', color: 'var(--accent-rose)', fontSize: '0.72rem' }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onDeleteCustomServer(server.id);
-                              }}
-                              title="Remove custom connection"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                      {isExpanded && (
-                        <>
-                          <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>{server.description}</p>
-
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-dim)', paddingTop: '0.4rem', borderTop: '1px solid var(--border-subtle)' }}>
-                            <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: isConnected ? 'var(--accent-emerald)' : 'var(--text-dim)' }} />
-                              <span>{isConnected ? 'Active & Ready' : 'Disconnected'}</span>
-                              {isConnected && (server.authUsername || (server.id === 'mcp-github' && ghAccountInfo?.username)) && (
-                                <span style={{ color: 'var(--accent-cyan)', fontWeight: 600, fontSize: '0.72rem', background: 'rgba(6, 182, 212, 0.1)', padding: '1px 6px', borderRadius: '4px' }}>
-                                  @{server.authUsername || ghAccountInfo?.username}
-                                </span>
-                              )}
-                            </span>
-                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={server.endpoint}>
-                              {server.id === 'mcp-github'
-                                ? (isConnected ? 'Stdio MCP (@modelcontextprotocol/server-github)' : 'Personal Token Required')
-                                : (server.endpoint ? server.endpoint.replace('https://', '').replace('http://', '') : 'Configuration Required')}
-                            </span>
-                          </div>
-
-                          {server.error && (
-                            <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.6rem', color: '#f87171', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '0.35rem' }}>
-                              <AlertTriangle size={13} style={{ flexShrink: 0 }} />
-                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{server.error}</span>
-                            </div>
-                          )}
-
-                          {/* Tools List & Permissions */}
-                          {server.tools.length > 0 && (
-                            <div style={{ background: 'var(--code-bg)', border: '1px solid var(--code-border)', padding: '0.75rem 0.85rem', borderRadius: 'var(--radius-sm)', marginTop: '0.35rem', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)' }}>
-                              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: isConnected ? 'var(--accent-cyan)' : 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                  <Shield size={13} />
-                                  <span>{isConnected ? `Discovered Tools (${server.tools.length})` : `Available Tools (${server.tools.length})`}</span>
-                                </div>
-                                {isConnected && (
-                                  <button
-                                    type="button"
-                                    onClick={async () => {
-                                      setConnectingServerId(server.id);
-                                      if (server.id === 'mcp-github') {
-                                        const st = await getGithubMcpStatus();
-                                        if (st.configured && onUpdateServer) {
-                                          onUpdateServer({
-                                            ...server,
-                                            status: 'connected',
-                                            authUsername: st.username,
-                                            lastSyncedAt: new Date().toISOString()
-                                          });
-                                        }
-                                      } else if (server.endpoint) {
-                                        const disc = await discoverRemoteMcpTools(server.endpoint, server.authHeader);
-                                        if (disc.success && disc.tools.length > 0 && onUpdateServer) {
-                                          onUpdateServer({
-                                            ...server,
-                                            lastSyncedAt: new Date().toISOString(),
-                                            tools: disc.tools.map((t) => ({ ...t, serverId: server.id })),
-                                            error: undefined
-                                          });
-                                        }
-                                      }
-                                      setConnectingServerId(null);
-                                    }}
-                                    disabled={connectingServerId === server.id}
-                                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.68rem' }}
-                                    title="Sync latest tools from endpoint"
-                                  >
-                                    <RefreshCw size={11} className={connectingServerId === server.id ? 'animate-spin' : ''} />
-                                    <span>Refresh</span>
-                                  </button>
-                                )}
-                              </div>
-
-                              {server.tools.length > 6 && (
-                                <div style={{ position: 'relative', marginBottom: '0.4rem' }}>
-                                  <Search size={11} style={{ position: 'absolute', left: '0.5rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
-                                  <input
-                                    type="text"
-                                    className="input-text"
-                                    placeholder={`Filter ${server.tools.length} tools...`}
-                                    value={toolSearchQueries[server.id] || ''}
-                                    onChange={(e) => setToolSearchQueries({ ...toolSearchQueries, [server.id]: e.target.value })}
-                                    style={{
-                                      width: '100%',
-                                      paddingLeft: '1.6rem',
-                                      paddingRight: '0.5rem',
-                                      paddingTop: '0.2rem',
-                                      paddingBottom: '0.2rem',
-                                      fontSize: '0.72rem',
-                                      height: '24px'
-                                    }}
-                                  />
-                                </div>
-                              )}
-
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', maxHeight: '180px', overflowY: 'auto' }}>
-                                {server.tools
-                                  .filter((tool) => {
-                                    const q = (toolSearchQueries[server.id] || '').toLowerCase().trim();
-                                    if (!q) return true;
-                                    return tool.name.toLowerCase().includes(q) || (tool.description && tool.description.toLowerCase().includes(q));
-                                  })
-                                  .map((tool) => (
-                                    <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.3rem 0', borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
-                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', overflow: 'hidden' }}>
-                                        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--code-text)', fontSize: '0.76rem', fontWeight: 600 }}>{tool.name}</span>
-                                        {tool.description && (
-                                          <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '280px' }} title={tool.description}>
-                                            {tool.description}
-                                          </span>
-                                        )}
-                                      </div>
-                                      <button
-                                        type="button"
-                                        style={{
-                                          background: tool.autoApprove ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)',
-                                          color: tool.autoApprove ? '#34d399' : '#fbbf24',
-                                          border: '1px solid ' + (tool.autoApprove ? 'rgba(16, 185, 129, 0.45)' : 'rgba(245, 158, 11, 0.45)'),
-                                          padding: '0.2rem 0.55rem',
-                                          borderRadius: '4px',
-                                          fontSize: '0.7rem',
-                                          cursor: 'pointer',
-                                          fontWeight: 600,
-                                          flexShrink: 0,
-                                          transition: 'all 0.15s ease'
-                                        }}
-                                        onClick={() => onToggleToolAutoApprove(server.id, tool.id)}
-                                      >
-                                        {tool.autoApprove ? 'Auto-Approve' : 'Ask Permission'}
-                                      </button>
-                                    </div>
-                                  ))}
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-        </div>
-
-        <div className="modal-footer">
-          <button className="btn btn-primary" onClick={onClose}>
-            Done
-          </button>
         </div>
       </div>
+    );
 
+    return (
+      <>
+        <SettingsGroup title="Add a folder">
+          <form onSubmit={handleAddRootSubmit} className="eg-settings-form">
+            <Input
+              mono
+              placeholder="/home/you/my-project"
+              value={newRootPath}
+              onChange={(e) => setNewRootPath(e.target.value)}
+              aria-label="Folder path"
+              style={{ flex: 2, minWidth: 200 }}
+            />
+            <Input
+              placeholder="Name (optional)"
+              value={newRootName}
+              onChange={(e) => setNewRootName(e.target.value)}
+              aria-label="Folder name"
+              style={{ flex: 1, minWidth: 120 }}
+            />
+            <Button type="submit" variant="primary" icon={FolderPlus} disabled={!newRootPath.trim()}>
+              Add folder
+            </Button>
+          </form>
+          {activeProject && (
+            <div className="eg-srow">
+              <div className="eg-srow-text">
+                <div className="eg-srow-title">Allow it for</div>
+              </div>
+              <SegmentedControl
+                label="Allow the new folder for"
+                options={[
+                  { id: 'global', label: 'Every project' },
+                  { id: 'project', label: `Only ${activeProject.name}` },
+                ]}
+                value={addScope}
+                onChange={setAddScope}
+              />
+            </div>
+          )}
+        </SettingsGroup>
+
+        {activeProject && (
+          <section className="eg-sgroup">
+            <h3 className="eg-sgroup-title">Only {activeProject.name}</h3>
+            <p className="eg-settings-groupdesc">
+              {projectFolders.length > 0
+                ? "This project's agents use only these folders (and Ergo's storage), and start in the working folder. Folders allowed for every project aren't used."
+                : `None yet, so this project uses the folders allowed for every project. Add one for "Only ${activeProject.name}" to keep its agents inside it.`}
+            </p>
+            {projectFolders.length > 0 && <div className="eg-srows">{projectFolders.map((f, i) => folderRow(f, { project: true, working: i === 0, index: i }))}</div>}
+          </section>
+        )}
+
+        <section className="eg-sgroup">
+          <h3 className="eg-sgroup-title">{activeProject ? 'Every project' : 'Allowed folders'}</h3>
+          <p className="eg-settings-groupdesc">Agents can read and write only inside folders you allow here. Each folder is indexed so agents can search its code.</p>
+          <div className="eg-srows">{roots.map((r) => folderRow(r, {}))}</div>
+        </section>
+      </>
+    );
+  }
+
+  function renderEmbeddedSkills() {
+    return (
+      <section className="eg-sgroup">
+        <div className="eg-settings-grouphead">
+          <h3 className="eg-sgroup-title">Skills</h3>
+          <Button size="sm" icon={Plus} onClick={handleOpenAddSkill}>
+            New skill
+          </Button>
+        </div>
+        <p className="eg-settings-groupdesc">
+          Workflows and rules the agent follows when a task matches their triggers, or when you type <span className="eg-settings-mono">/</span> and pick one. Saved on this computer in{' '}
+          <span className="eg-settings-mono">config/workspace-skills.json</span>.
+        </p>
+        <div className="eg-srows">
+          {skills.map((skill) => {
+            const isExpanded = !!expandedSkillIds[skill.id];
+            return (
+              <div key={skill.id} className="eg-srow eg-settings-top">
+                <div className="eg-srow-text">
+                  <div className="eg-srow-title">
+                    {skill.name}
+                    <span className="eg-settings-note"> · {skill.isBuiltIn ? 'Built-in' : 'Custom'}</span>
+                  </div>
+                  <div className="eg-srow-help">{skill.description}</div>
+                  {skill.triggerKeywords && skill.triggerKeywords.length > 0 && (
+                    <div className="eg-srow-help">Triggers: {skill.triggerKeywords.join(', ')}</div>
+                  )}
+                  {isExpanded && (
+                    <div className="eg-settings-sub">
+                      {skill.rules && (
+                        <>
+                          <div className="eg-settings-label">Rules</div>
+                          <pre className="eg-settings-pre">{skill.rules}</pre>
+                        </>
+                      )}
+                      <div className="eg-settings-label">Instructions</div>
+                      <pre className="eg-settings-pre">{skill.instructions}</pre>
+                    </div>
+                  )}
+                </div>
+                <div className="eg-settings-actions">
+                  <IconButton
+                    icon={isExpanded ? ChevronUp : ChevronDown}
+                    label={isExpanded ? 'Hide instructions' : 'Show instructions'}
+                    size="sm"
+                    onClick={() => setExpandedSkillIds((prev) => ({ ...prev, [skill.id]: !prev[skill.id] }))}
+                  />
+                  {!skill.isBuiltIn && (
+                    <>
+                      <IconButton icon={Edit3} label="Edit skill" size="sm" onClick={() => handleOpenEditSkill(skill)} />
+                      <IconButton icon={Trash2} label="Delete skill" size="sm" onClick={() => handleDeleteCustomSkill(skill.id)} />
+                    </>
+                  )}
+                  <Switch checked={skill.enabled} onChange={() => handleToggleSkill(skill.id)} aria-label={`Use ${skill.name}`} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {skills.length === 0 && <EmptyState title="No skills yet" text="Add a skill to give the agent a workflow it can reuse." />}
+      </section>
+    );
+  }
+
+  function renderEmbeddedIntegrations() {
+    const q = toolsSearchQuery.trim().toLowerCase();
+    const builtinTools = WORKSPACE_MCP_TOOLS.filter((t) => !q || t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q));
+    return (
+      <>
+        <section className="eg-sgroup">
+          <div className="eg-settings-grouphead">
+            <h3 className="eg-sgroup-title">Services</h3>
+            <div className="eg-settings-actions">
+              <Button size="sm" variant="ghost" icon={RefreshCw} onClick={handleCheckAllUpdates} disabled={isCheckingUpdates}>
+                {isCheckingUpdates ? 'Checking…' : 'Check for new tools'}
+              </Button>
+              <Button size="sm" icon={Plus} onClick={() => setShowAddForm(!showAddForm)}>
+                Add server
+              </Button>
+            </div>
+          </div>
+          <p className="eg-settings-groupdesc">
+            {updateStatusMsg || 'MCP servers agents can use. Each tool asks before it runs unless you allow it. Tokens are stored in your secrets file.'}
+          </p>
+
+          {showAddForm && (
+            <form onSubmit={handleAddSubmit} className="eg-settings-card">
+              <Field label="Server URL">
+                <div className="eg-settings-actions">
+                  <Input
+                    mono
+                    placeholder="https://mcp.example.com/mcp"
+                    value={newServerEndpoint}
+                    onChange={(e) => {
+                      setNewServerEndpoint(e.target.value);
+                      setDiscoveryError(null);
+                    }}
+                    style={{ flex: 1 }}
+                  />
+                  <Button size="sm" disabled={!newServerEndpoint.trim() || isDiscovering} onClick={() => handleDiscoverEndpoint(newServerEndpoint, newServerAuthHeader)}>
+                    {isDiscovering ? 'Testing…' : 'Test'}
+                  </Button>
+                </div>
+              </Field>
+              <div className="eg-settings-form">
+                <Field label="Name" help="Found from the server if left blank.">
+                  <Input value={newServerName} onChange={(e) => setNewServerName(e.target.value)} placeholder="Linear" />
+                </Field>
+                <Field label="Token" help="Leave blank if the server doesn't need one.">
+                  <Input type="password" value={newServerAuthHeader} onChange={(e) => setNewServerAuthHeader(e.target.value)} />
+                </Field>
+              </div>
+              {discoveryError && <Banner tone="danger" title="Couldn't reach that server" text={discoveryError} />}
+              {discoveredPreview && (
+                <p className="eg-srow-help">
+                  Found {discoveredPreview.toolsCount} tools on {discoveredPreview.serverName}: {discoveredPreview.tools.slice(0, 4).map((t) => t.name).join(', ')}
+                  {discoveredPreview.toolsCount > 4 ? '…' : ''}
+                </p>
+              )}
+              <div className="eg-settings-actions eg-settings-end">
+                <Button variant="ghost" onClick={() => setShowAddForm(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" variant="primary" disabled={!newServerEndpoint.trim() || isDiscovering}>
+                  {isDiscovering ? 'Connecting…' : 'Connect server'}
+                </Button>
+              </div>
+            </form>
+          )}
+
+          {externalServers.length === 0 ? (
+            <EmptyState title="No integrations" text="Add an MCP server to let agents use another service." />
+          ) : (
+            <div className="eg-srows">
+              {externalServers.map((server) => {
+                const isConnected = server.status === 'connected';
+                const isConnecting = connectingServerId === server.id;
+                const isExpanded = !!expandedServerIds[server.id];
+                const account = server.authUsername || (server.id === 'mcp-github' ? ghAccountInfo?.username : undefined);
+                return (
+                  <div key={server.id} className="eg-srow eg-settings-top">
+                    <div className="eg-srow-text">
+                      <div className="eg-srow-title eg-settings-inline">
+                        {serverIcon(server)}
+                        {server.name}
+                      </div>
+                      <div className="eg-srow-help">
+                        {isConnected ? (
+                          <span className="eg-settings-inline">
+                            <StatusDot state="success" />
+                            Connected{account ? ` as @${account}` : ''}
+                            {server.tools.length > 0 ? ` · ${server.tools.length} ${server.tools.length === 1 ? 'tool' : 'tools'}` : ''}
+                          </span>
+                        ) : (
+                          server.description
+                        )}
+                      </div>
+                      {server.error && <div className="eg-srow-help eg-settings-bad">{server.error}</div>}
+                      {isExpanded && server.tools.length > 0 && renderServerTools(server)}
+                    </div>
+                    <div className="eg-settings-actions">
+                      {server.tools.length > 0 && (
+                        <IconButton
+                          icon={isExpanded ? ChevronUp : ChevronDown}
+                          label={isExpanded ? 'Hide tools' : 'Show tools and permissions'}
+                          size="sm"
+                          onClick={() => toggleExpandedServer(server.id)}
+                        />
+                      )}
+                      {isConnected && server.tools.length > 0 && (
+                        <IconButton icon={RefreshCw} label="Refresh tools" size="sm" disabled={isConnecting} onClick={() => void refreshServerTools(server)} />
+                      )}
+                      {server.id === 'mcp-github' && isConnected && (
+                        <IconButton
+                          icon={Key}
+                          label="Change GitHub token"
+                          size="sm"
+                          onClick={() => {
+                            setGhAuthError(null);
+                            setIsGhAuthModalOpen(true);
+                          }}
+                        />
+                      )}
+                      {server.isCustom && onDeleteCustomServer && (
+                        <IconButton icon={Trash2} label="Remove server" size="sm" onClick={() => onDeleteCustomServer(server.id)} />
+                      )}
+                      <Button size="sm" variant={isConnected ? 'ghost' : 'secondary'} disabled={isConnecting} onClick={() => handleConnectExternal(server)}>
+                        {isConnecting ? 'Syncing…' : isConnected ? 'Disconnect' : 'Connect'}
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        <section className="eg-sgroup">
+          <h3 className="eg-sgroup-title">Built into Ergo</h3>
+          <p className="eg-settings-groupdesc">Local servers Ergo runs through the bridge: files, fetch and git.</p>
+          <div className="eg-srows">
+            {bundledHarnesses.map((server) => {
+              const isConnected = server.status === 'connected';
+              const isExpanded = !!expandedServerIds[server.id];
+              return (
+                <div key={server.id} className="eg-srow eg-settings-top">
+                  <div className="eg-srow-text">
+                    <div className="eg-srow-title eg-settings-inline">
+                      {serverIcon(server)}
+                      {server.name}
+                    </div>
+                    <div className="eg-srow-help">{server.description}</div>
+                    {isExpanded && isConnected && server.tools.length > 0 && renderServerTools(server)}
+                  </div>
+                  <div className="eg-settings-actions">
+                    {isConnected && server.tools.length > 0 && (
+                      <IconButton
+                        icon={isExpanded ? ChevronUp : ChevronDown}
+                        label={isExpanded ? 'Hide tools' : 'Show tools and permissions'}
+                        size="sm"
+                        onClick={() => toggleExpandedServer(server.id)}
+                      />
+                    )}
+                    <Switch checked={isConnected} onChange={() => onToggleConnectServer(server.id)} aria-label={`Use ${server.name}`} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="eg-sgroup">
+          <div className="eg-settings-grouphead">
+            <h3 className="eg-sgroup-title">Built-in tools</h3>
+            <Input
+              icon={Search}
+              placeholder="Filter tools"
+              value={toolsSearchQuery}
+              onChange={(e) => setToolsSearchQuery(e.target.value)}
+              aria-label="Filter built-in tools"
+              style={{ width: 200 }}
+            />
+          </div>
+          <p className="eg-settings-groupdesc">
+            The {WORKSPACE_MCP_TOOLS.length} tools Ergo's own agent uses to read and change tasks and runs. They're always on; this list is for reference. Agents can list
+            your integrations' tools but can't change their permissions or remove them.
+          </p>
+          <div className="eg-srows">
+            {builtinTools.map((tool) => {
+              const isExpanded = !!expandedToolIds[tool.name];
+              const schemaProps: Record<string, { type?: string; description?: string }> = (tool.inputSchema as { properties?: Record<string, { type?: string; description?: string }> } | undefined)?.properties || {};
+              const requiredFields: string[] = (tool.inputSchema as { required?: string[] } | undefined)?.required || [];
+              const propKeys = Object.keys(schemaProps);
+              return (
+                <div key={tool.name} className="eg-srow eg-settings-top">
+                  <div className="eg-srow-text">
+                    <div className="eg-srow-title eg-settings-mono">{tool.name}</div>
+                    <div className="eg-srow-help">{tool.description}</div>
+                    {isExpanded && (
+                      <div className="eg-settings-sub">
+                        {propKeys.length === 0 ? (
+                          <div className="eg-srow-help">No parameters.</div>
+                        ) : (
+                          propKeys.map((pk) => (
+                            <div key={pk} className="eg-srow-help">
+                              <span className="eg-settings-mono">{pk}</span> · {schemaProps[pk]?.type || 'string'}
+                              {requiredFields.includes(pk) ? ' · required' : ''}
+                              {schemaProps[pk]?.description ? ` — ${schemaProps[pk]?.description}` : ''}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <IconButton
+                    icon={isExpanded ? ChevronUp : ChevronDown}
+                    label={isExpanded ? 'Hide parameters' : 'Show parameters'}
+                    size="sm"
+                    onClick={() => setExpandedToolIds((prev) => ({ ...prev, [tool.name]: !prev[tool.name] }))}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      </>
+    );
+  }
+
+  const subModals = (
+    <>
       {/* GitHub Authentication Modal */}
       {isGhAuthModalOpen && (
         <div
           className="modal-overlay"
-          style={{ zIndex: 1100, backgroundColor: 'rgba(0,0,0,0.78)', backdropFilter: 'blur(4px)' }}
+          style={{ zIndex: 1100, backgroundColor: 'var(--overlay)' }}
           onClick={(e) => {
             if (e.target === e.currentTarget && !isGhTesting) setIsGhAuthModalOpen(false);
           }}
@@ -2265,8 +1255,8 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               maxWidth: '560px',
               padding: '1.75rem',
               borderRadius: 'var(--radius-lg)',
-              border: '1px solid rgba(255,255,255,0.14)',
-              boxShadow: '0 25px 60px rgba(0,0,0,0.6)',
+              border: '1px solid var(--line-strong)',
+              boxShadow: 'var(--shadow-dialog)',
               position: 'relative'
             }}
             onClick={(e) => e.stopPropagation()}
@@ -2279,18 +1269,18 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                     width: '42px',
                     height: '42px',
                     borderRadius: '10px',
-                    background: 'linear-gradient(135deg, #24292e 0%, #0d1117 100%)',
-                    border: '1px solid rgba(255,255,255,0.18)',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--line-strong)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.3)'
+                    boxShadow: 'none'
                   }}
                 >
-                  <Code size={22} color="#fff" />
+                  <Code size={22} color="var(--ink)" />
                 </div>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: '#fff' }}>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600, color: 'var(--ink)' }}>
                     Connect GitHub MCP
                   </h3>
                   <p style={{ margin: '0.15rem 0 0', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
@@ -2310,8 +1300,8 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
             {/* Quick 1-Click Helper Banner for Non-Techies */}
             <div
               style={{
-                background: 'rgba(56, 189, 248, 0.08)',
-                border: '1px solid rgba(56, 189, 248, 0.25)',
+                background: 'var(--accent-subtle)',
+                border: '1px solid var(--line-strong)',
                 borderRadius: 'var(--radius-md)',
                 padding: '1rem',
                 marginBottom: '1.25rem'
@@ -2323,7 +1313,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                     Need a Personal Access Token?
                   </div>
                   <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>
-                    Generate a token on GitHub with recommended scopes (<code style={{ color: '#fff', fontSize: '0.72rem' }}>repo</code>, <code style={{ color: '#fff', fontSize: '0.72rem' }}>read:org</code>, <code style={{ color: '#fff', fontSize: '0.72rem' }}>user</code>) already pre-checked.
+                    Generate a token on GitHub with recommended scopes (<code style={{ color: 'var(--ink)', fontSize: '0.72rem' }}>repo</code>, <code style={{ color: 'var(--ink)', fontSize: '0.72rem' }}>read:org</code>, <code style={{ color: 'var(--ink)', fontSize: '0.72rem' }}>user</code>) already pre-checked.
                   </div>
                 </div>
                 <a
@@ -2337,7 +1327,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                     gap: '0.35rem',
                     flexShrink: 0,
                     color: 'var(--accent-cyan)',
-                    borderColor: 'rgba(56, 189, 248, 0.4)'
+                    borderColor: 'var(--line-strong)'
                   }}
                 >
                   <ExternalLink size={13} />
@@ -2397,11 +1387,11 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               {ghAuthError && (
                 <div
                   style={{
-                    background: 'rgba(239, 68, 68, 0.1)',
-                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    background: 'var(--danger-subtle)',
+                    border: '1px solid var(--line-strong)',
                     borderRadius: 'var(--radius-sm)',
                     padding: '0.6rem 0.8rem',
-                    color: '#f87171',
+                    color: 'var(--danger)',
                     fontSize: '0.76rem',
                     display: 'flex',
                     alignItems: 'center',
@@ -2456,7 +1446,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
         return (
           <div
             className="modal-overlay"
-            style={{ zIndex: 1100, backgroundColor: 'rgba(0,0,0,0.78)', backdropFilter: 'blur(4px)' }}
+            style={{ zIndex: 1100, backgroundColor: 'var(--overlay)' }}
             onClick={(e) => {
               if (e.target === e.currentTarget && !isGenericTesting) setSelectedExternalModalServer(null);
             }}
@@ -2467,8 +1457,8 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                 maxWidth: '580px',
                 padding: '1.75rem',
                 borderRadius: 'var(--radius-lg)',
-                border: '1px solid rgba(255,255,255,0.14)',
-                boxShadow: '0 25px 60px rgba(0,0,0,0.6)',
+                border: '1px solid var(--line-strong)',
+                boxShadow: 'var(--shadow-dialog)',
                 maxHeight: '90vh',
                 overflowY: 'auto'
               }}
@@ -2480,7 +1470,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                   {renderServerIcon(selectedExternalModalServer, false)}
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: '#fff' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600, color: 'var(--ink)' }}>
                         Connect {selectedExternalModalServer.name}
                       </h3>
                       {isPreset && (
@@ -2490,9 +1480,9 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                             fontWeight: 600,
                             padding: '0.15rem 0.5rem',
                             borderRadius: '9999px',
-                            background: 'rgba(56, 189, 248, 0.12)',
+                            background: 'var(--accent-subtle)',
                             color: 'var(--accent-cyan)',
-                            border: '1px solid rgba(56, 189, 248, 0.25)'
+                            border: '1px solid var(--line-strong)'
                           }}
                         >
                           MCP Bridge
@@ -2517,8 +1507,8 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               {guide && (
                 <div
                   style={{
-                    background: 'rgba(56, 189, 248, 0.07)',
-                    border: '1px solid rgba(56, 189, 248, 0.22)',
+                    background: 'var(--accent-subtle)',
+                    border: '1px solid var(--line-strong)',
                     borderRadius: 'var(--radius-md)',
                     padding: '0.85rem 1rem',
                     marginBottom: '1.25rem'
@@ -2547,7 +1537,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                         gap: '0.35rem',
                         flexShrink: 0,
                         color: 'var(--accent-cyan)',
-                        borderColor: 'rgba(56, 189, 248, 0.35)',
+                        borderColor: 'var(--line-strong)',
                         padding: '0.35rem 0.65rem'
                       }}
                     >
@@ -2561,9 +1551,9 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                       style={{
                         marginTop: '0.65rem',
                         padding: '0.45rem 0.6rem',
-                        background: 'rgba(0, 0, 0, 0.35)',
+                        background: 'var(--surface-1)',
                         borderRadius: 'var(--radius-sm)',
-                        border: '1px solid rgba(255, 255, 255, 0.08)',
+                        border: '1px solid var(--line)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
@@ -2571,7 +1561,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', overflow: 'hidden' }}>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Run Local:</span>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', textTransform: 'none', letterSpacing: 'normal' }}>Run Local:</span>
                         <code style={{ fontSize: '0.72rem', color: 'var(--accent-amber)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
                           {guide.quickRunCommand}
                         </code>
@@ -2716,9 +1706,9 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                 {/* Educational Accordion: "New to MCP? How does this work?" */}
                 <div
                   style={{
-                    border: '1px solid rgba(255, 255, 255, 0.08)',
+                    border: '1px solid var(--line)',
                     borderRadius: 'var(--radius-md)',
-                    background: 'rgba(255, 255, 255, 0.02)',
+                    background: 'var(--surface-1)',
                     marginBottom: '1.25rem',
                     overflow: 'hidden'
                   }}
@@ -2751,15 +1741,15 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                     <div
                       style={{
                         padding: '0.75rem 0.85rem 0.95rem',
-                        borderTop: '1px solid rgba(255, 255, 255, 0.06)',
-                        background: 'rgba(0, 0, 0, 0.2)',
+                        borderTop: '1px solid var(--line)',
+                        background: 'var(--surface-1)',
                         fontSize: '0.75rem',
                         lineHeight: 1.5,
                         color: 'var(--text-muted)'
                       }}
                     >
                       <div style={{ marginBottom: '0.6rem' }}>
-                        <strong style={{ color: '#fff' }}>What is an MCP Server?</strong>
+                        <strong style={{ color: 'var(--ink)' }}>What is an MCP Server?</strong>
                         <p style={{ margin: '0.2rem 0 0.5rem', color: 'var(--text-dim)' }}>
                           MCP (Model Context Protocol) is an open standard that allows AI assistants like Ergo to safely talk to external tools (Google Calendar, Slack, Notion, databases) on your behalf.
                         </p>
@@ -2767,7 +1757,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
 
                       {guide?.setupSteps && (
                         <div style={{ marginBottom: '0.6rem' }}>
-                          <strong style={{ color: '#fff' }}>Step-by-Step Instructions:</strong>
+                          <strong style={{ color: 'var(--ink)' }}>Step-by-Step Instructions:</strong>
                           <ol style={{ margin: '0.3rem 0 0.5rem', paddingLeft: '1.2rem', color: 'var(--text-muted)' }}>
                             {guide.setupSteps.map((step, idx) => (
                               <li key={idx} style={{ marginBottom: '0.25rem' }}>{step}</li>
@@ -2776,8 +1766,8 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                         </div>
                       )}
 
-                      <div style={{ background: 'rgba(56, 189, 248, 0.05)', borderRadius: 'var(--radius-sm)', padding: '0.5rem 0.7rem', border: '1px solid rgba(56, 189, 248, 0.15)' }}>
-                        <span style={{ color: 'var(--accent-cyan)', fontWeight: 600 }}>💡 Tip for Non-Tech Users: </span>
+                      <div style={{ background: 'var(--accent-subtle)', borderRadius: 'var(--radius-sm)', padding: '0.5rem 0.7rem', border: '1px solid var(--line-strong)' }}>
+                        <span style={{ color: 'var(--accent-cyan)', fontWeight: 600 }}>Tip: </span>
                         If you are using tools like Zapier or a hosted bridge, you can simply paste the HTTPS webhook URL provided in their developer dashboard. No terminal commands needed.
                       </div>
                     </div>
@@ -2787,11 +1777,11 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                 {genericAuthError && (
                   <div
                     style={{
-                      background: 'rgba(239, 68, 68, 0.1)',
-                      border: '1px solid rgba(239, 68, 68, 0.3)',
+                      background: 'var(--danger-subtle)',
+                      border: '1px solid var(--line-strong)',
                       borderRadius: 'var(--radius-sm)',
                       padding: '0.6rem 0.8rem',
-                      color: '#f87171',
+                      color: 'var(--danger)',
                       fontSize: '0.76rem',
                       display: 'flex',
                       alignItems: 'center',
@@ -2845,8 +1835,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(0, 0, 0, 0.7)',
-            backdropFilter: 'blur(3px)',
+            background: 'var(--overlay)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -2859,8 +1848,8 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
         >
           <div
             style={{
-              background: '#12141a',
-              border: '1px solid rgba(168, 85, 247, 0.35)',
+              background: 'var(--surface-1)',
+              border: '1px solid var(--line-strong)',
               borderRadius: 'var(--radius-md)',
               width: '100%',
               maxWidth: '620px',
@@ -2868,13 +1857,13 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
               display: 'flex',
               flexDirection: 'column',
               gap: '1rem',
-              boxShadow: '0 20px 45px rgba(0,0,0,0.6)'
+              boxShadow: 'var(--shadow-dialog)'
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <Sparkles size={18} color="#c084fc" />
-                <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#f3e8ff', margin: 0 }}>
+                <Sparkles size={18} color="var(--ink-subtle)" />
+                <h3 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--ink)', margin: 0 }}>
                   {editingSkill ? `Edit Skill: ${editingSkill.name}` : 'Create Custom Workspace Skill'}
                 </h3>
               </div>
@@ -2973,15 +1962,1500 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                 <button
                   type="submit"
                   className="btn btn-primary"
-                  style={{ background: 'linear-gradient(135deg, #9333ea 0%, #7c3aed 100%)', borderColor: '#a855f7' }}
                 >
-                  {editingSkill ? 'Save Changes' : 'Create & Sync Skill'}
+                  {editingSkill ? 'Save skill' : 'Add skill'}
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="eg-settings-embed">
+        {section === 'roots' && renderEmbeddedRoots()}
+        {section === 'skills' && renderEmbeddedSkills()}
+        {section === 'integrations' && renderEmbeddedIntegrations()}
+        {subModals}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="modal-overlay"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="modal-content" style={{ maxWidth: '920px', height: '85vh', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
+        {/* Modal Header */}
+        <div className="modal-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <div
+              style={{
+                width: '38px',
+                height: '38px',
+                borderRadius: '10px',
+                background: 'var(--surface-2)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--ink)',
+                boxShadow: 'none',
+                flexShrink: 0
+              }}
+            >
+              <Unplug size={20} />
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 600, color: 'var(--text-bright)', margin: 0 }}>Connections</h3>
+              </div>
+              <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0.15rem 0 0 0' }}>
+                Manage local connections & folders, external MCPs, and cloud coding tools
+              </p>
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            {updateStatusMsg && (
+              <span
+                style={{
+                  fontSize: '0.74rem',
+                  color: updateStatusMsg.includes('Failed') ? 'var(--accent-red)' : 'var(--accent-emerald)',
+                  fontWeight: 500,
+                  maxWidth: '320px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap'
+                }}
+                title={updateStatusMsg}
+              >
+                {updateStatusMsg}
+              </span>
+            )}
+            <button
+              className="btn btn-secondary"
+              style={{
+                padding: '0.35rem 0.65rem',
+                fontSize: '0.75rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                borderRadius: '6px',
+                border: '1px solid var(--border-subtle)',
+                background: isCheckingUpdates ? 'var(--accent-subtle)' : undefined,
+                color: isCheckingUpdates ? 'var(--accent-primary)' : 'var(--text-muted)'
+              }}
+              onClick={handleCheckAllUpdates}
+              disabled={isCheckingUpdates}
+              title="Routinely query tools/list across connected MCP servers"
+            >
+              <RefreshCw size={13} style={{ animation: isCheckingUpdates ? 'spin 1s linear infinite' : 'none' }} />
+              <span>{isCheckingUpdates ? 'Checking...' : 'Check Updates'}</span>
+            </button>
+            <button className="btn btn-secondary" style={{ padding: '0.35rem 0.6rem' }} onClick={onClose}>
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+
+        {/* Tab Navigation */}
+        <div style={{ display: 'flex', gap: '0.25rem', borderBottom: '1px solid var(--border-subtle)', padding: '0 1.5rem', background: 'var(--bg-darkest)' }}>
+          <button
+            className={`tab-btn ${activeTab === 'harnesses' ? 'active' : ''}`}
+            onClick={() => setActiveTab('harnesses')}
+            style={{
+              padding: '0.75rem 1rem',
+              border: 'none',
+              borderBottom: activeTab === 'harnesses' ? '2px solid var(--accent-cyan)' : '2px solid transparent',
+              color: activeTab === 'harnesses' ? 'var(--text-bright)' : 'var(--text-muted)',
+              fontWeight: 600,
+              fontSize: '0.84rem',
+              background: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <span>Default Connections</span>
+            <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: activeTab === 'harnesses' ? 'var(--accent-subtle)' : 'var(--surface-2)', color: activeTab === 'harnesses' ? 'var(--accent-cyan)' : 'var(--text-dim)', fontWeight: 600 }}>
+              {bundledHarnesses.length}
+            </span>
+          </button>
+
+          <button
+            className={`tab-btn ${activeTab === 'tools-skills' ? 'active' : ''}`}
+            onClick={() => setActiveTab('tools-skills')}
+            style={{
+              padding: '0.75rem 1rem',
+              border: 'none',
+              borderBottom: activeTab === 'tools-skills' ? '2px solid var(--ink)' : '2px solid transparent',
+              color: activeTab === 'tools-skills' ? 'var(--text-bright)' : 'var(--text-muted)',
+              fontWeight: 600,
+              fontSize: '0.84rem',
+              background: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <Sparkles size={14} color="var(--ink-subtle)" />
+            <span>Tools & Skills</span>
+            <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: activeTab === 'tools-skills' ? 'var(--surface-2)' : 'var(--surface-2)', color: activeTab === 'tools-skills' ? 'var(--ink-subtle)' : 'var(--text-dim)', fontWeight: 600 }}>
+              {WORKSPACE_MCP_TOOLS.length} tools / {skills.length} skills
+            </span>
+          </button>
+
+          <button
+            className={`tab-btn ${activeTab === 'roots' ? 'active' : ''}`}
+            onClick={() => setActiveTab('roots')}
+            style={{
+              padding: '0.75rem 1rem',
+              border: 'none',
+              borderBottom: activeTab === 'roots' ? '2px solid var(--accent-cyan)' : '2px solid transparent',
+              color: activeTab === 'roots' ? 'var(--text-bright)' : 'var(--text-muted)',
+              fontWeight: 600,
+              fontSize: '0.84rem',
+              background: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <span>Allowed Folders</span>
+            <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: activeTab === 'roots' ? 'var(--accent-subtle)' : 'var(--surface-2)', color: activeTab === 'roots' ? 'var(--accent-cyan)' : 'var(--text-dim)', fontWeight: 600 }}>
+              {roots.length}
+            </span>
+          </button>
+
+          <button
+            className={`tab-btn ${activeTab === 'external' ? 'active' : ''}`}
+            onClick={() => setActiveTab('external')}
+            style={{
+              padding: '0.75rem 1rem',
+              border: 'none',
+              borderBottom: activeTab === 'external' ? '2px solid var(--accent-cyan)' : '2px solid transparent',
+              color: activeTab === 'external' ? 'var(--text-bright)' : 'var(--text-muted)',
+              fontWeight: 600,
+              fontSize: '0.84rem',
+              background: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <span>External Apps</span>
+            <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: activeTab === 'external' ? 'var(--accent-subtle)' : 'var(--surface-2)', color: activeTab === 'external' ? 'var(--accent-cyan)' : 'var(--text-dim)', fontWeight: 600 }}>
+              {externalServers.length}
+            </span>
+          </button>
+        </div>
+
+        <div className="modal-body" style={{ overflowY: 'auto', flex: 1, padding: '1.25rem 1.5rem' }}>
+          {/* Header Action Bar */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            {/* <h4
+              style={{
+                fontSize: '0.85rem',
+                fontWeight: 600,
+                color: 'var(--text-muted)',
+                textTransform: 'none',
+                letterSpacing: 'normal',
+                margin: 0,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}
+            >
+              <span>MCP Server Connections</span>
+              <span className="badge badge-done" style={{ fontSize: '0.68rem', textTransform: 'none', letterSpacing: 'normal' }}>
+                {mcpServers.filter((s) => s.status === 'connected').length} / {mcpServers.length} Active
+              </span>
+            </h4> */}
+            <span></span>
+
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              {/* <button
+                className="btn btn-secondary"
+                style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem', gap: '0.4rem' }}
+                onClick={handleSyncAllTools}
+                title="Call tools/list across all servers to discover latest tools and update signatures"
+              >
+                <RefreshCw size={13} className={isSyncing ? 'animate-spin' : ''} />
+                <span>{isSyncing ? 'Syncing tools/list...' : 'Sync tools/list'}</span>
+              </button> */}
+
+              {activeTab === 'external' && (
+                <button className="btn btn-primary" style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem', marginTop: '-0.5rem', marginBottom: '0.75rem' }} onClick={() => setShowAddForm(!showAddForm)}>
+                  <Plus size={14} />
+                  <span>Connect Other</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* TAB 1: BUNDLED AGENT HARNESSES */}
+          {activeTab === 'harnesses' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              {/* <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '0.85rem 1rem', fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+                <strong style={{ color: 'var(--ink)' }}>Open-Source Agent Harnesses:</strong> Ergo bundles standard Node.js MCP servers (<span style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>server-filesystem</span>, <span style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>server-fetch</span>, and <span style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>mcp-server-git</span>) communicating via synchronous Local Stdio IPC. These operate browser-agnostically with zero database required.
+              </div> */}
+
+              <div className="mcp-grid">
+                {bundledHarnesses.map((server) => {
+                  const isConnected = server.status === 'connected';
+                  const isExpanded = !!expandedServerIds[server.id];
+
+                  return (
+                    <div
+                      key={server.id}
+                      className={`mcp-card ${isConnected ? 'connected' : ''} ${!isExpanded ? 'collapsed' : ''}`}
+                      onClick={() => {
+                        if (!isExpanded) {
+                          toggleExpandedServer(server.id);
+                        }
+                      }}
+                    >
+                      <div className="mcp-header">
+                        <div className="mcp-title">
+                          <button
+                            type="button"
+                            className="mcp-collapse-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleExpandedServer(server.id);
+                            }}
+                            title={isExpanded ? 'Collapse card' : 'Expand permissions & details'}
+                            aria-label={isExpanded ? 'Collapse card' : 'Expand permissions & details'}
+                          >
+                            {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                          </button>
+                          {renderServerIcon(server, isConnected)}
+                          <span>{server.name}</span>
+                          {!isExpanded && server.tools.length > 0 && (
+                            <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontWeight: 500, fontFamily: 'var(--font-mono)' }}>
+                              ({server.tools.length} {server.tools.length === 1 ? 'tool' : 'tools'})
+                            </span>
+                          )}
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                          <button
+                            type="button"
+                            className={isConnected ? 'btn btn-secondary' : 'btn btn-primary'}
+                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem' }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onToggleConnectServer(server.id);
+                            }}
+                          >
+                            {isConnected ? 'Disable' : 'Enable'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {isExpanded && (
+                        <>
+                          <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>{server.description}</p>
+
+                          {/* Discovered Tools List & Permissions */}
+                          {isConnected && server.tools.length > 0 && (
+                            <div style={{ background: 'var(--code-bg)', border: '1px solid var(--code-border)', padding: '0.75rem 0.85rem', borderRadius: 'var(--radius-sm)', marginTop: '0.35rem', boxShadow: 'none' }}>
+                              <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--accent-cyan)', textTransform: 'none', letterSpacing: 'normal', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                <Shield size={13} />
+                                <span>Auto-Approval & Permissions</span>
+                              </div>
+                              <p style={{ fontSize: '0.72rem', color: 'var(--text-dim)', margin: '0 0 0.5rem 0', lineHeight: 1.4 }}>
+                                Control AI action permissions globally. Toggle Auto-Approve to allow agents to run commands automatically.
+                              </p>
+
+                              {server.tools.map((tool) => (
+                                <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.35rem 0', borderTop: '1px solid var(--line)' }}>
+                                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--code-text)', fontSize: '0.78rem', fontWeight: 500 }}>{tool.name}</span>
+                                  <button
+                                    style={{
+                                      background: tool.autoApprove ? 'var(--success-subtle)' : 'var(--warning-subtle)',
+                                      color: tool.autoApprove ? 'var(--success)' : 'var(--warning)',
+                                      border: '1px solid ' + (tool.autoApprove ? 'var(--line-strong)' : 'var(--line-strong)'),
+                                      padding: '0.2rem 0.55rem',
+                                      borderRadius: '4px',
+                                      fontSize: '0.72rem',
+                                      cursor: 'pointer',
+                                      fontWeight: 600,
+                                      transition: 'all 0.15s ease'
+                                    }}
+                                    onClick={() => onToggleToolAutoApprove(server.id, tool.id)}
+                                  >
+                                    {tool.autoApprove ? 'Auto-Approve' : 'Ask Permission'}
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* TAB: TOOLS & SKILLS */}
+          {activeTab === 'tools-skills' && (() => {
+            const getToolCategory = (name: string): 'tasks' | 'lanes' | 'execution' | 'mcp' => {
+              if (name.includes('task') && !name.includes('execute') && !name.includes('run') && !name.includes('schedule') && !name.includes('cancel') && !name.includes('move')) {
+                return 'tasks';
+              }
+              if (name.includes('swim_lane') || name.includes('move_task_lane')) {
+                return 'lanes';
+              }
+              if (name.includes('execute') || name.includes('run_') || name.includes('schedule') || name.includes('cancel') || name.includes('brief')) {
+                return 'execution';
+              }
+              return 'mcp';
+            };
+
+            const filteredWorkspaceTools = WORKSPACE_MCP_TOOLS.filter((t) => {
+              const cat = getToolCategory(t.name);
+              if (selectedToolsCategory !== 'all' && cat !== selectedToolsCategory) return false;
+              if (toolsSearchQuery.trim()) {
+                const q = toolsSearchQuery.toLowerCase();
+                return t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q);
+              }
+              return true;
+            });
+
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                {/* Header Card */}
+                <div
+                  style={{
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--line-strong)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '1rem 1.25rem',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: '1rem'
+                  }}
+                >
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem' }}>
+                      <Sparkles size={18} color="var(--ink-subtle)" />
+                      <h3 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--ink)', margin: 0 }}>
+                        Ergo Workspace Actions & Global Skills
+                      </h3>
+                      <span style={{ fontSize: '0.68rem', fontWeight: 600, padding: '0.15rem 0.55rem', borderRadius: '12px', background: 'var(--surface-2)', color: 'var(--ink-muted)', border: '1px solid var(--line-strong)' }}>
+                        Global AI Engine
+                      </span>
+                    </div>
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0, maxWidth: '680px', lineHeight: 1.45 }}>
+                      Built-in Ergo MCP tools enable the internal AI agent to interact directly with tasks, swim lanes, and executions.
+                      Global skills define autonomous agent behaviors. They are saved on this computer, in <code style={{ color: 'var(--ink-subtle)' }}>config/workspace-skills.json</code> in your Ergo folder.
+                    </p>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={handleOpenAddSkill}
+                      style={{
+                        fontSize: '0.78rem',
+                        padding: '0.45rem 0.85rem',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.45rem',
+                        background: 'var(--surface-2)',
+                        borderColor: 'var(--line-strong)'
+                      }}
+                    >
+                      <Plus size={14} />
+                      <span>New Custom Skill</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Sub-view switcher pills */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.75rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => setSkillsSubView('tools')}
+                    style={{
+                      padding: '0.4rem 0.9rem',
+                      borderRadius: '20px',
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      border: '1px solid',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      transition: 'all 0.15s ease',
+                      background: skillsSubView === 'tools' ? 'var(--surface-2)' : 'var(--surface-1)',
+                      borderColor: skillsSubView === 'tools' ? 'var(--line-strong)' : 'var(--border-subtle)',
+                      color: skillsSubView === 'tools' ? 'var(--ink)' : 'var(--text-muted)'
+                    }}
+                  >
+                    <Wrench size={13} color={skillsSubView === 'tools' ? 'var(--ink-subtle)' : 'currentColor'} />
+                    <span>Ergo Workspace MCP Tools ({WORKSPACE_MCP_TOOLS.length})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSkillsSubView('skills')}
+                    style={{
+                      padding: '0.4rem 0.9rem',
+                      borderRadius: '20px',
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      border: '1px solid',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      transition: 'all 0.15s ease',
+                      background: skillsSubView === 'skills' ? 'var(--surface-2)' : 'var(--surface-1)',
+                      borderColor: skillsSubView === 'skills' ? 'var(--line-strong)' : 'var(--border-subtle)',
+                      color: skillsSubView === 'skills' ? 'var(--ink)' : 'var(--text-muted)'
+                    }}
+                  >
+                    <Sparkles size={13} color={skillsSubView === 'skills' ? 'var(--ink-subtle)' : 'currentColor'} />
+                    <span>Global Rules & Skills ({skills.length})</span>
+                  </button>
+                </div>
+
+                {/* ── SUB-VIEW A: WORKSPACE MCP TOOLS ── */}
+                {skillsSubView === 'tools' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    {/* Category Filter Pills & Search */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                        {[
+                          { id: 'all', label: `All Actions (${WORKSPACE_MCP_TOOLS.length})` },
+                          { id: 'tasks', label: 'Tasks & Subtasks (6)' },
+                          { id: 'lanes', label: 'Swim Lanes & Routing (5)' },
+                          { id: 'execution', label: 'Executions & Scheduler (7)' },
+                          { id: 'mcp', label: 'External MCP Inspector (3)' }
+                        ].map((cat) => (
+                          <button
+                            key={cat.id}
+                            type="button"
+                            onClick={() => setSelectedToolsCategory(cat.id as any)}
+                            style={{
+                              padding: '0.25rem 0.65rem',
+                              borderRadius: '6px',
+                              fontSize: '0.74rem',
+                              fontWeight: 600,
+                              border: '1px solid',
+                              cursor: 'pointer',
+                              background: selectedToolsCategory === cat.id ? 'var(--surface-2)' : 'var(--surface-1)',
+                              borderColor: selectedToolsCategory === cat.id ? 'var(--line-strong)' : 'var(--border-subtle)',
+                              color: selectedToolsCategory === cat.id ? 'var(--ink)' : 'var(--text-muted)'
+                            }}
+                          >
+                            {cat.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div style={{ position: 'relative', width: '240px' }}>
+                        <Search size={13} style={{ position: 'absolute', left: '0.65rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
+                        <input
+                          type="text"
+                          className="input-text"
+                          placeholder="Filter tools..."
+                          value={toolsSearchQuery}
+                          onChange={(e) => setToolsSearchQuery(e.target.value)}
+                          style={{ paddingLeft: '2rem', paddingRight: '0.5rem', height: '28px', fontSize: '0.74rem', width: '100%' }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Security Notice */}
+                    <div
+                      style={{
+                        background: 'var(--accent-subtle)',
+                        border: '1px solid var(--line-strong)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '0.65rem 0.95rem',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '0.65rem',
+                        fontSize: '0.76rem',
+                        color: 'var(--accent-text)',
+                        lineHeight: 1.45
+                      }}
+                    >
+                      <Shield size={16} color="var(--accent-text)" style={{ flexShrink: 0, marginTop: '2px' }} />
+                      <div>
+                        <strong style={{ color: 'var(--ink)' }}>Manual Security Policy:</strong> External MCP server connections, API tokens, tool permissions, and removal are strictly manual and human-controlled in the <em>External Apps</em> tab. The AI workspace can inspect available external tools via <code>workspace_read_mcp_tools</code>, but cannot modify permissions or remove servers.
+                      </div>
+                    </div>
+
+                    {/* Tools Grid */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+                      {filteredWorkspaceTools.map((tool) => {
+                        const isExpanded = !!expandedToolIds[tool.name];
+                        const category = getToolCategory(tool.name);
+                        const schemaProps = (tool.inputSchema as any)?.properties || {};
+                        const requiredFields: string[] = (tool.inputSchema as any)?.required || [];
+                        const propKeys = Object.keys(schemaProps);
+
+                        const categoryBadges: Record<string, { label: string; color: string; bg: string }> = {
+                          tasks: { label: 'Task CRUD', color: 'var(--accent-text)', bg: 'var(--accent-subtle)' },
+                          lanes: { label: 'Swim Lanes', color: 'var(--accent-text)', bg: 'var(--accent-subtle)' },
+                          execution: { label: 'AI Execution', color: 'var(--success)', bg: 'var(--success-subtle)' },
+                          mcp: { label: 'MCP Reader', color: 'var(--ink-muted)', bg: 'var(--surface-2)' }
+                        };
+
+                        const badge = categoryBadges[category] || categoryBadges.tasks;
+
+                        return (
+                          <div
+                            key={tool.name}
+                            style={{
+                              background: 'var(--surface-1)',
+                              border: '1px solid var(--line)',
+                              borderRadius: 'var(--radius-sm)',
+                              padding: '0.75rem 1rem',
+                              transition: 'all 0.15s ease'
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                                <span
+                                  style={{
+                                    fontFamily: 'var(--font-mono, monospace)',
+                                    fontSize: '0.82rem',
+                                    fontWeight: 600,
+                                    color: 'var(--ink)',
+                                    background: 'var(--surface-2)',
+                                    padding: '0.2rem 0.55rem',
+                                    borderRadius: '4px',
+                                    border: '1px solid var(--line)'
+                                  }}
+                                >
+                                  {tool.name}
+                                </span>
+
+                                <span
+                                  style={{
+                                    fontSize: '0.66rem',
+                                    fontWeight: 600,
+                                    padding: '0.12rem 0.45rem',
+                                    borderRadius: '10px',
+                                    background: badge.bg,
+                                    color: badge.color
+                                  }}
+                                >
+                                  {badge.label}
+                                </span>
+
+                                <span
+                                  style={{
+                                    fontSize: '0.66rem',
+                                    fontWeight: 600,
+                                    padding: '0.12rem 0.45rem',
+                                    borderRadius: '10px',
+                                    background: 'var(--success-subtle)',
+                                    color: 'var(--success)'
+                                  }}
+                                >
+                                  Global
+                                </span>
+                              </div>
+
+                              <button
+                                type="button"
+                                className="btn btn-secondary"
+                                onClick={() =>
+                                  setExpandedToolIds((prev) => ({
+                                    ...prev,
+                                    [tool.name]: !prev[tool.name]
+                                  }))
+                                }
+                                style={{
+                                  padding: '0.2rem 0.55rem',
+                                  fontSize: '0.7rem',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.35rem'
+                                }}
+                              >
+                                <span>{propKeys.length} {propKeys.length === 1 ? 'param' : 'params'}</span>
+                                {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                              </button>
+                            </div>
+
+                            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: 1.45 }}>
+                              {tool.description}
+                            </div>
+
+                            {isExpanded && (
+                              <div
+                                style={{
+                                  marginTop: '0.75rem',
+                                  paddingTop: '0.65rem',
+                                  borderTop: '1px solid var(--line)',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '0.45rem'
+                                }}
+                              >
+                                <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-dim)', textTransform: 'none', letterSpacing: 'normal' }}>
+                                  Parameters & Schema
+                                </div>
+                                {propKeys.length === 0 ? (
+                                  <span style={{ fontSize: '0.74rem', color: 'var(--text-dim)', fontStyle: 'italic' }}>
+                                    No required parameters.
+                                  </span>
+                                ) : (
+                                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.45rem' }}>
+                                    {propKeys.map((pk) => {
+                                      const prop = schemaProps[pk] || {};
+                                      const isReq = requiredFields.includes(pk);
+                                      return (
+                                        <div
+                                          key={pk}
+                                          style={{
+                                            background: 'var(--surface-1)',
+                                            border: '1px solid var(--line)',
+                                            borderRadius: '4px',
+                                            padding: '0.4rem 0.6rem',
+                                            fontSize: '0.72rem'
+                                          }}
+                                        >
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.2rem' }}>
+                                            <code style={{ color: 'var(--accent-text)', fontWeight: 600 }}>{pk}</code>
+                                            <span style={{ color: 'var(--text-dim)', fontSize: '0.66rem' }}>
+                                              ({prop.type || 'string'})
+                                            </span>
+                                            {isReq && (
+                                              <span style={{ color: 'var(--danger)', fontSize: '0.64rem', fontWeight: 600 }}>
+                                                required
+                                              </span>
+                                            )}
+                                          </div>
+                                          <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', lineHeight: 1.35 }}>
+                                            {prop.description || 'No description.'}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* ── SUB-VIEW B: GLOBAL RULES & SKILLS ── */}
+                {skillsSubView === 'skills' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div
+                      style={{
+                        background: 'var(--surface-1)',
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '0.75rem 1rem',
+                        fontSize: '0.78rem',
+                        color: 'var(--text-muted)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        flexWrap: 'wrap',
+                        gap: '0.75rem'
+                      }}
+                    >
+                      <span>
+                        Skills guide the AI with specialized workflows, rules, and triggers. They are saved on this computer, so every browser you open Ergo in sees the same skills.
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={handleOpenAddSkill}
+                        style={{ fontSize: '0.74rem', padding: '0.3rem 0.65rem' }}
+                      >
+                        <Plus size={12} />
+                        <span>Create New Skill</span>
+                      </button>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      {skills.map((skill) => {
+                        const isExpanded = !!expandedSkillIds[skill.id];
+                        return (
+                          <div
+                            key={skill.id}
+                            style={{
+                              background: 'var(--surface-1)',
+                              border: skill.enabled ? '1px solid var(--line-strong)' : '1px solid var(--line)',
+                              borderRadius: 'var(--radius-sm)',
+                              padding: '0.85rem 1.15rem',
+                              transition: 'all 0.15s ease'
+                            }}
+                          >
+                            {/* Header row */}
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.65rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                                <Sparkles size={16} color={skill.enabled ? 'var(--surface-1)' : 'var(--text-dim)'} />
+                                <span style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--ink)' }}>
+                                  {skill.name}
+                                </span>
+                                <span
+                                  style={{
+                                    fontSize: '0.66rem',
+                                    fontFamily: 'var(--font-mono, monospace)',
+                                    color: 'var(--text-dim)',
+                                    background: 'var(--surface-1)',
+                                    padding: '0.1rem 0.4rem',
+                                    borderRadius: '4px'
+                                  }}
+                                >
+                                  {skill.id}
+                                </span>
+                                {skill.isBuiltIn ? (
+                                  <span style={{ fontSize: '0.65rem', fontWeight: 600, padding: '0.1rem 0.45rem', borderRadius: '10px', background: 'var(--accent-subtle)', color: 'var(--accent-text)' }}>
+                                    Built-in
+                                  </span>
+                                ) : (
+                                  <span style={{ fontSize: '0.65rem', fontWeight: 600, padding: '0.1rem 0.45rem', borderRadius: '10px', background: 'var(--surface-2)', color: 'var(--ink-muted)' }}>
+                                    Custom
+                                  </span>
+                                )}
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                                {/* Toggle switch */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleSkill(skill.id)}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.4rem',
+                                    padding: '0.25rem 0.65rem',
+                                    borderRadius: '16px',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    border: '1px solid',
+                                    background: skill.enabled ? 'var(--success-subtle)' : 'var(--surface-1)',
+                                    borderColor: skill.enabled ? 'var(--line-strong)' : 'var(--border-subtle)',
+                                    color: skill.enabled ? 'var(--success)' : 'var(--text-muted)'
+                                  }}
+                                >
+                                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: skill.enabled ? 'var(--surface-1)' : 'var(--text-dim)' }} />
+                                  <span>{skill.enabled ? 'Active' : 'Disabled'}</span>
+                                </button>
+
+                                {!skill.isBuiltIn && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary"
+                                      onClick={() => handleOpenEditSkill(skill)}
+                                      style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+                                      title="Edit custom skill"
+                                    >
+                                      <Edit3 size={11} />
+                                      <span>Edit</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary"
+                                      onClick={() => handleDeleteCustomSkill(skill.id)}
+                                      style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', color: 'var(--danger)' }}
+                                      title="Delete custom skill"
+                                    >
+                                      <Trash2 size={11} />
+                                      <span>Delete</span>
+                                    </button>
+                                  </>
+                                )}
+
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary"
+                                  onClick={() =>
+                                    setExpandedSkillIds((prev) => ({
+                                      ...prev,
+                                      [skill.id]: !prev[skill.id]
+                                    }))
+                                  }
+                                  style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+                                >
+                                  <span>{isExpanded ? 'Hide Details' : 'View Instructions'}</span>
+                                  {isExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                                </button>
+                              </div>
+                            </div>
+
+                            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.45rem', lineHeight: 1.45 }}>
+                              {skill.description}
+                            </div>
+
+                            {/* Trigger Keywords */}
+                            {skill.triggerKeywords && skill.triggerKeywords.length > 0 && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+                                <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontWeight: 600 }}>Triggers:</span>
+                                {skill.triggerKeywords.map((kw) => (
+                                  <span
+                                    key={kw}
+                                    style={{
+                                      fontSize: '0.68rem',
+                                      padding: '0.1rem 0.45rem',
+                                      borderRadius: '4px',
+                                      background: 'var(--surface-2)',
+                                      color: 'var(--ink-muted)',
+                                      border: '1px solid var(--line-strong)',
+                                      fontFamily: 'var(--font-mono, monospace)'
+                                    }}
+                                  >
+                                    #{kw}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            {isExpanded && (
+                              <div
+                                style={{
+                                  marginTop: '0.75rem',
+                                  paddingTop: '0.75rem',
+                                  borderTop: '1px solid var(--line)',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '0.65rem'
+                                }}
+                              >
+                                {skill.rules && (
+                                  <div>
+                                    <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--warning)', textTransform: 'none', letterSpacing: 'normal', marginBottom: '0.25rem' }}>
+                                      Rules & Constraints
+                                    </div>
+                                    <div style={{ background: 'var(--surface-1)', border: '1px solid var(--line-strong)', borderRadius: '4px', padding: '0.5rem 0.75rem', fontSize: '0.74rem', color: 'var(--ink-muted)', lineHeight: 1.45 }}>
+                                      {skill.rules}
+                                    </div>
+                                  </div>
+                                )}
+
+                                <div>
+                                  <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-dim)', textTransform: 'none', letterSpacing: 'normal', marginBottom: '0.25rem' }}>
+                                    Instructions & Workflow
+                                  </div>
+                                  <pre
+                                    style={{
+                                      background: 'var(--surface-1)',
+                                      border: '1px solid var(--line)',
+                                      borderRadius: '4px',
+                                      padding: '0.65rem 0.75rem',
+                                      fontSize: '0.72rem',
+                                      color: 'var(--ink-muted)',
+                                      whiteSpace: 'pre-wrap',
+                                      fontFamily: 'var(--font-mono, monospace)',
+                                      margin: 0,
+                                      lineHeight: 1.45
+                                    }}
+                                  >
+                                    {skill.instructions}
+                                  </pre>
+                                </div>
+
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* TAB 2: SAFE DIRECTORY ROOTS */}
+          {activeTab === 'roots' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '0.85rem 1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.35rem' }}>
+                  <Lock size={25} color="var(--accent-cyan)" />
+                  {/* <span style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--ink)' }}>Allowed Filesystem Directories</span> */}
+                  <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.5 }}>
+                    To protect your data, the filesystem connection (<span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)' }}>server-filesystem</span>) is strictly constrained to the folders you approve. AI agents cannot read or write outside these approved boundaries.
+                  </p>
+                </div>
+
+              </div>
+
+              {/* Add Root Form */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                  <h4
+                    style={{
+                      fontSize: '0.85rem',
+                      fontWeight: 600,
+                      color: 'var(--text-muted)',
+                      textTransform: 'none',
+                      letterSpacing: 'normal',
+                      margin: 0
+                    }}
+                  >
+                    Add Allowed Folder
+                  </h4>
+                </div>
+                <form onSubmit={handleAddRootSubmit} style={{ display: 'flex', gap: '0.75rem' }}>
+                  <input
+                    type="text"
+                    className="input-text"
+                    placeholder="Folder Path (e.g. /home/user/my-project or ../other-repo)"
+                    value={newRootPath}
+                    onChange={(e) => setNewRootPath(e.target.value)}
+                    style={{ flex: 2 }}
+                  />
+                  <input
+                    type="text"
+                    className="input-text"
+                    placeholder="Label / Nickname (optional)"
+                    value={newRootName}
+                    onChange={(e) => setNewRootName(e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                  {activeProject && (
+                    <select
+                      className="input-text"
+                      value={addScope}
+                      onChange={(e) => setAddScope(e.target.value as 'global' | 'project')}
+                      title="Which projects may use this folder"
+                      style={{ flex: '0 1 11rem' }}
+                    >
+                      <option value="global">Every project</option>
+                      <option value="project">Only {activeProject.name}</option>
+                    </select>
+                  )}
+                  <button type="submit" className="btn btn-primary" disabled={!newRootPath.trim()} style={{ whiteSpace: 'nowrap' }}>
+                    <FolderPlus size={14} />
+                    <span>Add Folder</span>
+                  </button>
+                </form>
+              </div>
+
+              {/* The open project's own folders */}
+              {activeProject && (
+                <div>
+                  <h4 style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'none', letterSpacing: 'normal', margin: '0 0 0.4rem' }}>
+                    Only {activeProject.name} ({projectFolders.length})
+                  </h4>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0 0 0.75rem', lineHeight: 1.5 }}>
+                    {projectFolders.length > 0
+                      ? <>This project's agents use only these folders (and Ergo's storage), and start in the first one: its working folder. The folders below aren't used by this project.</>
+                      : <>None yet: this project uses the folders allowed for every project, below. Give it its own (for example its repo) with "Only {activeProject.name}" above, and its agents stop looking anywhere else.</>}
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                    {projectFolders.map((folder, i) => (
+                      <div
+                        key={folder.id}
+                        style={{
+                          background: 'var(--bg-card)',
+                          border: `1px solid ${i === 0 ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
+                          borderRadius: 'var(--radius-sm)',
+                          padding: '0.75rem 1rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between'
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          <Folder size={18} color="var(--accent-cyan)" />
+                          <div>
+                            <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-bright)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                              <span>{folder.name}</span>
+                              {i === 0 && <span className="badge badge-done" style={{ fontSize: '0.65rem' }}>Working folder</span>}
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', marginTop: '0.1rem' }}>{folder.path}</div>
+                            <CodeIndexLine status={codeIndex.find((c) => samePath(c.root, folder.path))} />
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                          {i > 0 && (
+                            <button
+                              className="btn btn-secondary"
+                              style={{ padding: '0.3rem 0.55rem', fontSize: '0.72rem' }}
+                              onClick={() => updateProjectFolders([folder, ...projectFolders.filter((f) => f.id !== folder.id)])}
+                              title="Make this the folder the project's agents start in"
+                            >
+                              Make working folder
+                            </button>
+                          )}
+                          <button
+                            className="btn btn-secondary"
+                            style={{ padding: '0.3rem 0.5rem', color: 'var(--accent-rose)' }}
+                            onClick={() => updateProjectFolders(projectFolders.filter((f) => f.id !== folder.id))}
+                            title="Remove this folder from the project"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Roots List */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                  <h4
+                    style={{
+                      fontSize: '0.85rem',
+                      fontWeight: 600,
+                      color: 'var(--text-muted)',
+                      textTransform: 'none',
+                      letterSpacing: 'normal',
+                      margin: 0
+                    }}
+                  >
+                    {activeProject ? 'Every project' : 'Configured Folders'} ({roots.length})
+                  </h4>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                  {roots.map((root) => (
+                    <div
+                      key={root.id}
+                      style={{
+                        background: 'var(--bg-card)',
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '0.75rem 1rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <Folder size={18} color="var(--accent-cyan)" />
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--ink)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <span>{root.name}</span>
+                            {root.isDefault && (
+                              <span className="badge badge-done" style={{ fontSize: '0.65rem' }}>
+                                Default Storage
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', marginTop: '0.1rem' }}>
+                            {root.path}
+                          </div>
+                          {!root.isDefault && <CodeIndexLine status={codeIndex.find((c) => samePath(c.root, root.path))} />}
+                        </div>
+                      </div>
+
+                      {!root.isDefault && (
+                        <button
+                          className="btn btn-secondary"
+                          style={{ padding: '0.3rem 0.5rem', color: 'var(--accent-rose)' }}
+                          onClick={() => handleRemoveRoot(root.id)}
+                          title="Remove allowed root"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: EXTERNAL SAAS MCPS */}
+          {activeTab === 'external' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              {showAddForm && (
+                <form
+                  onSubmit={handleAddSubmit}
+                  style={{
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--accent-cyan)',
+                    boxShadow: 'none',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '1.25rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.85rem'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Globe size={16} color="var(--accent-cyan)" />
+                      <h4 style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--ink)', margin: 0 }}>
+                        Connect Other MCP
+                      </h4>
+                    </div>
+                    {/* <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      Non-technical? Just paste your MCP URL below and click Connect
+                    </span> */}
+                  </div>
+
+                  <div>
+                    <label className="input-label" style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
+                      MCP Endpoint URL <span style={{ color: 'var(--accent-rose)' }}>*</span>
+                    </label>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <input
+                        type="text"
+                        className="input-text"
+                        placeholder="https://mcp.my-tool.com/mcp or http://localhost:3000/mcp"
+                        value={newServerEndpoint}
+                        onChange={(e) => {
+                          setNewServerEndpoint(e.target.value);
+                          setDiscoveryError(null);
+                        }}
+                        style={{ flex: 1 }}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        disabled={!newServerEndpoint.trim() || isDiscovering}
+                        onClick={() => handleDiscoverEndpoint(newServerEndpoint, newServerAuthHeader)}
+                        style={{ fontSize: '0.78rem', whiteSpace: 'nowrap' }}
+                      >
+                        <RefreshCw size={13} className={isDiscovering ? 'animate-spin' : ''} />
+                        <span>{isDiscovering ? 'Testing…' : 'Test Endpoint'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
+                    <div>
+                      <label className="input-label" style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
+                        Display Name <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(auto-detected if blank)</span>
+                      </label>
+                      <input
+                        type="text"
+                        className="input-text"
+                        placeholder="e.g. Asana, Linear, Airtable"
+                        value={newServerName}
+                        onChange={(e) => setNewServerName(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="input-label" style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
+                        API Key / Bearer Token <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(optional)</span>
+                      </label>
+                      <input
+                        type="password"
+                        className="input-text"
+                        placeholder="Leave blank if public / unauthenticated"
+                        value={newServerAuthHeader}
+                        onChange={(e) => setNewServerAuthHeader(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  {discoveryError && (
+                    <div style={{ background: 'var(--danger-subtle)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', padding: '0.5rem 0.75rem', color: 'var(--danger)', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <AlertTriangle size={14} />
+                      <span>{discoveryError}</span>
+                    </div>
+                  )}
+
+                  {discoveredPreview && (
+                    <div style={{ background: 'var(--success-subtle)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', padding: '0.5rem 0.75rem', color: 'var(--accent-emerald)', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <CheckCircle2 size={15} />
+                      <span>
+                        Discovered <strong>{discoveredPreview.toolsCount}</strong> tools from <strong>{discoveredPreview.serverName}</strong>: {discoveredPreview.tools.slice(0, 4).map((t) => t.name).join(', ')}{discoveredPreview.toolsCount > 4 ? '…' : ''}
+                      </span>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.25rem' }}>
+                    <button type="button" className="btn btn-secondary" style={{ fontSize: '0.8rem' }} onClick={() => setShowAddForm(false)}>
+                      Cancel
+                    </button>
+                    <button type="submit" className="btn btn-primary" disabled={!newServerEndpoint.trim() || isDiscovering} style={{ fontSize: '0.8rem', gap: '0.35rem' }}>
+                      <Check size={14} />
+                      <span>{isDiscovering ? 'Connecting…' : 'Connect & Discover Tools'}</span>
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              <div className="mcp-grid">
+                {externalServers.map((server) => {
+                  const isConnected = server.status === 'connected';
+                  const isConnecting = connectingServerId === server.id;
+                  const isExpanded = !!expandedServerIds[server.id];
+
+                  return (
+                    <div
+                      key={server.id}
+                      className={`mcp-card ${isConnected ? 'connected' : ''} ${!isExpanded ? 'collapsed' : ''}`}
+                      onClick={() => {
+                        if (!isExpanded) {
+                          toggleExpandedServer(server.id);
+                        }
+                      }}
+                    >
+                      <div className="mcp-header">
+                        <div className="mcp-title">
+                          <button
+                            type="button"
+                            className="mcp-collapse-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleExpandedServer(server.id);
+                            }}
+                            title={isExpanded ? 'Collapse card' : 'Expand permissions & details'}
+                            aria-label={isExpanded ? 'Collapse card' : 'Expand permissions & details'}
+                          >
+                            {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                          </button>
+                          {renderServerIcon(server, isConnected)}
+                          <span>{server.name}</span>
+                          {server.isCustom && (
+                            <span style={{ fontSize: '0.62rem', background: 'var(--surface-2)', padding: '1px 5px', borderRadius: '3px', color: 'var(--accent-cyan)' }}>
+                              Custom
+                            </span>
+                          )}
+                          {!isExpanded && server.tools.length > 0 && (
+                            <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontWeight: 500, fontFamily: 'var(--font-mono)' }}>
+                              ({server.tools.length} {server.tools.length === 1 ? 'tool' : 'tools'})
+                            </span>
+                          )}
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                          {server.id === 'mcp-github' && isConnected && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              style={{ padding: '0.25rem 0.45rem', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setGhAuthError(null);
+                                setIsGhAuthModalOpen(true);
+                              }}
+                              title="Configure GitHub Token"
+                            >
+                              <Key size={12} />
+                              <span>Key</span>
+                            </button>
+                          )}
+
+                          <button
+                            className={isConnected ? 'btn btn-secondary' : 'btn btn-primary'}
+                            style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem', minWidth: '75px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}
+                            disabled={isConnecting}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleConnectExternal(server);
+                            }}
+                          >
+                            {isConnecting ? (
+                              <>
+                                <RefreshCw size={12} className="animate-spin" />
+                                <span>Syncing…</span>
+                              </>
+                            ) : isConnected ? (
+                              <span>Disconnect</span>
+                            ) : (
+                              <span>Connect</span>
+                            )}
+                          </button>
+
+                          {server.isCustom && onDeleteCustomServer && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              style={{ padding: '0.25rem 0.45rem', color: 'var(--accent-rose)', fontSize: '0.72rem' }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDeleteCustomServer(server.id);
+                              }}
+                              title="Remove custom connection"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {isExpanded && (
+                        <>
+                          <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>{server.description}</p>
+
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-dim)', paddingTop: '0.4rem', borderTop: '1px solid var(--border-subtle)' }}>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: isConnected ? 'var(--accent-emerald)' : 'var(--text-dim)' }} />
+                              <span>{isConnected ? 'Active & Ready' : 'Disconnected'}</span>
+                              {isConnected && (server.authUsername || (server.id === 'mcp-github' && ghAccountInfo?.username)) && (
+                                <span style={{ color: 'var(--accent-cyan)', fontWeight: 600, fontSize: '0.72rem', background: 'var(--accent-subtle)', padding: '1px 6px', borderRadius: '4px' }}>
+                                  @{server.authUsername || ghAccountInfo?.username}
+                                </span>
+                              )}
+                            </span>
+                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={server.endpoint}>
+                              {server.id === 'mcp-github'
+                                ? (isConnected ? 'Stdio MCP (@modelcontextprotocol/server-github)' : 'Personal Token Required')
+                                : (server.endpoint ? server.endpoint.replace('https://', '').replace('http://', '') : 'Configuration Required')}
+                            </span>
+                          </div>
+
+                          {server.error && (
+                            <div style={{ background: 'var(--danger-subtle)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.6rem', color: 'var(--danger)', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '0.35rem' }}>
+                              <AlertTriangle size={13} style={{ flexShrink: 0 }} />
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{server.error}</span>
+                            </div>
+                          )}
+
+                          {/* Tools List & Permissions */}
+                          {server.tools.length > 0 && (
+                            <div style={{ background: 'var(--code-bg)', border: '1px solid var(--code-border)', padding: '0.75rem 0.85rem', borderRadius: 'var(--radius-sm)', marginTop: '0.35rem', boxShadow: 'none' }}>
+                              <div style={{ fontSize: '0.72rem', fontWeight: 600, color: isConnected ? 'var(--accent-cyan)' : 'var(--text-dim)', textTransform: 'none', letterSpacing: 'normal', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                  <Shield size={13} />
+                                  <span>{isConnected ? `Discovered Tools (${server.tools.length})` : `Available Tools (${server.tools.length})`}</span>
+                                </div>
+                                {isConnected && (
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      setConnectingServerId(server.id);
+                                      if (server.id === 'mcp-github') {
+                                        const st = await getGithubMcpStatus();
+                                        if (st.configured && onUpdateServer) {
+                                          onUpdateServer({
+                                            ...server,
+                                            status: 'connected',
+                                            authUsername: st.username,
+                                            lastSyncedAt: new Date().toISOString()
+                                          });
+                                        }
+                                      } else if (server.endpoint) {
+                                        const disc = await discoverRemoteMcpTools(server.endpoint, server.authHeader);
+                                        if (disc.success && disc.tools.length > 0 && onUpdateServer) {
+                                          onUpdateServer({
+                                            ...server,
+                                            lastSyncedAt: new Date().toISOString(),
+                                            tools: disc.tools.map((t) => ({ ...t, serverId: server.id })),
+                                            error: undefined
+                                          });
+                                        }
+                                      }
+                                      setConnectingServerId(null);
+                                    }}
+                                    disabled={connectingServerId === server.id}
+                                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.68rem' }}
+                                    title="Sync latest tools from endpoint"
+                                  >
+                                    <RefreshCw size={11} className={connectingServerId === server.id ? 'animate-spin' : ''} />
+                                    <span>Refresh</span>
+                                  </button>
+                                )}
+                              </div>
+
+                              {server.tools.length > 6 && (
+                                <div style={{ position: 'relative', marginBottom: '0.4rem' }}>
+                                  <Search size={11} style={{ position: 'absolute', left: '0.5rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
+                                  <input
+                                    type="text"
+                                    className="input-text"
+                                    placeholder={`Filter ${server.tools.length} tools...`}
+                                    value={toolSearchQueries[server.id] || ''}
+                                    onChange={(e) => setToolSearchQueries({ ...toolSearchQueries, [server.id]: e.target.value })}
+                                    style={{
+                                      width: '100%',
+                                      paddingLeft: '1.6rem',
+                                      paddingRight: '0.5rem',
+                                      paddingTop: '0.2rem',
+                                      paddingBottom: '0.2rem',
+                                      fontSize: '0.72rem',
+                                      height: '24px'
+                                    }}
+                                  />
+                                </div>
+                              )}
+
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', maxHeight: '180px', overflowY: 'auto' }}>
+                                {server.tools
+                                  .filter((tool) => {
+                                    const q = (toolSearchQueries[server.id] || '').toLowerCase().trim();
+                                    if (!q) return true;
+                                    return tool.name.toLowerCase().includes(q) || (tool.description && tool.description.toLowerCase().includes(q));
+                                  })
+                                  .map((tool) => (
+                                    <div key={tool.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem', padding: '0.3rem 0', borderTop: '1px solid var(--line)' }}>
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', overflow: 'hidden' }}>
+                                        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--code-text)', fontSize: '0.76rem', fontWeight: 600 }}>{tool.name}</span>
+                                        {tool.description && (
+                                          <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '280px' }} title={tool.description}>
+                                            {tool.description}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <button
+                                        type="button"
+                                        style={{
+                                          background: tool.autoApprove ? 'var(--success-subtle)' : 'var(--warning-subtle)',
+                                          color: tool.autoApprove ? 'var(--success)' : 'var(--warning)',
+                                          border: '1px solid ' + (tool.autoApprove ? 'var(--line-strong)' : 'var(--line-strong)'),
+                                          padding: '0.2rem 0.55rem',
+                                          borderRadius: '4px',
+                                          fontSize: '0.7rem',
+                                          cursor: 'pointer',
+                                          fontWeight: 600,
+                                          flexShrink: 0,
+                                          transition: 'all 0.15s ease'
+                                        }}
+                                        onClick={() => onToggleToolAutoApprove(server.id, tool.id)}
+                                      >
+                                        {tool.autoApprove ? 'Auto-Approve' : 'Ask Permission'}
+                                      </button>
+                                    </div>
+                                  ))}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+        </div>
+
+        <div className="modal-footer">
+          <button className="btn btn-primary" onClick={onClose}>
+            Done
+          </button>
+        </div>
+      </div>
+
+      {subModals}
     </div>
   );
 };

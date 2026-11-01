@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { StatusDot } from './ui';
 import { bridgeClient } from '../lib/bridgeClient';
 import {
   type TaskItem,
@@ -212,7 +213,7 @@ function usePlanUsage(cli: string | undefined, enabled: boolean): PlanUsage | nu
   return usage;
 }
 
-function planLine(plan: PlanUsage, /*label: string*/): string | null {
+function planLine(plan: PlanUsage): string | null {
   const weekly = plan.weekly;
   if (!weekly) return null;
   const resets = weekly.resetsAt ? new Date(weekly.resetsAt) : null;
@@ -256,365 +257,120 @@ export const BvTokenCounterCard: React.FC<BvTokenCounterCardProps> = ({
     ([, data]) => data.total > 0 || data.usage.calls > 0
   );
 
-  const roleConfig: Record<AgentRole, { label: string; color: string; bg: string; border: string }> = {
-    summary: { label: 'Summary', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.08)', border: 'rgba(245, 158, 11, 0.2)' },
-    manager: { label: 'Manager', color: '#818cf8', bg: 'rgba(129, 140, 248, 0.08)', border: 'rgba(129, 140, 248, 0.2)' },
-    worker: { label: 'Workers', color: '#34d399', bg: 'rgba(52, 211, 153, 0.08)', border: 'rgba(52, 211, 153, 0.2)' },
-    cleaner: { label: 'Cleaner', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.08)', border: 'rgba(251, 113, 133, 0.2)' },
-    verifier: { label: 'Verifier', color: '#c084fc', bg: 'rgba(192, 132, 252, 0.08)', border: 'rgba(192, 132, 252, 0.2)' },
-    logger: { label: 'Logger', color: '#94a3b8', bg: 'rgba(148, 163, 184, 0.08)', border: 'rgba(148, 163, 184, 0.2)' },
-    autocomplete: { label: 'Small model', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.08)', border: 'rgba(56, 189, 248, 0.2)' }
+  const ROLE_LABEL: Record<AgentRole, string> = {
+    summary: 'Summary',
+    manager: 'Manager',
+    worker: 'Workers',
+    cleaner: 'Cleaner',
+    verifier: 'Verifier',
+    logger: 'Logger',
+    autocomplete: 'Small model',
   };
 
-  // If task is not started and has no usage yet, display blank card with hint
+  // Not run yet: one quiet line.
   if (!isTaskStarted && !hasUsage && !isExecuting) {
     return (
-      <div
-        className="bv-token-counter-card is-unstarted"
-        style={{
-          background: 'var(--bg-card)',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: '6px',
-          padding: '0.45rem 0.65rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.35rem',
-          transition: 'all 0.15s ease'
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-            <div
-              style={{
-                width: '20px',
-                height: '20px',
-                borderRadius: '4px',
-                background: 'var(--btn-secondary-bg)',
-                border: '1px solid var(--border-subtle)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: 'var(--text-muted)'
-              }}
-            >
-              <Zap size={11} color="var(--text-muted)" />
-            </div>
-            <span
-              style={{
-                fontSize: '0.72rem',
-                fontWeight: 600,
-                letterSpacing: '0.04em',
-                textTransform: 'uppercase',
-                color: 'var(--text-main)'
-              }}
-            >
-              Token Usage
-            </span>
-            <span
-              className="task-status-pill"
-              style={{
-                fontSize: '0.66rem',
-                fontWeight: 500,
-                padding: '0.06rem 0.4rem',
-                borderRadius: '9999px',
-                background: 'var(--btn-secondary-bg)',
-                color: 'var(--text-muted)',
-                border: '1px solid var(--border-subtle)'
-              }}
-            >
-              0 tokens
-            </span>
-          </div>
-          <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-            Not started
-          </span>
+      <section className="bv-token-counter-card eg-usage is-unstarted">
+        <div className="eg-usage-head">
+          <span className="eg-usage-label">Usage</span>
+          <span className="eg-usage-sub">Counted once the task runs</span>
         </div>
-        <div
-          className="ai-card-hint"
-          style={{
-            fontSize: '0.72rem',
-            color: 'var(--text-muted)',
-            fontStyle: 'italic',
-            padding: '0.2rem 0.1rem 0.1rem'
-          }}
-        >
-          Start the task to track token consumption across AI phases (Summary, Manager, Workers, Verifier, and Logger).
-        </div>
-      </div>
+      </section>
     );
   }
 
+  const costText = typeof totalUsage.costUsd === 'number'
+    ? `${totalUsage.costPartial || totalUsage.estimated ? '≈ ' : ''}${formatUsd(totalUsage.costUsd)}`
+    : null;
+  const tokenText = `${totalUsage.estimated ? '≈ ' : ''}${compactTokens(totalTokens)} ${totalUsage.estimated ? 'tokens (est.)' : 'tokens'}`;
+  // What the user cares about: API key → cost first; subscription → tokens (plan usage), with the API value after.
+  const costFirst = !isSubscription && costText;
+  const planText = isSubscription && plan ? planLine(plan) : null;
+
   return (
-    <div
-      className="bv-token-counter-card"
-      style={{
-        background: 'var(--bg-card)',
-        border: '1px solid var(--border-subtle)',
-        borderRadius: '6px',
-        padding: '0.45rem 0.65rem',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '0.4rem',
-        transition: 'all 0.15s ease'
-      }}
-    >
-      {/* Top Header Row: Label, Status Pill, and Prominent Total Token Number */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.15rem' }}>
-              <div
-                style={{
-                  width: '22px',
-                  height: '22px',
-                  borderRadius: '5px',
-                  background: isExecuting ? 'rgba(6, 182, 212, 0.15)' : 'var(--btn-secondary-bg)',
-                  border: `1px solid ${isExecuting ? 'rgba(6, 182, 212, 0.35)' : 'var(--border-subtle)'}`,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: isExecuting ? 'var(--accent-cyan)' : 'var(--text-muted)'
-                }}
-              >
-                <Zap size={12} color={isExecuting ? '#06b6d4' : 'var(--text-muted)'} />
-              </div>
-              <span
-                style={{
-                  fontSize: '0.72rem',
-                  fontWeight: 700,
-                  letterSpacing: '0.05em',
-                  textTransform: 'uppercase',
-                  color: 'var(--text-muted)'
-                }}
-              >
-                {typeof totalUsage.costUsd === 'number' && !isSubscription ? 'Task Cost' : 'Task Usage'}
-              </span>
-            </span>
-
-            {isSubscription && plan && planLine(plan, /*billing?.label || ''*/) && (
-              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }} title={plan.fetchedAt ? `As of ${new Date(plan.fetchedAt).toLocaleString()}` : undefined}>
-                {planLine(plan, /*billing?.label || ''*/)}
-              </div>
-            )}
+    <section className={`bv-token-counter-card eg-usage ${isExecuting ? 'is-live' : ''}`}>
+      <div className="eg-usage-head">
+        <span className="eg-usage-label">{costFirst ? 'Cost' : 'Usage'}</span>
+        {isExecuting && (
+          <span className="eg-usage-live">
+            <StatusDot state="live" />
+            Counting
           </span>
-
-          {/* Running vs Done vs Standby status pill */}
-          {isExecuting && (
-            <span
-              className="task-status-pill"
-              style={{
-                fontSize: '0.68rem',
-                fontWeight: 600,
-                padding: '0.08rem 0.45rem',
-                borderRadius: '9999px',
-                background: 'rgba(6, 182, 212, 0.12)',
-                color: '#06b6d4',
-                border: '1px solid rgba(6, 182, 212, 0.35)',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '0.3rem'
-              }}
-            >
-              <span className="live-pulse-dot" style={{ width: '6px', height: '6px' }} />
-              <span>Calculating...</span>
-            </span>
-          )}
-        </div>
-
-        {/* Primary figure: what the user cares about. API key → cost; subscription → tokens (plan usage), cost as "API value". */}
-        {(() => {
-          const costText = typeof totalUsage.costUsd === 'number'
-            ? `${totalUsage.costPartial || totalUsage.estimated ? '≈ ' : ''}${formatUsd(totalUsage.costUsd)}`
-            : null;
-          const tokenText = `${totalUsage.estimated ? '≈ ' : ''}${compactTokens(totalTokens)}`;
-          const bigStyle: React.CSSProperties = {
-            fontFamily: 'var(--font-mono)',
-            fontSize: '1.15rem',
-            fontWeight: 700,
-            color: 'var(--text-bright)',
-            letterSpacing: '-0.02em',
-            textShadow: isExecuting ? '0 0 12px rgba(6, 182, 212, 0.3)' : 'none'
-          };
-          const smallStyle: React.CSSProperties = { fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' };
-          if (isSubscription || !costText) {
-            return (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.15 }}>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}>
-                  <span style={bigStyle} title={tokenTitle}>{tokenText}</span>
-                  <span style={{ fontSize: '0.72rem', fontWeight: 500, color: 'var(--text-muted)' }} title={tokenTitle}>
-                    {totalUsage.estimated ? 'tokens (est.)' : 'tokens'}
-                  </span>
-                </div>
-                {costText && (
-                  <span
-                    style={smallStyle}
-                    title="What these calls would cost at API prices. Your subscription covers them; they count toward its usage limits."
-                  >
-                    {costText} API value
-                  </span>
-                )}
-              </div>
-            );
-          }
-          return (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.15 }}>
-              <span style={bigStyle} title="Cost at your provider's API prices, prompt-cache discounts included.">{costText}</span>
-              <span style={smallStyle} title={tokenTitle}>{tokenText} tokens</span>
-            </div>
-          );
-        })()}
-      </div>
-
-      {/* Middle Metrics Strip: In / Out / Calls breakdown */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: '0.4rem',
-          fontSize: '0.72rem',
-          color: 'var(--text-muted)'
-        }}
-      >
-        {/* Breakdown Toggle Button (if active roles exist) */}
+        )}
+        <span className="eg-spacer" />
+        {costFirst ? (
+          <>
+            <span className="eg-usage-total" title="Cost at your provider's API prices, prompt-cache discounts included.">{costText}</span>
+            <span className="eg-usage-sub" title={tokenTitle}>{tokenText}</span>
+          </>
+        ) : (
+          <>
+            <span className="eg-usage-total" title={tokenTitle}>{tokenText}</span>
+            {costText && (
+              <span className="eg-usage-sub" title="What these calls would cost at API prices. Your subscription covers them; they count toward its usage limits.">
+                {costText} API value
+              </span>
+            )}
+          </>
+        )}
         {activeRoles.length > 0 && (
           <button
             type="button"
+            className="eg-btn eg-btn-ghost eg-btn-sm eg-usage-toggle"
             onClick={() => setShowBreakdown((prev) => !prev)}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.25rem',
-              background: 'transparent',
-              border: 'none',
-              padding: '0.1rem 0.3rem',
-              color: 'var(--text-dim)',
-              fontSize: '0.68rem',
-              cursor: 'pointer',
-              borderRadius: '4px',
-              transition: 'all 0.12s ease'
-            }}
-            title={showBreakdown ? 'Hide token breakdown' : 'Show token breakdown'}
+            aria-expanded={showBreakdown}
           >
-            <span>{showBreakdown ? 'Hide Details' : 'Show Details'}</span>
-            {showBreakdown ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+            Details
+            {showBreakdown ? <ChevronDown size={14} strokeWidth={1.75} /> : <ChevronRight size={14} strokeWidth={1.75} />}
           </button>
         )}
       </div>
-
-      {/* Bottom Stage Breakdown Row: Summary, Manager, Workers, verifier, Logger */}
-      {showBreakdown && activeRoles.length > 0 && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: '0.35rem',
-            paddingTop: '0.35rem',
-            borderTop: '1px solid rgba(255, 255, 255, 0.06)'
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.45rem' }}>
-            {/* Input tokens */}
-            <span
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: '0.72rem',
-                padding: '0.1rem 0.42rem',
-                borderRadius: '4px',
-                background: 'var(--btn-secondary-bg)',
-                border: '1px solid var(--border-subtle)',
-                whiteSpace: 'nowrap'
-              }}
-              title="Total input/prompt tokens sent across all LLM calls"
-            >
-              <span style={{ color: 'var(--text-dim)', marginRight: '0.25rem' }}>Input:</span>
-              {/* <strong style={{ color: 'var(--text-bright)' }}>{inputTokens.toLocaleString()}</strong> */}
-              {cacheWriteTokens > 0 && (
-                <span style={{ color: '#38bdf8', marginLeft: '0.25rem' }} title="Input tokens written to prompt cache">
-                  {cacheWriteTokens.toLocaleString()}
-                </span>
-              )}
-              {cachedInputTokens > 0 && (
-                <span style={{ color: 'var(--accent-emerald)', marginLeft: '0.5rem' }} title="Input tokens read from prompt cache">
-                  ({cachedInputTokens.toLocaleString()} cached)
-                </span>
-              )}
-            </span>
-
-            {/* Output tokens */}
-            <span
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: '0.72rem',
-                padding: '0.1rem 0.42rem',
-                borderRadius: '4px',
-                background: 'var(--btn-secondary-bg)',
-                border: '1px solid var(--border-subtle)',
-                whiteSpace: 'nowrap'
-              }}
-              title="Total output/generation tokens received across all LLM calls"
-            >
-              <span style={{ color: 'var(--text-dim)', marginRight: '0.25rem' }}>Output:</span>
-              <strong style={{ color: 'var(--accent-cyan)' }}>{outputTokens.toLocaleString()}</strong>
-            </span>
-
-            {/* Round-trip calls */}
-            <span
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: '0.72rem',
-                padding: '0.1rem 0.42rem',
-                borderRadius: '4px',
-                background: 'var(--btn-secondary-bg)',
-                border: '1px solid var(--border-subtle)',
-                whiteSpace: 'nowrap'
-              }}
-              title="Total LLM round trips across Summary, Manager, Workers, Verifier, and Logger"
-            >
-              <span style={{ color: 'var(--text-dim)', marginRight: '0.25rem' }}>Calls:</span>
-              <strong style={{ color: 'var(--text-bright)' }}>{calls}</strong>
-            </span>
-          </div>
-          <span
-            style={{
-              fontSize: '0.64rem',
-              textTransform: 'uppercase',
-              letterSpacing: '0.04em',
-              color: 'var(--text-dim)',
-              fontWeight: 600,
-              marginRight: '0.15rem'
-            }}
-          >
-            Stages:
-          </span>
-          {activeRoles.map(([role, data]) => {
-            const cfg = roleConfig[role];
-            return (
-              <span
-                key={role}
-                title={`${cfg.label}: ${data.total.toLocaleString()} new tokens (${data.usage.calls} call${data.usage.calls === 1 ? '' : 's'}${data.usage.cachedInputTokens > 0 ? `, ${data.usage.cachedInputTokens.toLocaleString()} cached` : ''}${data.usage.cacheWriteTokens > 0 ? `, ${data.usage.cacheWriteTokens.toLocaleString()} written` : ''})`}
-                style={{
-                  fontSize: '0.66rem',
-                  fontFamily: 'var(--font-mono)',
-                  padding: '0.08rem 0.38rem',
-                  borderRadius: '4px',
-                  background: cfg.bg,
-                  color: cfg.color,
-                  border: `1px solid ${cfg.border}`,
-                  whiteSpace: 'nowrap'
-                }}
-              >
-                {cfg.label}: {isSubscription || typeof data.usage.costUsd !== 'number'
-                  ? compactTokens(data.total)
-                  : `${data.usage.costPartial ? '≈ ' : ''}${formatUsd(data.usage.costUsd)} · ${compactTokens(data.total)}`}
-              </span>
-            );
-          })}
+      {planText && (
+        <div className="eg-usage-plan" title={plan?.fetchedAt ? `As of ${new Date(plan.fetchedAt).toLocaleString()}` : undefined}>
+          {planText}
         </div>
       )}
-    </div>
+
+      {showBreakdown && activeRoles.length > 0 && (
+        <div className="eg-props eg-usage-props">
+          <span className="eg-prop-k">Output</span>
+          <span className="eg-prop-v eg-tabular" title="Output tokens received across all calls">{outputTokens.toLocaleString()}</span>
+          {cachedInputTokens > 0 && (
+            <>
+              <span className="eg-prop-k">Cache reads</span>
+              <span className="eg-prop-v eg-tabular" title="Input tokens read from the prompt cache (billed at about 10% of the input price)">
+                {cachedInputTokens.toLocaleString()}
+              </span>
+            </>
+          )}
+          {cacheWriteTokens > 0 && (
+            <>
+              <span className="eg-prop-k">Cache writes</span>
+              <span className="eg-prop-v eg-tabular" title="Input tokens written to the prompt cache">{cacheWriteTokens.toLocaleString()}</span>
+            </>
+          )}
+          <span className="eg-prop-k">Calls</span>
+          <span className="eg-prop-v eg-tabular" title="Model round trips across every stage">{calls}</span>
+          {activeRoles.map(([role, data]) => (
+            <React.Fragment key={role}>
+              <span className="eg-prop-k">{ROLE_LABEL[role]}</span>
+              <span
+                className="eg-prop-v eg-tabular"
+                title={`${data.total.toLocaleString()} new tokens (${data.usage.calls} call${data.usage.calls === 1 ? '' : 's'}${data.usage.cachedInputTokens > 0 ? `, ${data.usage.cachedInputTokens.toLocaleString()} cached` : ''}${data.usage.cacheWriteTokens > 0 ? `, ${data.usage.cacheWriteTokens.toLocaleString()} written` : ''})`}
+              >
+                {compactTokens(data.total)}
+                {!isSubscription && typeof data.usage.costUsd === 'number' && (
+                  <span className="eg-usage-sub">
+                    {data.usage.costPartial ? '≈ ' : ''}
+                    {formatUsd(data.usage.costUsd)}
+                  </span>
+                )}
+              </span>
+            </React.Fragment>
+          ))}
+        </div>
+      )}
+    </section>
   );
 };
 
@@ -640,15 +396,15 @@ export const BvHeaderTokenBadge: React.FC<BvTokenCounterCardProps> = ({
         fontSize: '0.72rem',
         fontFamily: 'var(--font-mono)',
         fontWeight: 600,
-        color: isExecuting ? 'var(--accent-cyan)' : 'var(--text-main)',
-        background: isExecuting ? 'rgba(6, 182, 212, 0.08)' : 'var(--btn-secondary-bg)',
-        border: `1px solid ${isExecuting ? 'rgba(6, 182, 212, 0.28)' : 'var(--border-subtle)'}`,
+        color: isExecuting ? 'var(--accent-text)' : 'var(--ink-muted)',
+        background: isExecuting ? 'var(--accent-subtle)' : 'var(--surface-2)',
+        border: 0,
         padding: '0.15rem 0.45rem',
         borderRadius: '4px'
       }}
       title={`Total tokens used: ${summary.totalUsage.estimated ? '≈ ' : ''}${summary.totalTokens.toLocaleString()} (${summary.totalUsage.calls} calls)${summary.totalUsage.estimated ? ' — estimated' : ''}`}
     >
-      <Zap size={11} color={isExecuting ? '#06b6d4' : 'var(--accent-violet)'} />
+      <Zap size={11} strokeWidth={1.75} color={isExecuting ? 'var(--accent-text)' : 'var(--ink-subtle)'} />
       {typeof summary.totalUsage.costUsd === 'number' ? (
         <>
           <span>{summary.totalUsage.costPartial || summary.totalUsage.estimated ? '≈ ' : ''}{formatUsd(summary.totalUsage.costUsd)}</span>

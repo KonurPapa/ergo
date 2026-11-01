@@ -8,6 +8,7 @@
  * renders as "can't reach the bridge" instead of throwing.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { askConfirm } from './ui/askDialogs';
 import {
   getLocalModelStatus,
   installLocalModel,
@@ -27,6 +28,7 @@ import {
   Trash2,
   X
 } from 'lucide-react';
+import { Banner, Button, SettingsGroup, SettingsRow } from './ui';
 
 export type LocalModelMode = 'local' | 'cloud' | 'unset';
 export type LocalModelState = 'not_installed' | 'installing' | 'installed' | 'starting' | 'ready' | 'error';
@@ -608,28 +610,30 @@ export interface LocalModelSettingsSectionProps {
   mode: LocalModelMode;
   cloudLabel: string;
   onSetMode: (mode: 'local' | 'cloud') => void;
+  /** Settings page: rows in the design's settings groups instead of the old card. */
+  embedded?: boolean;
 }
 
 function settingsBadge(controller: LocalModelInstallController): { text: string; className: string } {
   const { status, checked, unreachable } = controller;
-  if (!checked) return { text: 'CHECKING', className: 'badge' };
-  if (!status) return { text: unreachable ? 'UNAVAILABLE' : 'CHECKING', className: 'badge' };
-  if (!status.platformSupported && !isLocalModelInstalled(status)) return { text: 'NOT SUPPORTED', className: 'badge' };
+  if (!checked) return { text: 'Checking', className: 'badge' };
+  if (!status) return { text: unreachable ? 'Unavailable' : 'Checking', className: 'badge' };
+  if (!status.platformSupported && !isLocalModelInstalled(status)) return { text: 'Not supported', className: 'badge' };
   switch (status.state) {
     case 'ready':
-      return { text: 'READY', className: 'badge badge-done' };
+      return { text: 'Ready', className: 'badge badge-done' };
     case 'installed':
-      return { text: 'INSTALLED', className: 'badge badge-done' };
+      return { text: 'Installed', className: 'badge badge-done' };
     case 'starting':
-      return { text: 'STARTING', className: 'badge badge-running' };
+      return { text: 'Starting', className: 'badge badge-running' };
     case 'installing': {
       const pct = progressPercent(status);
-      return { text: pct === null ? 'INSTALLING' : `INSTALLING ${pct}%`, className: 'badge badge-running' };
+      return { text: pct === null ? 'Installing' : `Installing ${pct}%`, className: 'badge badge-running' };
     }
     case 'error':
-      return { text: 'ERROR', className: 'badge badge-error' };
+      return { text: 'Not working', className: 'badge badge-error' };
     default:
-      return { text: 'NOT INSTALLED', className: 'badge' };
+      return { text: 'Not installed', className: 'badge' };
   }
 }
 
@@ -637,7 +641,8 @@ export const LocalModelSettingsSection: React.FC<LocalModelSettingsSectionProps>
   controller,
   mode,
   cloudLabel,
-  onSetMode
+  onSetMode,
+  embedded = false
 }) => {
   const { status, checked, unreachable, busy, actionError } = controller;
   const installed = isLocalModelInstalled(status);
@@ -648,10 +653,12 @@ export const LocalModelSettingsSection: React.FC<LocalModelSettingsSectionProps>
   const effectiveMode: 'local' | 'cloud' = mode === 'local' ? 'local' : 'cloud';
 
   const handleUninstall = async () => {
-    const ok = window.confirm(
-      `Remove the local AI model?\n\nThis deletes about ${formatMB(total, 0)} from ${installDirOf(status)}. ` +
-        `Ergo will use ${cloudLabel} for these jobs instead. You can install it again anytime.`
-    );
+    const ok = await askConfirm({
+      title: 'Remove the local model?',
+      text: `This deletes about ${formatMB(total, 0)} from ${installDirOf(status)}. Ergo will use ${cloudLabel} for these jobs instead. You can install it again anytime.`,
+      confirmLabel: 'Remove model',
+      danger: true,
+    });
     if (!ok) return;
     await controller.uninstall();
     if (mode === 'local') onSetMode('cloud');
@@ -775,6 +782,97 @@ export const LocalModelSettingsSection: React.FC<LocalModelSettingsSectionProps>
       </div>
     );
   };
+
+  if (embedded) {
+    return (
+      <SettingsGroup title="Local model">
+        <SettingsRow
+          title="Background jobs"
+          help={`Quick background decisions and autocomplete run on Qwen 2.5 Coder 0.5B on this computer, or on ${cloudLabel}.`}
+        >
+          <div className="eg-seg" role="radiogroup" aria-label="Model for background jobs">
+            <button
+              type="button"
+              role="radio"
+              className="eg-seg-item"
+              aria-checked={effectiveMode === 'local'}
+              disabled={!installed}
+              title={installed ? 'Use the model on this computer' : 'Install the model first'}
+              onClick={() => onSetMode('local')}
+            >
+              Local model
+            </button>
+            <button type="button" role="radio" className="eg-seg-item" aria-checked={effectiveMode === 'cloud'} onClick={() => onSetMode('cloud')}>
+              {isProperName(cloudLabel) ? cloudLabel : 'Cloud'}
+            </button>
+          </div>
+        </SettingsRow>
+        {(() => {
+          let help: React.ReactNode = null;
+          let action: React.ReactNode = null;
+          let below: React.ReactNode = null;
+          if (!checked) help = 'Checking…';
+          else if (!status) {
+            help = "The bridge isn't responding, so the model can't be checked or installed right now.";
+            action = <Button size="sm" icon={RefreshCw} onClick={() => void controller.refresh()}>Check again</Button>;
+          } else if (unsupported) help = `Not available for this system yet. Ergo uses ${cloudLabel} instead.`;
+          else if (status.state === 'installing') {
+            below = <LocalModelProgress status={status} onCancel={() => void handleCancel()} cancelling={busy === 'cancel'} compact />;
+          } else if (installed) {
+            help = (
+              <>
+                {status.state === 'ready' ? 'Ready' : status.state === 'starting' ? 'Starting…' : 'Installed · starts when needed'} ·{' '}
+                <span className="eg-settings-mono">{installDirOf(status)}</span>
+              </>
+            );
+            action = (
+              <Button size="sm" variant="ghost" icon={Trash2} onClick={() => void handleUninstall()} disabled={busy !== null}>
+                {busy === 'uninstall' ? 'Removing…' : 'Uninstall'}
+              </Button>
+            );
+          } else if (status.state === 'error') {
+            below = (
+              <Banner
+                tone="danger"
+                title="The local model isn't working"
+                text={`${status.error || 'Something went wrong.'} Ergo uses ${cloudLabel} until this is fixed.`}
+                actions={
+                  <>
+                    <Button size="sm" icon={RefreshCw} onClick={() => void controller.install()} disabled={busy !== null}>Try again</Button>
+                    <Button size="sm" variant="ghost" icon={Trash2} onClick={() => void handleUninstall()} disabled={busy !== null}>Remove files</Button>
+                  </>
+                }
+              />
+            );
+          } else {
+            help = `Not installed · ${formatMB(total, 0)} download, stored in Ergo's folder. No admin rights needed.`;
+            action = (
+              <Button size="sm" icon={Download} onClick={() => void controller.install()} disabled={busy !== null}>
+                {busy === 'install' ? 'Starting…' : 'Install'}
+              </Button>
+            );
+          }
+          return (
+            <div className="eg-srow eg-settings-top">
+              <div className="eg-srow-text">
+                <div className="eg-srow-title">Qwen 2.5 Coder 0.5B</div>
+                {help && <div className="eg-srow-help">{help}</div>}
+                {mode === 'local' && status?.platformSupported && (status.state === 'not_installed' || status.state === 'installing') && (
+                  <div className="eg-srow-help">
+                    Set to the local model, but it isn't installed{status?.state === 'installing' ? ' yet' : ''}. Ergo uses {cloudLabel} until it is.
+                  </div>
+                )}
+                {below && <div className="eg-settings-sub">{below}</div>}
+                {actionError && status?.state !== 'error' && <div className="eg-srow-help eg-settings-bad" role="alert">{actionError}</div>}
+                {unreachable && status && <div className="eg-srow-help">Lost contact with the bridge. Showing the last known status.</div>}
+              </div>
+              {action}
+            </div>
+          );
+        })()}
+      </SettingsGroup>
+    );
+  }
 
   return (
     <div className="lm-settings">

@@ -783,7 +783,7 @@ function detectConfirmation(rows: Row[]): CliDetectedPrompt | null {
   return finishPrompt({
     type: 'confirmation',
     kind,
-    title: 'Confirmation Required',
+    title: 'Confirmation required',
     targetCommand,
     question,
     options,
@@ -800,7 +800,7 @@ function detectNotice(rows: Row[]): CliDetectedPrompt | null {
     return finishPrompt({
       type: 'freeform',
       kind: 'notice',
-      title: 'AI Account Notice',
+      title: 'Account notice',
       question: `${capText(detail, 240)} (Please check your API key in AI Credentials Settings or verify account balance).`,
       rawSnippet: snippetOf(rows.slice(Math.max(0, rows.indexOf(nonBlank[i]) - 3), rows.indexOf(nonBlank[i]) + 2)),
     });

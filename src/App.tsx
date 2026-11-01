@@ -69,15 +69,12 @@ import { useCliAgentRuns, makeCliRunId, isWorkingAgentSession, type CliLaunchCon
 import { Navbar } from './components/Navbar';
 import { TaskPane } from './components/TaskPane';
 import { BriefPane } from './components/BriefPane';
-import { McpHubModal } from './components/McpHubModal';
 import { RawMarkdownModal } from './components/RawMarkdownModal';
 import { CreateProjectModal } from './components/CreateProjectModal';
-import { AiCredentialsModal } from './components/AiCredentialsModal';
-import { SettingsModal } from './components/SettingsModal';
-import { BridgeDownloadButton } from './components/BridgeDownloadButton';
 import { BridgeUpdateBanner } from './components/BridgeUpdateBanner';
 import { loadMcpServers, markMcpServerToggled, saveMcpServers } from './lib/mcpConfigStore';
-import { loadPrefs } from './lib/userPrefs';
+import { loadPrefs, subscribePrefs } from './lib/userPrefs';
+import { withDisplayNames } from './lib/projectNames';
 import { FolderPickerModal } from './components/FolderPickerModal';
 import { OnboardingModal } from './components/OnboardingModal';
 import { ToastContainer, type ToastMessage } from './components/Toast';
@@ -125,10 +122,16 @@ import { getWorkspaceSkills, loadWorkspaceSkills } from './lib/skillsManager';
 import type { ImportedLane } from './lib/markdownImport';
 import { loadScopedRules, renameLaneScope, setScopedLanes, withScopedRules } from './lib/scopedRules';
 import { describeTaskReferences, formatReferenceNoteForBrief, projectWorkingFolder, resolveTaskReferences } from './lib/taskReferences';
-import { bridgeClient, type BridgeStatus, getBridgeDownload } from './lib/bridgeClient';
-import { AlertTriangle, RefreshCw, Undo2 } from 'lucide-react';
+import { bridgeClient, type BridgeStatus } from './lib/bridgeClient';
+import { Circle, CircleCheck, CornerDownRight, Download, FileCode, FileText, FolderGit2, Heading2, Layers, ListPlus, Moon, PanelRight, Play, Plus, RefreshCw, Save, Settings, Sun, Undo2 } from 'lucide-react';
+import { StatusBar } from './components/StatusBar';
+import { CommandPalette, type PaletteItem } from './components/CommandPalette';
+import { AskDialogHost } from './components/ui/askDialogs';
+import { SETTINGS_PAGES, type SettingsPage } from './lib/settingsPages';
+import { SettingsScreen } from './components/SettingsScreen';
+import { MOD, SHIFT, matches } from './lib/shortcuts';
 import { ArchiveConfirmModal, type ArchiveConfirmRequest, type ArchiveScope } from './components/ArchiveConfirmModal';
-import { ArchivedTasksModal, type ArchiveRestorePlan, type ArchiveTab } from './components/ArchivedTasksModal';
+import { type ArchiveRestorePlan } from './components/ArchivedTasksModal';
 
 /** The token total a task's steps carry (what its token card shows), or undefined when they have none. */
 function stepsTokenTotal(steps: ExecutionStep[] | undefined): TokenUsage | undefined {
@@ -203,9 +206,17 @@ function App() {
   // Settings must not be saved before the stored ones are loaded, or the initial first-project default overwrites the last-used project.
   const [settingsLoaded, setSettingsLoaded] = useState(false);
 
+  // Display names (Settings › General) load with the preferences file and may change at any time.
+  const [projectNamesVersion, setProjectNamesVersion] = useState(0);
+  useEffect(() => subscribePrefs(() => setProjectNamesVersion((n) => n + 1)), []);
+  const namedProjects = useMemo(
+    () => withDisplayNames(projects),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projects, projectNamesVersion]
+  );
   const activeProject = useMemo(
-    () => projects.find((p) => p.id === activeProjectId) || projects[0],
-    [projects, activeProjectId]
+    () => namedProjects.find((p) => p.id === activeProjectId) || namedProjects[0],
+    [namedProjects, activeProjectId]
   );
 
   // Parsed Tasks & Briefs State
@@ -215,7 +226,6 @@ function App() {
   const [archivedBriefs, setArchivedBriefs] = useState<AgentContextItem[]>([]);
   const [archiveConfirm, setArchiveConfirm] = useState<ArchiveConfirmRequest | null>(null);
   // The Archives & Learnings screen: the tab it is open on, or null when closed.
-  const [archivesTab, setArchivesTab] = useState<ArchiveTab | null>(null);
   const [headerComments, setHeaderComments] = useState<string>('');
   const [selectedTaskId, setSelectedTaskId] = useState<string | number | null>(null);
   const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>(() => getScheduledJobs());
@@ -268,7 +278,6 @@ function App() {
   // Restored from the user's config/settings.json on load.
   const [activeKeyId, setActiveKeyId] = useState<string | null>(() => userApiKeys[0]?.id ?? null);
 
-  const [editingKey, setEditingKey] = useState<UserApiKey | null>(null);
 
   // Toast Notifications State
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -296,11 +305,11 @@ function App() {
   // Agent terminal sessions (one per agent of a CLI run) live in useCliAgentRuns, wired in below.
 
 
-  // Theme State (Default: 'light')
+  // Theme State (Default: 'dark', the design's primary theme)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('ergo_theme');
     if (saved === 'dark' || saved === 'light') return saved;
-    return 'light';
+    return 'dark';
   });
 
   // Agent Execution Pipeline tuning (concurrency, verifier retries, tool rounds, cleaner/verifier gates)
@@ -652,7 +661,7 @@ function App() {
           setMcpServers(result.updatedServers);
           showToast({
             type: 'info',
-            title: 'MCP Tools Updated',
+            title: 'MCP tools updated',
             message: result.summaryMessage || 'New or updated tools were discovered from your connected MCP servers.',
             duration: 5000
           });
@@ -665,11 +674,8 @@ function App() {
 
   // Modal Open States
   const [isDraftModalOpen, setIsDraftModalOpen] = useState(false);
-  const [isMcpHubOpen, setIsMcpHubOpen] = useState(false);
   const [isRawMarkdownOpen, setIsRawMarkdownOpen] = useState(false);
   const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
-  const [isAiScreenOpen, setIsAiScreenOpen] = useState(false);
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
   const [executingTaskId, setExecutingTaskId] = useState<string | number | null>(null);
   const [taskExecutionSteps, setTaskExecutionSteps] = useState<Record<string | number, ExecutionStep[]>>({});
@@ -760,7 +766,7 @@ function App() {
       nextActiveKeyId = newKey.id;
       showToast({
         type: 'success',
-        title: 'Account Connected',
+        title: 'Account connected',
         message: `Successfully connected ${newKey.name}. Welcome to Ergo!`,
         duration: 4500
       });
@@ -849,7 +855,6 @@ function App() {
       setUserApiKeys((prev) => [...prev, newKey]);
     }
     setActiveKeyId(savedId);
-    setEditingKey(null);
   };
 
   const handleDeleteUserKey = (id: string) => {
@@ -874,11 +879,6 @@ function App() {
 
   const handleSelectUserKey = (keyId: string | null) => {
     setActiveKeyId(keyId);
-  };
-
-  const handleOpenAiScreen = () => {
-    setEditingKey(null);
-    setIsAiScreenOpen(true);
   };
 
   // Popout AI Workspace Panel State (default: open)
@@ -920,7 +920,7 @@ function App() {
       if (res.success) {
         showToast({
           type: 'success',
-          title: 'Device Bridge Connected',
+          title: 'Device bridge connected',
           message: `Connected to local environment at ${bridgeClient.getBridgeUrl()}`,
           duration: 3500
         });
@@ -932,10 +932,10 @@ function App() {
       } else {
         showToast({
           type: 'error',
-          title: 'Connection Failed',
+          title: 'Connection failed',
           message: `${res.error || 'Could not reach Ergo Bridge on this computer.'} Open Settings to download Ergo Bridge.`,
           actionLabel: 'Open Settings',
-          onAction: () => setIsSettingsModalOpen(true),
+          onAction: () => setSettingsPage('bridge'),
           duration: 10000
         });
       }
@@ -944,8 +944,11 @@ function App() {
     }
   }, [showToast]);
 
-  // Resizable Split Pane State (default: 2/3 for Human lanes, 1/3 for AI workspace)
-  const [splitWidth, setSplitWidth] = useState<number>(66.667); // percentage
+  // Detail pane width (design: 480px default, resizable 380–720px), remembered across sessions.
+  const [detailWidth, setDetailWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('ergo_detail_width'));
+    return Number.isFinite(saved) && saved >= 380 && saved <= 720 ? saved : 480;
+  });
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
 
@@ -955,32 +958,27 @@ function App() {
   };
 
   useEffect(() => {
+    if (!isDragging) return;
     const handleMouseMove = (e: MouseEvent) => {
-      if (!isDragging || !workspaceRef.current) return;
+      if (!workspaceRef.current) return;
       const rect = workspaceRef.current.getBoundingClientRect();
-      const relativeX = e.clientX - rect.left;
-      const newPercent = (relativeX / rect.width) * 100;
-      // Clamp between 20% and 80%
-      const clamped = Math.min(Math.max(newPercent, 20), 80);
-      setSplitWidth(clamped);
+      setDetailWidth(Math.round(Math.min(720, Math.max(380, rect.right - e.clientX))));
     };
-
-    const handleMouseUp = () => {
-      if (isDragging) {
-        setIsDragging(false);
-      }
-    };
-
-    if (isDragging) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
-    }
-
+    const handleMouseUp = () => setIsDragging(false);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [isDragging]);
+
+  useEffect(() => {
+    if (isDragging) return;
+    try {
+      localStorage.setItem('ergo_detail_width', String(detailWidth));
+    } catch { }
+  }, [detailWidth, isDragging]);
 
   // Allowed Folders and file tool calls follow the open project (it may have folders of its own).
   // Keyed by the project's folder in storage (projects/<name>), which is its id once listed from disk; a project
@@ -1674,7 +1672,7 @@ function App() {
               {
                 label: 'Edit rules',
                 variant: 'secondary',
-                onClick: () => setArchivesTab('rules'),
+                onClick: () => setSettingsPage('rules'),
               },
             ],
           });
@@ -1725,7 +1723,7 @@ function App() {
     setAiUndoSnapshot(null);
     showToast({
       type: 'info',
-      title: 'AI Changes Undone',
+      title: 'AI changes undone',
       message: 'Reverted previous AI assistant changes to TODO.md.'
     });
   }, [aiUndoSnapshot, showToast]);
@@ -1805,7 +1803,7 @@ function App() {
     // 4. Show feedback toast with Undo button
     showToast({
       type: 'success',
-      title: 'AI Changes Applied',
+      title: 'AI changes applied',
       message: result.summary || 'Workspace tasks and context updated successfully.',
       actionLabel: 'Undo (Ctrl+Z)',
       duration: 8000,
@@ -1888,7 +1886,7 @@ function App() {
 
     showToast({
       type: 'success',
-      title: 'AI Task Added',
+      title: 'AI task added',
       message: `Added "${taskTitle}" to AI Workspace (${laneTitle}).`,
       duration: 3500,
     });
@@ -1905,7 +1903,7 @@ function App() {
     syncAndSaveProject(nextTasks, nextBriefs, true);
     showToast({
       type: 'success',
-      title: 'MCP Tools Updated',
+      title: 'MCP tools updated',
       message: toolNames.length === 0
         ? 'Cleared MCP tool constraints for task.'
         : `Assigned ${toolNames.length} MCP tool${toolNames.length === 1 ? '' : 's'} to this task.`,
@@ -2143,7 +2141,7 @@ function App() {
         handleSelectUserKey(cloudKey.id);
       } else {
         // Open credentials modal so user can configure / connect cloud provider
-        setIsAiScreenOpen(true);
+        setSettingsPage('models');
       }
       pending.resolve('switch_cloud');
     }
@@ -2184,10 +2182,10 @@ function App() {
       if (!hasValidKey) {
         showToast({
           type: 'warning',
-          title: 'AI API Key Required',
+          title: 'AI API key required',
           message: 'No active AI provider or API key selected. Please select or add an AI provider configuration to execute tasks with AI.',
           actionLabel: 'Set Up Key',
-          onAction: () => setIsAiScreenOpen(true),
+          onAction: () => setSettingsPage('models'),
           duration: 6000,
         });
         return false;
@@ -2209,7 +2207,7 @@ function App() {
     if (effectiveCli?.command && !execOpts?.startOver && cliRunsRef.current.isCliRunPaused(task.id)) {
       const resumed = await cliRunsRef.current.resumeCliRun(task.id);
       if (!resumed.ok) {
-        showToast({ type: 'error', title: 'Could Not Resume Task', message: `"${task.title}": ${resumed.error}`, duration: 8000 });
+        showToast({ type: 'error', title: 'Could not resume task', message: `"${task.title}": ${resumed.error}`, duration: 8000 });
       }
       return resumed.ok;
     }
@@ -2482,7 +2480,7 @@ function App() {
           setExecutingTaskId((cur) => (cur !== null && String(cur) === String(task.id) ? null : cur));
           showToast({
             type: 'warning',
-            title: 'No CLI Agent',
+            title: 'No CLI agent',
             message: 'The active AI profile has no CLI agent configured.',
             duration: 5000,
           });
@@ -2615,7 +2613,7 @@ function App() {
               {
                 id: `step-resume-${Date.now()}`,
                 stage: 'context' as const,
-                title: 'Resuming Task Execution',
+                title: 'Resuming task execution',
                 detail: 'Picking back up with the task where it was left off…',
                 status: 'running' as const,
                 time: new Date().toLocaleTimeString(),
@@ -2813,7 +2811,7 @@ function App() {
               showToast({
                 id: toastId,
                 type: 'error',
-                title: 'Local Ollama Connection Failed',
+                title: 'Local Ollama connection failed',
                 message: `Task "${task.title}": Ollama connection failed after ${ollamaFallbackPrompt.consecutiveFailures} attempts. You don't seem to be connected locally.`,
                 duration: 0,
                 actions: [
@@ -3226,7 +3224,7 @@ function App() {
         setQueue([]);
         showToast({
           type: 'info',
-          title: 'Queue Stopped',
+          title: 'Queue stopped',
           message: `"${task.title}" ${stopped ? 'was stopped' : "couldn't start"}, so the ${left === 1 ? 'task' : `${left} tasks`} queued after it ${left === 1 ? 'was' : 'were'} taken out of the queue.`,
           duration: 6000,
         });
@@ -3251,7 +3249,7 @@ function App() {
       const chosen = new Set(runnable.map((t) => String(t.id)));
       setQueue(queuedTaskIdsRef.current.filter((id) => !chosen.has(String(id))));
       for (const task of runnable) void handleExecuteTaskRef.current(task);
-      showToast({ type: 'info', title: 'Tasks Started', message: `Running ${runnable.length} tasks at once.`, duration: 3500 });
+      showToast({ type: 'info', title: 'Tasks started', message: `Running ${runnable.length} tasks at once.`, duration: 3500 });
       return;
     }
 
@@ -3260,7 +3258,7 @@ function App() {
     setQueue([...queuedTaskIdsRef.current, ...runnable.map((t) => t.id).filter((id) => !inLine.has(String(id)))]);
     showToast({
       type: 'info',
-      title: 'Tasks Queued',
+      title: 'Tasks queued',
       message: `${runnable.length} tasks will run one after another. The ones waiting show as Queued.`,
       duration: 3500,
     });
@@ -3613,7 +3611,7 @@ function App() {
 
     showToast({
       type: 'info',
-      title: 'Task Removed from AI Workspace',
+      title: 'Task removed from AI workspace',
       message: `Removed "${briefToRemove.title}" from the AI workspace. You can re-add it anytime from the human workspace.`,
       duration: 3500,
     });
@@ -3704,7 +3702,7 @@ function App() {
 
     showToast({
       type: 'info',
-      title: 'Task Removed Completely',
+      title: 'Task removed completely',
       message: `"${targetTitle}" and its execution logs have been permanently deleted from AI Workspace and vector memory.`,
       duration: 3500,
     });
@@ -3724,7 +3722,7 @@ function App() {
 
     showToast({
       type: 'info',
-      title: 'Task Scheduled',
+      title: 'Task scheduled',
       message: `Scheduled "${title}" for ${new Date(scheduledIso).toLocaleString()}${cronExpr ? ` (${cronExpr})` : ''}`,
       duration: 4000,
     });
@@ -3736,7 +3734,7 @@ function App() {
 
     showToast({
       type: 'info',
-      title: 'Schedule Removed',
+      title: 'Schedule removed',
       message: 'Scheduled execution for this task has been cancelled.',
       duration: 3000,
     });
@@ -3808,7 +3806,7 @@ function App() {
           if (targetTask) {
             showToast({
               type: 'info',
-              title: 'Scheduled Task Executing',
+              title: 'Scheduled task executing',
               message: `Starting scheduled execution of "${targetTask.title}"…`,
               duration: 5000,
             });
@@ -3828,7 +3826,7 @@ function App() {
               };
               showToast({
                 type: 'info',
-                title: 'Scheduled Task Executing',
+                title: 'Scheduled task executing',
                 message: `Starting scheduled execution of "${synthesizedTask.title}"…`,
                 duration: 5000,
               });
@@ -4156,7 +4154,7 @@ function App() {
 
     showToast({
       type: 'success',
-      title: 'Swim Lane Added',
+      title: 'Swim lane added',
       message: `Created new swim lane "${title}" (${fileName}) with linked context.`
     });
   };
@@ -4239,7 +4237,7 @@ function App() {
 
     showToast({
       type: 'info',
-      title: 'Swim Lane Renamed',
+      title: 'Swim lane renamed',
       message: `Renamed swim lane to "${trimmedTitle}".`
     });
   };
@@ -4260,7 +4258,7 @@ function App() {
     if (currentLanes.length <= 1) {
       showToast({
         type: 'warning',
-        title: 'Cannot Delete Last Swim Lane',
+        title: 'Cannot delete last swim lane',
         message: 'A workspace must contain at least 1 swim lane.'
       });
       return;
@@ -4321,7 +4319,7 @@ function App() {
 
     showToast({
       type: 'info',
-      title: 'Swim Lane Removed',
+      title: 'Swim lane removed',
       message: `Removed swim lane "${removedLane?.title || laneId}".`
     });
   };
@@ -4466,7 +4464,7 @@ function App() {
     const removed = await clearProjectMemory(activeProjectId);
     showToast({
       type: 'success',
-      title: 'Project Memory Cleared',
+      title: 'Project memory cleared',
       message: `Cleared ${removed} vector memory chunk(s) for "${activeProject?.name || activeProjectId}".`
     });
     return removed;
@@ -4477,7 +4475,7 @@ function App() {
     const removed = await clearAllMemory();
     showToast({
       type: 'success',
-      title: 'Vector Memory Reset',
+      title: 'Vector memory reset',
       message: `Cleared all ${removed} chunk(s) from local vector memory across all projects.`
     });
     return removed;
@@ -4511,274 +4509,68 @@ function App() {
     return ids;
   }, [tasks, briefs, terminalSessions, executingTaskId, runningJobs]);
 
-  return (
-    <div className="app-container">
-      {/* Top Navigation Bar */}
-      <Navbar
-        projects={projects}
-        activeProject={activeProject}
-        onSelectProject={(p) => setActiveProjectId(p.id)}
-        onNewProject={() => setIsCreateProjectModalOpen(true)}
-        folderMetadata={folderMetadata}
-        onOpenFolderPicker={() => setIsFolderPickerOpen(true)}
-        mcpServers={mcpServers}
-        onOpenMcpHub={() => setIsMcpHubOpen(true)}
-        userApiKeys={userApiKeys}
-        activeKeyId={activeKeyId}
-        aiConfig={aiConfig}
-        onSelectUserKey={handleSelectUserKey}
-        onOpenAiScreen={handleOpenAiScreen}
-        onOpenRawMarkdownModal={() => setIsRawMarkdownOpen(true)}
-        onOpenSettingsModal={() => setIsSettingsModalOpen(true)}
-        onSaveImmediately={handleManualSaveNow}
-        autosaveStatus={autosave.status}
-        autosaveDelaySec={autosave.delaySec}
-        isAutosaveEnabled={autosave.isEnabled}
-        isAiPanelOpen={isAiPanelOpen}
-        onToggleAiPanel={handleToggleAiPanel}
-        runningAiTaskCount={runningTaskIds.length}
-      />
+  // A task picked in the document (click, caret, Open brief) shows its card in the detail pane. Each pick counts,
+  // even of the same task, so going back to the runs view and clicking the task again reopens it.
+  const [detailRequest, setDetailRequest] = useState(0);
+  // The status bar's queue item asks the detail pane for its runs view.
+  const [runsViewRequest, setRunsViewRequest] = useState(0);
+  const showTaskDetail = useCallback((id: string | number) => {
+    setSelectedTaskId(id);
+    setDetailRequest((n) => n + 1);
+  }, []);
 
-      {/* The connected bridge is older than this app needs: it updates itself (or says how) */}
-      <BridgeUpdateBanner status={bridgeStatus} />
-
-      {/* Disconnected Bridge Notification Banner for Hosted Web Environments */}
-      {bridgeClient.isHostedWeb() && !bridgeStatus.isConnected && (
-        <div
-          style={{
-            background: 'linear-gradient(90deg, rgba(234, 179, 8, 0.16) 0%, rgba(245, 158, 11, 0.12) 100%)',
-            borderBottom: '1px solid rgba(234, 179, 8, 0.35)',
-            padding: '0.45rem 1.25rem',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '1rem',
-            zIndex: 40,
-            fontSize: '0.8rem',
-            color: 'var(--text-bright)',
-            flexWrap: 'wrap'
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-            <div
-              style={{
-                width: 22,
-                height: 22,
-                borderRadius: '6px',
-                background: 'rgba(234, 179, 8, 0.25)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#eab308'
-              }}
-            >
-              <AlertTriangle size={13} />
-            </div>
-            <span>
-              <strong>Local Device Bridge Disconnected.</strong>{' '}
-              {bridgeStatus.isMixedContentBlocked
-                ? 'Hosted HTTPS web apps cannot call local HTTP devices. Run Ergo locally at http://localhost:5173 or connect via API Key in Settings.'
-                : bridgeStatus.awaitingPermission
-                  ? bridgeClient.describeUnreachable('permission-prompt')
-                  : bridgeStatus.diagnosis === 'permission-denied' || bridgeStatus.diagnosis === 'permission-prompt'
-                    ? bridgeStatus.error
-                    : bridgeStatus.diagnosis === 'unreachable' && getBridgeDownload()
-                      ? 'Ergo Bridge isn\'t running on this computer. Install it (or open it) to use your local ~/.ergo folders and run autonomous agents (Claude Code, Antigravity, etc.).'
-                      : 'Reconnect to access your local ~/.ergo folders and run autonomous agents (Claude Code, Antigravity, etc.).'}
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            {bridgeStatus.diagnosis === 'unreachable' && getBridgeDownload() && (
-              <BridgeDownloadButton style={{ fontSize: '0.74rem', fontWeight: 700, padding: '0.35rem 0.75rem' }} />
-            )}
-            <button
-              type="button"
-              onClick={handleManualReconnectBridge}
-              disabled={isReconnectingBridge}
-              style={{
-                background: '#eab308',
-                color: '#000000',
-                fontWeight: 700,
-                fontSize: '0.74rem',
-                border: 'none',
-                borderRadius: '6px',
-                padding: '0.35rem 0.75rem',
-                cursor: isReconnectingBridge ? 'wait' : 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.35rem',
-                boxShadow: '0 2px 8px rgba(234, 179, 8, 0.3)'
-              }}
-            >
-              <RefreshCw size={12} className={isReconnectingBridge ? 'spin-animate' : ''} />
-              <span>{isReconnectingBridge ? 'Connecting...' : 'Reconnect Device'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsSettingsModalOpen(true)}
-              style={{
-                background: 'rgba(255, 255, 255, 0.08)',
-                color: 'var(--text-bright)',
-                fontWeight: 600,
-                fontSize: '0.74rem',
-                border: '1px solid rgba(255, 255, 255, 0.15)',
-                borderRadius: '6px',
-                padding: '0.35rem 0.65rem',
-                cursor: 'pointer'
-              }}
-            >
-              Configure Bridge
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Main Dual-Pane Workspace */}
-      <div
-        className={`workspace-body ${isDragging ? 'is-dragging' : ''} ${isAiPanelOpen ? 'ai-panel-open' : 'ai-panel-collapsed'}`}
-        ref={workspaceRef}
-      >
-        {/* Left Pane: Obsidian-style Markdown Editor & Task Swim Lanes */}
-        <div style={{
-          width: isAiPanelOpen ? `${splitWidth}%` : 'calc(100% - 44px)',
-          flex: isAiPanelOpen ? undefined : 1,
-          display: 'flex',
-          flexDirection: 'column',
-          height: '100%',
-          overflow: 'hidden',
-          transition: isDragging ? 'none' : 'width 0.22s cubic-bezier(0.16, 1, 0.3, 1), flex 0.22s cubic-bezier(0.16, 1, 0.3, 1)'
-        }}>
-          <TaskPane
-            rawMarkdown={activeProject?.todoMarkdown || ''}
-            tasks={tasks}
-            archivedTasks={archivedTasks}
-            selectedTaskId={selectedTaskId}
-            runningTaskIds={runningTaskIds}
-            pendingHumanInputs={pendingHumanInputs}
-            onSelectTask={(id) => setSelectedTaskId(id)}
-            onOpenDraftModal={() => setIsDraftModalOpen(true)}
-            onMarkdownChange={(newMd) => handleSwimLaneMarkdownChange(activeProject?.swimLanes?.[0]?.id || 'lane-default', newMd)}
-            isAssistantOpen={isDraftModalOpen}
-            onCloseAssistant={() => setIsDraftModalOpen(false)}
-            project={activeProject}
-            aiConfig={aiConfig}
-            mcpServers={mcpServers}
-            onApplyAssistantResult={handleApplyAssistantResult}
-            onArchiveTask={requestArchiveTask('human')}
-            onOpenArchives={() => setArchivesTab('human')}
-            swimLanes={activeProject?.swimLanes}
-            onAddSwimLane={handleAddSwimLane}
-            onRenameSwimLane={handleRenameSwimLane}
-            onDeleteSwimLane={handleDeleteSwimLane}
-            onSwimLaneMarkdownChange={handleSwimLaneMarkdownChange}
-            onCreateTaskFromSelection={handleCreateTaskFromSelection}
-            onRunTasks={handleRunTasks}
-            onScheduleTask={(id, iso, cron) => {
-              setIsAiPanelOpen(true);
-              handleScheduleTask(id, iso, cron);
-            }}
-            autocompleteSettings={autocompleteSettings}
-            onUpdateTaskMcpTools={handleUpdateTaskMcpTools}
-          />
-        </div>
-
-        {/* Resizable Divider Bar (Only active when AI Panel is open) */}
-        {isAiPanelOpen && (
-          <div
-            className={`resize-divider ${isDragging ? 'active' : ''}`}
-            onMouseDown={handleMouseDown}
-            title="Drag to resize AI Workspace"
-          >
-            <div className="resize-handle-bar" />
-          </div>
-        )}
-
-        {/* Right Pane: Popout AI Workspace Panel / Collapsed Vertical Menu Rail */}
-        <div
-          className={`ai-workspace-pane-wrapper ${isAiPanelOpen ? 'is-open' : 'is-collapsed'}`}
-          style={{
-            width: isAiPanelOpen ? `${100 - splitWidth}%` : '44px',
-            minWidth: isAiPanelOpen ? '320px' : '44px',
-            maxWidth: isAiPanelOpen ? '80%' : '44px',
-            display: 'flex',
-            flexDirection: 'column',
-            height: '100%',
-            overflow: 'hidden',
-            transition: isDragging ? 'none' : 'width 0.22s cubic-bezier(0.16, 1, 0.3, 1), min-width 0.22s cubic-bezier(0.16, 1, 0.3, 1)'
-          }}
-        >
-          <BriefPane
-            taskBilling={taskBilling}
-            tasks={tasks}
-            briefs={briefs}
-            archivedTasks={archivedTasks}
-            selectedTaskId={selectedTaskId}
-            runningTaskIds={runningTaskIds}
-            queuedTaskIds={queuedTaskIds}
-            onRunQueuedTaskNow={handleRunQueuedTaskNow}
-            mcpServers={mcpServers}
-            onUpdateTaskMcpTools={handleUpdateTaskMcpTools}
-            onSelectTask={(id) => setSelectedTaskId(id)}
-            onSaveBrief={handleSaveBrief}
-            onLiveBriefChange={handleLiveBriefChange}
-            onExecuteTask={handleExecuteTask}
-            onTerminateAgent={handleTerminateAgent}
-            onUpdateBriefWithAi={handleUpdateBriefWithAi}
-            onSyncOverviewWithTask={handleSyncOverviewWithTask}
-            onOpenArchives={() => setArchivesTab('ai')}
-            onSaveArchivedBrief={handleSaveArchivedBrief}
-            autosaveStatus={autosave.status}
-            autosaveDelaySec={autosave.delaySec}
-            terminalSessions={terminalSessions}
-            executingTaskId={executingTaskId}
-            taskExecutionSteps={taskExecutionSteps}
-            pendingPermissions={pendingPermissions}
-            pendingHumanInputs={pendingHumanInputs}
-            pendingOllamaFallbacks={pendingOllamaFallbacks}
-            onPermissionChoice={handlePermissionChoice}
-            onHumanInputChoice={handleHumanInputChoice}
-            onOllamaFallbackChoice={handleOllamaFallbackChoice}
-            onRestartSession={handleExecuteTask}
-            onKillSession={handleKillSession}
-            onKillAgentSession={handleKillAgentSession}
-            onSendTaskMessage={handleSendTaskMessage}
-            onArchiveTask={requestArchiveTask('ai')}
-            onRemoveAiTask={handleRemoveAiTask}
-            onPurgeTaskFromAi={handlePurgeTaskFromAi}
-            scheduledJobs={scheduledJobs}
-            onScheduleTask={handleScheduleTask}
-            onCancelScheduleTask={handleCancelScheduleTask}
-            isPanelOpen={isAiPanelOpen}
-            onTogglePanel={handleToggleAiPanel}
-            agentPipelineOptions={agentPipelineOptions}
-            onSetAgentPipelineOptions={updateAgentPipelineOptions}
-          />
-        </div>
-
-      </div>
-
-      {/* Modal 1: Create New Project Directory */}
-      <CreateProjectModal
-        isOpen={isCreateProjectModalOpen}
-        onClose={() => setIsCreateProjectModalOpen(false)}
-        onCreateProject={handleConfirmCreateProject}
-        storageDirectory={folderMetadata.storageDirectory || '.ergo'}
-        existingProjects={projects}
-      />
-
-
-
-      {/* Modal 4: MCP Connections Hub */}
-      <McpHubModal
-        isOpen={isMcpHubOpen}
-        onClose={() => setIsMcpHubOpen(false)}
-        mcpServers={mcpServers}
-        activeProject={activeProject && projectStorageId ? { id: projectStorageId, name: activeProject.name } : undefined}
-        onProjectFoldersChange={(folders) =>
-          setProjects((prev) => prev.map((p) => (p.id === activeProjectId ? { ...p, folders: folders.length > 0 ? folders : undefined } : p)))
-        }
-        onToggleConnectServer={(serverId) =>
+  // ── Settings page (replaces the old settings-type modals) ──
+  const [settingsPage, setSettingsPage] = useState<SettingsPage | null>(null);
+  const openSettings = useCallback((page: SettingsPage) => setSettingsPage(page), []);
+  const closeSettings = useCallback(() => setSettingsPage(null), []);
+  const settingsScreen: React.ReactNode = settingsPage === null ? null : (
+    <SettingsScreen
+      page={settingsPage ?? 'general'}
+      onNavigate={setSettingsPage}
+      onClose={closeSettings}
+      projectName={activeProject?.name || 'Project'}
+      settings={{
+          activeProject: activeProject,
+          folderMetadata: folderMetadata,
+          onOpenFolderPicker: () => setIsFolderPickerOpen(true),
+          onRescanProjects: handleRescanProjects,
+          onUpdateStorageDirectory: handleUpdateStorageDirectory,
+          autosaveStatus: autosave.status,
+          autosaveDelaySec: autosave.delaySec,
+          isAutosaveEnabled: autosave.isEnabled,
+          lastSavedAt: autosave.lastSavedAt,
+          onSetAutosaveDelay: autosave.setDelaySec,
+          onToggleAutosave: autosave.setIsEnabled,
+          onSaveImmediately: handleManualSaveNow,
+          theme: theme,
+          onThemeChange: setTheme,
+          agentPipelineOptions: agentPipelineOptions,
+          onSetAgentPipelineOptions: updateAgentPipelineOptions,
+          autocompleteSettings: autocompleteSettings,
+          onSetAutocompleteSettings: setAutocompleteSettings,
+          localModelMode: localModelMode,
+          onSetLocalModelMode: handleSetLocalModelMode,
+          tinyCloudModelLabel: tinyCloudModelLabel,
+          modelData: modelData,
+          onSetModelData: handleSetModelData,
+          onClearProjectMemory: handleClearActiveProjectMemory,
+          onClearAllMemory: handleClearAllMemory,
+          onExportProject: handleExportProject,
+          onOpenRawMarkdownModal: () => setIsRawMarkdownOpen(true),
+        }}
+      credentials={{
+          userApiKeys: userApiKeys,
+          activeKeyId: activeKeyId,
+          onSaveUserKey: handleSaveUserKey,
+          onDeleteUserKey: handleDeleteUserKey,
+          onSelectActiveKey: handleSelectUserKey,
+        }}
+      mcp={{
+          mcpServers: mcpServers,
+          activeProject: activeProject && projectStorageId ? { id: projectStorageId, name: activeProject.name } : undefined,
+          onProjectFoldersChange: (folders) =>
+          setProjects((prev) => prev.map((p) => (p.id === activeProjectId ? { ...p, folders: folders.length > 0 ? folders : undefined } : p))),
+          onToggleConnectServer: (serverId) =>
           setMcpServers((prev) => {
             markMcpServerToggled(serverId);
             const next = prev.map((s) => {
@@ -4798,9 +4590,8 @@ function App() {
               });
             }
             return next;
-          })
-        }
-        onToggleToolAutoApprove={(serverId, toolId) =>
+          }),
+          onToggleToolAutoApprove: (serverId, toolId) =>
           setMcpServers((prev) =>
             prev.map((s) =>
               s.id === serverId
@@ -4810,14 +4601,339 @@ function App() {
                 }
                 : s
             )
-          )
-        }
-        onAddCustomServer={(newServer) => setMcpServers([...mcpServers, newServer])}
-        onDeleteCustomServer={(serverId) => setMcpServers((prev) => prev.filter((s) => s.id !== serverId))}
-        onUpdateServer={(updatedServer) =>
-          setMcpServers((prev) => prev.map((s) => (s.id === updatedServer.id ? updatedServer : s)))
-        }
+          ),
+          onAddCustomServer: (newServer) => setMcpServers([...mcpServers, newServer]),
+          onDeleteCustomServer: (serverId) => setMcpServers((prev) => prev.filter((s) => s.id !== serverId)),
+          onUpdateServer: (updatedServer) =>
+          setMcpServers((prev) => prev.map((s) => (s.id === updatedServer.id ? updatedServer : s))),
+        }}
+      archive={{
+          projectId: activeProjectId,
+          projectName: activeProject?.name || activeProjectId,
+          tasks: tasks,
+          planRestore: planArchiveRestore,
+          onRestore: handleRestoreArchive,
+        }}
+    />
+  );
+
+  // Shortcut handlers read the latest values through refs.
+  const selectedTaskIdRef = useRef(selectedTaskId);
+  selectedTaskIdRef.current = selectedTaskId;
+  const ensureBriefsForTasksRef = useRef(ensureBriefsForTasks);
+  ensureBriefsForTasksRef.current = ensureBriefsForTasks;
+
+  // ── Command palette (⌘K) ──
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
+
+  // The status bar follows one agent: the first one working (a run's manager before its workers).
+  const liveAgentSession = useMemo(
+    () => terminalSessions.find((s) => s.session.isActive && isWorkingAgentSession(s)) ?? null,
+    [terminalSessions],
+  );
+
+  const paletteItems = useMemo<PaletteItem[]>(() => {
+    const laneFor = (t: TaskItem) => t.swimLaneId || activeProject?.swimLanes?.[0]?.id || 'lane-default';
+    const laneTitleFor = (t: TaskItem) => activeProject?.swimLanes?.find((l) => l.id === t.swimLaneId)?.title || 'TODO.md';
+    const openTask = (t: TaskItem) => {
+      setSelectedTaskId(t.id);
+      window.dispatchEvent(new CustomEvent('ergo:focus-task', { detail: { taskId: t.id } }));
+    };
+    const cleanHeading = (h: string) => cleanAndUnescapeMarkdown(h.replace(/\{color=[^}]*\}/g, '')).replace(/[*_]+/g, '').replace(/:$/, '').trim();
+    const taskItems: PaletteItem[] = tasks
+      .filter((t) => !t.isArchived)
+      // Open tasks first; the document's order within each.
+      .sort((a, b) => Number(a.isDone) - Number(b.isDone))
+      .map((t) => ({
+        id: `task:${t.id}`,
+        kind: 'task',
+        label: cleanAndUnescapeMarkdown(t.title),
+        context: t.category && t.category !== 'Untitled' ? cleanHeading(t.category) : undefined,
+        icon: t.isDone ? CircleCheck : Circle,
+        run: () => openTask(t),
+        actions: [
+          { label: 'Go to line', icon: CornerDownRight, run: () => openTask(t) },
+          {
+            label: 'Open brief',
+            icon: FileText,
+            run: () => {
+              showTaskDetail(t.id);
+              if (!isAiPanelOpen) handleToggleAiPanel();
+            },
+          },
+          { label: 'Run', icon: Play, kbd: [SHIFT, MOD, '↵'], run: () => void handleExecuteTask(t) },
+          { label: 'Queue', icon: Layers, run: () => handleRunTasks([t], laneFor(t), laneTitleFor(t), 'sequence') },
+        ],
+      }));
+    const seen = new Set<string>();
+    const headingItems: PaletteItem[] = [];
+    for (const t of tasks) {
+      const h = t.category?.trim();
+      if (!h || seen.has(h)) continue;
+      seen.add(h);
+      headingItems.push({
+        id: `heading:${h}`,
+        kind: 'heading',
+        label: cleanHeading(h) || h,
+        icon: Heading2,
+        run: () => window.dispatchEvent(new CustomEvent('ergo:focus-heading', { detail: { heading: h } })),
+      });
+    }
+    const commandItems: PaletteItem[] = [
+      { id: 'cmd:draft', kind: 'command', label: 'Draft tasks', icon: ListPlus, kbd: [SHIFT, MOD, 'D'], run: () => setIsDraftModalOpen(true) },
+      {
+        id: 'cmd:detail',
+        kind: 'command',
+        label: isAiPanelOpen ? 'Hide detail pane' : 'Show detail pane',
+        icon: PanelRight,
+        kbd: [MOD, 'J'],
+        run: handleToggleAiPanel,
+      },
+      { id: 'cmd:raw', kind: 'command', label: 'View TODO.md as markdown', icon: FileCode, run: () => setIsRawMarkdownOpen(true) },
+      { id: 'cmd:export', kind: 'command', label: 'Export project', icon: Download, run: handleExportProject },
+      { id: 'cmd:save', kind: 'command', label: 'Save to disk now', icon: Save, run: handleManualSaveNow },
+      { id: 'cmd:new-project', kind: 'command', label: 'New project', icon: Plus, run: () => setIsCreateProjectModalOpen(true) },
+      ...projects
+        .filter((p) => p.id !== activeProjectId)
+        .map<PaletteItem>((p) => ({ id: `cmd:project:${p.id}`, kind: 'command', label: `Switch to ${p.name}`, icon: FolderGit2, keywords: 'project', run: () => setActiveProjectId(p.id) })),
+      {
+        id: 'cmd:theme',
+        kind: 'command',
+        label: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
+        icon: theme === 'dark' ? Sun : Moon,
+        keywords: 'appearance',
+        run: () => setTheme(theme === 'dark' ? 'light' : 'dark'),
+      },
+      { id: 'cmd:reconnect', kind: 'command', label: 'Reconnect bridge', icon: RefreshCw, context: 'Bridge', run: handleManualReconnectBridge },
+      ...SETTINGS_PAGES.map<PaletteItem>((pg) => ({
+        id: `cmd:settings:${pg.id}`,
+        kind: 'command',
+        label: `Open ${pg.label.toLowerCase()} settings`,
+        icon: Settings,
+        context: 'Settings',
+        keywords: pg.keywords,
+        run: () => openSettings(pg.id),
+      })),
+    ];
+    return [...taskItems, ...headingItems, ...commandItems];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks, activeProject, projects, activeProjectId, isAiPanelOpen, theme]);
+
+  // App-wide shortcuts: ⌘K palette, ⇧⌘D Draft tasks, ⌘J detail pane, ⌘, settings, Escape leaves settings.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (matches(e, 'k', { mod: true })) {
+        e.preventDefault();
+        setIsPaletteOpen((v) => !v);
+      } else if (matches(e, 'd', { mod: true, shift: true })) {
+        e.preventDefault();
+        setIsDraftModalOpen(true);
+      } else if (matches(e, 'j', { mod: true })) {
+        e.preventDefault();
+        handleToggleAiPanel();
+      } else if (matches(e, 'Enter', { mod: true, shift: true })) {
+        // ⇧⌘↵ runs the task on the current line (creating its brief first, like the line's Run).
+        const task = tasksRef.current.find((t) => String(t.id) === String(selectedTaskIdRef.current));
+        if (!task) return;
+        e.preventDefault();
+        const laneId = task.swimLaneId || 'lane-default';
+        ensureBriefsForTasksRef.current([task], laneId, 'TODO.md');
+        void handleExecuteTaskRef.current(task);
+      } else if (matches(e, '.', { mod: true, shift: true })) {
+        if (selectedTaskIdRef.current == null) return;
+        e.preventDefault();
+        void handleTerminateAgent(selectedTaskIdRef.current);
+      } else if (matches(e, ',', { mod: true })) {
+        e.preventDefault();
+        setSettingsPage((p) => (p === null ? 'general' : null));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [handleToggleAiPanel, handleTerminateAgent]);
+
+  return (
+    <div className="eg-app">
+      <Navbar
+        projects={namedProjects}
+        activeProject={activeProject}
+        onSelectProject={(p) => setActiveProjectId(p.id)}
+        onNewProject={() => setIsCreateProjectModalOpen(true)}
+        onOpenFolderPicker={() => setIsFolderPickerOpen(true)}
+        onOpenRawMarkdownModal={() => setIsRawMarkdownOpen(true)}
+        onExportProject={handleExportProject}
+        onOpenPalette={() => setIsPaletteOpen(true)}
+        onOpenDraft={() => setIsDraftModalOpen(true)}
+        isDetailOpen={isAiPanelOpen}
+        onToggleDetail={handleToggleAiPanel}
+        isSettingsOpen={settingsPage !== null}
+        onOpenSettings={() => (settingsPage !== null ? closeSettings() : openSettings('general'))}
       />
+
+      <div className="eg-frame-body">
+        {/* The connected bridge is older than this app needs: it updates itself (or says how) */}
+        <BridgeUpdateBanner status={bridgeStatus} />
+
+        {settingsPage !== null && settingsScreen}
+
+        <main
+          className={`eg-main ${isAiPanelOpen ? '' : 'is-solo'} ${isDragging ? 'is-resizing' : ''}`}
+          ref={workspaceRef}
+          style={{
+            ['--detail-w' as string]: `${detailWidth}px`,
+            display: settingsPage !== null ? 'none' : undefined,
+          }}
+        >
+          <TaskPane
+            rawMarkdown={activeProject?.todoMarkdown || ''}
+            tasks={tasks}
+            archivedTasks={archivedTasks}
+            selectedTaskId={selectedTaskId}
+            runningTaskIds={runningTaskIds}
+            queuedTaskIds={queuedTaskIds}
+            terminalSessions={terminalSessions}
+            briefs={briefs}
+            pendingHumanInputs={pendingHumanInputs}
+            onSelectTask={showTaskDetail}
+            onOpenTaskDetail={(id) => {
+              showTaskDetail(id);
+              if (!isAiPanelOpen) handleToggleAiPanel();
+            }}
+            onRunTask={(task) => {
+              const laneId = task.swimLaneId || activeProject?.swimLanes?.[0]?.id || 'lane-default';
+              ensureBriefsForTasks([task], laneId, activeProject?.swimLanes?.find((l) => l.id === laneId)?.title || 'TODO.md');
+              void handleExecuteTaskRef.current(task);
+            }}
+            onStopTask={(task) => handleTerminateAgent(task.id)}
+            onOpenDraftModal={() => setIsDraftModalOpen(true)}
+            onMarkdownChange={(newMd) => handleSwimLaneMarkdownChange(activeProject?.swimLanes?.[0]?.id || 'lane-default', newMd)}
+            isAssistantOpen={isDraftModalOpen}
+            onCloseAssistant={() => setIsDraftModalOpen(false)}
+            project={activeProject}
+            aiConfig={aiConfig}
+            mcpServers={mcpServers}
+            onApplyAssistantResult={handleApplyAssistantResult}
+            onArchiveTask={requestArchiveTask('human')}
+            onOpenArchives={() => openSettings('archive')}
+            swimLanes={activeProject?.swimLanes}
+            onAddSwimLane={handleAddSwimLane}
+            onRenameSwimLane={handleRenameSwimLane}
+            onDeleteSwimLane={handleDeleteSwimLane}
+            onSwimLaneMarkdownChange={handleSwimLaneMarkdownChange}
+            onCreateTaskFromSelection={handleCreateTaskFromSelection}
+            onRunTasks={handleRunTasks}
+            onScheduleTask={(id, iso, cron) => {
+              setIsAiPanelOpen(true);
+              handleScheduleTask(id, iso, cron);
+            }}
+            autocompleteSettings={autocompleteSettings}
+            onUpdateTaskMcpTools={handleUpdateTaskMcpTools}
+          />
+
+          {isAiPanelOpen && (
+            <BriefPane
+              onResizeStart={handleMouseDown}
+              isResizing={isDragging}
+              taskBilling={taskBilling}
+              tasks={tasks}
+              briefs={briefs}
+              archivedTasks={archivedTasks}
+              selectedTaskId={selectedTaskId}
+              runningTaskIds={runningTaskIds}
+              queuedTaskIds={queuedTaskIds}
+              onRunQueuedTaskNow={handleRunQueuedTaskNow}
+              onQueueTask={(task) => handleRunTasks([task], task.swimLaneId || activeProject?.swimLanes?.[0]?.id || 'lane-default', activeProject?.swimLanes?.find((l) => l.id === task.swimLaneId)?.title || 'TODO.md', 'sequence')}
+              isBridgeConnected={bridgeStatus.isConnected}
+              mcpServers={mcpServers}
+              onUpdateTaskMcpTools={handleUpdateTaskMcpTools}
+              onSelectTask={showTaskDetail}
+              detailRequest={detailRequest}
+              runsViewRequest={runsViewRequest}
+              onSaveBrief={handleSaveBrief}
+              onLiveBriefChange={handleLiveBriefChange}
+              onExecuteTask={handleExecuteTask}
+              onTerminateAgent={handleTerminateAgent}
+              onUpdateBriefWithAi={handleUpdateBriefWithAi}
+              onSyncOverviewWithTask={handleSyncOverviewWithTask}
+              onOpenArchives={() => openSettings('archive')}
+              onSaveArchivedBrief={handleSaveArchivedBrief}
+              autosaveStatus={autosave.status}
+              autosaveDelaySec={autosave.delaySec}
+              terminalSessions={terminalSessions}
+              executingTaskId={executingTaskId}
+              taskExecutionSteps={taskExecutionSteps}
+              pendingPermissions={pendingPermissions}
+              pendingHumanInputs={pendingHumanInputs}
+              pendingOllamaFallbacks={pendingOllamaFallbacks}
+              onPermissionChoice={handlePermissionChoice}
+              onHumanInputChoice={handleHumanInputChoice}
+              onOllamaFallbackChoice={handleOllamaFallbackChoice}
+              onRestartSession={handleExecuteTask}
+              onKillSession={handleKillSession}
+              onKillAgentSession={handleKillAgentSession}
+              onSendTaskMessage={handleSendTaskMessage}
+              onArchiveTask={requestArchiveTask('ai')}
+              onRemoveAiTask={handleRemoveAiTask}
+              onPurgeTaskFromAi={handlePurgeTaskFromAi}
+              scheduledJobs={scheduledJobs}
+              onScheduleTask={handleScheduleTask}
+              onCancelScheduleTask={handleCancelScheduleTask}
+              isPanelOpen={isAiPanelOpen}
+              onTogglePanel={handleToggleAiPanel}
+              agentPipelineOptions={agentPipelineOptions}
+              onSetAgentPipelineOptions={updateAgentPipelineOptions}
+              userApiKeys={userApiKeys}
+              activeKeyId={activeKeyId}
+              onOpenModels={() => openSettings('models')}
+            />
+          )}
+        </main>
+      </div>
+
+      <StatusBar
+        bridgeStatus={bridgeStatus}
+        isReconnecting={isReconnectingBridge}
+        onReconnect={handleManualReconnectBridge}
+        onOpenBridgeSettings={() => openSettings('bridge')}
+        userApiKeys={userApiKeys}
+        activeKeyId={activeKeyId}
+        onSelectUserKey={handleSelectUserKey}
+        modelSelection={agentPipelineOptions.modelSelection}
+        onOpenModels={() => openSettings('models')}
+        liveSession={liveAgentSession}
+        onOpenLiveTask={
+          liveAgentSession
+            ? () => {
+                showTaskDetail(liveAgentSession.session.taskId);
+                if (!isAiPanelOpen) handleToggleAiPanel();
+              }
+            : undefined
+        }
+        queuedCount={queuedTaskIds.length}
+        onOpenQueue={() => {
+          setRunsViewRequest((n) => n + 1);
+          if (!isAiPanelOpen) handleToggleAiPanel();
+        }}
+        autosaveStatus={autosave.status}
+        todoFileName={(activeProject?.todoFilePath || 'TODO.md').split(/[\\/]/).pop() || 'TODO.md'}
+        onSaveNow={handleManualSaveNow}
+      />
+
+      <AskDialogHost />
+      <CommandPalette open={isPaletteOpen} onClose={() => setIsPaletteOpen(false)} items={paletteItems} />
+
+      {/* Modal 1: Create New Project Directory */}
+      <CreateProjectModal
+        isOpen={isCreateProjectModalOpen}
+        onClose={() => setIsCreateProjectModalOpen(false)}
+        onCreateProject={handleConfirmCreateProject}
+        storageDirectory={folderMetadata.storageDirectory || '.ergo'}
+        existingProjects={projects}
+      />
+
+
+
+      
 
 
       {/* Modal 5: Raw Markdown Sync & Download Preview */}
@@ -4832,50 +4948,9 @@ function App() {
         onExportProject={handleExportProject}
       />
 
-      {/* Modal 6: AI Engine Screen & Key Setup Manager */}
-      <AiCredentialsModal
-        isOpen={isAiScreenOpen}
-        onClose={() => setIsAiScreenOpen(false)}
-        userApiKeys={userApiKeys}
-        activeKeyId={activeKeyId}
-        onSaveUserKey={handleSaveUserKey}
-        onDeleteUserKey={handleDeleteUserKey}
-        onSelectActiveKey={handleSelectUserKey}
-        editingKey={editingKey}
-      />
+      
 
-      {/* Modal 7: Workspace & Auto-Save Settings */}
-      <SettingsModal
-        isOpen={isSettingsModalOpen}
-        onClose={() => setIsSettingsModalOpen(false)}
-        activeProject={activeProject}
-        folderMetadata={folderMetadata}
-        onOpenFolderPicker={() => setIsFolderPickerOpen(true)}
-        onRescanProjects={handleRescanProjects}
-        onUpdateStorageDirectory={handleUpdateStorageDirectory}
-        autosaveStatus={autosave.status}
-        autosaveDelaySec={autosave.delaySec}
-        isAutosaveEnabled={autosave.isEnabled}
-        lastSavedAt={autosave.lastSavedAt}
-        onSetAutosaveDelay={autosave.setDelaySec}
-        onToggleAutosave={autosave.setIsEnabled}
-        onSaveImmediately={handleManualSaveNow}
-        theme={theme}
-        onThemeChange={setTheme}
-        agentPipelineOptions={agentPipelineOptions}
-        onSetAgentPipelineOptions={updateAgentPipelineOptions}
-        autocompleteSettings={autocompleteSettings}
-        onSetAutocompleteSettings={setAutocompleteSettings}
-        localModelMode={localModelMode}
-        onSetLocalModelMode={handleSetLocalModelMode}
-        tinyCloudModelLabel={tinyCloudModelLabel}
-        modelData={modelData}
-        onSetModelData={handleSetModelData}
-        onClearProjectMemory={handleClearActiveProjectMemory}
-        onClearAllMemory={handleClearAllMemory}
-        onExportProject={handleExportProject}
-        onOpenRawMarkdownModal={() => setIsRawMarkdownOpen(true)}
-      />
+      
 
       {/* Modal 8: Local Root Directory Picker */}
       <FolderPickerModal
@@ -4899,16 +4974,7 @@ function App() {
         tinyCloudModelLabel={tinyCloudModelLabel}
       />
 
-      <ArchivedTasksModal
-        isOpen={archivesTab !== null}
-        initialTab={archivesTab ?? 'human'}
-        onClose={() => setArchivesTab(null)}
-        projectId={activeProjectId}
-        projectName={activeProject?.name || activeProjectId}
-        tasks={tasks}
-        planRestore={planArchiveRestore}
-        onRestore={handleRestoreArchive}
-      />
+      
 
       <ArchiveConfirmModal
         request={archiveConfirm}

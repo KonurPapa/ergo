@@ -1,0 +1,327 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   The document editor (HumanWorkspace: TODO.md edited like a doc), restyled to the
+   design's DocHeading / TaskLine / EditorToolbar. The editor is TipTap, so these rules
+   map the design onto its DOM: top-level list items are task lines, nested ones are sub-items.
+   Scoped under .eg-docscroll so they win over the older editor rules in index.css.
+   ────────────────────────────────────────────────────────────────────────── */
+
+.eg-docpane-root { display: flex; flex-direction: column; min-height: 0; height: 100%; background: var(--canvas); }
+.eg-docpane-root .swimlanes-wrapper { flex: 1; min-height: 0; }
+.eg-docpane-root .swimlane-column { background: var(--canvas); border: 0; border-radius: 0; box-shadow: none; }
+.eg-docpane-root .swimlanes-wrapper.is-multi-column .swimlane-column + .swimlane-resizer-handle { background: transparent; }
+.eg-docpane-root .swimlane-resizer-handle { border-left: 1px solid var(--line); }
+.eg-docpane-root .swimlanes-wrapper.is-single-column .swimlane-resizer-handle { display: none; }
+.eg-docpane-root .swimlane-editor-area { background: var(--canvas); }
+
+/* Header row */
+.eg-doc-head { border-bottom: 0; }
+.eg-doc-head .eg-btn.is-pressed { background: var(--surface-2); color: var(--ink); }
+.eg-doc-lane { color: var(--ink); font-weight: 500; font-size: calc(13px * var(--type-scale)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+.eg-doc-path, .eg-doc-count { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.eg-doc-path { min-width: 0; }
+.eg-doc-count { font-variant-numeric: tabular-nums; }
+.eg-doc-title-input { height: 24px; width: 220px; font-size: calc(12px * var(--type-scale)); }
+.eg-toolbar .eg-tb-select { min-width: 92px; justify-content: space-between; }
+
+/* The text column */
+.eg-docscroll { container: doc / inline-size; }
+.eg-docscroll .tiptap-editor-root .tiptap {
+  /* Centered in the pane: a 72px gutter on the left (insert, drag, fold) and room on the right for each line's
+     run state and actions, so they sit beside the text instead of squeezing it. */
+  --doc-right: 248px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(760px + 72px + var(--doc-right));
+  margin: 0 auto;
+  padding: var(--space-8) var(--doc-right) var(--space-12) 72px;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: calc(14px * var(--type-scale));
+  line-height: calc(22px * var(--type-scale));
+  letter-spacing: -0.05px;
+  caret-color: var(--ink);
+}
+.eg-docscroll .tiptap-editor-root .tiptap p { margin: 0 0 var(--space-2); }
+.eg-docscroll .tiptap-editor-root .tiptap > p { color: var(--ink-muted); }
+.eg-docscroll .tiptap-editor-root .tiptap p.is-editor-empty:first-child::before { color: var(--ink-subtle); opacity: 1; font-style: normal; }
+
+/* DocHeading: neutral, no per-header colors */
+.eg-docscroll .tiptap-editor-root .tiptap h1,
+.eg-docscroll .tiptap-editor-root .tiptap h2,
+.eg-docscroll .tiptap-editor-root .tiptap h3,
+.eg-docscroll .tiptap-editor-root .tiptap h4 { position: relative; color: var(--ink) !important; font-weight: 600; border: 0; padding: 0; background: none; }
+.eg-docscroll .tiptap-editor-root .tiptap h1 { margin: 0 0 var(--space-3); font-size: calc(30px * var(--type-scale)); line-height: calc(38px * var(--type-scale)); letter-spacing: -0.6px; }
+.eg-docscroll .tiptap-editor-root .tiptap h2 { margin: var(--space-12) 0 var(--space-3); font-size: calc(23px * var(--type-scale)); line-height: calc(30px * var(--type-scale)); letter-spacing: -0.4px; }
+.eg-docscroll .tiptap-editor-root .tiptap h3 { margin: var(--space-8) 0 var(--space-2); font-size: calc(18px * var(--type-scale)); line-height: calc(26px * var(--type-scale)); letter-spacing: -0.2px; }
+.eg-docscroll .tiptap-editor-root .tiptap h4 { margin: var(--space-6) 0 var(--space-1); font-size: calc(15px * var(--type-scale)); line-height: calc(22px * var(--type-scale)); }
+.eg-docscroll .tiptap-editor-root .tiptap > :first-child { margin-top: 0; }
+.eg-docscroll .tiptap-editor-root .tiptap .hdr-colored,
+.eg-docscroll .tiptap-editor-root .tiptap .hdr-colored * { color: var(--ink) !important; }
+.eg-docscroll .tiptap-editor-root .tiptap .hdr-colored::before,
+.eg-docscroll .tiptap-editor-root .tiptap .hdr-colored::after { display: none !important; }
+.eg-docscroll .tiptap .eg-doc-h-count { margin-left: var(--space-2); color: var(--ink-subtle); font-size: calc(12px * var(--type-scale)); font-weight: 400; letter-spacing: 0; opacity: 0; user-select: none; transition: opacity var(--duration-fast) var(--ease-out); }
+.eg-docscroll .tiptap :is(h1, h2, h3, h4):hover .eg-doc-h-count { opacity: 1; }
+/* Section fold handle (the gutter twisty for headers) */
+.eg-docscroll .tiptap .hdr-collapse-btn { position: absolute; left: -24px; top: 2px; width: 18px; height: 18px; display: grid; place-items: center; border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--ink-subtle); opacity: 0; cursor: pointer; padding: 0; }
+.eg-docscroll .tiptap :is(h1, h2, h3, h4):hover .hdr-collapse-btn,
+.eg-docscroll .tiptap .hdr-collapse-btn.is-collapsed { opacity: 1; }
+.eg-docscroll .tiptap .hdr-collapse-btn:hover { background: var(--surface-2); color: var(--ink); }
+.eg-docscroll .tiptap .hdr-collapse-btn svg { width: 14px; height: 14px; stroke-width: 1.75; }
+
+/* Inline marks */
+.eg-docscroll .tiptap-editor-root .tiptap strong { color: var(--ink); font-weight: 600; }
+.eg-docscroll .tiptap-editor-root .tiptap code { padding: 1px 4px; border: 0; border-radius: var(--radius-xs); background: var(--surface-2); color: var(--ink); font-family: var(--font-mono); font-size: calc(12px * var(--type-scale)); }
+.eg-docscroll .tiptap-editor-root .tiptap pre { margin: 0 0 var(--space-3); padding: var(--space-3); border-radius: var(--radius-md); border: 1px solid var(--line); background: var(--surface-1); color: var(--ink); font-family: var(--font-mono); font-size: calc(12px * var(--type-scale)); line-height: calc(18px * var(--type-scale)); }
+.eg-docscroll .tiptap-editor-root .tiptap pre code { padding: 0; background: none; }
+.eg-docscroll .tiptap-editor-root .tiptap a { color: var(--accent-text); text-decoration: none; }
+.eg-docscroll .tiptap-editor-root .tiptap a:hover { text-decoration: underline; }
+.eg-docscroll .tiptap-editor-root .tiptap blockquote { margin: 0 0 var(--space-3); padding: 0 0 0 var(--space-3); border-left: 2px solid var(--line-strong); background: none; color: var(--ink-subtle); }
+.eg-docscroll .tiptap-editor-root .tiptap hr { border: 0; border-top: 1px solid var(--line); margin: var(--space-6) 0; }
+.eg-docscroll .tiptap-editor-root .tiptap s { color: var(--ink-disabled); opacity: 1; text-decoration-color: var(--ink-disabled); }
+.eg-docscroll .tiptap-editor-root .tiptap mark { background: var(--surface-3); color: var(--ink); border-radius: 2px; }
+
+/* ── Task lines: top-level list items ── */
+.eg-docscroll .tiptap-editor-root .tiptap ul:not(li ul),
+.eg-docscroll .tiptap-editor-root .tiptap > ol { margin: 0 0 var(--space-2); padding: 0; list-style: none; gap: 0; }
+.eg-docscroll .tiptap-editor-root .tiptap ol > li,
+.eg-docscroll .tiptap-editor-root .tiptap ul:not(li ul) > li {
+  --num-w: 0px;
+  position: relative;
+  isolation: isolate;
+  min-height: calc(30px * var(--type-scale));
+  margin: 0 -10px;
+  padding: 4px 10px 4px calc(10px + var(--num-w) + 26px) !important;
+  border: 0 !important;
+  border-radius: var(--radius-sm) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+.eg-docscroll .tiptap-editor-root .tiptap ol > li:hover,
+.eg-docscroll .tiptap-editor-root .tiptap ul:not(li ul) > li:hover,
+.eg-docscroll .tiptap-editor-root .tiptap ol > li.is-active-card,
+.eg-docscroll .tiptap-editor-root .tiptap ul:not(li ul) > li.is-active-card { background: var(--surface-1) !important; }
+.eg-docscroll .tiptap-editor-root .tiptap li > p { margin: 0 !important; padding: 0 !important; }
+
+/* The user's own number marker: subtle, tabular */
+.eg-docscroll .tiptap-editor-root .tiptap ol > li.card-digits-1 { --num-w: 18px; }
+.eg-docscroll .tiptap-editor-root .tiptap ol > li.card-digits-2 { --num-w: 26px; }
+.eg-docscroll .tiptap-editor-root .tiptap ol > li.card-digits-3 { --num-w: 34px; }
+.eg-docscroll .tiptap-editor-root .tiptap ol > li.card-digits-4 { --num-w: 42px; }
+.eg-docscroll .tiptap-editor-root .tiptap ol > li::before {
+  left: 10px !important;
+  top: 4px !important;
+  height: calc(22px * var(--type-scale)) !important;
+  width: var(--num-w);
+  justify-content: flex-end;
+  color: var(--ink-subtle) !important;
+  font-family: var(--font-sans) !important;
+  font-size: calc(14px * var(--type-scale)) !important;
+  font-weight: 400 !important;
+  font-variant-numeric: tabular-nums;
+}
+.eg-docscroll .tiptap-editor-root .tiptap li.card-unordered,
+.eg-docscroll .tiptap-editor-root .tiptap ul:not(li ul) > li { --num-w: -8px; }
+
+/* The task checkbox (TaskLine .eg-tcheck) */
+.eg-docscroll .tiptap-editor-root .tiptap .task-card-checkbox-wrapper,
+.eg-docscroll .tiptap-editor-root .tiptap li.card-unordered .task-card-checkbox-wrapper,
+.eg-docscroll .tiptap-editor-root .tiptap ul:not(li ul) > li .task-card-checkbox-wrapper {
+  left: calc(10px + var(--num-w) + 6px) !important;
+  top: 4px !important;
+  height: calc(22px * var(--type-scale)) !important;
+}
+.eg-docscroll .task-ui-checkbox.parent-checkbox,
+.eg-docscroll .task-ui-checkbox.subtask-checkbox {
+  width: 16px; height: 16px;
+  border-radius: var(--radius-xs);
+  border: 1.5px solid var(--line-control) !important;
+  background: transparent !important;
+  color: var(--canvas) !important;
+  box-shadow: none !important;
+  transition: background-color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
+}
+.eg-docscroll .task-ui-checkbox.subtask-checkbox { width: 14px; height: 14px; }
+.eg-docscroll .task-ui-checkbox:hover { border-color: var(--ink-subtle) !important; background: transparent !important; }
+.eg-docscroll .task-ui-checkbox.checked { background: var(--ink-subtle) !important; border-color: var(--ink-subtle) !important; }
+.eg-docscroll .task-ui-checkbox.checked svg { stroke-width: 3; }
+.eg-docscroll .task-ui-checkbox.running,
+.eg-docscroll .task-ui-checkbox.needs-input { border-color: var(--line-control) !important; animation: none !important; }
+.eg-docscroll .task-card-checkbox-wrapper.is-running::before,
+.eg-docscroll .task-card-checkbox-wrapper.is-running::after { display: none !important; }
+
+/* Done lines: ink-disabled and struck through (the strike mark carries it) */
+.eg-docscroll .tiptap-editor-root .tiptap li.is-card-done,
+.eg-docscroll .tiptap-editor-root .tiptap li.is-card-done p { color: var(--ink-disabled); opacity: 1 !important; }
+/* Hide done: done tasks and sub-items collapse to nothing but stay in the list, so they still count toward the
+   numbers of the lines around them (display: none would renumber everything after them). */
+.eg-docscroll.is-hide-done .tiptap-editor-root .tiptap li:is(.is-card-done, .is-sub-done) {
+  height: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  overflow: hidden !important;
+  visibility: hidden !important;
+  pointer-events: none;
+}
+
+/* Sub-items: nested 26px per level */
+.eg-docscroll .tiptap-editor-root .tiptap li ol,
+.eg-docscroll .tiptap-editor-root .tiptap li ul { margin: 0 !important; padding-left: 0 !important; }
+.eg-docscroll .tiptap-editor-root .tiptap li li {
+  min-height: calc(30px * var(--type-scale));
+  margin: 0 !important;
+  padding: 4px 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--ink);
+  font-size: calc(14px * var(--type-scale));
+  line-height: calc(22px * var(--type-scale));
+}
+.eg-docscroll .tiptap-editor-root .tiptap li li::before { color: var(--ink-subtle) !important; font-family: var(--font-sans) !important; font-weight: 400 !important; font-size: calc(14px * var(--type-scale)) !important; }
+.eg-docscroll .subtask-checkbox-wrapper { margin-top: 4px !important; }
+
+/* Fold twisty for a task with sub-items */
+.eg-docscroll .tiptap-editor-root .tiptap li > .card-collapse-btn {
+  position: absolute !important;
+  left: -12px !important;
+  top: 6px !important;
+  width: 18px !important;
+  height: 18px !important;
+  display: grid !important;
+  place-items: center;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: var(--radius-xs) !important;
+  background: transparent !important;
+  color: var(--ink-subtle) !important;
+}
+.eg-docscroll .tiptap-editor-root .tiptap li > .card-collapse-btn:hover { background: var(--surface-2) !important; color: var(--ink) !important; }
+.eg-docscroll .tiptap-editor-root .tiptap li > .card-collapse-btn svg { width: 14px; height: 14px; stroke-width: 1.75; }
+
+/* Gutter: insert and drag, on hover or on the current line */
+.eg-docscroll .tiptap .eg-line-grip { position: absolute; top: 6px; left: -46px; display: flex; opacity: 0; color: var(--ink-subtle); user-select: none; transition: opacity var(--duration-fast) var(--ease-out); }
+.eg-docscroll .tiptap li:hover > .eg-line-grip,
+.eg-docscroll .tiptap li.is-active-card > .eg-line-grip { opacity: 1; }
+.eg-docscroll .tiptap .eg-line-grip button { display: grid; place-items: center; width: 20px; height: 18px; padding: 0; border: 0; border-radius: var(--radius-xs); background: transparent; color: inherit; cursor: pointer; }
+.eg-docscroll .tiptap .eg-line-grip button:hover { background: var(--surface-2); color: var(--ink); }
+.eg-docscroll .tiptap .eg-line-grip .eg-line-drag { cursor: grab; }
+.eg-docscroll .tiptap .eg-line-grip svg { width: 14px; height: 14px; }
+
+/* The right end of the line: run state + actions */
+.eg-docscroll .tiptap .eg-line-side {
+  position: absolute !important;
+  top: 4px !important;
+  right: auto !important;
+  left: calc(100% + var(--space-2)) !important;
+  width: max-content;
+  max-width: calc(var(--doc-right) - var(--space-4));
+  height: calc(22px * var(--type-scale)) !important;
+  display: flex !important;
+  align-items: center;
+  gap: var(--space-2) !important;
+  padding-left: var(--space-4);
+  color: var(--ink-subtle);
+  font-size: calc(12px * var(--type-scale));
+  line-height: calc(16px * var(--type-scale));
+  text-decoration: none;
+  z-index: 2;
+  user-select: none;
+}
+.eg-docscroll .tiptap .eg-line-side .eg-runstate { max-width: 220px; overflow: hidden; }
+.eg-docscroll .tiptap .eg-line-live { display: inline-flex; min-width: 0; max-width: 260px; }
+.eg-docscroll .tiptap .eg-line-live .eg-runstate { overflow: hidden; text-overflow: ellipsis; }
+.eg-docscroll .tiptap .eg-line-acts { display: none; gap: 2px; }
+.eg-docscroll .tiptap li:hover > .eg-line-side .eg-line-acts,
+.eg-docscroll .tiptap li.is-active-card > .eg-line-side .eg-line-acts,
+.eg-docscroll .tiptap .eg-line-side:has(.card-dropdown-menu) .eg-line-acts { display: flex; }
+.eg-docscroll .tiptap .eg-line-acts .card-action-btn {
+  width: 22px !important;
+  height: calc(22px * var(--type-scale)) !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--ink-subtle) !important;
+  font-size: calc(13px * var(--type-scale)) !important;
+  line-height: calc(20px * var(--type-scale)) !important;
+}
+.eg-docscroll .tiptap .eg-line-acts .card-action-btn:hover { background: var(--surface-2) !important; color: var(--ink) !important; }
+.eg-docscroll .tiptap .eg-line-acts .card-action-btn .eg-icon { width: 14px; height: 14px; }
+.eg-docscroll .tiptap .eg-line-side .card-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  left: auto;
+  min-width: 200px;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-popover);
+  z-index: var(--z-popover);
+}
+.eg-docscroll .tiptap .eg-line-side .card-dropdown-item { height: 28px; padding: 0 var(--space-2); font-size: calc(13px * var(--type-scale)); font-weight: 400; color: var(--ink-muted); gap: var(--space-2); }
+.eg-docscroll .tiptap .eg-line-side .card-dropdown-item:hover { background: var(--surface-3); color: var(--ink); }
+.eg-docscroll .tiptap .eg-line-side .card-dropdown-item .eg-icon { width: 14px; height: 14px; color: var(--ink-subtle); }
+.eg-docscroll .tiptap .eg-line-side .eg-status { width: 12px; height: 12px; color: var(--ink-subtle); }
+
+/* Autocomplete ghost text */
+.eg-docscroll .tiptap .autocomplete-ghost, .eg-docscroll .tiptap [class*="ghost-suggestion"] { color: var(--ink-subtle) !important; opacity: 1; }
+
+/* Selection toolbar (portal) */
+.eg-seltb.selection-run-tooltip { position: fixed; transform: translateX(-50%); padding: 4px; border: 0; background: var(--surface-2); box-shadow: var(--shadow-popover); border-radius: var(--radius-md); gap: 2px; }
+.eg-seltb .eg-tb-btn { width: 26px; height: 26px; }
+
+/* Narrow panes: no room beside the text, so the controls overlay the line's right end again. */
+@container doc (max-width: 820px) {
+  .eg-docscroll .tiptap-editor-root .tiptap { --doc-right: var(--space-8); }
+  .eg-docscroll .tiptap .eg-line-side { left: auto !important; right: 10px !important; background: var(--surface-1); padding-left: var(--space-2); border-radius: var(--radius-sm); }
+  .eg-docscroll .tiptap li:not(:hover):not(.is-active-card) > .eg-line-side:not(:has(.eg-runstate)) { display: none !important; }
+}
+@media (max-width: 640px) {
+  .eg-docscroll .tiptap-editor-root .tiptap { padding: var(--space-4) var(--space-4) var(--space-12) 40px; }
+  .eg-docscroll .tiptap .eg-line-grip, .eg-docscroll .tiptap .eg-line-acts { display: none !important; }
+  .eg-toolbar { overflow-x: auto; }
+}
+
+/* Nested lists inside a task: no divider, the sub-items sit on the 30px rhythm */
+.eg-docscroll .tiptap-editor-root .tiptap li > ul,
+.eg-docscroll .tiptap-editor-root .tiptap li > ol { border-top: 0 !important; margin: 0 !important; padding-top: 0 !important; gap: 0 !important; }
+.eg-docscroll .tiptap-editor-root .tiptap a.md-link { border-bottom: 0; color: var(--accent-text); }
+.eg-doc-name { color: var(--ink); font-weight: 600; font-size: calc(13px * var(--type-scale)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+
+/* Selection toolbar chip (collapsed state) */
+.eg-seltb.is-chip { padding: 2px; }
+.eg-seltb-chip { display: grid; place-items: center; width: 28px; height: 20px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--ink-subtle); cursor: pointer; }
+.eg-seltb-chip:hover, .eg-seltb-chip:focus-visible { color: var(--ink); background: var(--surface-3); }
+
+/* Text color button + swatch menu */
+.eg-tb-color { position: relative; }
+.eg-tb-color-bar { position: absolute; left: 8px; right: 8px; bottom: 4px; height: 2px; border-radius: 1px; }
+.eg-swatches { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: var(--space-2); min-width: 0; }
+.eg-swatch { width: 100%; aspect-ratio: 1; min-height: 28px; border: 0; border-radius: var(--radius-xs); cursor: pointer; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.15); }
+.eg-swatch[aria-checked="true"] { outline: 2px solid var(--ink); outline-offset: 2px; }
+.eg-swatch:hover { filter: brightness(1.1); }
+.eg-swatch-clear { grid-column: 1 / -1; }
+.eg-docscroll .tiptap .text-colored { color: var(--text-color) !important; }
+.eg-docscroll .tiptap-editor-root .tiptap :is(h1, h2, h3, h4) .text-colored { color: var(--text-color) !important; }
+
+/* Dragging a task line */
+.eg-drop-line { position: fixed; display: none; height: 2px; border-radius: 1px; background: var(--accent-text); pointer-events: none; z-index: var(--z-popover); }
+.eg-docscroll .tiptap li.is-dragging { opacity: .5; }
+body.eg-is-dragging-line, body.eg-is-dragging-line * { cursor: grabbing !important; user-select: none !important; }
+
+/* @file and /skill: chips in the document, and the suggestion menu (Composer's .eg-suggest) */
+.eg-docscroll .tiptap .eg-ref { display: inline; padding: 1px 4px; border-radius: var(--radius-xs); background: var(--accent-subtle); color: var(--accent-text); font-family: var(--font-mono); font-size: calc(12px * var(--type-scale)); line-height: 1; white-space: nowrap; }
+.eg-docscroll .tiptap .eg-ref code { padding: 0; background: none !important; color: inherit !important; font-size: inherit; }
+.eg-docscroll .tiptap .eg-ref-skill { background: var(--surface-3); color: var(--ink); }
+.task-command-menu { padding: 4px !important; border: 0 !important; border-radius: var(--radius-md) !important; background: var(--surface-2) !important; box-shadow: var(--shadow-popover) !important; z-index: var(--z-popover); }
+.task-command-menu-head { padding: 6px var(--space-2) 2px !important; border: 0 !important; background: none !important; color: var(--ink-subtle) !important; font-size: calc(11px * var(--type-scale)) !important; font-weight: 500 !important; text-transform: none !important; letter-spacing: 0 !important; }
+.task-command-item { min-height: 28px; padding: 4px var(--space-2) !important; border: 0 !important; border-radius: var(--radius-sm) !important; background: transparent !important; color: var(--ink-muted) !important; }
+.task-command-item.is-active, .task-command-item:hover { background: var(--surface-3) !important; color: var(--ink) !important; }
+.task-command-icon, .task-command-icon.is-skill { color: var(--ink-subtle) !important; }
+.task-command-label { font-family: var(--font-mono); font-size: calc(12px * var(--type-scale)) !important; color: var(--ink) !important; font-weight: 400 !important; }
+.task-command-detail { color: var(--ink-subtle) !important; font-size: calc(12px * var(--type-scale)) !important; }
+.task-command-menu-foot { border-top: 1px solid var(--line-strong) !important; background: none !important; color: var(--ink-subtle) !important; font-size: calc(11px * var(--type-scale)) !important; }

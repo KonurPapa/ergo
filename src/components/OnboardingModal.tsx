@@ -21,7 +21,6 @@ import { bridgeClient, type BridgeStatus, BRIDGE_LAUNCH_URL, DEFAULT_BRIDGE_URL,
 import { BridgeDownloadButton } from './BridgeDownloadButton';
 import ergoIcon from '../assets/ergo_icon_2.png';
 import {
-  Zap,
   Key,
   CheckCircle2,
   AlertCircle,
@@ -32,15 +31,14 @@ import {
   ShieldCheck,
   ChevronRight,
   ChevronDown,
-  Settings2,
   X,
   RefreshCw,
   RotateCcw,
-  Laptop,
   Check,
   Copy,
   MoreHorizontal
 } from 'lucide-react';
+import { Banner, Button, Field, IconButton, Input, SegmentedControl } from './ui';
 
 interface OnboardingModalProps {
   isOpen: boolean;
@@ -62,7 +60,6 @@ interface ProviderMeta {
   name: string;
   badge: string;
   iconUrl: string;
-  brandColor: string;
   cli: string;
   cliName: string;
   packageName: string;
@@ -81,14 +78,13 @@ const PROVIDER_METAS: Record<ProviderChoice, ProviderMeta> = {
     name: 'ChatGPT',
     badge: 'Plus / Team / Pro',
     iconUrl: '/icons/providers/openai.svg',
-    brandColor: '#10a37f',
     cli: 'codex',
     cliName: 'OpenAI Codex CLI',
     packageName: '@openai/codex',
     installCommand: 'npm install -g @openai/codex',
     loginCommand: 'codex login',
     loginArgs: ['login'],
-    signInLabel: 'Sign In with OpenAI',
+    signInLabel: 'Sign in with OpenAI',
     description: 'OpenAI ChatGPT Plus, Team, or Pro subscription.',
     accountHelp: 'Authenticates with your OpenAI account in browser.',
     keyDocUrl: 'https://platform.openai.com/api-keys'
@@ -98,14 +94,13 @@ const PROVIDER_METAS: Record<ProviderChoice, ProviderMeta> = {
     name: 'Claude',
     badge: 'Pro / Team / Max',
     iconUrl: '/icons/providers/anthropic.svg',
-    brandColor: '#D97757',
     cli: 'claude',
     cliName: 'Claude',
     packageName: '@anthropic-ai/claude-code',
     installCommand: 'curl -fsSL https://claude.ai/install.sh | bash',
     loginCommand: 'claude login',
     loginArgs: ['login'],
-    signInLabel: 'Sign In with Anthropic',
+    signInLabel: 'Sign in with Anthropic',
     description: 'Anthropic Claude Pro, Max, Team, or Enterprise subscription.',
     accountHelp: 'Authenticates with your Claude account.',
     keyDocUrl: 'https://console.anthropic.com/settings/keys'
@@ -115,14 +110,13 @@ const PROVIDER_METAS: Record<ProviderChoice, ProviderMeta> = {
     name: 'Gemini',
     badge: 'Google Gemini / Gemini Code Assist',
     iconUrl: '/icons/providers/gemini.svg',
-    brandColor: '#3b82f6',
     cli: 'agy',
     cliName: 'Antigravity CLI (agy)',
     packageName: 'Antigravity Suite',
     installCommand: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
     loginCommand: 'agy',
     loginArgs: [],
-    signInLabel: 'Sign In with Google Gemini',
+    signInLabel: 'Sign in with Google Gemini',
     description: 'Google Gemini subscription.',
     accountHelp: 'Authenticates with your Google account.',
     keyDocUrl: 'https://antigravity.google'
@@ -132,7 +126,6 @@ const PROVIDER_METAS: Record<ProviderChoice, ProviderMeta> = {
     name: 'Other',
     badge: 'Cursor, Ollama, Grok, etc.',
     iconUrl: '',
-    brandColor: '#8b5cf6',
     cli: '',
     cliName: 'Other Provider',
     packageName: '',
@@ -159,8 +152,6 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   // Wizard Steps: 1 = AI Account Connection, 2 = Optional Local AI Model, 3 = Local Device Bridge
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
 
-  // Splash Animation state: show centered brand, then slide to top & fade in content
-  const [isIntroAnimating, setIsIntroAnimating] = useState<boolean>(true);
 
   // Connection Mode Tab
   const [activeTab, setActiveTab] = useState<'subscription' | 'apikey'>('subscription');
@@ -220,16 +211,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     return unsub;
   }, []);
 
-  // Splash animation timer on opening
+  // Start at step 1 each time the wizard opens
   useEffect(() => {
-    if (isOpen) {
-      setCurrentStep(1);
-      setIsIntroAnimating(true);
-      const timer = setTimeout(() => {
-        setIsIntroAnimating(false);
-      }, 850);
-      return () => clearTimeout(timer);
-    }
+    if (isOpen) setCurrentStep(1);
   }, [isOpen]);
 
   const checkStatus = async (cliName: string) => {
@@ -242,7 +226,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           ...status,
           isAuthenticated: false,
           userEmail: null,
-          message: 'Not connected (Sign in to connect)'
+          message: 'Not connected. Sign in to connect.'
         });
       } else {
         setAuthStatus(status);
@@ -304,7 +288,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         message: 'Subscription disconnected. You can now connect a different profile.'
       });
     } catch (err: any) {
-      setLoginError(err.message || 'Failed to reset authentication.');
+      setLoginError(err.message || 'Ergo couldn’t sign out of this account.');
     } finally {
       setIsResettingAuth(false);
     }
@@ -357,9 +341,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   // Nothing answers on this computer: offer the Ergo Bridge installer, and a link that opens an installed one.
   const bridgeDownload = getBridgeDownload();
   const bridgeInstallActions = bridgeClient.isHostedWeb() && !bridgeStatus.isConnected && bridgeStatus.diagnosis === 'unreachable' && bridgeDownload ? (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', flexWrap: 'wrap' }}>
-      <BridgeDownloadButton />
-      <a href={BRIDGE_LAUNCH_URL} style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--accent-primary)' }}>
+    <div className="eg-hstack" style={{ flexWrap: 'wrap', gap: 'var(--space-3)' }}>
+      <BridgeDownloadButton size="sm" />
+      <a href={BRIDGE_LAUNCH_URL} className="dlg-link">
         Already installed? Open it
       </a>
     </div>
@@ -389,7 +373,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     const res = await bridgeClient.checkConnection(targetUrl);
     setIsTestingBridge(false);
     if (!res.success) {
-      setBridgeConnectError(res.error || 'Could not connect to device bridge.');
+      setBridgeConnectError(res.error || 'Ergo couldn’t reach the bridge on this computer.');
     } else {
       setBridgeConnectError(null);
     }
@@ -441,7 +425,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
         if (!refreshed.isInstalled && !res.success) {
           setInstallError(
-            res.error || `Could not automatically install ${currentMeta.packageName}. You can also connect directly via the API Key tab.`
+            res.error || `Ergo couldn’t install ${currentMeta.packageName} automatically. You can also connect with an API key.`
           );
           setIsConnectingSubscription(false);
           return;
@@ -466,7 +450,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           setLoginAuthUrl(loginRes.authUrl);
           const popup = window.open(loginRes.authUrl, 'ai_auth_window', 'width=650,height=750,noopener,noreferrer');
           if (!popup) {
-            setLoginError('Popup window was blocked by the browser. Click "Open Authorization Window" below.');
+            setLoginError('The browser blocked the sign-in window. Use “Open the sign-in window” below.');
           }
         }
       }
@@ -479,7 +463,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         if (Date.now() - pollStartTime > 90_000) {
           if (pollingRef.current) clearInterval(pollingRef.current);
           setIsConnectingSubscription(false);
-          setLoginError(`Authentication timed out. If you completed signing in, click "Connect with ${currentMeta.name}" again or use the terminal below.`);
+          setLoginError(`Sign-in is taking longer than expected. If you finished signing in, click “Connect ${currentMeta.name}” again or use the terminal below.`);
           return;
         }
 
@@ -506,7 +490,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         }
       }, 2000);
     } catch (err: any) {
-      setLoginError(err.message || 'One-click sign in encountered an unexpected error.');
+      setLoginError(err.message || 'Sign-in stopped unexpectedly. Try again.');
       setIsConnectingSubscription(false);
     }
   };
@@ -545,7 +529,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     try {
       const res = await testAiConnection(apiKeyProvider, { apiKey: trimmed });
       if (!res.success) {
-        setKeyValidationError(res.message || 'Verification failed. Please check your API key.');
+        setKeyValidationError(res.message || 'That key didn’t work. Check it and try again.');
         setIsValidatingKey(false);
         return;
       }
@@ -563,7 +547,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
       proceedToLocalModelStep(newKey);
     } catch (err: any) {
-      setKeyValidationError(err.message || 'Connection error.');
+      setKeyValidationError(err.message || 'Ergo couldn’t reach the provider to check the key.');
     } finally {
       setIsValidatingKey(false);
     }
@@ -593,499 +577,152 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     onCompleteOnboarding(connectedUserKey || undefined);
   };
 
+  const steps: Array<{ n: 1 | 2 | 3; label: string }> = [
+    { n: 1, label: 'Install bridge' },
+    { n: 2, label: 'Connect AI' },
+    { n: 3, label: 'Local AI model' }
+  ];
+
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 9999,
-        background: 'rgba(0, 0, 0, 0.65)',
-        backdropFilter: 'blur(16px)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '1.5rem',
-        animation: 'fadeIn 0.25s ease-out'
-      }}
-    >
-      <div
-        style={{
-          background: 'var(--modal-bg, var(--bg-card, #ffffff))',
-          border: '1px solid var(--border-strong, var(--border, #e2e8f0))',
-          borderRadius: '20px',
-          width: '100%',
-          maxWidth: '680px',
-          minHeight: '520px',
-          maxHeight: '92vh',
-          display: 'flex',
-          flexDirection: 'column',
-          boxShadow: 'var(--shadow-lg, 0 20px 50px rgba(0, 0, 0, 0.25))',
-          overflow: 'hidden',
-          position: 'relative',
-          transition: 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
-        }}
-      >
-        {/* Animated Brand Header */}
-        <div
-          style={{
-            padding: isIntroAnimating ? '0 2rem' : '1.75rem 2rem 1.25rem 2rem',
-            borderBottom: isIntroAnimating ? 'none' : '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-            position: isIntroAnimating ? 'absolute' : 'relative',
-            inset: isIntroAnimating ? '0' : 'auto',
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: isIntroAnimating ? 'center' : 'flex-start',
-            alignItems: isIntroAnimating ? 'center' : 'stretch',
-            zIndex: isIntroAnimating ? 10 : 'auto',
-            pointerEvents: isIntroAnimating ? 'none' : 'auto',
-            transition: 'all 0.65s cubic-bezier(0.16, 1, 0.3, 1)',
-            background: isIntroAnimating
-              ? 'transparent'
-              : 'var(--modal-header-bg, var(--bg-pane, transparent))'
-          }}
-        >
-          {/* Top Brand Line: Logo Icon + Stylized Name */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: isIntroAnimating ? 'center' : 'space-between',
-              width: '100%',
-              transform: isIntroAnimating ? 'scale(1.2)' : 'scale(1)',
-              transition: 'all 0.65s cubic-bezier(0.16, 1, 0.3, 1)'
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
-              <div
-                style={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: '12px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0
-                }}
-              >
-                <img
-                  src={ergoIcon}
-                  alt="Ergo Logo"
-                  style={{
-                    width: isIntroAnimating ? 56 : 48,
-                    height: isIntroAnimating ? 56 : 48,
-                    objectFit: 'contain',
-                    filter: 'drop-shadow(0 2px 8px rgba(0, 0, 0, 0.5))',
-                    transition: 'all 0.65s cubic-bezier(0.16, 1, 0.3, 1)'
-                  }}
-                />
-              </div>
-
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <span
-                    className="brand-title"
-                    style={{
-                      fontSize: '1.5rem',
-                      fontWeight: 500,
-                      letterSpacing: '-0.02em',
-                      color: 'var(--text-bright)',
-                      textTransform: 'uppercase'
-                    }}
-                  >
-                    Ergo
-                  </span>
-                  <span
-                    style={{
-                      fontSize: '0.6rem',
-                      margin: '4px',
-                      padding: '2px 8px',
-                      borderRadius: '999px',
-                      background: 'rgba(0, 212, 146, 0.15)',
-                      color: 'var(--accent)',
-                      border: '1px solid rgba(0, 212, 146, 0.35)',
-                      fontWeight: 700,
-                      letterSpacing: '0.04em'
-                    }}
-                  >
-                    ALPHA
-                  </span>
-                </div>
-                <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '-2px', fontWeight: 500 }}>
-                  Human & AI Collaborative Workspace
-                </div>
-              </div>
-            </div>
-
-            {!isIntroAnimating && (
-              <button
-                type="button"
-                onClick={onClose}
-                style={{
-                  background: 'var(--bg-hover, rgba(0, 0, 0, 0.05))',
-                  border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                  borderRadius: '10px',
-                  width: 32,
-                  height: 32,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: 'var(--text-muted)',
-                  cursor: 'pointer',
-                  transition: 'all 0.15s ease'
-                }}
-                title="Close"
-              >
-                <X size={16} />
-              </button>
-            )}
+    <div className="eg-scrim dlg-onboarding-scrim">
+      <div className="eg-dialog dlg-onboarding" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+        <div className="eg-dialog-head">
+          <img src={ergoIcon} alt="" width={28} height={28} style={{ objectFit: 'contain', flex: 'none', marginTop: -2 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h2 className="eg-dialog-title" id="onboarding-title">Set up Ergo</h2>
+            <p className="eg-dialog-desc">Human and AI collaborative workspace</p>
           </div>
-
-          {/* Stepper Progress Indicator (Step 1 vs Step 2 vs Step 3) */}
-          {!isIntroAnimating && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.65rem',
-                marginTop: '1.25rem',
-                paddingTop: '0.85rem',
-                borderTop: '1px solid var(--border-subtle, var(--border, #e2e8f0))'
-              }}
-            >
-              {/* Step 1: Install Ergo Bridge */}
-              <div
-                onClick={() => setCurrentStep(1)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.45rem',
-                  fontSize: '0.76rem',
-                  fontWeight: currentStep === 1 ? 700 : 600,
-                  color: currentStep === 1 ? 'var(--text-bright)' : 'var(--accent-emerald)',
-                  cursor: 'pointer',
-                  userSelect: 'none',
-                  transition: 'opacity 0.15s ease'
-                }}
-                role="button"
-                tabIndex={0}
-                title="Go to Step 1: Install Ergo Bridge"
-              >
-                <div
-                  style={{
-                    width: 22,
-                    height: 22,
-                    borderRadius: '50%',
-                    background: currentStep === 1 ? 'var(--accent-primary)' : 'rgba(16, 185, 129, 0.2)',
-                    border: `1.5px solid ${currentStep === 1 ? 'var(--accent-primary)' : 'var(--accent-emerald)'}`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '0.72rem',
-                    color: '#ffffff'
-                  }}
-                >
-                  {currentStep > 1 ? <CheckCircle2 size={13} color="var(--accent-emerald)" /> : '1'}
-                </div>
-                <span>Install Bridge</span>
-              </div>
-
-              <div style={{ flex: 1, height: '1.5px', background: currentStep > 1 ? 'var(--accent-emerald)' : 'var(--border-subtle, var(--border, #e2e8f0))' }} />
-
-              {/* Step 2: Connect AI */}
-              <div
-                onClick={() => setCurrentStep(2)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.45rem',
-                  fontSize: '0.76rem',
-                  fontWeight: currentStep === 2 ? 700 : 500,
-                  color: currentStep === 2 ? 'var(--text-bright)' : currentStep > 2 ? 'var(--accent-emerald)' : 'var(--text-dim)',
-                  cursor: 'pointer',
-                  userSelect: 'none',
-                  transition: 'opacity 0.15s ease'
-                }}
-                role="button"
-                tabIndex={0}
-                title="Go to Step 2: Connect AI"
-              >
-                <div
-                  style={{
-                    width: 22,
-                    height: 22,
-                    borderRadius: '50%',
-                    background: currentStep === 2 ? 'var(--accent-primary)' : currentStep > 2 ? 'rgba(16, 185, 129, 0.2)' : 'var(--bg-hover, rgba(0, 0, 0, 0.05))',
-                    border: `1.5px solid ${currentStep === 2 ? 'var(--accent-primary)' : currentStep > 2 ? 'var(--accent-emerald)' : 'var(--border-strong, var(--border, #cbd5e1))'}`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '0.72rem',
-                    color: currentStep === 2 ? '#ffffff' : 'var(--text-dim)'
-                  }}
-                >
-                  {currentStep > 2 ? <CheckCircle2 size={13} color="var(--accent-emerald)" /> : '2'}
-                </div>
-                <span>Connect AI</span>
-              </div>
-
-              <div style={{ flex: 1, height: '1.5px', background: currentStep > 2 ? 'var(--accent-emerald)' : 'var(--border-subtle, var(--border, #e2e8f0))' }} />
-
-              {/* Step 3: Local AI model */}
-              <div
-                onClick={() => setCurrentStep(3)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.45rem',
-                  fontSize: '0.76rem',
-                  fontWeight: currentStep === 3 ? 700 : 500,
-                  color: currentStep === 3 ? 'var(--text-bright)' : currentStep > 3 ? 'var(--accent-emerald)' : 'var(--text-dim)',
-                  cursor: 'pointer',
-                  userSelect: 'none',
-                  transition: 'opacity 0.15s ease'
-                }}
-                role="button"
-                tabIndex={0}
-                title="Go to Step 3: Local AI model"
-              >
-                <div
-                  style={{
-                    width: 22,
-                    height: 22,
-                    borderRadius: '50%',
-                    background: currentStep === 3 ? 'var(--accent-cyan)' : currentStep > 3 ? 'rgba(16, 185, 129, 0.2)' : 'var(--bg-hover, rgba(0, 0, 0, 0.05))',
-                    border: `1.5px solid ${currentStep === 3 ? 'var(--accent-cyan)' : currentStep > 3 ? 'var(--accent-emerald)' : 'var(--border-strong, var(--border, #cbd5e1))'}`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '0.72rem',
-                    color: currentStep === 3 ? '#ffffff' : currentStep > 3 ? 'var(--accent-emerald)' : 'var(--text-dim)'
-                  }}
-                >
-                  {currentStep > 3 ? <CheckCircle2 size={13} color="var(--accent-emerald)" /> : '3'}
-                </div>
-                <span>Local AI Model</span>
-              </div>
-
-            </div>
-          )}
+          <IconButton icon={X} label="Close" size="sm" onClick={onClose} />
         </div>
 
+        {/* Steps */}
+        <nav className="dlg-steps" aria-label="Setup steps">
+          {steps.map((st, i) => (
+            <React.Fragment key={st.n}>
+              {i > 0 && <span className="dlg-steps-line" aria-hidden="true" />}
+              <button
+                type="button"
+                className="dlg-step"
+                aria-current={currentStep === st.n ? 'step' : undefined}
+                data-done={currentStep > st.n ? 'true' : undefined}
+                onClick={() => setCurrentStep(st.n)}
+                title={`Go to step ${st.n}: ${st.label}`}
+              >
+                <span className="dlg-step-num">{currentStep > st.n ? <Check size={12} strokeWidth={2} /> : st.n}</span>
+                {st.label}
+              </button>
+            </React.Fragment>
+          ))}
+        </nav>
+
         {/* Modal Main Body */}
-        <div
-          style={{
-            padding: '1.5rem 2rem',
-            overflowY: 'auto',
-            flex: 1,
-            opacity: isIntroAnimating ? 0 : 1,
-            transform: isIntroAnimating ? 'translateY(16px)' : 'translateY(0)',
-            transition: 'all 0.45s ease-out 0.15s'
-          }}
-        >
+        <div className="eg-dialog-body dlg-onboarding-body">
           {/* STEP 1: Install and start Ergo Bridge, which everything after this step runs through */}
           {currentStep === 1 && (
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginBottom: '0.5rem' }}>
-                <div
-                  style={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: '8px',
-                    background: 'rgba(99, 102, 241, 0.15)',
-                    border: '1px solid rgba(99, 102, 241, 0.3)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: 'var(--accent-primary)'
-                  }}
-                >
-                  <Laptop size={18} />
-                </div>
-                <div>
-                  <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0, color: 'var(--text-bright)' }}>
-                    Install Ergo Bridge
-                  </h3>
-                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                    A small app that lets Ergo use your AI subscription, your files and your tools on this computer.
-                  </p>
-                </div>
+            <div className="dlg-ob-step">
+              <div>
+                <h3 className="dlg-ob-title">Install Ergo Bridge</h3>
+                <p className="dlg-ob-lead">A small app that lets Ergo use your AI subscription, your files and your tools on this computer.</p>
               </div>
 
-              <div
-                style={{
-                  marginTop: '1.25rem',
-                  padding: '1rem 1.25rem',
-                  borderRadius: '12px',
-                  background: bridgeStatus.isConnected ? 'rgba(16, 185, 129, 0.1)' : 'var(--bg-card, var(--card, #ffffff))',
-                  border: bridgeStatus.isConnected ? '1.5px solid rgba(16, 185, 129, 0.35)' : '1px solid var(--border-subtle, var(--border, #e2e8f0))'
-                }}
-              >
-                {bridgeStatus.isConnected ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <CheckCircle2 size={22} color="var(--accent-emerald)" style={{ flexShrink: 0 }} />
-                    <div>
-                      <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-bright)' }}>Ergo Bridge is running</div>
-                      <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        Connected at {bridgeStatus.url}. Your work is saved in <code>{bridgeStatus.storageDir}</code>.
-                      </div>
-                    </div>
-                  </div>
-                ) : !getBridgeDownload() || !bridgeClient.isHostedWeb() ? (
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                    {bridgeClient.isHostedWeb()
+              {bridgeStatus.isConnected ? (
+                <Banner
+                  icon={CheckCircle2}
+                  title="Ergo Bridge is running"
+                  text={
+                    <>
+                      Connected at {bridgeStatus.url}. Your work is saved in <code className="eg-mono" style={{ fontSize: 'calc(11px * var(--type-scale))' }}>{bridgeStatus.storageDir}</code>.
+                    </>
+                  }
+                  className="dlg-banner-success"
+                />
+              ) : !getBridgeDownload() || !bridgeClient.isHostedWeb() ? (
+                <Banner
+                  title={bridgeClient.isHostedWeb() ? 'Ergo Bridge isn’t available for this device' : 'The local Ergo server isn’t running'}
+                  text={
+                    bridgeClient.isHostedWeb()
                       ? 'Ergo Bridge runs on Windows, macOS and Linux computers. On this device you can still use Ergo with an API key: skip this step.'
-                      : 'Start the local Ergo server (npm run dev) to continue.'}
-                  </div>
-                ) : (
-                  <>
-                    <ol style={{ margin: '0 0 1rem 0', paddingLeft: '1.2rem', fontSize: '0.8rem', color: 'var(--text-main)', lineHeight: 1.7 }}>
-                      <li>Download Ergo Bridge and open the file to install it.</li>
-                      <li>Come back to this page. It finds Ergo Bridge by itself once it's running.</li>
-                      <li>When your browser asks to let this site access apps on this device, click <strong>Allow</strong>.</li>
-                    </ol>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', flexWrap: 'wrap' }}>
-                      <BridgeDownloadButton />
-                      <a href={BRIDGE_LAUNCH_URL} style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--accent-primary)' }}>
-                        Already installed? Open it
-                      </a>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginTop: '0.9rem', fontSize: '0.74rem', color: 'var(--text-dim)' }}>
-                      <Loader2 size={12} className="animate-spin" />
+                      : 'Start the local Ergo server (npm run dev) to continue.'
+                  }
+                />
+              ) : (
+                <div className="dlg-ob-panel">
+                  <ol className="eg-steps" style={{ margin: 0 }}>
+                    <li>
+                      <span>Download Ergo Bridge and open the file to install it.</span>
+                    </li>
+                    <li>
+                      <span>Come back to this page. It finds Ergo Bridge by itself once it's running.</span>
+                    </li>
+                    <li>
                       <span>
-                        {bridgeStatus.awaitingPermission
-                          ? 'Found Ergo Bridge: click Allow in the browser prompt next to the address bar.'
-                          : 'Waiting for Ergo Bridge to start on this computer…'}
+                        When your browser asks to let this site access apps on this device, click <strong>Allow</strong>.
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => handleTestBridgeConnection()}
-                        disabled={isTestingBridge}
-                        style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent-primary)', fontSize: '0.74rem', fontWeight: 600, cursor: isTestingBridge ? 'wait' : 'pointer' }}
-                      >
-                        {isTestingBridge ? 'Checking…' : 'Check again'}
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Error Alert if any */}
-              {bridgeConnectError && (
-                <div
-                  style={{
-                    marginTop: '0.85rem',
-                    padding: '0.75rem 1rem',
-                    borderRadius: '8px',
-                    background: 'rgba(239, 68, 68, 0.1)',
-                    border: '1px solid rgba(239, 68, 68, 0.3)',
-                    color: '#f87171',
-                    fontSize: '0.78rem',
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: '0.5rem'
-                  }}
-                >
-                  <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '2px' }} />
-                  <div>
-                    <div style={{ fontWeight: 600 }}>Connection Notice</div>
-                    <div style={{ marginTop: '2px', color: 'var(--text-main)', lineHeight: 1.45 }}>
-                      {bridgeConnectError}
-                    </div>
-                    {bridgeStatus.isMixedContentBlocked && (
-                      <div style={{ marginTop: '0.5rem', padding: '0.45rem 0.65rem', background: 'var(--bg-hover, rgba(0, 0, 0, 0.05))', borderRadius: '6px', border: '1px solid var(--border-subtle, var(--border, #e2e8f0))', color: 'var(--text-bright)', fontSize: '0.74rem' }}>
-                        💡 <strong>Why this happens:</strong> Mobile browsers and HTTPS websites restrict connecting to <code>localhost</code> over unencrypted HTTP. To use Ergo on this device, either use an <strong>API Key</strong> in Step 2, or open Ergo directly on your computer at <code>http://localhost:5173</code>.
-                      </div>
-                    )}
+                    </li>
+                  </ol>
+                  <div className="eg-hstack" style={{ flexWrap: 'wrap', gap: 'var(--space-3)', marginTop: 'var(--space-4)' }}>
+                    <BridgeDownloadButton size="lg" />
+                    <a href={BRIDGE_LAUNCH_URL} className="dlg-link">
+                      Already installed? Open it
+                    </a>
                   </div>
-                </div>
-              )}
-
-              {!bridgeConnectError && !bridgeStatus.isConnected && (bridgeStatus.diagnosis === 'permission-denied' || bridgeStatus.diagnosis === 'origin-refused') && bridgeStatus.error && (
-                <div style={{ marginTop: '0.85rem', padding: '0.75rem 1rem', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: 1.45 }}>
-                  {bridgeStatus.error}
-                </div>
-              )}
-
-              {/* Collapsible Advanced Settings Dropdown */}
-              <div
-                style={{
-                  marginTop: '0.85rem',
-                  borderRadius: '10px',
-                  background: 'var(--bg-card, var(--card, #ffffff))',
-                  border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                  overflow: 'hidden',
-                  transition: 'all 0.2s ease',
-                  boxShadow: 'var(--shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.04))'
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setShowAdvancedBridge((prev) => !prev)}
-                  style={{
-                    width: '100%',
-                    padding: '0.75rem 1rem',
-                    background: 'transparent',
-                    border: 'none',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    cursor: 'pointer',
-                    color: 'var(--text-muted)',
-                    fontSize: '0.78rem',
-                    fontWeight: 600,
-                    transition: 'color 0.15s ease'
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-bright)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted)')}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <Settings2 size={14} color="#8b5cf6" />
-                    <span>Advanced Settings</span>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: 400 }}>
-                      (Port configuration & helper commands)
+                  <div className="eg-hstack" style={{ marginTop: 'var(--space-3)', fontSize: 'calc(12px * var(--type-scale))', color: 'var(--ink-subtle)' }}>
+                    <Loader2 size={14} strokeWidth={1.75} className="animate-spin" />
+                    <span>
+                      {bridgeStatus.awaitingPermission
+                        ? 'Found Ergo Bridge: click Allow in the browser prompt next to the address bar.'
+                        : 'Waiting for Ergo Bridge to start on this computer…'}
                     </span>
+                    <Button variant="ghost" size="sm" onClick={() => handleTestBridgeConnection()} disabled={isTestingBridge}>
+                      {isTestingBridge ? 'Checking…' : 'Check again'}
+                    </Button>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center' }}>
-                    {showAdvancedBridge ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  </div>
+                </div>
+              )}
+
+              {bridgeConnectError && (
+                <Banner
+                  tone="warning"
+                  title="Ergo can’t reach the bridge yet"
+                  text={
+                    <>
+                      {bridgeConnectError}
+                      {bridgeStatus.isMixedContentBlocked && (
+                        <span style={{ display: 'block', marginTop: 'var(--space-2)' }}>
+                          Why: mobile browsers and HTTPS sites can’t connect to <code className="eg-mono" style={{ fontSize: 'calc(11px * var(--type-scale))' }}>localhost</code> over
+                          plain HTTP. To use Ergo on this device, use an API key in step 2, or open Ergo on your computer at{' '}
+                          <code className="eg-mono" style={{ fontSize: 'calc(11px * var(--type-scale))' }}>http://localhost:5173</code>.
+                        </span>
+                      )}
+                    </>
+                  }
+                />
+              )}
+
+              {!bridgeConnectError &&
+                !bridgeStatus.isConnected &&
+                (bridgeStatus.diagnosis === 'permission-denied' || bridgeStatus.diagnosis === 'origin-refused') &&
+                bridgeStatus.error && <Banner tone="warning" title="The browser is blocking the bridge" text={bridgeStatus.error} />}
+
+              {/* Advanced: port and the launch command */}
+              <div>
+                <button type="button" className="dlg-disclosure" aria-expanded={showAdvancedBridge} onClick={() => setShowAdvancedBridge((prev) => !prev)}>
+                  {showAdvancedBridge ? <ChevronDown size={14} strokeWidth={1.75} /> : <ChevronRight size={14} strokeWidth={1.75} />}
+                  <span>Advanced</span>
+                  <span className="eg-subtle" style={{ fontWeight: 400 }}>Port and launch command</span>
                 </button>
 
                 {showAdvancedBridge && (
-                  <div
-                    style={{
-                      padding: '0.85rem 1rem 1rem 1rem',
-                      borderTop: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.9rem'
-                    }}
-                  >
-                    {/* Port Customization */}
-                    <div>
-                      <div style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-bright)', marginBottom: '0.35rem' }}>
-                        Local Bridge Port
-                      </div>
-                      <div style={{ fontSize: '0.71rem', color: 'var(--text-dim)', marginBottom: '0.45rem' }}>
-                        Change the port number if your local Ergo bridge is running on a custom port.
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            background: 'var(--bg-hover, rgba(0, 0, 0, 0.04))',
-                            border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                            borderRadius: '6px',
-                            padding: '0 0.5rem',
-                            flex: 1
-                          }}
-                        >
-                          <span style={{ fontSize: '0.76rem', color: 'var(--text-dim)', fontFamily: 'monospace', userSelect: 'none' }}>
-                            http://localhost:
-                          </span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)', padding: 'var(--space-3) 0 0 22px' }}>
+                    <div className="eg-field">
+                      <span className="eg-field-label">Bridge port</span>
+                      <div className="eg-hstack">
+                        <span className="dlg-prefix-input" style={{ flex: 1 }}>
+                          <span className="dlg-prefix-input-prefix">http://localhost:</span>
                           <input
                             type="text"
                             value={bridgePortInput}
+                            aria-label="Bridge port"
                             onChange={(e) => {
                               const cleaned = e.target.value.replace(/\D/g, '').slice(0, 5);
                               setBridgePortInput(cleaned);
@@ -1093,99 +730,46 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                               bridgeClient.setBridgeUrl(fullUrl);
                             }}
                             placeholder="5173"
-                            style={{
-                              width: '70px',
-                              fontSize: '0.78rem',
-                              fontFamily: 'monospace',
-                              fontWeight: 700,
-                              padding: '0.4rem 0.35rem',
-                              background: 'transparent',
-                              border: 'none',
-                              color: 'var(--accent-primary)',
-                              outline: 'none'
-                            }}
                           />
-                        </div>
-
-                        <button
-                          type="button"
+                        </span>
+                        <Button
+                          icon={RefreshCw}
                           onClick={() => handleTestBridgeConnection(bridgePortInput)}
                           disabled={isTestingBridge}
-                          style={{
-                            padding: '0.42rem 0.85rem',
-                            borderRadius: '6px',
-                            background: 'var(--btn-secondary-bg, var(--bg-card, #ffffff))',
-                            border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                            color: 'var(--text-bright)',
-                            fontSize: '0.74rem',
-                            fontWeight: 600,
-                            cursor: isTestingBridge ? 'wait' : 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.35rem',
-                            whiteSpace: 'nowrap'
-                          }}
+                          className={isTestingBridge ? 'dlg-spin-icon' : undefined}
                         >
-                          <RefreshCw size={11} className={isTestingBridge ? 'animate-spin' : ''} />
-                          <span>Apply Port</span>
-                        </button>
+                          Use this port
+                        </Button>
                       </div>
+                      <span className="eg-field-help">Change it if your bridge runs on a custom port.</span>
                     </div>
 
-                    {/* Terminal Launch Command */}
-                    <div>
-                      <div style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-bright)', marginBottom: '0.35rem' }}>
-                        Manual Helper Launch Command
-                      </div>
-                      <div style={{ fontSize: '0.71rem', color: 'var(--text-dim)', marginBottom: '0.45rem' }}>
+                    <div className="eg-field">
+                      <span className="eg-field-label">Launch command</span>
+                      <span className="eg-field-help" style={{ marginTop: -2 }}>
                         Developers working from a copy of the Ergo repository can run the bridge from it instead:
-                      </div>
+                      </span>
                       {(() => {
                         // The Ergo checkout the bridge last ran from (not the ~/.ergo data folder). Two lines rather
                         // than `&&`, which Windows PowerShell 5.1 rejects.
                         const appFolder = bridgeStatus.appDir || '<your Ergo folder>';
                         const launchCmd = `cd ${appFolder.includes(' ') ? `"${appFolder}"` : appFolder}\nnpm run dev`;
                         return (
-                          <div
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              background: 'var(--code-bg, #0f172a)',
-                              padding: '0.45rem 0.75rem',
-                              borderRadius: '6px',
-                              border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                              fontFamily: 'monospace',
-                              fontSize: '0.75rem',
-                              color: 'var(--accent-emerald)',
-                              overflowX: 'auto',
-                              gap: '0.5rem'
-                            }}
-                          >
-                            <span style={{ whiteSpace: 'pre' }}>{launchCmd}</span>
-                            <button
-                              type="button"
+                          <div className="dlg-code-well dlg-code-row">
+                            <pre>{launchCmd}</pre>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              icon={copiedBridgeCmd ? Check : Copy}
                               onClick={() => {
                                 navigator.clipboard.writeText(launchCmd);
                                 setCopiedBridgeCmd(true);
                                 setTimeout(() => setCopiedBridgeCmd(false), 2000);
                               }}
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                color: 'var(--text-muted)',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.25rem',
-                                fontSize: '0.72rem',
-                                flexShrink: 0
-                              }}
                               title="Copy command"
                             >
-                              {copiedBridgeCmd ? <Check size={12} color="var(--accent-emerald)" /> : <Copy size={12} />}
-                              <span>{copiedBridgeCmd ? 'Copied' : 'Copy'}</span>
-                            </button>
+                              {copiedBridgeCmd ? 'Copied' : 'Copy'}
+                            </Button>
                           </div>
                         );
                       })()}
@@ -1198,431 +782,188 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
           {/* STEP 2: Connect AI Account (Subscription or API Key) */}
           {currentStep === 2 && (
-            <div>
-              {/* Header explanation */}
-              <p style={{ fontSize: '0.86rem', color: 'var(--text-main)', lineHeight: 1.5, margin: '0 0 1.25rem 0' }}>
-                Connect Ergo to your AI subscription, or provide an API key to pay per usage.
-              </p>
-
-              {/* Navigation Tabs: Subscription vs Developer API Key */}
-              <div
-                style={{
-                  display: 'flex',
-                  gap: '0.5rem',
-                  marginBottom: '1.25rem',
-                  background: 'var(--bg-hover, rgba(0, 0, 0, 0.04))',
-                  padding: '0.3rem',
-                  borderRadius: '10px',
-                  border: '1px solid var(--border-subtle, var(--border, #e2e8f0))'
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('subscription')}
-                  style={{
-                    flex: 1,
-                    padding: '0.65rem 0.75rem',
-                    borderRadius: '8px',
-                    border: 'none',
-                    background: activeTab === 'subscription' ? 'var(--accent-primary)' : 'transparent',
-                    color: activeTab === 'subscription' ? '#ffffff' : 'var(--text-muted)',
-                    fontWeight: activeTab === 'subscription' ? 700 : 500,
-                    fontSize: '0.84rem',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '0.45rem',
-                    transition: 'all 0.15s ease',
-                    boxShadow: activeTab === 'subscription' ? '0 2px 10px rgba(37, 99, 235, 0.35)' : 'none'
-                  }}
-                >
-                  <Zap size={15} color={activeTab === 'subscription' ? '#ffffff' : 'var(--accent-emerald)'} />
-                  <span>AI Subscription</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('apikey')}
-                  style={{
-                    flex: 1,
-                    padding: '0.65rem 0.75rem',
-                    borderRadius: '8px',
-                    border: 'none',
-                    background: activeTab === 'apikey' ? 'var(--accent-primary)' : 'transparent',
-                    color: activeTab === 'apikey' ? '#ffffff' : 'var(--text-muted)',
-                    fontWeight: activeTab === 'apikey' ? 700 : 500,
-                    fontSize: '0.84rem',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '0.45rem',
-                    transition: 'all 0.15s ease',
-                    boxShadow: activeTab === 'apikey' ? '0 2px 10px rgba(37, 99, 235, 0.35)' : 'none'
-                  }}
-                >
-                  <Key size={15} color={activeTab === 'apikey' ? '#ffffff' : 'var(--accent-amber)'} />
-                  <span>API Key</span>
-                </button>
+            <div className="dlg-ob-step">
+              <div>
+                <h3 className="dlg-ob-title">Connect AI</h3>
+                <p className="dlg-ob-lead">Connect Ergo to your AI subscription, or provide an API key to pay per usage.</p>
               </div>
 
+              <SegmentedControl<'subscription' | 'apikey'>
+                full
+                label="How to connect"
+                value={activeTab}
+                onChange={setActiveTab}
+                options={[
+                  { id: 'subscription', label: 'AI subscription' },
+                  { id: 'apikey', label: 'API key' }
+                ]}
+              />
+
               {activeTab === 'subscription' ? (
-                <div>
-                  {/* Provider Grid with Authentic SVG Logos */}
-                  <div style={{ marginBottom: '1.25rem' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.65rem' }}>
-                      {(['codex', 'claude', 'gemini', 'other'] as ProviderChoice[]).map((pId) => {
-                        const p = PROVIDER_METAS[pId];
-                        const isSelected = selectedProvider === pId;
-                        return (
-                          <div
-                            key={p.id}
-                            onClick={() => {
-                              setSelectedProvider(pId);
-                              setGeminiTerminalActive(false);
-                              setLoginError(null);
-                              setInstallError(null);
-                            }}
-                            style={{
-                              padding: '0.65rem 0.8rem',
-                              borderRadius: '12px',
-                              border: `1.5px solid ${isSelected ? p.brandColor : 'var(--border-subtle, var(--border, #e2e8f0))'}`,
-                              background: isSelected ? 'var(--accent-subtle, rgba(37, 99, 235, 0.08))' : 'var(--bg-card, var(--card, #ffffff))',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: '0.45rem',
-                              transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
-                              boxShadow: isSelected ? `0 0 16px ${p.brandColor}33` : 'var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.04))',
-                              position: 'relative'
-                            }}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                              {/* Official Provider SVG Icon or Fallback Icon */}
-                              <div
-                                style={{
-                                  width: 32,
-                                  height: 32,
-                                  borderRadius: '8px',
-                                  background: 'var(--bg-hover, rgba(0, 0, 0, 0.05))',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  padding: p.iconUrl ? '5px' : '0px',
-                                  color: p.brandColor
-                                }}
-                              >
-                                {p.iconUrl ? (
-                                  <img
-                                    src={p.iconUrl}
-                                    alt={p.name}
-                                    style={{
-                                      width: '100%',
-                                      height: '100%',
-                                      objectFit: 'contain'
-                                    }}
-                                  />
-                                ) : (
-                                  <MoreHorizontal size={20} />
-                                )}
-                              </div>
-
-                              <div
-                                style={{
-                                  width: 16,
-                                  height: 16,
-                                  borderRadius: '50%',
-                                  border: `2px solid ${isSelected ? p.brandColor : 'var(--border-strong, var(--border, #cbd5e1))'}`,
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  transition: 'all 0.15s ease'
-                                }}
-                              >
-                                {isSelected && (
-                                  <div
-                                    style={{
-                                      width: 8,
-                                      height: 8,
-                                      borderRadius: '50%',
-                                      background: p.brandColor
-                                    }}
-                                  />
-                                )}
-                              </div>
-                            </div>
-
-                            <div style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--text-bright)', marginTop: '0.2rem' }}>
-                              {p.name}
-                            </div>
-                            {/* <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', lineHeight: 1.3 }}>
-                              {p.badge}
-                            </div> */}
-                          </div>
-                        );
-                      })}
-                    </div>
+                <>
+                  <div className="dlg-provider-grid" role="radiogroup" aria-label="Provider">
+                    {(['codex', 'claude', 'gemini', 'other'] as ProviderChoice[]).map((pId) => {
+                      const p = PROVIDER_METAS[pId];
+                      const isSelected = selectedProvider === pId;
+                      return (
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={isSelected}
+                          key={p.id}
+                          className="dlg-provider"
+                          onClick={() => {
+                            setSelectedProvider(pId);
+                            setGeminiTerminalActive(false);
+                            setLoginError(null);
+                            setInstallError(null);
+                          }}
+                        >
+                          <span className="dlg-provider-logo">
+                            {p.iconUrl ? <img src={p.iconUrl} alt="" /> : <MoreHorizontal size={16} strokeWidth={1.75} />}
+                          </span>
+                          <span>{p.name}</span>
+                        </button>
+                      );
+                    })}
                   </div>
 
                   {bridgeStatus.awaitingPermission && (
-                    <div
-                      style={{
-                        marginBottom: '1.25rem',
-                        padding: '0.85rem 1rem',
-                        borderRadius: '10px',
-                        background: 'rgba(234, 179, 8, 0.1)',
-                        border: '1px solid rgba(234, 179, 8, 0.35)',
-                        display: 'flex',
-                        alignItems: 'flex-start',
-                        gap: '0.75rem',
-                        fontSize: '0.78rem',
-                        color: 'var(--text-main)',
-                        lineHeight: 1.45
-                      }}
-                    >
-                      <AlertCircle size={18} color="#eab308" style={{ marginTop: '2px', flexShrink: 0 }} />
-                      <div>{bridgeClient.describeUnreachable('permission-prompt')}</div>
-                    </div>
+                    <Banner tone="warning" title="Allow Ergo to reach the bridge" text={bridgeClient.describeUnreachable('permission-prompt')} />
                   )}
 
-                  {/* Prominent Error Banner */}
                   {(loginError || installError) && (
-                    <div
-                      style={{
-                        marginBottom: '1.25rem',
-                        padding: '0.85rem 1rem',
-                        borderRadius: '10px',
-                        background: 'rgba(239, 68, 68, 0.12)',
-                        border: '1px solid rgba(239, 68, 68, 0.35)',
-                        display: 'flex',
-                        alignItems: 'flex-start',
-                        gap: '0.75rem',
-                        animation: 'fadeIn 0.2s ease-out'
-                      }}
-                    >
-                      <AlertCircle size={18} color="var(--accent-rose)" style={{ marginTop: '2px', flexShrink: 0 }} />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--accent-rose)', marginBottom: '0.25rem' }}>
-                          Connection Notice
-                        </div>
-                        <div style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: 1.45 }}>
-                          {loginError || installError}
-                        </div>
-                        {bridgeInstallActions && <div style={{ marginTop: '0.65rem' }}>{bridgeInstallActions}</div>}
-                        {!bridgeStatus.isConnected && (
-                          <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setActiveTab('apikey');
-                                setLoginError(null);
-                                setInstallError(null);
-                              }}
-                              style={{
-                                padding: '0.35rem 0.75rem',
-                                borderRadius: '6px',
-                                background: 'var(--btn-secondary-bg, var(--bg-card, #ffffff))',
-                                border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                                color: 'var(--text-bright)',
-                                fontSize: '0.74rem',
-                                fontWeight: 600,
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '0.35rem'
-                              }}
-                            >
-                              <Key size={13} />
-                              <span>Switch to API Key Tab</span>
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                      <button
-                        type="button"
+                    <div style={{ position: 'relative' }}>
+                      <Banner
+                        tone="warning"
+                        title={`${currentMeta.name} isn’t connected yet`}
+                        text={loginError || installError}
+                        actions={
+                          bridgeInstallActions || !bridgeStatus.isConnected ? (
+                            <>
+                              {bridgeInstallActions}
+                              {!bridgeStatus.isConnected && (
+                                <Button
+                                  size="sm"
+                                  icon={Key}
+                                  onClick={() => {
+                                    setActiveTab('apikey');
+                                    setLoginError(null);
+                                    setInstallError(null);
+                                  }}
+                                >
+                                  Use an API key instead
+                                </Button>
+                              )}
+                            </>
+                          ) : undefined
+                        }
+                      />
+                      <IconButton
+                        icon={X}
+                        label="Dismiss"
+                        size="sm"
+                        style={{ position: 'absolute', top: 8, right: 8 }}
                         onClick={() => {
                           setLoginError(null);
                           setInstallError(null);
                         }}
-                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 2 }}
-                        title="Dismiss"
-                      >
-                        <X size={14} />
-                      </button>
+                      />
                     </div>
                   )}
 
-                  {/* Reset Confirmation Notice */}
                   {resetSuccessMessage && (
-                    <div
-                      style={{
-                        background: 'rgba(16, 185, 129, 0.08)',
-                        border: '1px solid rgba(16, 185, 129, 0.25)',
-                        borderRadius: '10px',
-                        padding: '0.85rem 1rem',
-                        display: 'flex',
-                        alignItems: 'flex-start',
-                        gap: '0.65rem'
-                      }}
-                    >
-                      <CheckCircle2 size={18} color="var(--accent-emerald)" style={{ marginTop: '2px', flexShrink: 0 }} />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--accent-emerald)', marginBottom: '0.2rem' }}>
-                          Subscription Disconnected
-                        </div>
-                        <div style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: 1.45 }}>
-                          {resetSuccessMessage}
-                        </div>
-                      </div>
-                      <button
-                        type="button"
+                    <div style={{ position: 'relative' }}>
+                      <Banner icon={CheckCircle2} title="Subscription disconnected" text={resetSuccessMessage} className="dlg-banner-success" />
+                      <IconButton
+                        icon={X}
+                        label="Dismiss"
+                        size="sm"
+                        style={{ position: 'absolute', top: 8, right: 8 }}
                         onClick={() => setResetSuccessMessage(null)}
-                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 2 }}
-                        title="Dismiss"
-                      >
-                        <X size={14} />
-                      </button>
+                      />
                     </div>
                   )}
 
-                  {/* 1-Click Connection Card */}
-                  <div
-                    style={{
-                      background: 'var(--bg-card, var(--card, #ffffff))',
-                      border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                      borderRadius: '14px',
-                      padding: '1.35rem',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '1rem',
-                      boxShadow: 'var(--shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.04))'
-                    }}
-                  >
-                    {selectedProvider !== 'other' && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                        <ShieldCheck size={18} color="var(--accent-emerald)" />
-                        <span style={{ fontSize: '0.86rem', fontWeight: 700, color: 'var(--text-bright)' }}>
-                          Subscription Connection
-                        </span>
+                  {/* Connect */}
+                  <div className="dlg-ob-panel" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                    {selectedProvider !== 'other' && (
+                      <div className="eg-hstack">
+                        <ShieldCheck size={16} strokeWidth={1.75} style={{ color: 'var(--ink-subtle)' }} />
+                        <span style={{ color: 'var(--ink)', fontWeight: 500 }}>Subscription</span>
+                        <span className="eg-spacer" />
+                        {isCheckingAuth && (
+                          <span className="eg-hstack eg-subtle" style={{ fontSize: 'calc(12px * var(--type-scale))', gap: 6 }}>
+                            <Loader2 size={14} strokeWidth={1.75} className="animate-spin" />
+                            Checking…
+                          </span>
+                        )}
+                        {!isCheckingAuth && authStatus?.isInstalled && authStatus.isAuthenticated && (
+                          <span className="eg-hstack" style={{ fontSize: 'calc(12px * var(--type-scale))', gap: 6, color: 'var(--ink-muted)' }}>
+                            <span className="eg-dot eg-dot-success" />
+                            Connected
+                          </span>
+                        )}
                       </div>
+                    )}
 
-                      {isCheckingAuth && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.72rem', color: 'var(--accent-cyan)' }}>
-                          <Loader2 size={12} className="animate-spin" />
-                          <span>Checking status...</span>
-                        </div>
+                    <p style={{ margin: 0 }}>
+                      {selectedProvider === 'other' ? (
+                        'Using Grok, a local Ollama model, or another AI provider? You can skip this step and configure it later from the AI profile menu.'
+                      ) : authStatus?.isInstalled && authStatus.isAuthenticated ? (
+                        <span>
+                          Connected to your {currentMeta.name} subscription
+                          {authStatus.userEmail ? (
+                            <>
+                              {' '}
+                              (<span style={{ color: 'var(--ink)' }}>{authStatus.userEmail}</span>).
+                            </>
+                          ) : (
+                            '.'
+                          )}
+                        </span>
+                      ) : (
+                        'Connect in one click. Ergo handles sign-in and stores the credentials locally.'
                       )}
-                    </div>}
-
-                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>
-                      {selectedProvider === 'other'
-                        ? 'Using Grok, a local Ollama model, or another AI provider? You can skip this step and configure it later from the AI Profile dropdown.'
-                        : authStatus?.isInstalled && authStatus.isAuthenticated
-                          ? (
-                            <span>
-                              Successfully connected to your {currentMeta.name} subscription
-                              {authStatus.userEmail ? (
-                                <>
-                                  {' '}(<strong style={{ color: 'var(--text-bright)' }}>{authStatus.userEmail}</strong>).
-                                </>
-                              ) : (
-                                '.'
-                              )}
-                            </span>
-                          )
-                          : `Connect in one click. Handles authentication and secure local storage automatically.`}
                     </p>
 
-                    {/* Single 1-Click Action Button & Reset Auth Button */}
-                    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                      <button
-                        type="button"
+                    <div className="eg-hstack" style={{ flexWrap: 'wrap' }}>
+                      <Button
+                        variant="primary"
+                        size="lg"
                         onClick={handleOneClickSubscriptionConnect}
                         disabled={isConnectingSubscription || isResettingAuth}
-                        style={{
-                          flex: 1,
-                          minWidth: '240px',
-                          padding: '0.75rem 1.4rem',
-                          borderRadius: '10px',
-                          background: authStatus?.isInstalled && authStatus.isAuthenticated
-                            ? 'var(--accent-emerald)'
-                            : 'var(--accent-primary)',
-                          color: '#ffffff',
-                          fontWeight: 700,
-                          fontSize: '0.88rem',
-                          border: 'none',
-                          cursor: (isConnectingSubscription || isResettingAuth) ? 'not-allowed' : 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: '0.55rem',
-                          boxShadow: authStatus?.isInstalled && authStatus.isAuthenticated
-                            ? '0 4px 16px rgba(16, 185, 129, 0.35)'
-                            : '0 4px 16px rgba(37, 99, 235, 0.35)',
-                          transition: 'all 0.15s ease',
-                          opacity: (isConnectingSubscription || isResettingAuth) ? 0.8 : 1
-                        }}
+                        style={{ flex: 1, minWidth: 220 }}
                       >
-                        {selectedProvider === 'other' ? (
-                          <>
-                            {/* <ChevronRight size={20} /> */}
-                            <span>I'll set this up later</span>
-                          </>
-                        ) : isConnectingSubscription ? (
-                          <>
-                            <Loader2 size={20} className="animate-spin" />
-                            <span>Connecting {currentMeta.name}...</span>
-                          </>
-                        ) : authStatus?.isInstalled && authStatus.isAuthenticated ? (
-                          <>
-                            {/* <CheckCircle2 size={20} /> */}
-                            <span>Confirm & Continue</span>
-                          </>
-                        ) : (
-                          <>
-                            {/* <Zap size={20} /> */}
-                            <span>Connect with {currentMeta.name}</span>
-                          </>
+                        {isConnectingSubscription && selectedProvider !== 'other' && (
+                          <Loader2 size={14} strokeWidth={1.75} className="animate-spin" />
                         )}
-                      </button>
+                        {selectedProvider === 'other'
+                          ? "I'll set this up later"
+                          : isConnectingSubscription
+                            ? `Connecting ${currentMeta.name}…`
+                            : authStatus?.isInstalled && authStatus.isAuthenticated
+                              ? 'Continue'
+                              : `Connect ${currentMeta.name}`}
+                      </Button>
 
                       {selectedProvider !== 'other' && (
-                        <button
-                          type="button"
+                        <Button
+                          size="lg"
+                          icon={isResettingAuth ? undefined : RotateCcw}
                           onClick={handleResetAuth}
                           disabled={isResettingAuth || isConnectingSubscription}
-                          style={{
-                            padding: '0.75rem 1rem',
-                            borderRadius: '10px',
-                            background: 'var(--btn-secondary-bg, var(--bg-card, #ffffff))',
-                            border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                            color: 'var(--text-muted)',
-                            fontSize: '0.8rem',
-                            fontWeight: 600,
-                            cursor: (isResettingAuth || isConnectingSubscription) ? 'not-allowed' : 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: '0.45rem',
-                            transition: 'all 0.15s ease',
-                            whiteSpace: 'nowrap'
-                          }}
-                          title="Wipe saved credentials for this provider and sign in under another account"
+                          title="Remove the saved sign-in for this provider so you can use another account"
                         >
-                          {isResettingAuth ? (
-                            <Loader2 size={14} className="animate-spin" />
-                          ) : (
-                            <RotateCcw size={14} />
-                          )}
-                          <span>Reset</span>
-                        </button>
+                          {isResettingAuth && <Loader2 size={14} strokeWidth={1.75} className="animate-spin" />}
+                          Sign out
+                        </Button>
                       )}
 
-                      {/* Cancel button if currently in connecting state */}
                       {isConnectingSubscription && (
-                        <button
-                          type="button"
+                        <Button
+                          variant="ghost"
+                          size="lg"
                           onClick={() => {
                             if (pollingRef.current) {
                               clearInterval(pollingRef.current);
@@ -1630,70 +971,29 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                             }
                             setIsConnectingSubscription(false);
                           }}
-                          style={{
-                            padding: '0.75rem 1rem',
-                            borderRadius: '10px',
-                            background: 'var(--bg-hover, rgba(0, 0, 0, 0.05))',
-                            border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                            color: 'var(--text-dim)',
-                            fontSize: '0.8rem',
-                            fontWeight: 600,
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.35rem'
-                          }}
                         >
-                          <X size={14} />
-                          <span>Cancel</span>
-                        </button>
+                          Cancel
+                        </Button>
                       )}
                     </div>
 
-                    {/* Quick Access to OAuth Link if window was blocked or closed */}
+                    {/* Quick access to the OAuth link if the window was blocked or closed */}
                     {isConnectingSubscription && loginAuthUrl && (
-                      <div
-                        style={{
-                          background: 'rgba(37, 99, 235, 0.08)',
-                          border: '1px solid rgba(37, 99, 235, 0.25)',
-                          borderRadius: '8px',
-                          padding: '0.65rem 0.85rem',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          gap: '0.5rem',
-                          marginTop: '0.25rem'
-                        }}
-                      >
-                        <span style={{ fontSize: '0.76rem', color: 'var(--text-main)' }}>
-                          Sign-in window didn't open?
-                        </span>
-                        <a
-                          href={loginAuthUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{
-                            fontSize: '0.76rem',
-                            fontWeight: 600,
-                            color: 'var(--accent-primary)',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.3rem',
-                            textDecoration: 'none'
-                          }}
-                        >
-                          <span>Open Authorization Window</span>
-                          <ExternalLink size={12} />
+                      <div className="eg-hstack" style={{ fontSize: 'calc(12px * var(--type-scale))' }}>
+                        <span>Sign-in window didn't open?</span>
+                        <a href={loginAuthUrl} target="_blank" rel="noreferrer" className="dlg-link eg-hstack" style={{ gap: 4 }}>
+                          Open the sign-in window
+                          <ExternalLink size={12} strokeWidth={1.75} />
                         </a>
                       </div>
                     )}
 
-                    {/* Interactive terminal container - only shown for Gemini when user initiates connection and authentication is needed */}
+                    {/* Interactive terminal - only for Gemini while connecting and sign-in is needed */}
                     {selectedProvider === 'gemini' && (isConnectingSubscription || (authStatus && !authStatus.isAuthenticated && geminiTerminalActive)) && (
-                      <div style={{ marginTop: '0.5rem', borderTop: '1px solid var(--border-subtle, var(--border, #e2e8f0))', paddingTop: '0.85rem' }}>
-                        <div style={{ marginBottom: '0.5rem', fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
-                          Antigravity CLI authenticates directly via the interactive console below. Follow the on-screen prompt:
-                        </div>
+                      <div style={{ borderTop: '1px solid var(--line)', paddingTop: 'var(--space-3)' }}>
+                        <p style={{ margin: '0 0 var(--space-2)', fontSize: 'calc(12px * var(--type-scale))', lineHeight: 'calc(16px * var(--type-scale))' }}>
+                          Antigravity CLI signs in through the console below. Follow its prompt:
+                        </p>
                         <ResizableTerminalContainer
                           defaultHeight={280}
                           minHeight={180}
@@ -1701,14 +1001,14 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           maximizedHeight={480}
                           storageKey="ergo_terminal_height_onboarding"
                           style={{
-                            border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                            borderRadius: '8px',
+                            border: '1px solid var(--line)',
+                            borderRadius: 'var(--radius-md)',
                             overflow: 'hidden'
                           }}
                           headerLeft={
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.73rem', fontWeight: 700, color: 'var(--accent-cyan)' }}>
-                              <Terminal size={13} />
-                              <span>Console Authentication ({currentMeta.cliName})</span>
+                            <div className="eg-hstack" style={{ gap: 6, fontSize: 'calc(12px * var(--type-scale))', fontWeight: 500, color: 'var(--ink-muted)' }}>
+                              <Terminal size={14} strokeWidth={1.75} />
+                              <span>Sign in · {currentMeta.cliName}</span>
                             </div>
                           }
                         >
@@ -1730,196 +1030,74 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                       </div>
                     )}
                   </div>
-                </div>
+                </>
               ) : (
-                /* Developer API Key Tab */
-                <div
-                  style={{
-                    background: 'var(--bg-card, var(--card, #ffffff))',
-                    border: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-                    borderRadius: '14px',
-                    padding: '1.0rem',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '1.25rem',
-                    boxShadow: 'var(--shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.04))'
-                  }}
-                >
-                  <div>
-                    {/* <label style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-bright)', marginBottom: '0.45rem', display: 'block' }}>
-                      Paste API Key:
-                    </label> */}
-                    <input
+                /* Developer API key */
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+                  <div className="eg-field">
+                    <span className="eg-field-label">API key</span>
+                    <Input
                       type="password"
-                      className="input-text"
-                      placeholder="sk-ant-... or sk-proj-... or AIzaSy..."
+                      mono
+                      aria-label="API key"
+                      placeholder="sk-ant-…, sk-proj-… or AIzaSy…"
                       value={apiKeyInput}
+                      invalid={!!keyValidationError}
                       onChange={(e) => handleApiKeyChange(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') handleOneClickApiKeyConnect();
                       }}
-                      style={{
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: '0.88rem',
-                        padding: '0.75rem 0.95rem',
-                        width: '100%',
-                        borderRadius: '10px'
-                      }}
+                      style={{ height: 'var(--size-control-lg)' }}
                     />
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '0.65rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                      {apiKeyProvider === "none" ? (
-                        <span></span>
-                      ) : (
-                        <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-                          Provider auto-detected: <strong style={{ color: 'var(--text-bright)' }}>{apiKeyProvider.toUpperCase()}</strong>
+                    <div className="eg-hstack" style={{ flexWrap: 'wrap', fontSize: 'calc(12px * var(--type-scale))', color: 'var(--ink-subtle)' }}>
+                      {apiKeyProvider !== 'none' && (
+                        <span>
+                          Detected: <span style={{ color: 'var(--ink)' }}>{apiKeyProvider}</span>
                         </span>
                       )}
-
-                      {/* 3-Button Tab to Get API Keys */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginRight: '0.15rem' }}>Get Key:</span>
+                      <span className="eg-spacer" />
+                      <span>Get a key:</span>
+                      {[
+                        { id: 'openai', label: 'OpenAI', href: 'https://platform.openai.com/api-keys', icon: '/icons/providers/openai.svg' },
+                        { id: 'anthropic', label: 'Anthropic', href: 'https://console.anthropic.com/settings/keys', icon: '/icons/providers/anthropic.svg' },
+                        { id: 'gemini', label: 'Gemini', href: 'https://aistudio.google.com/app/apikey', icon: '/icons/providers/gemini.svg' }
+                      ].map((k) => (
                         <a
-                          href="https://platform.openai.com/api-keys"
+                          key={k.id}
+                          href={k.href}
                           target="_blank"
                           rel="noreferrer"
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.25rem',
-                            padding: '0.22rem 0.55rem',
-                            borderRadius: '6px',
-                            background: apiKeyProvider === 'openai' ? 'rgba(16, 163, 127, 0.15)' : 'var(--bg-hover, rgba(0, 0, 0, 0.04))',
-                            border: `1px solid ${apiKeyProvider === 'openai' ? 'rgba(16, 163, 127, 0.4)' : 'var(--border-subtle, var(--border, #e2e8f0))'}`,
-                            color: apiKeyProvider === 'openai' ? '#10b981' : 'var(--text-muted)',
-                            fontSize: '0.72rem',
-                            fontWeight: 600,
-                            textDecoration: 'none',
-                            transition: 'all 0.15s ease'
-                          }}
+                          className="eg-btn eg-btn-ghost eg-btn-sm"
+                          style={{ textDecoration: 'none', color: apiKeyProvider === k.id ? 'var(--ink)' : undefined }}
                         >
-                          <img src="/icons/providers/openai.svg" alt="OpenAI" style={{ width: 11, height: 11 }} />
-                          <span>OpenAI</span>
-                          <ExternalLink size={10} />
+                          <img src={k.icon} alt="" style={{ width: 12, height: 12 }} />
+                          {k.label}
+                          <ExternalLink size={12} strokeWidth={1.75} />
                         </a>
-
-                        <a
-                          href="https://console.anthropic.com/settings/keys"
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.25rem',
-                            padding: '0.22rem 0.55rem',
-                            borderRadius: '6px',
-                            background: apiKeyProvider === 'anthropic' ? 'rgba(217, 119, 87, 0.15)' : 'var(--bg-hover, rgba(0, 0, 0, 0.04))',
-                            border: `1px solid ${apiKeyProvider === 'anthropic' ? 'rgba(217, 119, 87, 0.4)' : 'var(--border-subtle, var(--border, #e2e8f0))'}`,
-                            color: apiKeyProvider === 'anthropic' ? '#D97757' : 'var(--text-muted)',
-                            fontSize: '0.72rem',
-                            fontWeight: 600,
-                            textDecoration: 'none',
-                            transition: 'all 0.15s ease'
-                          }}
-                        >
-                          <img src="/icons/providers/anthropic.svg" alt="Anthropic" style={{ width: 11, height: 11 }} />
-                          <span>Anthropic</span>
-                          <ExternalLink size={10} />
-                        </a>
-
-                        <a
-                          href="https://aistudio.google.com/app/apikey"
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.25rem',
-                            padding: '0.22rem 0.55rem',
-                            borderRadius: '6px',
-                            background: apiKeyProvider === 'gemini' ? 'rgba(59, 130, 246, 0.15)' : 'var(--bg-hover, rgba(0, 0, 0, 0.04))',
-                            border: `1px solid ${apiKeyProvider === 'gemini' ? 'rgba(59, 130, 246, 0.4)' : 'var(--border-subtle, var(--border, #e2e8f0))'}`,
-                            color: apiKeyProvider === 'gemini' ? '#60a5fa' : 'var(--text-muted)',
-                            fontSize: '0.72rem',
-                            fontWeight: 600,
-                            textDecoration: 'none',
-                            transition: 'all 0.15s ease'
-                          }}
-                        >
-                          <img src="/icons/providers/gemini.svg" alt="Gemini" style={{ width: 11, height: 11 }} />
-                          <span>Gemini</span>
-                          <ExternalLink size={10} />
-                        </a>
-                      </div>
+                      ))}
                     </div>
+                    {keyValidationError && (
+                      <span className="eg-field-error" role="alert">
+                        <AlertCircle size={14} strokeWidth={1.75} />
+                        {keyValidationError}
+                      </span>
+                    )}
                   </div>
 
-                  {keyValidationError && (
-                    <div
-                      style={{
-                        fontSize: '0.78rem',
-                        color: 'var(--accent-rose)',
-                        background: 'rgba(244, 63, 94, 0.1)',
-                        border: '1px solid rgba(244, 63, 94, 0.25)',
-                        padding: '0.65rem 0.85rem',
-                        borderRadius: '8px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.45rem'
-                      }}
-                    >
-                      <AlertCircle size={14} />
-                      <span>{keyValidationError}</span>
-                    </div>
-                  )}
+                  <Field label="Profile name (optional)">
+                    <Input type="text" placeholder="Work key" value={apiKeyProfileName} onChange={(e) => setApiKeyProfileName(e.target.value)} />
+                  </Field>
 
-                  <div>
-                    <label style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-                      Profile Name (Optional):
-                    </label>
-                    <input
-                      type="text"
-                      className="input-text"
-                      placeholder="e.g. Work Key"
-                      value={apiKeyProfileName}
-                      onChange={(e) => setApiKeyProfileName(e.target.value)}
-                      style={{ fontSize: '0.84rem', padding: '0.6rem 0.85rem', width: '100%', borderRadius: '8px' }}
-                    />
-                  </div>
-
-                  {/* Single 1-Click Connect Button for API Key */}
-                  <button
-                    type="button"
+                  <Button
+                    variant="primary"
+                    size="lg"
                     onClick={handleOneClickApiKeyConnect}
                     disabled={isValidatingKey || !apiKeyInput.trim()}
-                    style={{
-                      padding: '0.75rem 1.4rem',
-                      borderRadius: '10px',
-                      background: 'var(--accent-primary)',
-                      color: '#ffffff',
-                      fontWeight: 700,
-                      fontSize: '0.88rem',
-                      border: 'none',
-                      cursor: isValidatingKey || !apiKeyInput.trim() ? 'not-allowed' : 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '0.5rem',
-                      boxShadow: '0 4px 16px rgba(37, 99, 235, 0.35)',
-                      opacity: isValidatingKey || !apiKeyInput.trim() ? 0.6 : 1
-                    }}
+                    style={{ alignSelf: 'flex-start' }}
                   >
-                    {isValidatingKey ? (
-                      <>
-                        <Loader2 size={16} className="animate-spin" />
-                        <span>Validating & Connecting...</span>
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle2 size={16} />
-                        <span>Connect API Key</span>
-                      </>
-                    )}
-                  </button>
+                    {isValidatingKey && <Loader2 size={14} strokeWidth={1.75} className="animate-spin" />}
+                    {isValidatingKey ? 'Checking the key…' : 'Connect API key'}
+                  </Button>
                 </div>
               )}
             </div>
@@ -1927,7 +1105,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
           {/* STEP 3: Optional Local AI Model */}
           {currentStep === 3 && (
-            <div style={{ animation: 'fadeIn 0.25s ease-out' }}>
+            <div>
               <LocalModelOnboardingStep
                 controller={localModel}
                 mode={localModelMode}
@@ -1940,117 +1118,37 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
         </div>
 
-        {/* Modal Footer with Actions and Skip option */}
-        <div
-          style={{
-            padding: '1.15rem 2rem',
-            borderTop: '1px solid var(--border-subtle, var(--border, #e2e8f0))',
-            background: 'var(--modal-footer-bg, var(--bg-hover, transparent))',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '1rem'
-          }}
-        >
+        {/* Footer: skip on the left, the next step on the right */}
+        <div className="eg-dialog-foot">
           {currentStep === 1 ? (
             <>
-              {bridgeStatus.isConnected ? <span /> : (
-              <button
-                type="button"
-                onClick={() => setCurrentStep(2)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: 'var(--text-muted)',
-                  fontSize: '0.78rem',
-                  cursor: 'pointer',
-                  textDecoration: 'underline',
-                  padding: '0.4rem 0'
-                }}
-              >
-                Skip for now (API keys only)
-              </button>
+              {!bridgeStatus.isConnected && (
+                <Button variant="ghost" size="lg" onClick={() => setCurrentStep(2)}>
+                  Skip for now (API keys only)
+                </Button>
               )}
-
-              <button
-                type="button"
-                onClick={() => setCurrentStep(2)}
-                disabled={!bridgeStatus.isConnected}
-                style={{
-                  padding: '0.65rem 1.4rem',
-                  borderRadius: '10px',
-                  background: 'var(--accent-primary)',
-                  color: '#ffffff',
-                  fontSize: '0.85rem',
-                  fontWeight: 700,
-                  border: 'none',
-                  cursor: bridgeStatus.isConnected ? 'pointer' : 'not-allowed',
-                  opacity: bridgeStatus.isConnected ? 1 : 0.5,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.45rem',
-                  boxShadow: '0 4px 16px rgba(37, 99, 235, 0.35)',
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                <span>Next: Connect AI</span>
-                <ArrowRight size={15} />
-              </button>
+              <span className="eg-spacer" />
+              <Button variant="primary" size="lg" iconRight={ArrowRight} onClick={() => setCurrentStep(2)} disabled={!bridgeStatus.isConnected}>
+                Next: connect AI
+              </Button>
             </>
           ) : currentStep === 2 ? (
             <>
-              <div style={{ fontSize: '0.74rem', color: 'var(--text-dim)' }}>
-                Preferences are saved locally in <code>.ergo/config/</code>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => proceedToLocalModelStep()}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: 'var(--text-muted)',
-                  fontSize: '0.78rem',
-                  cursor: 'pointer',
-                  textDecoration: 'underline',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.35rem',
-                  transition: 'color 0.15s ease'
-                }}
-              >
-                <span>Skip Step</span>
-                <ChevronRight size={14} />
-              </button>
+              <span className="eg-subtle" style={{ fontSize: 'calc(12px * var(--type-scale))' }}>
+                Preferences are saved locally in <code className="eg-mono" style={{ fontSize: 'calc(11px * var(--type-scale))' }}>.ergo/config/</code>
+              </span>
+              <span className="eg-spacer" />
+              <Button variant="ghost" size="lg" iconRight={ChevronRight} onClick={() => proceedToLocalModelStep()}>
+                Skip this step
+              </Button>
             </>
           ) : (
             <>
-              <div style={{ fontSize: '0.74rem', color: 'var(--text-dim)' }}>
-                You can change this anytime in Settings.
-              </div>
-
-              <button
-                type="button"
-                onClick={handleLocalModelNext}
-                style={{
-                  padding: '0.65rem 1.4rem',
-                  borderRadius: '10px',
-                  background: 'var(--accent-primary)',
-                  color: '#ffffff',
-                  fontSize: '0.85rem',
-                  fontWeight: 700,
-                  border: 'none',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.45rem',
-                  boxShadow: '0 4px 16px rgba(37, 99, 235, 0.35)',
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                <span>Enter Workspace</span>
-                <ArrowRight size={15} />
-              </button>
+              <span className="eg-subtle" style={{ fontSize: 'calc(12px * var(--type-scale))' }}>You can change this anytime in Settings.</span>
+              <span className="eg-spacer" />
+              <Button variant="primary" size="lg" iconRight={ArrowRight} onClick={handleLocalModelNext}>
+                Open the workspace
+              </Button>
             </>
           )}
         </div>

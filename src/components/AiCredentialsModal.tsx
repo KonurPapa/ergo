@@ -51,8 +51,10 @@ import {
   RefreshCw
 } from 'lucide-react';
 
-interface AiCredentialsModalProps {
+export interface AiCredentialsModalProps {
   isOpen: boolean;
+  /** Settings › Models opens this as a plain add/edit dialog: no profile list (the page lists the profiles). */
+  formOnly?: boolean;
   onClose: () => void;
   userApiKeys: UserApiKey[];
   activeKeyId: string | null;
@@ -81,22 +83,22 @@ const ROLE_ICONS: Record<AgentRole, React.ReactNode> = {
 function getScoreBadgeStyle(score: number): { bg: string; color: string; border: string } {
   if (score >= 8.5) {
     return {
-      bg: 'rgba(245, 158, 11, 0.15)',
+      bg: 'var(--warning-subtle)',
       color: 'var(--accent-amber)',
-      border: 'rgba(245, 158, 11, 0.3)'
+      border: 'var(--line-strong)'
     };
   }
   if (score >= 6.0) {
     return {
-      bg: 'rgba(6, 182, 212, 0.15)',
+      bg: 'var(--accent-subtle)',
       color: 'var(--accent-cyan)',
-      border: 'rgba(6, 182, 212, 0.3)'
+      border: 'var(--line-strong)'
     };
   }
   return {
-    bg: 'rgba(16, 185, 129, 0.15)',
+    bg: 'var(--success-subtle)',
     color: 'var(--accent-emerald)',
-    border: 'rgba(16, 185, 129, 0.3)'
+    border: 'var(--line-strong)'
   };
 }
 
@@ -108,7 +110,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
   onSaveUserKey,
   onDeleteUserKey,
   onSelectActiveKey,
-  editingKey
+  editingKey,
+  formOnly = false
 }) => {
   const [keyName, setKeyName] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -697,7 +700,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
       }}
     >
       <div>
-        <div style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--text-bright)' }}>Context Compaction</div>
+        <div style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-bright)' }}>Context compaction</div>
         <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.15rem', lineHeight: 1.45 }}>
           When an agent's conversation nears the model's context window, the same model summarizes the older part so the run can
           continue. {providerId === 'ollama'
@@ -720,8 +723,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
               fontSize: '0.74rem',
               borderRadius: 'var(--radius-sm)',
               cursor: 'pointer',
-              border: `1.5px solid ${compactMode === mode ? 'var(--accent-cyan)' : 'rgba(255, 255, 255, 0.08)'}`,
-              background: compactMode === mode ? 'rgba(6, 182, 212, 0.12)' : 'transparent',
+              border: `1.5px solid ${compactMode === mode ? 'var(--accent-cyan)' : 'var(--line)'}`,
+              background: compactMode === mode ? 'var(--accent-subtle)' : 'transparent',
               color: compactMode === mode ? 'var(--accent-cyan)' : 'var(--text-muted)',
               fontWeight: compactMode === mode ? 700 : 500
             }}
@@ -887,6 +890,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
       isConnected: true
     });
     resetForm();
+    if (formOnly) onClose();
   };
 
   // Find all distinct providers currently selected across roles
@@ -922,24 +926,26 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 width: '38px',
                 height: '38px',
                 borderRadius: '10px',
-                background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-cyan))',
+                background: 'var(--surface-2)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: '#fff',
-                boxShadow: '0 2px 8px rgba(99, 102, 241, 0.3)'
+                color: 'var(--ink)',
+                boxShadow: 'none'
               }}
             >
               <Key size={20} />
             </div>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-bright)', margin: 0 }}>
-                  Manage AI Profiles
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 600, color: 'var(--text-bright)', margin: 0 }}>
+                  {formOnly ? (editingId ? 'Edit profile' : 'Add profile') : 'AI profiles'}
                 </h3>
               </div>
               <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0 }}>
-                Configure execution profiles. Mix and match models and providers across workflow agents.
+                {formOnly
+                  ? 'Choose the provider, how you sign in, and the model for each stage.'
+                  : 'Configure execution profiles. Mix and match models and providers across workflow agents.'}
               </p>
             </div>
           </div>
@@ -951,26 +957,26 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
         {/* Body */}
         <div className="modal-body" style={{ overflowY: 'auto', flex: 1, padding: '1.25rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           {/* Card 1: Add New / Edit Profile Form Card */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '-0.75rem' }}>
+          {!formOnly && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '-0.75rem' }}>
             <h4
               style={{
                 fontSize: '0.85rem',
-                fontWeight: 700,
+                fontWeight: 600,
                 color: 'var(--text-muted)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
+                textTransform: 'none',
+                letterSpacing: 'normal',
                 margin: 0
               }}
             >
-              {editingId ? 'Edit Profile' : 'Create New Profile'}
+              {editingId ? 'Edit profile' : 'New profile'}
             </h4>
             {editingId && (
               <button
                 type="button"
                 onClick={() => resetForm()}
                 style={{
-                  background: 'rgba(244, 63, 94, 0.1)',
-                  border: '1px solid rgba(244, 63, 94, 0.3)',
+                  background: 'var(--danger-subtle)',
+                  border: '1px solid var(--line-strong)',
                   color: 'var(--accent-rose)',
                   borderRadius: 'var(--radius-sm)',
                   padding: '0.2rem 0.6rem',
@@ -979,10 +985,10 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                   fontWeight: 600
                 }}
               >
-                Cancel Edit
+                Cancel edit
               </button>
             )}
-          </div>
+          </div>}
 
           <div
             style={{
@@ -990,7 +996,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
               border: editingId ? '1.5px solid var(--accent-cyan)' : '1px solid var(--border-subtle)',
               borderRadius: 'var(--radius-md)',
               padding: '1.25rem',
-              boxShadow: editingId ? '0 0 16px rgba(6, 182, 212, 0.15)' : 'var(--shadow-card)',
+              boxShadow: 'none',
               transition: 'all 0.2s ease'
             }}
           >
@@ -1012,11 +1018,11 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         padding: '0.65rem 0.4rem',
                         borderRadius: 'var(--radius-sm)',
                         border: `1.5px solid ${isSelected ? 'var(--accent-primary)' : 'var(--btn-secondary-border)'}`,
-                        background: isSelected ? 'rgba(99, 102, 241, 0.15)' : 'var(--btn-secondary-bg)',
+                        background: isSelected ? 'var(--accent-subtle)' : 'var(--btn-secondary-bg)',
                         color: isSelected ? 'var(--accent-primary)' : 'var(--text-main)',
                         cursor: 'pointer',
                         transition: 'all 0.15s ease',
-                        boxShadow: isSelected ? '0 0 10px rgba(99, 102, 241, 0.2)' : '0 1px 2px rgba(0, 0, 0, 0.04)'
+                        boxShadow: 'none'
                       }}
                     >
                       <div style={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -1033,7 +1039,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                             }}
                           />
                         ) : (
-                          <span style={{ fontSize: '1.2rem' }}>{p.icon}</span>
+                          <span style={{ fontSize: '1.2rem' }}>{p.shortName.slice(0, 1)}</span>
                         )}
                       </div>
                       <span style={{ fontSize: '0.76rem', fontWeight: isSelected ? 700 : 600 }}>{p.shortName}</span>
@@ -1048,7 +1054,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
             <div className="input-group" style={{ marginBottom: '0.85rem' }}>
               <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
                 <Tag size={13} color="var(--accent-cyan)" />
-                <span style={{ fontWeight: 700, color: 'var(--text-bright)' }}>Profile Name</span>
+                <span style={{ fontWeight: 600, color: 'var(--text-bright)' }}>Profile name</span>
               </label>
               <input
                 type="text"
@@ -1065,7 +1071,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
                   <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
                     <Sliders size={13} color="var(--accent-primary)" />
-                    <span style={{ fontWeight: 700, color: 'var(--text-bright)' }}>Authentication</span>
+                    <span style={{ fontWeight: 600, color: 'var(--text-bright)' }}>Authentication</span>
                   </label>
                 </div>
 
@@ -1074,7 +1080,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                     display: 'grid',
                     gridTemplateColumns: '1fr 1fr',
                     gap: '0.35rem',
-                    background: 'rgba(0, 0, 0, 0.25)',
+                    background: 'var(--surface-1)',
                     padding: '0.25rem',
                     borderRadius: 'var(--radius-sm)',
                     border: '1px solid var(--border-subtle)'
@@ -1095,7 +1101,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                       padding: '0.5rem 0.75rem',
                       borderRadius: 'calc(var(--radius-sm) - 2px)',
                       border: authMode === 'cli_subscription' ? '1.5px solid var(--accent-emerald)' : '1px solid transparent',
-                      background: authMode === 'cli_subscription' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+                      background: authMode === 'cli_subscription' ? 'var(--success-subtle)' : 'transparent',
                       color: authMode === 'cli_subscription' ? 'var(--accent-emerald)' : 'var(--text-muted)',
                       cursor: 'pointer',
                       fontWeight: authMode === 'cli_subscription' ? 700 : 500,
@@ -1104,7 +1110,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                     }}
                   >
                     <Zap size={14} />
-                    <span>AI Subscription</span>
+                    <span>Subscription</span>
                   </button>
 
                   <button
@@ -1118,7 +1124,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                       padding: '0.5rem 0.75rem',
                       borderRadius: 'calc(var(--radius-sm) - 2px)',
                       border: authMode === 'api_key' ? '1.5px solid var(--accent-amber)' : '1px solid transparent',
-                      background: authMode === 'api_key' ? 'rgba(245, 158, 11, 0.15)' : 'transparent',
+                      background: authMode === 'api_key' ? 'var(--warning-subtle)' : 'transparent',
                       color: authMode === 'api_key' ? 'var(--accent-amber)' : 'var(--text-muted)',
                       cursor: 'pointer',
                       fontWeight: authMode === 'api_key' ? 700 : 500,
@@ -1127,7 +1133,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                     }}
                   >
                     <Key size={14} />
-                    <span>Provider API Key</span>
+                    <span>API key</span>
                   </button>
                 </div>
               </div>
@@ -1138,7 +1144,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
               <div className="input-group" style={{ marginBottom: '0.85rem' }}>
                 <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
                   <Key size={13} color="var(--accent-amber)" />
-                  <span style={{ fontWeight: 700, color: 'var(--text-bright)' }}>{providerMeta.name} API Key</span>
+                  <span style={{ fontWeight: 600, color: 'var(--text-bright)' }}>{providerMeta.name} API Key</span>
                   <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>(Primary)</span>
                 </label>
                 <div style={{ position: 'relative' }}>
@@ -1174,14 +1180,14 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                     style={{
                       marginTop: '0.85rem',
                       padding: '1rem 1.15rem',
-                      background: 'rgba(99, 102, 241, 0.06)',
-                      border: '1px solid rgba(99, 102, 241, 0.2)',
+                      background: 'var(--accent-subtle)',
+                      border: '1px solid var(--line-strong)',
                       borderRadius: 'var(--radius-md)'
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
                       <HelpCircle size={17} color="var(--accent-cyan)" />
-                      <h4 style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-bright)', margin: 0 }}>
+                      <h4 style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-bright)', margin: 0 }}>
                         Don't know where to get an API key?
                       </h4>
                     </div>
@@ -1211,7 +1217,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         {providerMeta.iconUrl ? (
                           <img src={providerMeta.iconUrl} alt={providerMeta.shortName} style={{ width: 16, height: 16, objectFit: 'contain' }} />
                         ) : (
-                          <span>{providerMeta.icon}</span>
+                          <span>{providerMeta.shortName.slice(0, 1)}</span>
                         )}
                         <span>{providerMeta.name} {providerId === 'cursor' ? 'Subscription & Keys' : 'API Keys'}</span>
                       </span>
@@ -1226,7 +1232,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
               <div className="input-group" style={{ marginBottom: '0.85rem' }}>
                 <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
                   <Globe size={13} color="var(--accent-violet)" />
-                  <span style={{ fontWeight: 700, color: 'var(--text-bright)' }}>Ollama Host Endpoint</span>
+                  <span style={{ fontWeight: 600, color: 'var(--text-bright)' }}>Ollama address</span>
                   {isOllamaConnected && (
                     <span className="badge badge-done" style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', marginLeft: 'auto' }}>
                       Online ({ollamaModels.length} models)
@@ -1268,7 +1274,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <ShieldCheck size={16} color="var(--accent-emerald)" />
-                    <span style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--text-bright)' }}>
+                    <span style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-bright)' }}>
                       {connected ? `Connected to ${subCliName}` : `Connect ${subCliName}`}
                     </span>
                   </div>
@@ -1286,8 +1292,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         padding: '0.7rem 1.2rem',
                         borderRadius: '10px',
                         background: 'var(--accent-primary)',
-                        color: '#ffffff',
-                        fontWeight: 700,
+                        color: 'var(--ink)',
+                        fontWeight: 600,
                         fontSize: '0.86rem',
                         border: 'none',
                         cursor: busy ? 'not-allowed' : 'pointer',
@@ -1315,7 +1321,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                       maxHeight={650}
                       maximizedHeight={560}
                       storageKey="ergo_terminal_height_credentials"
-                      style={{ border: '1px solid rgba(255, 255, 255, 0.12)', borderRadius: '6px' }}
+                      style={{ border: '1px solid var(--line)', borderRadius: '6px' }}
                       headerLeft={
                         <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-bright)' }}>{cliTerminalState.title}</span>
                       }
@@ -1350,8 +1356,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
             {providerId === 'ollama' && (
               <div
                 style={{
-                  background: providerId === 'ollama' ? 'rgba(139, 92, 246, 0.04)' : 'rgba(16, 185, 129, 0.04)',
-                  border: `1px solid ${providerId === 'ollama' ? 'rgba(139, 92, 246, 0.22)' : 'rgba(16, 185, 129, 0.22)'}`,
+                  background: providerId === 'ollama' ? 'var(--surface-2)' : 'var(--success-subtle)',
+                  border: `1px solid ${providerId === 'ollama' ? 'var(--line-strong)' : 'var(--line-strong)'}`,
                   borderRadius: 'var(--radius-md)',
                   padding: '1rem',
                   marginBottom: '0.85rem'
@@ -1360,7 +1366,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 {/* Detected Agents List */}
                 <div style={{ marginBottom: '0.85rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
-                    <span style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--text-bright)' }}>
+                    <span style={{ fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-bright)' }}>
                       {providerId === 'ollama' ? 'Local Pair Programming / CLI Engine (Optional)' : 'Select Primary CLI Engine'}
                     </span>
                     <button
@@ -1399,7 +1405,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         subscriptionTier: 'Claude Pro / Team / Enterprise',
                         installCommand: 'npm install -g @anthropic-ai/claude-code',
                         docsUrl: 'https://docs.anthropic.com/claude/docs/claude-code',
-                        badgeColor: '#d97706',
+                        badgeColor: '#3C7758',
                         supportsHeadless: true,
                         supportsInteractive: true
                       },
@@ -1414,7 +1420,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         subscriptionTier: 'ChatGPT Plus / Team / Pro',
                         installCommand: 'npm install -g @openai/codex',
                         docsUrl: 'https://github.com/openai/codex',
-                        badgeColor: '#7c3aed',
+                        badgeColor: '#3C7758',
                         supportsHeadless: true,
                         supportsInteractive: true
                       },
@@ -1431,7 +1437,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         loginCommand: 'agy',
                         loginArgs: [],
                         docsUrl: 'https://antigravity.google',
-                        badgeColor: '#2563eb',
+                        badgeColor: '#3C7758',
                         supportsHeadless: true,
                         supportsInteractive: true
                       },
@@ -1448,7 +1454,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         loginCommand: 'cursor login',
                         loginArgs: ['login'],
                         docsUrl: 'https://cursor.com',
-                        badgeColor: '#0066FF',
+                        badgeColor: '#3C7758',
                         supportsHeadless: true,
                         supportsInteractive: true
                       },
@@ -1465,7 +1471,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         loginCommand: 'grok login',
                         loginArgs: ['login'],
                         docsUrl: 'https://x.ai',
-                        badgeColor: '#1d9bf0',
+                        badgeColor: '#3C7758',
                         supportsHeadless: true,
                         supportsInteractive: true
                       },
@@ -1482,7 +1488,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         loginCommand: 'aider',
                         loginArgs: [],
                         docsUrl: 'https://aider.chat',
-                        badgeColor: '#059669',
+                        badgeColor: '#3C7758',
                         supportsHeadless: true,
                         supportsInteractive: true
                       }
@@ -1497,8 +1503,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                             style={{
                               padding: '0.55rem 0.75rem',
                               borderRadius: 'var(--radius-sm)',
-                              border: `1.5px solid ${isSelected ? 'var(--accent-emerald)' : 'rgba(255, 255, 255, 0.08)'}`,
-                              background: isSelected ? 'rgba(16, 185, 129, 0.12)' : 'rgba(0, 0, 0, 0.15)',
+                              border: `1.5px solid ${isSelected ? 'var(--accent-emerald)' : 'var(--line)'}`,
+                              background: isSelected ? 'var(--success-subtle)' : 'var(--canvas)',
                               cursor: 'pointer',
                               display: 'flex',
                               alignItems: 'center',
@@ -1524,7 +1530,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                 )}
                               </div>
                               <div>
-                                <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-bright)' }}>
+                                <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-bright)' }}>
                                   {agent.name}
                                 </div>
                                 <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
@@ -1540,7 +1546,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                     fontSize: '0.66rem',
                                     padding: '0.15rem 0.45rem',
                                     borderRadius: 'var(--radius-sm)',
-                                    background: 'rgba(16, 185, 129, 0.2)',
+                                    background: 'var(--success-subtle)',
                                     color: 'var(--accent-emerald)',
                                     fontWeight: 600,
                                     display: 'flex',
@@ -1557,7 +1563,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                     fontSize: '0.66rem',
                                     padding: '0.15rem 0.45rem',
                                     borderRadius: 'var(--radius-sm)',
-                                    background: 'rgba(245, 158, 11, 0.15)',
+                                    background: 'var(--warning-subtle)',
                                     color: 'var(--accent-amber)',
                                     fontWeight: 600,
                                     display: 'flex',
@@ -1580,8 +1586,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                       style={{
                         padding: '0.55rem 0.75rem',
                         borderRadius: 'var(--radius-sm)',
-                        border: `1.5px solid ${selectedCliId === 'custom' ? 'var(--accent-emerald)' : 'rgba(255, 255, 255, 0.08)'}`,
-                        background: selectedCliId === 'custom' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(0, 0, 0, 0.15)',
+                        border: `1.5px solid ${selectedCliId === 'custom' ? 'var(--accent-emerald)' : 'var(--line)'}`,
+                        background: selectedCliId === 'custom' ? 'var(--success-subtle)' : 'var(--canvas)',
                         cursor: 'pointer',
                         display: 'flex',
                         flexDirection: 'column',
@@ -1604,7 +1610,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                             <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent-emerald)' }} />
                           )}
                         </div>
-                        <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-bright)' }}>
+                        <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-bright)' }}>
                           Custom CLI Command or Path
                         </span>
                       </div>
@@ -1641,7 +1647,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         loginCommand: 'agy',
                         loginArgs: [],
                         docsUrl: 'https://antigravity.google',
-                        badgeColor: '#2563eb',
+                        badgeColor: '#3C7758',
                         supportsHeadless: true,
                         supportsInteractive: true
                       }
@@ -1659,7 +1665,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                           loginCommand: 'cursor login',
                           loginArgs: ['login'],
                           docsUrl: 'https://cursor.com',
-                          badgeColor: '#0066FF',
+                          badgeColor: '#3C7758',
                           supportsHeadless: true,
                           supportsInteractive: true
                         }
@@ -1677,7 +1683,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                             loginCommand: 'grok login',
                             loginArgs: ['login'],
                             docsUrl: 'https://x.ai',
-                            badgeColor: '#1d9bf0',
+                            badgeColor: '#3C7758',
                             supportsHeadless: true,
                             supportsInteractive: true
                           }
@@ -1695,7 +1701,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                               loginCommand: 'aider',
                               loginArgs: [],
                               docsUrl: 'https://aider.chat',
-                              badgeColor: '#059669',
+                              badgeColor: '#3C7758',
                               supportsHeadless: true,
                               supportsInteractive: true
                             }
@@ -1709,8 +1715,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                   return (
                     <div
                       style={{
-                        background: isInstalled ? 'rgba(16, 185, 129, 0.05)' : 'rgba(245, 158, 11, 0.05)',
-                        border: `1px solid ${isInstalled ? 'rgba(16, 185, 129, 0.22)' : 'rgba(245, 158, 11, 0.25)'}`,
+                        background: isInstalled ? 'var(--success-subtle)' : 'var(--warning-subtle)',
+                        border: `1px solid ${isInstalled ? 'var(--line-strong)' : 'var(--line-strong)'}`,
                         borderRadius: 'var(--radius-sm)',
                         padding: '0.75rem 0.85rem',
                         marginBottom: '0.85rem'
@@ -1718,7 +1724,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                     >
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
                         <div>
-                          <div style={{ fontSize: '0.76rem', fontWeight: 700, color: isInstalled ? 'var(--accent-emerald)' : 'var(--accent-amber)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <div style={{ fontSize: '0.76rem', fontWeight: 600, color: isInstalled ? 'var(--accent-emerald)' : 'var(--accent-amber)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                             {isInstalled ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
                             <span>{currentAgent?.name || 'Custom CLI'}: {isInstalled ? 'Installed & Configured' : 'Setup Required'}</span>
                           </div>
@@ -1749,8 +1755,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                 gap: '0.35rem',
                                 padding: '0.35rem 0.75rem',
                                 background: 'var(--accent-primary)',
-                                color: '#ffffff',
-                                border: '1px solid rgba(255, 255, 255, 0.15)',
+                                color: 'var(--ink)',
+                                border: '1px solid var(--line-strong)',
                                 borderRadius: '6px',
                                 fontSize: '0.75rem',
                                 fontWeight: 600,
@@ -1783,9 +1789,9 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                   alignItems: 'center',
                                   gap: '0.35rem',
                                   padding: '0.35rem 0.75rem',
-                                  background: 'rgba(16, 185, 129, 0.15)',
+                                  background: 'var(--success-subtle)',
                                   color: 'var(--accent-emerald)',
-                                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                                  border: '1px solid var(--line-strong)',
                                   borderRadius: '6px',
                                   fontSize: '0.75rem',
                                   fontWeight: 600,
@@ -1814,16 +1820,16 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                   alignItems: 'center',
                                   gap: '0.35rem',
                                   padding: '0.35rem 0.65rem',
-                                  background: 'rgba(255, 255, 255, 0.05)',
+                                  background: 'var(--surface-2)',
                                   color: 'var(--text-main)',
-                                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                                  border: '1px solid var(--line)',
                                   borderRadius: '6px',
                                   fontSize: '0.75rem',
                                   cursor: 'pointer'
                                 }}
                               >
                                 <Terminal size={12} color="var(--accent-cyan)" />
-                                <span>Open Terminal Shell</span>
+                                <span>Open terminal</span>
                               </button>
                             </>
                           )}
@@ -1837,24 +1843,24 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                 alignItems: 'center',
                                 gap: '0.3rem',
                                 padding: '0.35rem 0.55rem',
-                                background: 'rgba(244, 63, 94, 0.1)',
+                                background: 'var(--danger-subtle)',
                                 color: 'var(--accent-rose)',
-                                border: '1px solid rgba(244, 63, 94, 0.25)',
+                                border: '1px solid var(--line-strong)',
                                 borderRadius: '6px',
                                 fontSize: '0.72rem',
                                 cursor: 'pointer'
                               }}
                             >
                               <X size={12} />
-                              <span>Close Terminal</span>
+                              <span>Close terminal</span>
                             </button>
                           )}
                         </div>
                       </div>
 
                       {isInstalled && (
-                        <div style={{ marginTop: '0.45rem', padding: '0.4rem 0.65rem', background: 'rgba(16, 185, 129, 0.08)', borderRadius: '5px', border: '1px solid rgba(16, 185, 129, 0.22)', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                          <span style={{ color: 'var(--accent-emerald)', fontWeight: 600 }}>⚡ Active CLI Subscription Bridge:</span> During task execution, all workflow AI requests (Summary, Manager, Verifier) are automatically bridged headlessly through {currentAgent?.name || 'the CLI'} using your authenticated subscription.
+                        <div style={{ marginTop: '0.45rem', padding: '0.4rem 0.65rem', background: 'var(--success-subtle)', borderRadius: '5px', border: '1px solid var(--line-strong)', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                          <span style={{ color: 'var(--accent-emerald)', fontWeight: 600 }}>Subscription runs through the CLI:</span> During task execution, all workflow AI requests (Summary, Manager, Verifier) are automatically bridged headlessly through {currentAgent?.name || 'the CLI'} using your authenticated subscription.
                         </div>
                       )}
 
@@ -1868,9 +1874,9 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                             maximizedHeight={560}
                             storageKey="ergo_terminal_height_credentials"
                             style={{
-                              border: '1px solid rgba(255, 255, 255, 0.12)',
+                              border: '1px solid var(--line)',
                               borderRadius: '6px',
-                              boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)'
+                              boxShadow: 'none'
                             }}
                             headerLeft={
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
@@ -1885,10 +1891,10 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                     borderRadius: '4px',
                                     background:
                                       cliTerminalState.status === 'running'
-                                        ? 'rgba(6, 182, 212, 0.15)'
+                                        ? 'var(--accent-subtle)'
                                         : cliTerminalState.status === 'completed'
-                                          ? 'rgba(16, 185, 129, 0.15)'
-                                          : 'rgba(244, 63, 94, 0.15)',
+                                          ? 'var(--success-subtle)'
+                                          : 'var(--danger-subtle)',
                                     color:
                                       cliTerminalState.status === 'running'
                                         ? 'var(--accent-cyan)'
@@ -1975,7 +1981,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   width: '100%',
-                  background: showAdvancedSettings ? 'rgba(99, 102, 241, 0.1)' : 'var(--btn-secondary-bg)',
+                  background: showAdvancedSettings ? 'var(--accent-subtle)' : 'var(--btn-secondary-bg)',
                   border: `1px solid ${showAdvancedSettings ? 'var(--accent-primary)' : 'var(--btn-secondary-border)'}`,
                   borderRadius: 'var(--radius-sm)',
                   padding: '0.6rem 0.85rem',
@@ -1988,16 +1994,16 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <Sliders size={15} color="var(--accent-cyan)" />
-                  <span>Advanced Settings: CLI Agent, Execution Mode & Roles</span>
+                  <span>Advanced: CLI agent, run mode and per-agent models</span>
                   {isCliCustomized && (
                     <span
                       style={{
                         fontSize: '0.65rem',
                         padding: '0.1rem 0.4rem',
                         borderRadius: '4px',
-                        background: 'rgba(217, 119, 6, 0.2)',
+                        background: 'var(--warning-subtle)',
                         color: 'var(--accent-amber)',
-                        fontWeight: 700
+                        fontWeight: 600
                       }}
                     >
                       Custom CLI
@@ -2009,9 +2015,9 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         fontSize: '0.65rem',
                         padding: '0.1rem 0.4rem',
                         borderRadius: '4px',
-                        background: 'rgba(6, 182, 212, 0.2)',
+                        background: 'var(--accent-subtle)',
                         color: 'var(--accent-cyan)',
-                        fontWeight: 700
+                        fontWeight: 600
                       }}
                     >
                       Multi-Provider ({providersUsedInProfile.length})
@@ -2066,17 +2072,17 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <Terminal size={15} color="var(--accent-emerald)" />
                         <div>
-                          <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <div style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--ink)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             <span>Terminal CLI Coding Agent (Execution)</span>
                             <span
                               style={{
                                 fontSize: '0.64rem',
                                 padding: '0.1rem 0.45rem',
                                 borderRadius: '4px',
-                                background: isCliCustomized ? 'rgba(6, 182, 212, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                                background: isCliCustomized ? 'var(--accent-subtle)' : 'var(--success-subtle)',
                                 color: isCliCustomized ? 'var(--accent-cyan)' : 'var(--accent-emerald)',
-                                fontWeight: 700,
-                                border: `1px solid ${isCliCustomized ? 'rgba(6, 182, 212, 0.3)' : 'rgba(16, 185, 129, 0.3)'}`
+                                fontWeight: 600,
+                                border: `1px solid ${isCliCustomized ? 'var(--line-strong)' : 'var(--line-strong)'}`
                               }}
                             >
                               {isCliCustomized ? 'Customized Override' : `Default for ${providerMeta.name}`}
@@ -2100,7 +2106,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                             setIsCliCustomized(false);
                           }}
                           style={{
-                            background: 'rgba(255, 255, 255, 0.05)',
+                            background: 'var(--surface-2)',
                             border: '1px solid var(--border-subtle)',
                             color: 'var(--text-muted)',
                             borderRadius: 'var(--radius-sm)',
@@ -2138,7 +2144,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                 padding: '0.65rem 0.75rem',
                                 borderRadius: 'var(--radius-sm)',
                                 border: `1.5px solid ${isSelected ? preset.badgeColor : 'var(--border-subtle)'}`,
-                                background: isSelected ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.2)',
+                                background: isSelected ? 'var(--surface-2)' : 'var(--canvas)',
                                 cursor: 'pointer',
                                 display: 'flex',
                                 flexDirection: 'column',
@@ -2147,7 +2153,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                               }}
                             >
                               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                <span style={{ fontWeight: 700, fontSize: '0.8rem', color: isSelected ? '#fff' : 'var(--text-main)' }}>
+                                <span style={{ fontWeight: 600, fontSize: '0.8rem', color: isSelected ? 'var(--ink)' : 'var(--text-main)' }}>
                                   {preset.label}
                                 </span>
                                 <span
@@ -2157,7 +2163,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                     borderRadius: '3px',
                                     background: `${preset.badgeColor}22`,
                                     color: preset.badgeColor,
-                                    fontWeight: 700,
+                                    fontWeight: 600,
                                     fontFamily: 'monospace'
                                   }}
                                 >
@@ -2186,7 +2192,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                             padding: '0.65rem 0.75rem',
                             borderRadius: 'var(--radius-sm)',
                             border: `1.5px solid ${selectedCliId === 'custom' ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
-                            background: selectedCliId === 'custom' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.2)',
+                            background: selectedCliId === 'custom' ? 'var(--surface-2)' : 'var(--canvas)',
                             cursor: 'pointer',
                             display: 'flex',
                             flexDirection: 'column',
@@ -2195,7 +2201,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                           }}
                         >
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                            <span style={{ fontWeight: 700, fontSize: '0.8rem', color: selectedCliId === 'custom' ? '#fff' : 'var(--text-main)' }}>
+                            <span style={{ fontWeight: 600, fontSize: '0.8rem', color: selectedCliId === 'custom' ? 'var(--ink)' : 'var(--text-main)' }}>
                               Custom / Other CLI
                             </span>
                             <span
@@ -2203,9 +2209,9 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                 fontSize: '0.62rem',
                                 padding: '0.08rem 0.35rem',
                                 borderRadius: '3px',
-                                background: 'rgba(6, 182, 212, 0.15)',
+                                background: 'var(--accent-subtle)',
                                 color: 'var(--accent-cyan)',
-                                fontWeight: 700,
+                                fontWeight: 600,
                                 fontFamily: 'monospace'
                               }}
                             >
@@ -2261,7 +2267,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                         <Terminal size={14} color="var(--accent-cyan)" />
-                        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-bright)' }}>
+                        <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-bright)' }}>
                           Coding Execution Mode
                         </span>
                       </div>
@@ -2276,14 +2282,14 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         style={{
                           padding: '0.5rem 0.65rem',
                           borderRadius: 'var(--radius-sm)',
-                          border: `1.5px solid ${cliExecutionMode === 'interactive' ? 'var(--accent-cyan)' : 'rgba(255, 255, 255, 0.08)'}`,
-                          background: cliExecutionMode === 'interactive' ? 'rgba(6, 182, 212, 0.1)' : 'rgba(0, 0, 0, 0.15)',
+                          border: `1.5px solid ${cliExecutionMode === 'interactive' ? 'var(--accent-cyan)' : 'var(--line)'}`,
+                          background: cliExecutionMode === 'interactive' ? 'var(--accent-subtle)' : 'var(--canvas)',
                           cursor: 'pointer'
                         }}
                       >
-                        <div style={{ fontSize: '0.75rem', fontWeight: 700, color: cliExecutionMode === 'interactive' ? 'var(--accent-cyan)' : 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: cliExecutionMode === 'interactive' ? 'var(--accent-cyan)' : 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                           <Terminal size={13} />
-                          <span>Interactive Terminal</span>
+                          <span>Interactive terminal</span>
                         </div>
                         <div style={{ fontSize: '0.67rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
                           Docked xterm window for live code interaction
@@ -2295,14 +2301,14 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                         style={{
                           padding: '0.5rem 0.65rem',
                           borderRadius: 'var(--radius-sm)',
-                          border: `1.5px solid ${cliExecutionMode === 'headless' ? 'var(--accent-cyan)' : 'rgba(255, 255, 255, 0.08)'}`,
-                          background: cliExecutionMode === 'headless' ? 'rgba(6, 182, 212, 0.1)' : 'rgba(0, 0, 0, 0.15)',
+                          border: `1.5px solid ${cliExecutionMode === 'headless' ? 'var(--accent-cyan)' : 'var(--line)'}`,
+                          background: cliExecutionMode === 'headless' ? 'var(--accent-subtle)' : 'var(--canvas)',
                           cursor: 'pointer'
                         }}
                       >
-                        <div style={{ fontSize: '0.75rem', fontWeight: 700, color: cliExecutionMode === 'headless' ? 'var(--accent-cyan)' : 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: cliExecutionMode === 'headless' ? 'var(--accent-cyan)' : 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                           <Zap size={13} />
-                          <span>Headless Background</span>
+                          <span>Headless background</span>
                         </div>
                         <div style={{ fontSize: '0.67rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
                           Executes silently in the background
@@ -2316,12 +2322,12 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.6rem' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                         <Layers size={14} color="var(--accent-cyan)" />
-                        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-bright)' }}>
+                        <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-bright)' }}>
                           Execution Agents (7 Roles)
                         </span>
                       </div>
                       <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                        Select custom providers & models per agent role. Click ℹ️ for performance benchmarks.
+                        Select custom providers & models per agent role. Select the info icon for each role's benchmarks.
                       </span>
                     </div>
                     <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', margin: '-0.3rem 0 0.6rem' }}>
@@ -2355,7 +2361,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                 {ROLE_ICONS[role]}
-                                <span style={{ fontWeight: 700, fontSize: '0.84rem', color: 'var(--text-bright)' }}>
+                                <span style={{ fontWeight: 600, fontSize: '0.84rem', color: 'var(--text-bright)' }}>
                                   {meta.name}
                                 </span>
                                 <span
@@ -2366,7 +2372,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                     background: badgeStyle.bg,
                                     color: badgeStyle.color,
                                     border: `1px solid ${badgeStyle.border}`,
-                                    fontWeight: 700
+                                    fontWeight: 600
                                   }}
                                 >
                                   Capability: {meta.scoreLabel}
@@ -2378,7 +2384,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                   type="button"
                                   onClick={() => setActiveTooltipRole(isTooltipOpen ? null : role)}
                                   style={{
-                                    background: isTooltipOpen ? 'rgba(6, 182, 212, 0.2)' : 'none',
+                                    background: isTooltipOpen ? 'var(--accent-subtle)' : 'none',
                                     border: `1px solid ${isTooltipOpen ? 'var(--accent-cyan)' : 'transparent'}`,
                                     borderRadius: '4px',
                                     color: isTooltipOpen ? 'var(--accent-cyan)' : 'var(--text-muted)',
@@ -2417,8 +2423,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                             {isTooltipOpen && (
                               <div
                                 style={{
-                                  background: 'rgba(6, 182, 212, 0.07)',
-                                  border: '1px solid rgba(6, 182, 212, 0.25)',
+                                  background: 'var(--accent-subtle)',
+                                  border: '1px solid var(--line-strong)',
                                   borderRadius: 'var(--radius-sm)',
                                   padding: '0.6rem 0.8rem',
                                   marginBottom: '0.65rem',
@@ -2521,7 +2527,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.6rem' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                         <Key size={14} color="var(--accent-amber)" />
-                        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-bright)' }}>
+                        <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-bright)' }}>
                           Provider API Credentials & Host Endpoints
                         </span>
                       </div>
@@ -2558,18 +2564,18 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                                 <div style={{ width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                  {p.iconUrl ? <img src={p.iconUrl} alt={p.shortName} style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : p.icon}
+                                  {p.iconUrl ? <img src={p.iconUrl} alt={p.shortName} style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : p.shortName.slice(0, 1)}
                                 </div>
-                                <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-bright)' }}>
+                                <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-bright)' }}>
                                   {p.shortName}
                                 </span>
                                 {isPrimary && (
-                                  <span style={{ fontSize: '0.62rem', padding: '0.05rem 0.35rem', borderRadius: '3px', background: 'rgba(99, 102, 241, 0.2)', color: 'var(--accent-primary)', fontWeight: 600 }}>
+                                  <span style={{ fontSize: '0.62rem', padding: '0.05rem 0.35rem', borderRadius: '3px', background: 'var(--accent-subtle)', color: 'var(--accent-primary)', fontWeight: 600 }}>
                                     Primary
                                   </span>
                                 )}
                                 {isUsed && !isPrimary && (
-                                  <span style={{ fontSize: '0.62rem', padding: '0.05rem 0.35rem', borderRadius: '3px', background: 'rgba(6, 182, 212, 0.15)', color: 'var(--accent-cyan)', fontWeight: 600 }}>
+                                  <span style={{ fontSize: '0.62rem', padding: '0.05rem 0.35rem', borderRadius: '3px', background: 'var(--accent-subtle)', color: 'var(--accent-cyan)', fontWeight: 600 }}>
                                     In Use
                                   </span>
                                 )}
@@ -2645,10 +2651,10 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 {isTesting ? (
                   <>
                     <Loader2 size={14} className="animate-spin" />
-                    <span>Testing Primary...</span>
+                    <span>Testing…</span>
                   </>
                 ) : (
-                  <span>Test Connection</span>
+                  <span>Test connection</span>
                 )}
               </button>
               <button
@@ -2659,7 +2665,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 style={{ fontSize: '0.82rem' }}
               >
                 <ShieldCheck size={16} />
-                <span>{editingId ? 'Save Profile Changes' : 'Save AI Profile'}</span>
+                <span>{editingId ? 'Save profile' : 'Add profile'}</span>
               </button>
             </div>
 
@@ -2676,8 +2682,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                   alignItems: 'center',
                   gap: '0.65rem',
                   fontSize: '0.82rem',
-                  background: testResult.success ? 'rgba(16, 185, 129, 0.12)' : 'rgba(244, 63, 94, 0.12)',
-                  border: `1px solid ${testResult.success ? 'rgba(16, 185, 129, 0.3)' : 'rgba(244, 63, 94, 0.3)'}`,
+                  background: testResult.success ? 'var(--success-subtle)' : 'var(--danger-subtle)',
+                  border: `1px solid ${testResult.success ? 'var(--line-strong)' : 'var(--line-strong)'}`,
                   color: testResult.success ? 'var(--accent-emerald)' : 'var(--accent-rose)'
                 }}
               >
@@ -2688,15 +2694,15 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
           </div>
 
           {/* Card 2: Configured AI Profiles List */}
-          <div>
+          {!formOnly && <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
               <h4
                 style={{
                   fontSize: '0.85rem',
-                  fontWeight: 700,
+                  fontWeight: 600,
                   color: 'var(--text-muted)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
+                  textTransform: 'none',
+                  letterSpacing: 'normal',
                   margin: 0
                 }}
               >
@@ -2720,7 +2726,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 }}
               >
                 <Key size={28} color="var(--text-muted)" style={{ margin: '0 auto 0.5rem auto', opacity: 0.6 }} />
-                <p style={{ fontSize: '0.84rem', color: '#fff', fontWeight: 600, margin: '0 0 0.25rem 0' }}>
+                <p style={{ fontSize: '0.84rem', color: 'var(--ink)', fontWeight: 600, margin: '0 0 0.25rem 0' }}>
                   No AI profiles created yet
                 </p>
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: 0 }}>
@@ -2756,7 +2762,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                             : 'var(--border-subtle)'
                           }`,
                         borderRadius: 'var(--radius-md)',
-                        boxShadow: isActive ? '0 0 10px rgba(6, 182, 212, 0.12)' : 'var(--shadow-card)',
+                        boxShadow: 'none',
                         transition: 'all 0.15s ease'
                       }}
                     >
@@ -2767,12 +2773,12 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                             {pMeta?.iconUrl ? (
                               <img src={pMeta.iconUrl} alt={pMeta.shortName} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
                             ) : (
-                              <span style={{ fontSize: '1.2rem' }}>{pMeta?.icon || '🔑'}</span>
+                              <span style={{ fontSize: '1.2rem' }}>{pMeta?.shortName?.slice(0, 1) || ''}</span>
                             )}
                           </div>
                           <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-                              <span style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-bright)' }}>{k.name}</span>
+                              <span style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-bright)' }}>{k.name}</span>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                                 {uniqueProviders.map((uP) => {
                                   const uMeta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === uP);
@@ -2798,13 +2804,13 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                     style={{
                                       fontSize: '0.65rem',
                                       padding: '0.1rem 0.4rem',
-                                      background: k.authMode === 'cli_subscription' || k.apiKey === 'cli_subscription_active' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                                      background: k.authMode === 'cli_subscription' || k.apiKey === 'cli_subscription_active' ? 'var(--success-subtle)' : 'var(--warning-subtle)',
                                       color: k.authMode === 'cli_subscription' || k.apiKey === 'cli_subscription_active' ? 'var(--accent-emerald)' : 'var(--accent-amber)',
-                                      borderColor: k.authMode === 'cli_subscription' || k.apiKey === 'cli_subscription_active' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)',
+                                      borderColor: k.authMode === 'cli_subscription' || k.apiKey === 'cli_subscription_active' ? 'var(--line-strong)' : 'var(--line-strong)',
                                       fontWeight: 600
                                     }}
                                   >
-                                    {k.authMode === 'cli_subscription' || k.apiKey === 'cli_subscription_active' ? '⚡ Subscription' : '🔑 API Key'}
+                                    {k.authMode === 'cli_subscription' || k.apiKey === 'cli_subscription_active' ? 'Subscription' : 'API key'}
                                   </span>
                                 )}
 
@@ -2813,7 +2819,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                     className="badge badge-done"
                                     style={{
                                       fontSize: '0.65rem',
-                                      background: 'rgba(6, 182, 212, 0.2)',
+                                      background: 'var(--accent-subtle)',
                                       color: 'var(--accent-cyan)',
                                       borderColor: 'var(--accent-cyan)'
                                     }}
@@ -2826,7 +2832,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                                     className="badge"
                                     style={{
                                       fontSize: '0.65rem',
-                                      background: 'rgba(245, 158, 11, 0.2)',
+                                      background: 'var(--warning-subtle)',
                                       color: 'var(--accent-amber)',
                                       borderColor: 'var(--accent-amber)'
                                     }}
@@ -2862,7 +2868,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                             style={{
                               padding: '0.25rem 0.55rem',
                               fontSize: '0.75rem',
-                              background: isCurrentlyEditing ? 'rgba(6, 182, 212, 0.15)' : undefined,
+                              background: isCurrentlyEditing ? 'var(--accent-subtle)' : undefined,
                               borderColor: isCurrentlyEditing ? 'var(--accent-cyan)' : undefined,
                               color: isCurrentlyEditing ? 'var(--accent-cyan)' : undefined
                             }}
@@ -2878,7 +2884,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                               padding: '0.25rem 0.45rem',
                               fontSize: '0.75rem',
                               color: 'var(--accent-rose)',
-                              borderColor: 'rgba(244, 63, 94, 0.3)'
+                              borderColor: 'var(--line-strong)'
                             }}
                             onClick={() => setKeyPendingDelete(k)}
                             title="Delete Profile"
@@ -2949,15 +2955,17 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 })}
               </div>
             )}
-          </div>
+          </div>}
         </div>
 
         {/* Footer */}
-        <div className="modal-footer">
-          <button className="btn btn-primary" onClick={onClose}>
-            Done
-          </button>
-        </div>
+        {!formOnly && (
+          <div className="modal-footer">
+            <button className="btn btn-primary" onClick={onClose}>
+              Done
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Irreversible Delete Warning Confirmation Dialog */}
@@ -2967,8 +2975,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(0, 0, 0, 0.8)',
-            backdropFilter: 'blur(5px)',
+            background: 'var(--overlay)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -2982,10 +2989,10 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
               maxWidth: '450px',
               width: '90%',
               background: 'var(--bg-card)',
-              border: '1px solid rgba(244, 63, 94, 0.45)',
+              border: '1px solid var(--line-strong)',
               borderRadius: 'var(--radius-md)',
               padding: '1.5rem',
-              boxShadow: '0 20px 40px rgba(0, 0, 0, 0.7), 0 0 25px rgba(244, 63, 94, 0.2)'
+              boxShadow: 'var(--shadow-dialog)'
             }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -2995,8 +3002,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                   width: '42px',
                   height: '42px',
                   borderRadius: '10px',
-                  background: 'rgba(244, 63, 94, 0.15)',
-                  border: '1px solid rgba(244, 63, 94, 0.35)',
+                  background: 'var(--danger-subtle)',
+                  border: '1px solid var(--line-strong)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -3007,32 +3014,32 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 <AlertTriangle size={22} />
               </div>
               <div>
-                <h4 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff', margin: 0 }}>
-                  Delete AI Profile?
+                <h4 style={{ fontSize: '1.05rem', fontWeight: 600, color: 'var(--ink)', margin: 0 }}>
+                  Delete this profile?
                 </h4>
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                  Irreversible action confirmation
+                  This can't be undone
                 </span>
               </div>
             </div>
 
             <p style={{ fontSize: '0.86rem', color: 'var(--text-main)', margin: '0 0 0.85rem 0', lineHeight: 1.45 }}>
-              Are you sure you want to disconnect and delete <strong style={{ color: '#fff' }}>"{keyPendingDelete.name}"</strong>?
+              Are you sure you want to disconnect and delete <strong style={{ color: 'var(--ink)' }}>"{keyPendingDelete.name}"</strong>?
             </p>
 
             <div
               style={{
                 padding: '0.75rem 0.95rem',
                 borderRadius: 'var(--radius-sm)',
-                background: 'rgba(244, 63, 94, 0.1)',
-                border: '1px solid rgba(244, 63, 94, 0.3)',
+                background: 'var(--danger-subtle)',
+                border: '1px solid var(--line-strong)',
                 fontSize: '0.78rem',
-                color: '#fca5a5',
+                color: 'var(--danger)',
                 lineHeight: 1.45,
                 marginBottom: '1.25rem'
               }}
             >
-              ⚠️ <strong>This action is irreversible.</strong> The stored API key credentials and model configurations will be permanently removed from your workspace settings (<code style={{ color: '#fff', fontSize: '0.74rem' }}>config/secrets.json</code>).
+              <strong>This can't be undone.</strong> The stored API key credentials and model configurations will be permanently removed from your workspace settings (<code style={{ color: 'var(--ink)', fontSize: '0.74rem' }}>config/secrets.json</code>).
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.65rem' }}>
@@ -3050,7 +3057,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 style={{
                   background: 'var(--accent-rose)',
                   borderColor: 'var(--accent-rose)',
-                  color: '#fff',
+                  color: 'var(--ink)',
                   padding: '0.45rem 1rem',
                   fontSize: '0.82rem',
                   display: 'flex',
@@ -3068,7 +3075,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
                 }}
               >
                 <Trash2 size={14} />
-                <span>Delete Permanently</span>
+                <span>Delete profile</span>
               </button>
             </div>
           </div>

@@ -153,3 +153,15 @@ Maybe the implementation looks something like the AI drafting its plan and build
         - Delete (Ctrl+Delete)
         - Select All (Ctrl+A)
     - instead of each stage being a dropdown card, it should be a series of tabs horizontally below the token usage card that open one by one as execution progresses through each stage
+**UI Redesign Follow-ups (2026-11)**
+    - **Runs tab: run detail from the design** (RunningScreen in public/design/ergo-design)
+        - a full-width live status line (agent, action, target, elapsed, tokens) and one meta line (model, permission mode, files changed)
+        - a **Changes** diff toggle on the terminal header, showing the run's diff log (+/- per file)
+        - **Up next** (this project's run queue) and **Earlier runs** (each run with its outcome, date and duration) at the bottom of the tab
+        - the runs view of the detail pane already lists running / up next / finished tasks; these are per-task versions of it
+    - **Draft tasks dialog** needs another pass
+        - per-item priority, dependencies ("after #2"), and an AI-written one-line reason per proposed task
+        - choosing the heading the tasks land under
+        - `@file` / `/skill` chips and the model chip inside the composer
+        - "add only the checked items" currently diffs the assistant's new TODO.md against the old one; revisit once the assistant returns structured items
+    - Sub-items always render with checkboxes; the design shows plain bullets for "- " items and checkboxes only for "- [ ]" items (needs a change to how done/not-done is stored)

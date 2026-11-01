@@ -1,6 +1,5 @@
 import { resolveHeaderColor } from '../lib/headerColors';
 import React, { useState, useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
 import {
   type TaskItem,
   type TaskStatus,
@@ -13,6 +12,8 @@ import {
   type OllamaFallbackChoice,
   type MCPServer,
   type AgentPipelineOptions,
+  type EffortLevel,
+  type UserApiKey,
   type PermissionDecision,
   type PermissionLevel
 } from '../types';
@@ -38,9 +39,7 @@ import { openFileInIdeOrSystem } from '../lib/mcpClient';
 import { promptSummary } from '../lib/cliPromptParser';
 import { StepStatusIcon, StepUsageBadge, PieceChip, BiblePreview, RelatedTasksPanel } from './ExecutionStepExtras';
 import { BvTokenCounterCard, type TaskBilling } from './BvTokenCounterCard';
-import { ExecutionSettingsBar } from './ExecutionSettingsBar';
 import {
-  FileCode,
   Edit3,
   Save,
   Play,
@@ -58,28 +57,33 @@ import {
   X,
   FileText,
   ChevronDown,
-  ListTodo,
   Sparkles,
-  ClipboardList,
   Wrench,
-  Flag,
   Archive,
   HelpCircle,
   MoreHorizontal,
-  Database,
-  PanelRightClose,
-  PanelRightOpen,
-  AlertTriangle,
   Calendar,
   Clock,
-  SlidersHorizontal,
   Copy,
   Check,
   CornerUpLeft,
   BookOpen,
   ExternalLink,
-  FolderTree
+  Cpu,
+  Settings2,
+  Unplug,
+  CircleX,
+  CircleDot,
+  Pencil,
+  ListChecks,
+  ArrowLeft,
+  Activity,
 } from 'lucide-react';
+import { getPref, setPref, subscribePrefs } from '../lib/userPrefs';
+import { Banner, Button, Dialog, EmptyState, Icon, IconButton, MenuButton, RunRow, SegmentedControl, StatusDot, StatusIcon, STATUS_LABEL, Tabs, type DesignTaskStatus, type MenuItem } from './ui';
+import { EFFORT_LABELS } from '../lib/agentPipeline/modelRouter';
+import { formatTokens } from '../lib/agentDisplay';
+import { MOD, SHIFT } from '../lib/shortcuts';
 
 import { RichTextToolbar } from './RichTextToolbar';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -87,7 +91,6 @@ import { ScheduleTaskModal } from './ScheduleTaskModal';
 import { TaskMcpToolsModal } from './TaskMcpToolsModal';
 import { type ScheduledJob } from '../lib/taskScheduler';
 import { handleMarkdownAutoWrap } from '../lib/markdownEditorUtils';
-import { getPref, setPref, subscribePrefs } from '../lib/userPrefs';
 
 interface HumanInputCardProps {
   prompt: HumanInputPrompt;
@@ -253,6 +256,20 @@ interface BriefPaneProps {
   // Execution settings (permission level + effort) shown in the header drop-down
   agentPipelineOptions?: AgentPipelineOptions;
   onSetAgentPipelineOptions?: (next: AgentPipelineOptions) => void;
+  /** Drag the pane's left edge to resize it. */
+  onResizeStart?: (e: React.MouseEvent) => void;
+  isResizing?: boolean;
+  /** Queue: run the task after the ones already queued. */
+  onQueueTask?: (task: TaskItem) => void;
+  isBridgeConnected?: boolean;
+  userApiKeys?: UserApiKey[];
+  activeKeyId?: string | null;
+  /** Settings › Models. */
+  onOpenModels?: () => void;
+  /** Bumped each time a task is picked in the document: show that task's card. */
+  detailRequest?: number;
+  /** Bumped to go back to the runs view (e.g. from the status bar's queue item). */
+  runsViewRequest?: number;
 }
 
 interface AiTaskCardProps {
@@ -298,16 +315,36 @@ interface AiTaskCardProps {
   /** Related Tasks card: whether a related task has a card to open, and opening (selecting) it. */
   canOpenRelatedTask?: (taskId: string) => boolean;
   onOpenRelatedTask?: (taskId: string) => void;
+  /** The document the task lives in ("TODO.md"), for the crumb and its Line property. */
+  fileName: string;
+  /** 0-based place in the run queue, when queued. */
+  queuePosition?: number;
+  isBridgeConnected?: boolean;
+  onQueue?: () => void;
+  onClosePane?: () => void;
+  /** Back to the runs view (the pane's default). */
+  onBackToRuns?: () => void;
+  agentPipelineOptions?: AgentPipelineOptions;
+  onSetAgentPipelineOptions?: (next: AgentPipelineOptions) => void;
+  onOpenModels?: () => void;
 }
 
 type CardStatus = 'not_started' | 'queued' | 'working' | 'done';
 
 const NO_AGENT_SESSIONS: SpawnedSession[] = [];
 
-/** AI Workspace card order: by the human workspace's headings and task numbers, or newest added first. */
+/** A document heading as plain text: no markdown marks or {color=…} tags. */
+const cleanHeading = (h: string) => h.replace(/\{color=[^}]*\}/g, '').replace(/[*_`]+/g, '').replace(/:\s*$/, '').trim();
+
+type RunsSort = 'status' | 'category' | 'alpha';
+const RUNS_SORT_PREF = 'ai_runs_sort';
+const readRunsSort = (): RunsSort => {
+  const v = getPref(RUNS_SORT_PREF);
+  return v === 'category' || v === 'alpha' ? v : 'status';
+};
+
+/** Brief list order: by the document's headings and task numbers, or newest added first. */
 type AiSortMode = 'category' | 'added';
-const AI_SORT_PREF = 'ai_workspace_sort';
-const readAiSortMode = (): AiSortMode => (getPref(AI_SORT_PREF) === 'added' ? 'added' : 'category');
 
 /** The human-side task a brief belongs to: its source task id, else the same title. */
 function briefTask(brief: AgentContextItem, tasks: TaskItem[]): TaskItem | null {
@@ -362,12 +399,12 @@ const agentViewKey = (s: SpawnedSession) => `${s.ptySessionId}|${s.spawnId || s.
 
 type TaskStageKey = 'related' | 'overview' | 'actions' | 'completion';
 
-/** The task card's stage tabs, in run order. */
-const TASK_STAGES: ReadonlyArray<{ key: TaskStageKey; label: string; Icon: React.ComponentType<{ size?: number; color?: string }>; color: string }> = [
-  { key: 'related', label: 'Related', Icon: Database, color: '#eab308' },
-  { key: 'overview', label: 'Overview', Icon: ClipboardList, color: '#3b82f6' },
-  { key: 'actions', label: 'Actions', Icon: Wrench, color: '#a855f7' },
-  { key: 'completion', label: 'Completion', Icon: Flag, color: '#14b8a6' },
+/** The detail pane's tabs, in run order: Related · Overview · Runs · Notes. A tab stays disabled until the run reaches it. */
+const TASK_STAGES: ReadonlyArray<{ key: TaskStageKey; label: string }> = [
+  { key: 'related', label: 'Related' },
+  { key: 'overview', label: 'Overview' },
+  { key: 'actions', label: 'Runs' },
+  { key: 'completion', label: 'Notes' },
 ];
 
 /** What a pipeline tool call wants to do: the exact command, the file + diff, or the tool's arguments. */
@@ -452,7 +489,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   taskBilling,
   task,
   brief,
-  isSelected,
+  isSelected: _isSelected,
   isWorking,
   isQueued = false,
   onRunQueuedNow,
@@ -465,7 +502,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   pendingOllamaFallback,
   scheduledJob,
   onOpenScheduleModal,
-  onSelect,
+  onSelect: _onSelect,
   onSaveBrief,
   onLiveBriefChange,
   onExecuteTask,
@@ -485,8 +522,16 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   onUpdateTaskMcpTools: _onUpdateTaskMcpTools,
   canOpenRelatedTask,
   onOpenRelatedTask,
+  fileName,
+  queuePosition,
+  isBridgeConnected,
+  onQueue,
+  onClosePane,
+  onBackToRuns,
+  agentPipelineOptions,
+  onSetAgentPipelineOptions,
+  onOpenModels,
 }) => {
-  const [isTaskCollapsed, setIsTaskCollapsed] = useState(!isSelected);
   // The Queued button asks before running the task out of turn.
   const [confirmRunNow, setConfirmRunNow] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -610,17 +655,6 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 
 
 
-  // Auto-expand and scroll into view when selected, collapse when another task is selected
-  useEffect(() => {
-    setIsTaskCollapsed(!isSelected);
-    if (isSelected && cardRef.current) {
-      const timer = setTimeout(() => {
-        cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }, 60);
-      return () => clearTimeout(timer);
-    }
-  }, [isSelected]);
-
   // The stage tab shown below the token card (follows the run; see the stage tabs block below).
   const [activeStage, setActiveStage] = useState<TaskStageKey>('overview');
 
@@ -681,8 +715,8 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     const wasWorking = prevWorkingRef.current;
     prevWorkingRef.current = isWorking;
 
-    // Started working -> expand task card
-    if (!wasWorking && isWorking) setIsTaskCollapsed(false);
+    // A run starting opens the Runs tab on it
+    if (!wasWorking && isWorking) setActiveStage('actions');
   }, [isWorking]);
 
   const isContextRunning =
@@ -733,7 +767,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   }, [isRelatedWorking, contextStep, executionSteps, task.isDone]);
 
   // Header tag: "2 related · 9 candidates" once matched (legacy context steps: memory hits / guidelines).
-  const { relatedSummaryTag, relatedSelectedCount } = React.useMemo(() => {
+  const { relatedSelectedCount } = React.useMemo(() => {
     const bc = contextStep?.baselineContext;
     if (!bc) return { relatedSummaryTag: null, relatedSelectedCount: 0 };
     if (!bc.relatedCandidates) {
@@ -1269,417 +1303,245 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     );
   };
 
-  const categoryName = task.category?.trim();
-  const categoryColorHex = categoryName && categoryName !== 'AI Workspace' && categoryName !== 'Untitled'
-    ? resolveHeaderColor(categoryName, task.categoryColor).hex
-    : undefined;
+  const categoryName =
+    task.category?.trim() && task.category !== 'AI Workspace' && task.category !== 'Untitled'
+      ? cleanHeading(task.category)
+      : '';
+  const runCount = agentSessions.length > 0 || executionSteps.length > 0 ? Math.max(1, new Set(agentSessions.map((x) => x.runId)).size) : 0;
+  const statusKind: DesignTaskStatus = isWorking
+    ? 'progress'
+    : isQueued
+      ? 'queued'
+      : task.isDone
+        ? 'done'
+        : brief?.lastRunOutcome?.outcome === 'failed' || brief?.lastRunOutcome?.outcome === 'verifier_failed'
+          ? 'failed'
+          : hasRunBefore
+            ? 'review'
+            : 'todo';
+  const lineLabel = task.sourceLine != null ? `${fileName}:${task.sourceLine + 1}` : null;
+  const notes = task.subtasks ?? [];
+  const usage = brief?.totalUsage ?? task.totalUsage;
+  const tokenTotal = usage ? usage.inputTokens + usage.outputTokens : 0;
+  const effortLevel = agentPipelineOptions?.effortLevel ?? 'medium';
+  const modelSelection = agentPipelineOptions?.modelSelection ?? 'auto';
+  const setPipeline = (patch: Partial<AgentPipelineOptions>) => {
+    if (agentPipelineOptions && onSetAgentPipelineOptions) onSetAgentPipelineOptions({ ...agentPipelineOptions, ...patch });
+  };
+  const canRun = isBridgeConnected !== false;
+  const completionNote = (brief?.completion || '').trim();
+  const outcome = brief?.lastRunOutcome?.outcome;
+
+  const moreItems: MenuItem[] = [
+    ...(isStoppedPartway
+      ? [
+          { label: 'Resume where it stopped', icon: Play, onSelect: () => onExecuteTask(task) },
+          { label: 'Start over', icon: RotateCcw, onSelect: () => onExecuteTask(task, { startOver: true }) },
+          { separator: true } as const,
+        ]
+      : []),
+    ...(hasRunBefore && !isStoppedPartway ? [{ label: 'Run again', icon: RotateCcw, onSelect: () => onExecuteTask(task) }, { separator: true } as const] : []),
+    {
+      label: 'Edit overview',
+      icon: Edit3,
+      onSelect: () => {
+        setIsEditing(true);
+        setViewModeSection2('notes');
+        setActiveStage('overview');
+      },
+    },
+    {
+      label: scheduledJob && scheduledJob.status === 'pending' ? 'Edit schedule' : 'Schedule',
+      icon: Calendar,
+      hint: scheduledJob && scheduledJob.status === 'pending' ? new Date(scheduledJob.scheduledTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : undefined,
+      onSelect: () => onOpenScheduleModal?.(task),
+    },
+    {
+      label: 'Tools for this task',
+      icon: Wrench,
+      hint: activeTaskTools.length > 0 ? String(activeTaskTools.length) : undefined,
+      onSelect: () => setIsMcpModalOpen(true),
+    },
+    (() => {
+      const verifierSession = agentSessions.find((s) => s.role === 'verifier');
+      const isVerifierActiveOrDone = Boolean(
+        verifierSession && ['running', 'starting', 'done', 'failed'].includes(verifierSession.status),
+      );
+      return {
+        label: 'Verification',
+        icon: ShieldCheck,
+        checked: verificationOn,
+        disabled: runActive && isVerifierActiveOrDone,
+        title: runActive && isVerifierActiveOrDone
+          ? "Can't change this while the verifier is running or finished"
+          : 'A separate verifier agent checks the finished work and sends it back to the manager if it fails.',
+        onSelect: () => toggleVerification(),
+      };
+    })(),
+    { separator: true },
+    { label: 'Archive', icon: Archive, onSelect: () => onArchiveTask?.(task.title || brief?.title || '') },
+  ];
+
+  const modelItems: MenuItem[] = [
+    { section: 'Model selection' },
+    { label: 'Auto', checked: modelSelection === 'auto', onSelect: () => setPipeline({ modelSelection: 'auto' }) },
+    { label: 'Manual', checked: modelSelection === 'manual', onSelect: () => setPipeline({ modelSelection: 'manual' }) },
+    { section: 'Effort' },
+    ...(Object.keys(EFFORT_LABELS) as EffortLevel[]).map((lvl) => ({
+      label: EFFORT_LABELS[lvl],
+      checked: effortLevel === lvl,
+      onSelect: () => setPipeline({ effortLevel: lvl }),
+    })),
+    { separator: true },
+    { label: 'Models and providers', icon: Settings2, onSelect: () => onOpenModels?.() },
+  ];
 
   return (
-    <div
-      ref={cardRef}
-      className={`ai-task-card ${isSelected ? 'is-selected' : ''} ${isWorking ? 'is-running' : ''} ${isTaskCollapsed ? 'is-collapsed' : ''} ${task.isDone ? 'is-done' : ''} ${isMenuOpen ? 'has-open-menu' : ''}`}
-      // A running card is drawn in its category's (human workspace header's) color.
-      style={categoryColorHex ? ({ '--card-category-color': categoryColorHex } as React.CSSProperties) : undefined}
-      onClick={() => {
-        onSelect();
-        if (isTaskCollapsed) {
-          setIsTaskCollapsed(false);
-        }
-      }}
-    >
-      {/* ── Task Card Header ── */}
-      <div className="ai-task-card-header">
-        <div className="ai-task-header-left">
-          <button
-            type="button"
-            className={`card-collapse-btn ${isTaskCollapsed ? 'is-collapsed' : ''}`}
-            title={isTaskCollapsed ? 'Expand task' : 'Collapse task'}
-            aria-label={isTaskCollapsed ? 'Expand task' : 'Collapse task'}
-            onClick={(e) => {
-              e.stopPropagation();
-              setIsTaskCollapsed((prev) => !prev);
-            }}
-          >
-            <ChevronDown size={14} className="collapse-chevron" />
-          </button>
-          {(() => {
-            const groupName = task.category && task.category.trim();
-            const isGroup = !!groupName && groupName !== 'AI Workspace' && groupName !== 'Untitled';
-            if (isGroup) {
-              const color = resolveHeaderColor(groupName!, task.categoryColor);
-              return (
-                <span
-                  className="ai-task-num-badge ai-task-num-badge-group"
-                  title={groupName!}
-                  style={{ color: color.hex, borderColor: color.hex, background: `${color.hex}1f` }}
-                >
-                  #{task.listIndex ?? task.id}
-                </span>
-              );
-            }
-            return brief?.isUnordered || task.isUnordered ? (
-              <span className="ai-task-num-badge ai-task-num-badge-unordered" title="Task">Task</span>
-            ) : (
-              <span className="ai-task-num-badge" title={`#${brief?.itemNumber ?? task.id}`}>
-                #{brief?.itemNumber ?? task.id}
-              </span>
-            );
-          })()}
-          <span className="ai-task-title-text" title={brief?.title || task.title}>
-            {brief?.title || task.title}
-          </span>
-          {scheduledJob && scheduledJob.status === 'pending' && (
-            <span
-              className="task-scheduled-clock-indicator"
-              title={`Scheduled to execute: ${new Date(scheduledJob.scheduledTime).toLocaleString()}${scheduledJob.cronExpression ? ` (${scheduledJob.cronExpression})` : ''}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpenScheduleModal?.(task);
-              }}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '0.25rem',
-                color: 'var(--accent-cyan, #06b6d4)',
-                background: 'rgba(6, 182, 212, 0.12)',
-                border: '1px solid rgba(6, 182, 212, 0.3)',
-                borderRadius: '4px',
-                padding: '0.1rem 0.35rem',
-                fontSize: '0.7rem',
-                cursor: 'pointer',
-                flexShrink: 0,
-              }}
-            >
-              <Clock size={11} />
-              <span>{new Date(scheduledJob.scheduledTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-            </span>
-          )}
-          {isQueued && (
-            <span
-              className="task-queued-indicator"
-              title="This task is queued in workspace"
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '0.25rem',
-                color: 'var(--warning, #eab308)',
-                background: 'rgba(234, 179, 8, 0.12)',
-                border: '1px solid rgba(234, 179, 8, 0.3)',
-                borderRadius: '4px',
-                padding: '0.1rem 0.35rem',
-                fontSize: '0.7rem',
-                fontWeight: 500,
-                flexShrink: 0,
-              }}
-            >
-              <Clock size={11} />
-              <span>Queued</span>
-            </span>
-          )}
-          {/* {renderStatusBadge()} */}
-        </div>
-
-        <div className="ai-task-header-actions" onClick={(e) => e.stopPropagation()}>
-          {isEditing ? (
-            <>
-              <button
-                type="button"
-                className="ai-card-btn"
-                onClick={handleCancel}
-                title="Cancel edits"
-              >
-                <X size={12} />
-                <span>Cancel</span>
-              </button>
-              <button
-                type="button"
-                className="ai-card-btn is-primary"
-                onClick={handleSave}
-                title="Save changes"
-              >
-                <Save size={12} />
-                <span>Save</span>
-              </button>
-            </>
-          ) : (
-            <>
-              {/* Main Task Action Button: Working... / Queued / Resume / Rerun / Run */}
-              <button
-                type="button"
-                className={`execute-task-btn ${isWorking
-                  ? 'is-working'
-                  : isQueued
-                    ? 'is-queued'
-                    : isStoppedPartway
-                      ? 'is-resume'
-                      : hasRunBefore
-                        ? 'is-rerun'
-                        : ''
-                  }`}
-                onClick={() => {
-                  if (isQueued) {
-                    setConfirmRunNow(true);
-                    return;
-                  }
-                  setIsTaskCollapsed(false);
-                  onExecuteTask(task);
-                }}
-                title={
-                  isWorking
-                    ? 'Agent is working on this task...'
-                    : isQueued
-                      ? 'Queued: it runs when the tasks before it finish. Click to run it now instead.'
-                      : isStoppedPartway
-                        ? 'Resume this task where it was left off'
-                        : hasRunBefore
-                          ? 'Rerun this task'
-                          : 'Start the AI on this task'
-                }
-                disabled={isWorking || (isQueued && !onRunQueuedNow)}
-              >
-                {isWorking ? (
-                  <>
-                    <Loader2 size={12} className="spin-animate" />
-                    <span>Working...</span>
-                  </>
-                ) : isQueued ? (
-                  <>
-                    <Clock size={12} />
-                    <span>Queued</span>
-                  </>
-                ) : isStoppedPartway ? (
-                  <>
-                    <Play size={12} />
-                    <span>Resume</span>
-                  </>
-                ) : hasRunBefore ? (
-                  <>
-                    <RotateCcw size={12} />
-                    <span>Rerun</span>
-                  </>
-                ) : (
-                  <>
-                    <Play size={12} />
-                    <span>Run</span>
-                  </>
-                )}
-              </button>
-              {confirmRunNow && createPortal(
-                <div className="modal-overlay" onClick={() => setConfirmRunNow(false)} style={{ zIndex: 130 }}>
-                  <div className="modal-content" style={{ maxWidth: '420px', width: '95vw' }} onClick={(e) => e.stopPropagation()}>
-                    <div className="modal-header">
-                      <h3 style={{ margin: 0, fontSize: '0.98rem', fontWeight: 650, color: 'var(--text-bright)' }}>Run it now?</h3>
-                    </div>
-                    <div className="modal-body" style={{ fontSize: '0.86rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                      This task is already queued. Do you want to run it now, in parallel with the task that's running? It
-                      leaves the queue.
-                    </div>
-                    <div className="modal-footer">
-                      <button type="button" className="btn btn-secondary" onClick={() => setConfirmRunNow(false)}>
-                        Keep it queued
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        onClick={() => {
-                          setConfirmRunNow(false);
-                          setIsTaskCollapsed(false);
-                          onRunQueuedNow?.();
-                        }}
-                      >
-                        Run in parallel
-                      </button>
-                    </div>
-                  </div>
-                </div>,
-                document.body
-              )}
-
-              {/* Stop active running agent or active terminal session */}
-              {isWorking && (onTerminateAgent || onKillSession) && (
-                <button
-                  type="button"
-                  className="stop-task-btn"
-                  onClick={() => {
-                    if (onTerminateAgent) {
-                      onTerminateAgent(task.id);
-                    } else if (onKillSession) {
-                      onKillSession(task.id);
-                    }
-                  }}
-                  title="Stop the running task immediately"
-                >
-                  <Square size={11} />
-                  <span>Stop</span>
-                </button>
-              )}
-            </>
-          )}
-
-          {/* Task Options Dropdown Menu */}
-          <div style={{ position: 'relative' }} ref={menuRef}>
-            <button
-              type="button"
-              className={`swimlane-menu-btn ${isMenuOpen ? 'active' : ''}`}
-              style={{ width: '26px', height: '26px' }}
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsMenuOpen((prev) => !prev);
-              }}
-              title="Task options"
-              aria-label="Task options"
-            >
-              <MoreHorizontal size={13} />
-            </button>
-
-            {isMenuOpen && (
-              <div className="swimlane-dropdown-menu" style={{ right: 0, minWidth: '185px' }} onClick={(e) => e.stopPropagation()}>
-                {isStoppedPartway && (
-                  <>
-                    <button
-                      type="button"
-                      className="swimlane-dropdown-item"
-                      onClick={() => {
-                        setIsMenuOpen(false);
-                        setIsTaskCollapsed(false);
-                        onExecuteTask(task);
-                      }}
-                    >
-                      <Play size={13} style={{ color: 'var(--accent-amber, #f59e0b)' }} />
-                      <span>Resume Task</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      className="swimlane-dropdown-item"
-                      onClick={() => {
-                        setIsMenuOpen(false);
-                        setIsTaskCollapsed(false);
-                        onExecuteTask(task, { startOver: true });
-                      }}
-                      title="Discard the stopped run and run the task again from the start"
-                    >
-                      <RotateCcw size={13} style={{ color: 'var(--accent-cyan)' }} />
-                      <span>Start Over</span>
-                    </button>
-
-                    <div className="swimlane-dropdown-divider" />
-                  </>
-                )}
-
-                {hasRunBefore && (
-                  <>
-                    <button
-                      type="button"
-                      className="swimlane-dropdown-item"
-                      onClick={() => {
-                        setIsMenuOpen(false);
-                        setIsTaskCollapsed(false);
-                        onExecuteTask(task);
-                      }}
-                    >
-                      <RotateCcw size={13} style={{ color: 'var(--accent-cyan)' }} />
-                      <span>Rerun Task</span>
-                    </button>
-
-                    <div className="swimlane-dropdown-divider" />
-                  </>
-                )}
-
-                <button
-                  type="button"
-                  className="swimlane-dropdown-item"
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    setIsEditing(true);
-                    setViewModeSection2('notes');
-                    setIsTaskCollapsed(false);
-                    setActiveStage('overview');
-                  }}
-                >
-                  <Edit3 size={13} />
-                  <span>Edit Task</span>
-                </button>
-
-                <button
-                  type="button"
-                  className="swimlane-dropdown-item"
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    onOpenScheduleModal?.(task);
-                  }}
-                >
-                  <Calendar size={13} style={{ color: 'var(--accent-primary, #6366f1)' }} />
-                  <span>{scheduledJob && scheduledJob.status === 'pending' ? 'Edit Schedule...' : 'Schedule task...'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  className="swimlane-dropdown-item"
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    setIsMcpModalOpen(true);
-                  }}
-                >
-                  <Wrench size={13} style={{ color: 'var(--accent-purple, #a855f7)' }} />
-                  <span>Configure MCP Tools{activeTaskTools.length > 0 ? ` (${activeTaskTools.length})` : ''}...</span>
-                </button>
-
-                {(() => {
-                  const verifierSession = agentSessions.find((s) => s.role === 'verifier');
-                  const isVerifierActiveOrDone = Boolean(
-                    verifierSession &&
-                      (verifierSession.status === 'running' ||
-                        verifierSession.status === 'starting' ||
-                        verifierSession.status === 'done' ||
-                        verifierSession.status === 'failed')
-                  );
-                  const isVerifierDisabled = runActive && isVerifierActiveOrDone;
-                  return (
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={verificationOn}
-                      className="swimlane-dropdown-item"
-                      onClick={toggleVerification}
-                      disabled={isVerifierDisabled}
-                      title={
-                        isVerifierDisabled
-                          ? "Can't change this while the verifier is running or finished"
-                          : 'A separate verifier agent checks the finished work and sends it back to the manager if it fails. Runs only if the AI determines it is necessary.'
-                      }
-                    >
-                      <ShieldCheck size={13} style={{ color: verificationOn ? 'var(--accent-emerald)' : undefined }} />
-                      <span style={{ flex: 1 }}>Verification</span>
-                      <span className={`toggle-switch-btn menu-switch ${verificationOn ? 'is-active' : ''}`} aria-hidden="true">
-                        <span className="toggle-switch-thumb" />
-                      </span>
-                    </button>
-                  );
-                })()}
-
-                <div className="swimlane-dropdown-divider" />
-
-                <button
-                  type="button"
-                  className="swimlane-dropdown-item"
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    onArchiveTask?.(task.title || brief?.title || '');
-                  }}
-                >
-                  <Archive size={13} style={{ color: '#f59e0b' }} />
-                  <span>Archive</span>
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
+    <div ref={cardRef} className={`eg-taskdetail ${isWorking ? 'is-running' : ''}`}>
+      <div className="eg-detail-head eg-detail-head-task">
+        {onBackToRuns && (
+          <Button variant="ghost" size="sm" icon={ArrowLeft} onClick={onBackToRuns} className="eg-back-btn" title="Back to all runs">
+            All runs
+          </Button>
+        )}
+        <span className="eg-detail-crumb">{fileName.replace(/\.md$/i, '')}</span>
+        {categoryName && (
+          <>
+            <span className="eg-crumb-sep">›</span>
+            <span className="eg-detail-crumb is-current">{categoryName}</span>
+          </>
+        )}
+        <span className="eg-spacer" />
+        <MenuButton align="end" width={240} items={moreItems} trigger={(p) => <IconButton {...p} icon={MoreHorizontal} size="sm" label="More" />} />
+        {onClosePane && <IconButton icon={X} size="sm" label={`Close (${MOD}J)`} onClick={onClosePane} />}
       </div>
 
+      <div className="eg-detail-body">
+        <h1 className="eg-detail-title">{brief?.title || task.title}</h1>
+        {notes.length > 0 ? (
+          <div className="eg-detail-desc">
+            <ul className="eg-detail-notes">
+              {notes.map((n, i) => (
+                <li key={i} className={n.isDone ? 'is-done' : undefined}>
+                  <MarkdownRenderer content={n.text} />
+                </li>
+              ))}
+            </ul>
+            <p className="eg-detail-hint">From {fileName.replace(/\.md$/i, '')}. Edit the lines in the document to change this.</p>
+          </div>
+        ) : !brief?.sourceTaskId && brief?.sourceContent ? (
+          <div className="eg-detail-desc">
+            <MarkdownRenderer content={brief.sourceContent} />
+          </div>
+        ) : null}
 
-      {/* ── Task Card Content (Collapsible) ── */}
-      {!isTaskCollapsed && (
+        <div className="eg-props">
+          <span className="eg-prop-k">Status</span>
+          <span className="eg-prop-v">
+            <span className="eg-chip">
+              <StatusIcon status={statusKind} />
+              {STATUS_LABEL[statusKind]}
+            </span>
+          </span>
+          {lineLabel && (
+            <>
+              <span className="eg-prop-k">Line</span>
+              <span className="eg-prop-v eg-mono-sm">{lineLabel}</span>
+            </>
+          )}
+          {isQueued && (
+            <>
+              <span className="eg-prop-k">Queue</span>
+              <span className="eg-prop-v">
+                <span className="eg-chip">
+                  <StatusIcon status="queued" />
+                  Queued {queuePosition != null ? queuePosition + 1 : ''}
+                </span>
+                {onRunQueuedNow && (
+                  <Button size="sm" variant="ghost" onClick={() => setConfirmRunNow(true)}>
+                    Run now instead
+                  </Button>
+                )}
+              </span>
+            </>
+          )}
+          {scheduledJob && scheduledJob.status === 'pending' && (
+            <>
+              <span className="eg-prop-k">Scheduled</span>
+              <span className="eg-prop-v">
+                <button type="button" className="eg-chip eg-chip-btn" onClick={() => onOpenScheduleModal?.(task)}>
+                  <Icon icon={Clock} size="sm" />
+                  {new Date(scheduledJob.scheduledTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                  {scheduledJob.cronExpression ? ` · ${scheduledJob.cronExpression}` : ''}
+                </button>
+              </span>
+            </>
+          )}
+          {relatedSelectedCount > 0 && (
+            <>
+              <span className="eg-prop-k">Related</span>
+              <span className="eg-prop-v">
+                <button type="button" className="eg-chip eg-chip-btn" onClick={() => setActiveStage('related')}>
+                  {relatedSelectedCount} related task{relatedSelectedCount === 1 ? '' : 's'}
+                </button>
+              </span>
+            </>
+          )}
+          {activeTaskTools.length > 0 && (
+            <>
+              <span className="eg-prop-k">Tools</span>
+              <span className="eg-prop-v">
+                <button type="button" className="eg-chip eg-chip-btn" onClick={() => setIsMcpModalOpen(true)}>
+                  {activeTaskTools.length} selected
+                </button>
+              </span>
+            </>
+          )}
+          {tokenTotal ? (
+            <>
+              <span className="eg-prop-k">Tokens</span>
+              <span className="eg-prop-v eg-tabular">{formatTokens(tokenTotal)}</span>
+            </>
+          ) : null}
+        </div>
+
+        {!canRun && (
+          <Banner
+            icon={Unplug}
+            title="Runs are paused — the bridge isn't reachable"
+            text="Tasks and briefs still save to TODO.md. Queued runs start when it's back."
+            className="eg-detail-banner"
+          />
+        )}
+        {!runActive && hasRunBefore && !task.isDone && outcome && (
+          <Banner
+            tone={outcome === 'failed' || outcome === 'verifier_failed' ? 'danger' : 'warning'}
+            icon={outcome === 'failed' || outcome === 'verifier_failed' ? CircleX : CircleDot}
+            title={
+              outcome === 'failed'
+                ? 'The last run failed'
+                : outcome === 'verifier_failed'
+                  ? "The last run didn't pass verification"
+                  : outcome === 'stopped'
+                    ? 'You stopped the last run'
+                    : 'Ready for your review'
+            }
+            text={
+              completionNote
+                ? 'The completion note is under Notes.'
+                : "The agent didn't write a completion note — check its terminal output under Runs."
+            }
+            actions={
+              <Button size="sm" onClick={() => setActiveStage(completionNote ? 'completion' : 'actions')}>
+                {completionNote ? 'Read the note' : 'Open runs'}
+              </Button>
+            }
+            className="eg-detail-banner"
+          />
+        )}
+
+      {/* ── Brief · Runs · Notes · Related ── */}
+      {(
         <div className="ai-task-card-body">
           {/* Rich Text Toolbar when editing */}
           {isEditing && (
@@ -1692,19 +1554,6 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
           )}
 
           <div className="brief-container" style={{ padding: 0, gap: '0.45rem' }}>
-            {/* ═══════════════════════════════════════════════════════════
-                CARD 1: TOKEN USAGE (stages breakout collapsed by default)
-               ═══════════════════════════════════════════════════════════ */}
-            <BvTokenCounterCard
-              task={task}
-              brief={brief}
-              executionSteps={executionSteps}
-              isExecuting={isExecuting}
-              isTaskStarted={isTaskStarted}
-              defaultBreakdownOpen={false}
-              billing={taskBilling}
-            />
-
             {/* "How did this task do?" after an Auto run Ergo can't judge well on its own */}
             <RunSurveyCard record={brief?.lastRunOutcome} hidden={runActive} />
 
@@ -1712,44 +1561,55 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                 STAGES: one tab per stage, unlocked as the run reaches it
                ═══════════════════════════════════════════════════════════ */}
             <div className={`stage-tabs-card stage-${shownStage} ${shownStage === 'actions' && hasPendingAlert ? 'has-pending-alert' : ''}`}>
-              <div className="stage-tabs" role="tablist" aria-label="Task stages">
-                {TASK_STAGES.map(({ key, label, Icon, color }) => {
-                  const status = stageStatus[key];
-                  const reached = stageReached(key);
-                  const attention = key === 'actions' && hasPendingAlert;
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      role="tab"
-                      aria-selected={shownStage === key}
-                      disabled={!reached}
-                      className={`stage-tab status-${status} ${shownStage === key ? 'is-active' : ''} ${attention ? 'needs-attention' : ''}`}
-                      onClick={() => setActiveStage(key)}
-                      title={
-                        !reached
-                          ? `${label} opens when the run gets here`
-                          : attention
-                            ? `${label}: an agent is waiting for you`
-                            : key === 'related' && relatedSummaryTag
-                              ? `${label}: ${relatedSummaryTag}`
-                              : `${label}${status === 'working' ? ' · working' : status === 'done' ? ' · done' : ''}`
-                      }
+              <div className="eg-detail-tabs">
+                <Tabs<TaskStageKey>
+                  value={shownStage}
+                  onChange={(key) => {
+                    if (stageReached(key)) setActiveStage(key);
+                  }}
+                  items={TASK_STAGES.map(({ key, label }) => {
+                    const status = stageStatus[key];
+                    const attention = key === 'actions' && hasPendingAlert;
+                    return {
+                      id: key,
+                      label,
+                      disabled: !stageReached(key),
+                      title: stageReached(key) ? undefined : `${label} opens when a run gets here`,
+                      count: key === 'related' && relatedSelectedCount > 0 ? relatedSelectedCount : key === 'actions' && runCount > 0 ? runCount : undefined,
+                      marker: attention ? <StatusDot state="warning" label="Waiting for you" /> : status === 'working' ? <StatusDot state="live" label="Working" /> : undefined,
+                    };
+                  })}
+                />
+                <span className="eg-detail-tabs-actions">
+                  {isEditing ? (
+                    <>
+                      <Button size="sm" variant="ghost" onClick={handleCancel}>
+                        Cancel
+                      </Button>
+                      <Button size="sm" icon={Save} onClick={handleSave}>
+                        Save
+                      </Button>
+                    </>
+                  ) : (shownStage === 'overview' || shownStage === 'completion') ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      icon={Pencil}
+                      onClick={() => {
+                        setIsEditing(true);
+                        setViewModeSection2('notes');
+                      }}
                     >
-                      <Icon size={12} color={reached ? color : undefined} />
-                      <span>{label}</span>
-                      {key === 'related' && relatedSelectedCount > 0 && <span className="stage-tab-count">{relatedSelectedCount}</span>}
-                      {attention ? (
-                        <AlertTriangle size={10} className="stage-tab-alert" />
-                      ) : status === 'working' ? (
-                        <Loader2 size={10} className="spin-animate stage-tab-working" />
-                      ) : status === 'done' ? (
-                        <Check size={10} className="stage-tab-done" />
-                      ) : null}
-                    </button>
-                  );
-                })}
+                      Edit
+                    </Button>
+                  ) : null}
+                </span>
               </div>
+              {shownStage === 'overview' && (
+                <div className="eg-detail-meta">
+                  {brief?.overviewSource === 'user' ? 'Overview · edited by you' : brief?.overviewSource === 'generated' ? 'Overview · written by the agent' : 'Overview'}
+                </div>
+              )}
 
               {shownStage === 'related' && (
                 <div className="ai-sub-card-body stage-panel" role="tabpanel">
@@ -1820,29 +1680,26 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                       )}
                     </div>
                   ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                      <div className="brief-markdown-render" style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: '1.45' }}>
-                        <div style={{ fontWeight: 600 }}>{task.title}</div>
-                        {task.subtasks.length > 0 && (
-                          <ul style={{ margin: '0.3rem 0 0', paddingLeft: '1.1rem' }}>
-                            {task.subtasks.map((st) => (
-                              <li key={st.id} style={st.isDone ? { textDecoration: 'line-through', opacity: 0.6 } : undefined}>
-                                {st.text}
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                      <div className="ai-card-hint">
-                        This is the task as written. The actual overview — goals, success criteria, and tool plan — is generated when the task is started, and kept for reruns. Click <strong>'Run Task'</strong> to begin.
-                      </div>
-                    </div>
+                    <EmptyState
+                      icon={FileText}
+                      title="No overview yet"
+                      text="The overview — goals, success criteria and tool plan — is written when the task first runs, and kept for reruns."
+                    />
                   )}
                 </div>
               )}
 
               {shownStage === 'actions' && (
                 <div className="ai-sub-card-body stage-panel" role="tabpanel" style={{ padding: 0 }}>
+                  <BvTokenCounterCard
+                    task={task}
+                    brief={brief}
+                    executionSteps={executionSteps}
+                    isExecuting={isExecuting}
+                    isTaskStarted={isTaskStarted}
+                    defaultBreakdownOpen={false}
+                    billing={taskBilling}
+                  />
                   {/* High-priority pending action prompts (Permission or Ollama Offline) */}
                   {(pendingPermission || pendingOllamaFallback || offscreenPromptAgents.length > 0) && (
                     <div style={{ padding: '0.65rem 0.65rem 0.25rem 0.65rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -2255,6 +2112,86 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
           </div>
         </div>
       )}
+      </div>
+
+      <div className="eg-detail-foot">
+        <MenuButton
+          placement="above"
+          width={220}
+          items={modelItems}
+          trigger={(p) => (
+            <Button {...p} variant="ghost" icon={Cpu} iconRight={ChevronDown} title="Model selection and effort for runs">
+              {modelSelection === 'auto' ? 'Auto' : 'Manual'}
+              <span className="eg-subtle">· {EFFORT_LABELS[effortLevel]}</span>
+            </Button>
+          )}
+        />
+        <span className="eg-spacer" />
+        {runActive ? (
+          <>
+            <span className="eg-detail-foot-note eg-hide-sm">Changes land in your working tree.</span>
+            {(onTerminateAgent || onKillSession) && (
+              <Button
+                variant="danger"
+                icon={Square}
+                kbd={[SHIFT, MOD, '.']}
+                onClick={() => (onTerminateAgent ? onTerminateAgent(task.id) : onKillSession?.(task.id))}
+              >
+                Stop
+              </Button>
+            )}
+          </>
+        ) : (
+          <>
+            {!isQueued && onQueue && (
+              <Button icon={Layers} onClick={onQueue} title={canRun ? 'Run after the tasks already queued' : 'Runs when the bridge is back'}>
+                {canRun ? 'Queue' : 'Queue for later'}
+              </Button>
+            )}
+            <Button
+              variant="primary"
+              icon={isStoppedPartway ? Play : hasRunBefore ? RotateCcw : Play}
+              kbd={[SHIFT, MOD, '↵']}
+              disabled={!canRun}
+              title={!canRun ? 'Runs need the bridge' : undefined}
+              onClick={() => {
+                if (isQueued) {
+                  setConfirmRunNow(true);
+                  return;
+                }
+                onExecuteTask(task);
+              }}
+            >
+              {isStoppedPartway ? 'Resume' : hasRunBefore ? 'Run again' : 'Run'}
+            </Button>
+          </>
+        )}
+      </div>
+
+      <Dialog
+        open={confirmRunNow}
+        title="Run it now?"
+        description="This task is already queued. Running it now starts it alongside the task that's running, and it leaves the queue."
+        onClose={() => setConfirmRunNow(false)}
+        width={420}
+        footer={
+          <>
+            <span className="eg-spacer" />
+            <Button onClick={() => setConfirmRunNow(false)}>Keep it queued</Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setConfirmRunNow(false);
+                onRunQueuedNow?.();
+              }}
+            >
+              Run in parallel
+            </Button>
+          </>
+        }
+      >
+        {null}
+      </Dialog>
 
       {isMcpModalOpen && (
         <TaskMcpToolsModal
@@ -2280,7 +2217,6 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   briefs,
   archivedTasks = [],
   selectedTaskId,
-  runningTaskIds = [],
   queuedTaskIds = [],
   onSelectTask,
   onSaveBrief,
@@ -2312,17 +2248,29 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
   scheduledJobs = [],
   onScheduleTask,
   onCancelScheduleTask,
-  isPanelOpen = true,
   onTogglePanel,
   mcpServers = [],
   onUpdateTaskMcpTools,
   agentPipelineOptions,
   onSetAgentPipelineOptions,
+  onResizeStart,
+  isResizing,
+  onQueueTask,
+  isBridgeConnected,
+  onOpenModels,
+  detailRequest = 0,
+  runsViewRequest = 0,
 }) => {
-  const [showExecSettings, setShowExecSettings] = useState(false);
   const [schedulingTask, setSchedulingTask] = useState<TaskItem | null>(null);
-
-  const activeTaskRunningCount = runningTaskIds.length;
+  // The runs view is the pane's anchor: shown by default, and whenever the user goes back to it. Picking a task in
+  // the document opens its card.
+  const [showRuns, setShowRuns] = useState(true);
+  useEffect(() => {
+    if (detailRequest > 0) setShowRuns(false);
+  }, [detailRequest]);
+  useEffect(() => {
+    if (runsViewRequest > 0) setShowRuns(true);
+  }, [runsViewRequest]);
 
   // Each task's agent sessions (String task ids), ordered manager → workers → verifier.
   const sessionsByTask = React.useMemo(() => {
@@ -2336,16 +2284,16 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
     for (const [key, list] of map) map.set(key, sortAgentSessions(list));
     return map;
   }, [terminalSessions]);
-  const doneCount = briefs.filter((b) => b.status === 'done').length;
 
-  const [sortMode, setSortMode] = useState<AiSortMode>(readAiSortMode);
-  // Preferences load after mount (and may change in another window).
-  useEffect(() => subscribePrefs(() => setSortMode(readAiSortMode())), []);
-  const chooseSortMode = (mode: AiSortMode) => {
-    setSortMode(mode);
-    setPref(AI_SORT_PREF, mode);
+  // The runs view's order: by run status (default), by the heading each task sits under, or alphabetically.
+  const [runsSort, setRunsSort] = useState<RunsSort>(readRunsSort);
+  useEffect(() => subscribePrefs(() => setRunsSort(readRunsSort())), []);
+  const chooseRunsSort = (next: RunsSort) => {
+    setRunsSort(next);
+    setPref(RUNS_SORT_PREF, next);
   };
-  const orderedBriefs = React.useMemo(() => orderBriefs(briefs, tasks, sortMode), [briefs, tasks, sortMode]);
+  // Base order follows the document: its headings, then task order.
+  const orderedBriefs = React.useMemo(() => orderBriefs(briefs, tasks, 'category'), [briefs, tasks]);
 
   // Related Tasks card: candidates carry String task ids; selection needs the task's own id (number or string).
   const taskIdByString = React.useMemo(() => new Map(tasks.map((t) => [String(t.id), t.id] as const)), [tasks]);
@@ -2355,262 +2303,251 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
     if (original !== undefined) onSelectTask?.(original);
   };
 
-  // ── Collapsed Vertical Menu Rail View ──
-  if (isPanelOpen === false) {
+  // ── The task on the current line (or the brief picked from the list) ──
+  const selectedRow = React.useMemo(() => {
+    if (selectedTaskId == null) return null;
+    const sel = String(selectedTaskId);
+    const task = tasks.find((t) => String(t.id) === sel) ?? null;
+    const brief =
+      briefs.find((b) => b.sourceTaskId != null && String(b.sourceTaskId) === sel) ||
+      briefs.find((b) => b.id != null && String(b.id) === sel) ||
+      (task ? briefs.find((b) => b.title.trim().toLowerCase() === task.title.trim().toLowerCase()) : undefined);
+    if (!task && !brief) return null;
+    const effectiveTask: TaskItem = task || {
+      id: brief!.sourceTaskId || brief!.id || `brief-${brief!.itemNumber}`,
+      title: brief!.title,
+      category: brief!.sourceLaneTitle || '',
+      status: (brief!.status as TaskStatus) || 'not_started',
+      isDone: brief!.status === 'done',
+      subtasks: [],
+      isUnordered: brief!.isUnordered,
+      swimLaneId: brief!.sourceLaneId,
+    };
+    return { task: effectiveTask, brief };
+  }, [selectedTaskId, tasks, briefs]);
+
+  const fileName = 'TODO.md';
+  const findById = <T,>(map: Record<string | number, T> | undefined, id: string | number): T | undefined =>
+    map?.[id] ?? Object.entries(map || {}).find(([k]) => String(k) === String(id))?.[1];
+
+  const renderDetail = (task: TaskItem, brief: AgentContextItem | undefined) => {
+    const agentSessions = sessionsByTask.get(String(task.id)) ?? NO_AGENT_SESSIONS;
+    const isExecuting = executingTaskId !== null && String(executingTaskId) === String(task.id);
+    const isWorking = agentSessions.some((x) => isAgentWorking(x.status)) || isExecuting;
+    const queuePos = queuedTaskIds.findIndex((qid) => String(qid) === String(task.id));
+    const taskJob = scheduledJobs.find((j) => String(j.taskId) === String(task.id) && j.status === 'pending');
     return (
-      <div
-        className="ai-workspace-vertical-rail"
-        onClick={onTogglePanel}
-        title="Expand AI Workspace Panel"
-      >
-        {/* Top Expand Button */}
-        <button
-          type="button"
-          className="ai-rail-expand-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            onTogglePanel?.();
-          }}
-          title="Expand AI Workspace Panel"
-          aria-label="Expand AI Workspace Panel"
-        >
-          <PanelRightOpen size={16} />
-        </button>
-
-        {/* Vertical Middle Section: Icon, Rotated Label, Counts */}
-        <div className="ai-rail-middle-section">
-          <div className="ai-rail-icon-wrapper">
-            <FileCode size={16} style={{ color: 'var(--accent-violet)' }} />
-            {activeTaskRunningCount > 0 && (
-              <span className="live-pulse-dot ai-rail-pulse" title={`${activeTaskRunningCount} running task${activeTaskRunningCount > 1 ? 's' : ''}`} />
-            )}
-          </div>
-
-          <div className="ai-rail-text-label">
-            <span>AI WORKSPACE</span>
-          </div>
-
-          <div className="ai-rail-count-badge" title={`${doneCount} of ${briefs.length} tasks completed`}>
-            <span>{doneCount}/{briefs.length}</span>
-          </div>
-
-          {activeTaskRunningCount > 0 && (
-            <div className="ai-rail-running-badge" title={`${activeTaskRunningCount} task${activeTaskRunningCount > 1 ? 's' : ''} currently running`}>
-              <Loader2 size={11} className="spin-animate" />
-              <span>{activeTaskRunningCount}</span>
-            </div>
-          )}
-        </div>
-
-        {/* Bottom Rail Actions */}
-        <div className="ai-rail-bottom-section" onClick={(e) => e.stopPropagation()}>
-          <button
-            type="button"
-            className="ai-rail-action-btn"
-            onClick={onOpenArchives}
-            title="Archives &amp; Learnings"
-            aria-label="Archives &amp; Learnings"
-          >
-            <Archive size={14} color="#f59e0b" />
-            {archivedTasks.length > 0 && (
-              <span className="ai-rail-mini-badge">{archivedTasks.length}</span>
-            )}
-          </button>
-        </div>
-
-      </div>
+      <AiTaskCard
+        key={String(task.id)}
+        taskBilling={taskBilling}
+        task={task}
+        brief={brief}
+        isSelected
+        isWorking={isWorking}
+        isQueued={queuePos >= 0}
+        queuePosition={queuePos >= 0 ? queuePos : undefined}
+        onRunQueuedNow={onRunQueuedTaskNow ? () => onRunQueuedTaskNow(task.id) : undefined}
+        onQueue={onQueueTask ? () => onQueueTask(task) : undefined}
+        isBridgeConnected={isBridgeConnected}
+        onClosePane={onTogglePanel}
+        onBackToRuns={() => setShowRuns(true)}
+        agentPipelineOptions={agentPipelineOptions}
+        onSetAgentPipelineOptions={onSetAgentPipelineOptions}
+        onOpenModels={onOpenModels}
+        fileName={fileName}
+        agentSessions={agentSessions}
+        permissionLevel={agentPipelineOptions?.permissionLevel}
+        isExecuting={isExecuting}
+        executionSteps={findById(taskExecutionSteps, task.id) || []}
+        pendingPermission={findById(pendingPermissions, task.id)?.prompt ?? null}
+        pendingHumanInput={findById(pendingHumanInputs, task.id) ?? null}
+        pendingOllamaFallback={findById(pendingOllamaFallbacks, task.id) ?? null}
+        scheduledJob={taskJob}
+        onOpenScheduleModal={(t) => setSchedulingTask(t)}
+        onSelect={() => onSelectTask?.(brief?.sourceTaskId || brief?.id || task.id)}
+        onSaveBrief={onSaveBrief}
+        onLiveBriefChange={onLiveBriefChange}
+        onExecuteTask={onExecuteTask}
+        onUpdateBriefWithAi={_onUpdateBriefWithAi}
+        onSyncOverviewWithTask={onSyncOverviewWithTask}
+        onPermissionChoice={(approved) => onPermissionChoice?.(task.id, approved)}
+        onHumanInputChoice={(answer) => onHumanInputChoice?.(task.id, answer)}
+        onOllamaFallbackChoice={(choice) => onOllamaFallbackChoice?.(task.id, choice)}
+        onRestartSession={onRestartSession}
+        onKillSession={onKillSession}
+        onKillAgentSession={onKillAgentSession}
+        onSendTaskMessage={onSendTaskMessage}
+        onTerminateAgent={onTerminateAgent}
+        onArchiveTask={onArchiveTask}
+        onRemoveAiTask={(targetId) => onRemoveAiTask?.(targetId)}
+        onPurgeTaskFromAi={(targetId) => onPurgeTaskFromAi?.(targetId)}
+        mcpServers={mcpServers}
+        onUpdateTaskMcpTools={onUpdateTaskMcpTools}
+        canOpenRelatedTask={canOpenRelatedTask}
+        onOpenRelatedTask={onSelectTask ? (id) => openRelatedTask(id) : undefined}
+      />
     );
-  }
+  };
 
-  return (
-    <div className="pane pane-right obsidian-pane ai-workspace-popout-panel">
-      <div className="ai-workspace-column">
-        {/* ── Pane Header ── */}
-        <div className="ai-workspace-column-header">
-          <div className="ai-workspace-title-container">
-            <FileCode size={15} style={{ color: 'var(--accent-violet)', flexShrink: 0 }} />
-            <span className="ai-workspace-title-text">AI Workspace</span>
-            <span className="swimlane-done-badge">{doneCount}/{briefs.length} done</span>
-          </div>
-
-          <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
-            {activeTaskRunningCount > 0 && (
-              <span className="running-indicator-badge">
-                <span className="live-pulse-dot" />
-                <span>{activeTaskRunningCount} running</span>
-              </span>
-            )}
-
-            {/* Collapse AI Workspace Panel Button */}
-            {onTogglePanel && (
-              <button
-                type="button"
-                className="swimlane-menu-btn ai-panel-collapse-btn"
-                onClick={onTogglePanel}
-                title="Collapse AI Workspace panel"
-                aria-label="Collapse AI Workspace panel"
-              >
-                <PanelRightClose size={14} />
-              </button>
-            )}
-          </div>
+  // The runs view: what's running, waiting on you, queued, finished and not run yet, for every task with a brief.
+  const renderOverview = () => {
+    const rows = orderedBriefs.map(({ brief, index, task }) => {
+      const id = task?.id ?? brief.sourceTaskId ?? brief.id ?? `brief-${brief.itemNumber || index + 1}`;
+      const sessions = sessionsByTask.get(String(id)) ?? NO_AGENT_SESSIONS;
+      const live = sessions.some((x) => isAgentWorking(x.status)) || (executingTaskId !== null && String(executingTaskId) === String(id));
+      const waiting =
+        sessions.some((x) => x.session.isActive && x.status === 'awaiting_approval') ||
+        Boolean(findById(pendingPermissions, id) || findById(pendingHumanInputs, id));
+      const queuePos = queuedTaskIds.findIndex((qid) => String(qid) === String(id));
+      const outcome = brief.lastRunOutcome?.outcome;
+      const done = Boolean(task?.isDone || brief.status === 'done');
+      const ran = Boolean(outcome) || sessions.length > 0 || Boolean(brief.completion?.trim());
+      const group: 'waiting' | 'running' | 'queued' | 'review' | 'failed' | 'new' | 'done' = waiting
+        ? 'waiting'
+        : live
+          ? 'running'
+          : queuePos >= 0
+            ? 'queued'
+            : done
+              ? 'done'
+              : outcome === 'failed' || outcome === 'verifier_failed'
+                ? 'failed'
+                : ran
+                  ? 'review'
+                  : 'new';
+      const started = sessions.find((x) => x.role === 'manager')?.session.spawnedAt ?? sessions[0]?.session.spawnedAt;
+      return { brief, task, id, group, queuePos, outcome, started };
+    });
+    const GROUPS: Array<{ key: (typeof rows)[number]['group']; label: string; status: DesignTaskStatus }> = [
+      { key: 'waiting', label: 'Waiting for you', status: 'review' },
+      { key: 'running', label: 'Running', status: 'progress' },
+      { key: 'queued', label: 'Up next', status: 'queued' },
+      { key: 'review', label: 'Ready for review', status: 'review' },
+      { key: 'failed', label: 'Failed', status: 'failed' },
+      { key: 'new', label: 'Not run yet', status: 'todo' },
+      { key: 'done', label: 'Done', status: 'done' },
+    ];
+    const GROUP_STATUS = Object.fromEntries(GROUPS.map((g) => [g.key, g.status])) as Record<(typeof rows)[number]['group'], DesignTaskStatus>;
+    const GROUP_LABEL = Object.fromEntries(GROUPS.map((g) => [g.key, g.label])) as Record<(typeof rows)[number]['group'], string>;
+    type Row = (typeof rows)[number];
+    // Run status: one section per state. Category: one per document heading, in document order. A–Z: one list.
+    const sections: Array<{ key: string; label: string | null; rows: Row[] }> =
+      runsSort === 'alpha'
+        ? [{ key: 'alpha', label: null, rows: [...rows].sort((x, y) => x.brief.title.localeCompare(y.brief.title, undefined, { sensitivity: 'base', numeric: true })) }]
+        : runsSort === 'category'
+          ? (() => {
+              const byHeading = new Map<string, Row[]>();
+              for (const r of rows) {
+                const h = r.task?.category && r.task.category !== 'Untitled' ? cleanHeading(r.task.category) : r.task ? 'No heading' : 'Not in the document';
+                const list = byHeading.get(h);
+                if (list) list.push(r);
+                else byHeading.set(h, [r]);
+              }
+              return [...byHeading].map(([h, list]) => ({ key: `cat-${h}`, label: h, rows: list }));
+            })()
+          : GROUPS.map((g) => ({
+              key: g.key,
+              label: g.label,
+              rows: rows.filter((r) => r.group === g.key).sort((x, y) => (g.key === 'queued' ? x.queuePos - y.queuePos : 0)),
+            })).filter((sec) => sec.rows.length > 0);
+    const counts = { running: rows.filter((r) => r.group === 'running' || r.group === 'waiting').length, queued: rows.filter((r) => r.group === 'queued').length };
+    const metaFor = (r: (typeof rows)[number]) =>
+      r.group === 'running'
+        ? r.started ? `since ${new Date(r.started).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Running'
+        : r.group === 'waiting'
+          ? 'Needs you'
+          : r.group === 'queued'
+            ? `#${r.queuePos + 1}`
+            : r.brief.lastRunOutcome?.at
+              ? new Date(r.brief.lastRunOutcome.at).toLocaleDateString([], { month: 'short', day: 'numeric' })
+              : '';
+    const open = (r: (typeof rows)[number]) => {
+      onSelectTask?.(r.brief.sourceTaskId || r.brief.id || r.id);
+      setShowRuns(false);
+    };
+    return (
+      <>
+        <div className="eg-detail-head">
+          <span className="eg-icon eg-icon-sm eg-subtle" aria-hidden="true"><Activity strokeWidth={1.75} /></span>
+          <span className="eg-detail-crumb is-current">Runs</span>
+          <span className="eg-detail-crumb eg-tabular">
+            {counts.running > 0 ? `${counts.running} running` : 'Nothing running'}
+            {counts.queued > 0 ? ` · ${counts.queued} queued` : ''}
+          </span>
+          <span className="eg-spacer" />
+          {onOpenArchives && <IconButton icon={Archive} size="sm" label={`Archived tasks${archivedTasks.length ? ` (${archivedTasks.length})` : ''}`} onClick={onOpenArchives} />}
+          {onTogglePanel && <IconButton icon={X} size="sm" label={`Close (${MOD}J)`} onClick={onTogglePanel} />}
         </div>
-
-        {/* ── Header second row: sorting, execution settings, archives ── */}
-        <div className="ai-workspace-header-row">
-          {briefs.length > 1 && (
-            <div className="steps-notes-chip ai-sort-chip" role="group" aria-label="Sort AI tasks">
-              <button
-                type="button"
-                className={`steps-notes-segment ${sortMode === 'category' ? 'active' : ''}`}
-                onClick={() => chooseSortMode('category')}
-                aria-pressed={sortMode === 'category'}
-                title="Sort by category: the human workspace's headings, then task number"
-              >
-                <FolderTree size={10} />
-                <span>Category</span>
-              </button>
-              <button
-                type="button"
-                className={`steps-notes-segment ${sortMode === 'added' ? 'active' : ''}`}
-                onClick={() => chooseSortMode('added')}
-                aria-pressed={sortMode === 'added'}
-                title="Sort by when the task was added to the AI workspace, newest first"
-              >
-                <Clock size={10} />
-                <span>Date added</span>
-              </button>
-            </div>
-          )}
-
-          <div className="ai-workspace-header-row-actions">
-            {/* Execution settings (permissions + effort) toggle — mirrors the formatting bar toggle */}
-            {agentPipelineOptions && onSetAgentPipelineOptions && (
-              <button
-                type="button"
-                className={`ai-header-text-btn ${showExecSettings ? 'active' : ''}`}
-                onClick={() => setShowExecSettings((v) => !v)}
-                title={showExecSettings ? 'Hide execution settings' : 'Execution settings: permissions & effort'}
-                aria-expanded={showExecSettings}
-              >
-                <SlidersHorizontal size={13} />
-                <span>Execution Settings</span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              className="ai-header-text-btn"
-              onClick={onOpenArchives}
-              title="Archived tasks and what the AI learned from them"
-            >
-              <Archive size={13} style={{ color: '#f59e0b' }} />
-              <span>Archives &amp; Learnings</span>
-              {archivedTasks.length > 0 && <span className="ai-header-text-btn-count">{archivedTasks.length}</span>}
+        <div className="eg-detail-body">
+          {selectedRow && (
+            <button type="button" className="eg-runs-current" onClick={() => setShowRuns(false)}>
+              <span className="eg-subtle">Current line</span>
+              <span className="eg-runs-current-title">{selectedRow.brief?.title || selectedRow.task.title}</span>
+              <span className="eg-runs-current-go">Open</span>
             </button>
-          </div>
-        </div>
-
-        {showExecSettings && agentPipelineOptions && onSetAgentPipelineOptions && (
-          <ExecutionSettingsBar options={agentPipelineOptions} onChange={onSetAgentPipelineOptions} />
-        )}
-
-        {/* ── Scrollable Multi-Task List ── */}
-        <div className="brief-scrollable-workspace">
+          )}
           {briefs.length === 0 ? (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: '300px' }}>
-              <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                <ListTodo size={48} color="var(--accent-violet)" style={{ opacity: 0.45, marginBottom: '1rem' }} />
-                <h3 style={{ color: 'var(--text-bright)', fontSize: '1.15rem' }}>No AI tasks in workspace</h3>
-                <p style={{ fontSize: '0.85rem', marginTop: '0.5rem', maxWidth: '420px', lineHeight: '1.6' }}>
-                  AI implementation briefs and execution plans will appear here.
-                </p>
-              </div>
-            </div>
+            <EmptyState
+              icon={ListChecks}
+              title="No runs yet"
+              text="Click a task in the document to open it here, then press Run. Running and queued tasks show up in this view."
+            />
           ) : (
-            <div className="ai-tasks-list-container">
-              {orderedBriefs.map(({ brief, index, task: matchingTask, group }) => {
-
-                const effectiveTask: TaskItem = matchingTask || {
-                  id: brief.sourceTaskId || brief.id || `brief-${brief.itemNumber || index + 1}`,
-                  title: brief.title,
-                  category: brief.sourceLaneTitle || 'AI Workspace',
-                  status: (brief.status as TaskStatus) || 'not_started',
-                  isDone: brief.status === 'done',
-                  subtasks: [],
-                  isUnordered: brief.isUnordered,
-                  swimLaneId: brief.sourceLaneId,
-                };
-
-                const agentSessions = sessionsByTask.get(String(effectiveTask.id)) ?? NO_AGENT_SESSIONS;
-                const areAgentsWorking = agentSessions.some((s) => isAgentWorking(s.status));
-                const isExecuting = executingTaskId !== null && String(executingTaskId) === String(effectiveTask.id);
-                const isWorking = areAgentsWorking || isExecuting;
-                const isSelected =
-                  selectedTaskId != null &&
-                  (selectedTaskId === effectiveTask.id ||
-                    (matchingTask != null && selectedTaskId === matchingTask.id) ||
-                    (brief.sourceTaskId != null && selectedTaskId === brief.sourceTaskId) ||
-                    (brief.id != null && selectedTaskId === brief.id));
-
-                const taskJob = scheduledJobs.find((j) => String(j.taskId) === String(effectiveTask.id) && j.status === 'pending');
-                const isQueued = queuedTaskIds ? queuedTaskIds.some((qid) => String(qid) === String(effectiveTask.id)) : false;
-
-                return (
-                  <React.Fragment key={brief.id || brief.sourceTaskId || brief.itemNumber || `brief-${index}`}>
-                  {group && (
-                    <div className="ai-sort-group-header" style={{ '--group-color': group.color } as React.CSSProperties}>
-                      <span className="ai-sort-group-dot" />
-                      <span>{group.name}</span>
+            <>
+              <div className="eg-runs-sort">
+                <span className="eg-runs-sort-label">Sort by</span>
+                <SegmentedControl<RunsSort>
+                  label="Sort tasks by"
+                  value={runsSort}
+                  onChange={chooseRunsSort}
+                  options={[
+                    { id: 'status', label: 'Run status' },
+                    { id: 'category', label: 'Category' },
+                    { id: 'alpha', label: 'A–Z' },
+                  ]}
+                />
+              </div>
+              {sections.map((sec) => (
+                <section key={sec.key} className={`eg-runs-group is-${sec.key}`}>
+                  {sec.label && (
+                    <div className="eg-section-label">
+                      {sec.label}
+                      <span className="eg-count">{sec.rows.length}</span>
                     </div>
                   )}
-                  <AiTaskCard
-                    taskBilling={taskBilling}
-                    task={effectiveTask}
-                    brief={brief}
-                    isSelected={isSelected}
-                    isWorking={isWorking}
-                    isQueued={isQueued}
-                    onRunQueuedNow={onRunQueuedTaskNow ? () => onRunQueuedTaskNow(effectiveTask.id) : undefined}
-                    agentSessions={agentSessions}
-                    permissionLevel={agentPipelineOptions?.permissionLevel}
-                    isExecuting={isExecuting}
-                    executionSteps={taskExecutionSteps[effectiveTask.id] || taskExecutionSteps[String(effectiveTask.id)] || []}
-                    pendingPermission={pendingPermissions[effectiveTask.id]?.prompt ?? Object.entries(pendingPermissions || {}).find(([k]) => String(k) === String(effectiveTask.id))?.[1]?.prompt ?? null}
-                    pendingHumanInput={pendingHumanInputs[effectiveTask.id] ?? Object.entries(pendingHumanInputs || {}).find(([k]) => String(k) === String(effectiveTask.id))?.[1] ?? null}
-                    pendingOllamaFallback={pendingOllamaFallbacks?.[effectiveTask.id] ?? Object.entries(pendingOllamaFallbacks || {}).find(([k]) => String(k) === String(effectiveTask.id))?.[1] ?? null}
-                    scheduledJob={taskJob}
-                    onOpenScheduleModal={(t) => setSchedulingTask(t)}
-                    onSelect={() => onSelectTask?.(brief.sourceTaskId || brief.id || effectiveTask.id)}
-                    onSaveBrief={onSaveBrief}
-                    onLiveBriefChange={onLiveBriefChange}
-                    onExecuteTask={onExecuteTask}
-                    onUpdateBriefWithAi={_onUpdateBriefWithAi}
-                    onSyncOverviewWithTask={onSyncOverviewWithTask}
-                    onPermissionChoice={(approved) => onPermissionChoice?.(effectiveTask.id, approved)}
-                    onHumanInputChoice={(answer) => onHumanInputChoice?.(effectiveTask.id, answer)}
-                    onOllamaFallbackChoice={(choice) => onOllamaFallbackChoice?.(effectiveTask.id, choice)}
-                    onRestartSession={onRestartSession}
-                    onKillSession={onKillSession}
-                    onKillAgentSession={onKillAgentSession}
-                    onSendTaskMessage={onSendTaskMessage}
-                    onTerminateAgent={onTerminateAgent}
-                    onArchiveTask={onArchiveTask}
-                    onRemoveAiTask={(targetId) => onRemoveAiTask?.(targetId)}
-                    onPurgeTaskFromAi={(targetId) => onPurgeTaskFromAi?.(targetId)}
-                    mcpServers={mcpServers}
-                    onUpdateTaskMcpTools={onUpdateTaskMcpTools}
-                    canOpenRelatedTask={canOpenRelatedTask}
-                    onOpenRelatedTask={onSelectTask ? (id) => openRelatedTask(id) : undefined}
-                  />
-                  </React.Fragment>
-                );
-              })}
-            </div>
+                  <div className="eg-runs">
+                    {sec.rows.map((r) => (
+                      <RunRow
+                        key={String(r.id)}
+                        live={r.group === 'running'}
+                        status={GROUP_STATUS[r.group]}
+                        title={r.brief.title}
+                        detail={
+                          runsSort === 'category'
+                            ? GROUP_LABEL[r.group]
+                            : r.task?.category && r.task.category !== 'Untitled'
+                              ? cleanHeading(r.task.category)
+                              : r.brief.sourceLaneTitle
+                        }
+                        meta={metaFor(r)}
+                        active={selectedRow != null && String(selectedRow.task.id) === String(r.id)}
+                        onClick={() => open(r)}
+                      />
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </>
           )}
         </div>
-      </div>
+      </>
+    );
+  };
 
+  return (
+    <aside className={`eg-detail ${isResizing ? 'is-resizing' : ''}`} aria-label="Task detail">
+      {onResizeStart && <div className={`eg-detail-resize ${isResizing ? 'is-active' : ''}`} onMouseDown={onResizeStart} title="Drag to resize" />}
+      {selectedRow && !showRuns ? renderDetail(selectedRow.task, selectedRow.brief) : renderOverview()}
 
       {/* ── Schedule Task Modal Window ── */}
       {schedulingTask && (
@@ -2629,7 +2566,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
           }}
         />
       )}
-    </div>
+    </aside>
   );
 };
 
@@ -2644,7 +2581,7 @@ function renderMcpAppWidget(type: string, data: any) {
             <Code size={15} color="var(--accent-cyan)" />
             <span>VS Code Editor MCP Live Stream ({data.editorFile || 'TODO.md'})</span>
           </div>
-          <span style={{ fontSize: '0.7rem', color: 'var(--accent-emerald)', background: 'rgba(16, 185, 129, 0.15)', padding: '0.1rem 0.45rem', borderRadius: '4px' }}>
+          <span style={{ fontSize: '0.7rem', color: 'var(--accent-emerald)', background: 'color-mix(in srgb, var(--accent-text) 15%, transparent)', padding: '0.1rem 0.45rem', borderRadius: '4px' }}>
             {data.connectionStatus || 'Stdio IPC Connected'}
           </span>
         </div>

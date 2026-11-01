@@ -1,8 +1,10 @@
-import React, { useEffect } from 'react';
-import { Key, AlertCircle, CheckCircle2, Info, X, Undo2, Settings } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { CircleCheck, CircleX, Info, TriangleAlert, X } from 'lucide-react';
+import { Button, Icon, IconButton } from './ui';
 
 export interface ToastAction {
   label: string;
+  /** primary/emerald → the accent button (at most one per toast), danger → danger text, the rest secondary. */
   variant?: 'primary' | 'secondary' | 'emerald' | 'danger' | 'amber';
   onClick: () => void;
   icon?: React.ReactNode;
@@ -24,97 +26,80 @@ interface ToastContainerProps {
   onDismiss: (id: string) => void;
 }
 
-const ToastItem: React.FC<{ toast: ToastMessage; onDismiss: (id: string) => void }> = ({
-  toast,
-  onDismiss,
-}) => {
+/** At most this many toasts show at once (the newest). */
+const MAX_VISIBLE = 3;
+
+const TONE = {
+  success: { cls: 'eg-toast-success', icon: CircleCheck },
+  warning: { cls: 'eg-toast-warning', icon: TriangleAlert },
+  error: { cls: 'eg-toast-danger', icon: CircleX },
+  info: { cls: 'eg-toast-neutral', icon: Info },
+} as const;
+
+/** "Error: x failed!" → "x failed." — problems are stated calmly. */
+function calm(text: string): string {
+  return text.replace(/^\s*(error|warning)\s*:\s*/i, '').replace(/!+(\s|$)/g, '.$1').replace(/\.\.(\s|$)/g, '.$1');
+}
+
+const ToastItem: React.FC<{ toast: ToastMessage; onDismiss: (id: string) => void }> = ({ toast, onDismiss }) => {
+  const [hovered, setHovered] = useState(false);
+  const tone = TONE[toast.type ?? 'info'];
+  // Success and neutral toasts leave after 6s, warnings and failures after 15s (paused while hovered), unless the
+  // caller set a duration.
+  const duration = toast.duration ?? (toast.type === 'warning' || toast.type === 'error' ? 15000 : 6000);
+  const remaining = useRef(duration);
+  const startedAt = useRef(0);
+
   useEffect(() => {
-    const duration = toast.duration ?? 5000;
-    if (duration <= 0) return;
-    const timer = setTimeout(() => {
-      onDismiss(toast.id);
-    }, duration);
-    return () => clearTimeout(timer);
-  }, [toast, onDismiss]);
+    if (duration <= 0 || hovered) return;
+    startedAt.current = Date.now();
+    const timer = setTimeout(() => onDismiss(toast.id), Math.max(0, remaining.current));
+    return () => {
+      clearTimeout(timer);
+      remaining.current -= Date.now() - startedAt.current;
+    };
+  }, [toast.id, duration, hovered, onDismiss]);
 
-  const renderIcon = () => {
-    switch (toast.type) {
-      case 'warning':
-        return <Key size={18} color="var(--accent-amber)" />;
-      case 'error':
-        return <AlertCircle size={18} color="var(--accent-rose)" />;
-      case 'success':
-        return <CheckCircle2 size={18} color="var(--accent-emerald)" />;
-      case 'info':
-      default:
-        return <Info size={18} color="var(--accent-cyan)" />;
-    }
-  };
-
-  const getBorderColor = () => {
-    switch (toast.type) {
-      case 'warning':
-        return 'rgba(245, 158, 11, 0.4)';
-      case 'error':
-        return 'rgba(244, 63, 94, 0.4)';
-      case 'success':
-        return 'rgba(16, 185, 129, 0.4)';
-      case 'info':
-      default:
-        return 'rgba(6, 182, 212, 0.4)';
-    }
-  };
+  const actions: ToastAction[] =
+    toast.actions && toast.actions.length > 0
+      ? toast.actions
+      : toast.actionLabel && toast.onAction
+        ? [{ label: toast.actionLabel, onClick: toast.onAction }]
+        : [];
 
   return (
     <div
-      className={`toast-card ${toast.actions && toast.actions.length > 0 ? 'has-actions' : ''}`}
-      style={{
-        borderColor: getBorderColor(),
-      }}
+      className={`eg-toast ${tone.cls} dlg-toast`}
+      role={toast.type === 'error' ? 'alert' : 'status'}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
-      <div className="toast-icon-wrapper">{renderIcon()}</div>
-      <div className="toast-content">
-        <div className="toast-title">{toast.title}</div>
-        <div className="toast-message">{toast.message}</div>
-        {toast.actions && toast.actions.length > 0 ? (
-          <div className="toast-actions-row">
-            {toast.actions.map((act, idx) => (
-              <button
+      <span className="eg-toast-icon">
+        <Icon icon={tone.icon} />
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="eg-toast-title">{calm(toast.title)}</div>
+        {toast.message && <div className="eg-toast-text">{calm(toast.message)}</div>}
+        {actions.length > 0 && (
+          <div className="dlg-toast-actions">
+            {actions.map((act, idx) => (
+              <Button
                 key={idx}
-                type="button"
-                className={`toast-action-btn toast-action-${act.variant || 'primary'}`}
+                size="sm"
+                variant={act.variant === 'primary' || act.variant === 'emerald' ? 'primary' : act.variant === 'danger' ? 'danger' : 'secondary'}
                 onClick={() => {
                   act.onClick();
                   onDismiss(toast.id);
                 }}
               >
                 {act.icon}
-                <span>{act.label}</span>
-              </button>
+                {act.label}
+              </Button>
             ))}
           </div>
-        ) : toast.actionLabel && toast.onAction ? (
-          <button
-            type="button"
-            className="toast-action-btn"
-            onClick={() => {
-              toast.onAction?.();
-              onDismiss(toast.id);
-            }}
-          >
-            {toast.actionLabel.toLowerCase().includes('undo') ? <Undo2 size={13} /> : toast.actionLabel.toLowerCase().includes('settings') ? <Settings size={13} /> : <Key size={13} />}
-            <span>{toast.actionLabel}</span>
-          </button>
-        ) : null}
+        )}
       </div>
-      <button
-        type="button"
-        className="toast-close-btn"
-        onClick={() => onDismiss(toast.id)}
-        aria-label="Dismiss notification"
-      >
-        <X size={14} />
-      </button>
+      <IconButton icon={X} label="Dismiss" size="sm" onClick={() => onDismiss(toast.id)} />
     </div>
   );
 };
@@ -123,8 +108,8 @@ export const ToastContainer: React.FC<ToastContainerProps> = ({ toasts, onDismis
   if (toasts.length === 0) return null;
 
   return (
-    <div className="toast-viewport">
-      {toasts.map((toast) => (
+    <div className="dlg-toast-stack" aria-live="polite">
+      {toasts.slice(-MAX_VISIBLE).map((toast) => (
         <ToastItem key={toast.id} toast={toast} onDismiss={onDismiss} />
       ))}
     </div>

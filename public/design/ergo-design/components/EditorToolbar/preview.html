@@ -1,0 +1,13 @@
+<!-- @dsCard group="Document" height=150 subtitle="Formatting toolbar and the selection toolbar" -->
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="root" style="padding:16px;display:flex;flex-direction:column;gap:16px;align-items:flex-start"></div>
+<script>
+var E = window.Ergo, h = React.createElement, F = React.Fragment;
+ReactDOM.createRoot(document.getElementById("root")).render(h(F,null,
+  h("div",{style:{width:760}}, h(E.EditorToolbar,{active:["list-todo"],block:"Task"})),
+  h(E.SelectionToolbar,{runCount:2})
+));
+</script>
+</body></html>
