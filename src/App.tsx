@@ -78,7 +78,7 @@ import { withDisplayNames } from './lib/projectNames';
 import { ensureAnchors, markdownForExport, taskIdFor } from './lib/taskAnchors';
 import { applyReviewMode } from './lib/reviewMode';
 import { FolderPickerModal } from './components/FolderPickerModal';
-import { OnboardingModal } from './components/OnboardingModal';
+import { OnboardingScreen } from './components/OnboardingScreen';
 import { ToastContainer, type ToastMessage } from './components/Toast';
 import { executeTaskWithAi, syncTaskOverviewWithAi } from './lib/ai';
 import { continueTaskWithAi } from './lib/agentPipeline/continuation';
@@ -5050,8 +5050,8 @@ function App() {
         onUseServerFallback={handleUseServerFallback}
       />
 
-      {/* Modal 9: Welcome & AI Account Onboarding Modal */}
-      <OnboardingModal
+      {/* Screen: First-run Onboarding */}
+      <OnboardingScreen
         isOpen={isOnboardingOpen}
         onClose={() => setIsOnboardingOpen(false)}
         onSaveUserKey={handleSaveUserKey}

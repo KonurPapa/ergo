@@ -1,0 +1,92 @@
+<!-- @dsCard group="Screens" height=820 width=1280 page subtitle="First run: bridge, AI, local model — click through it" -->
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div class="eg-onb">
+  <header class="eg-onb-top">
+    <span class="eg-onb-brand"><span class="eg-brand-mark" aria-hidden="true">E</span>Ergo</span>
+    <button class="eg-btn eg-btn-ghost" id="skipall">Set up later</button>
+  </header>
+  <main class="eg-onb-main">
+    <nav class="eg-onb-steps" aria-label="Setup steps" id="steps"></nav>
+    <div id="panel"></div>
+    <div class="eg-onb-foot">
+      <button class="eg-btn eg-btn-ghost eg-btn-lg" id="back"><i data-i="arrow-left"></i>Back</button>
+      <span class="eg-spacer"></span>
+      <button class="eg-btn eg-btn-ghost eg-btn-lg" id="skip">Skip</button>
+      <button class="eg-btn eg-btn-primary eg-btn-lg" id="next"></button>
+    </div>
+  </main>
+  <footer class="eg-onb-note">Everything stays on this computer, in <code>~/.ergo</code>. You can change any of this later in Settings.</footer>
+</div>
+<script>
+(function () {
+  var E = window.Ergo, step = 0, dir = 1, bridge = "searching", provider = "claude", mode = "sub", model = "idle", pct = 0, adv = false, shown = -1;
+  var STEPS = ["Bridge", "AI", "Local model"];
+  var $ = function (id) { return document.getElementById(id); };
+  var PROV = [["claude","/icons/providers/anthropic.svg","Claude","Pro or Max plan"],["chatgpt","/icons/providers/openai.svg","ChatGPT","Plus or Pro plan"],["gemini","/icons/providers/gemini.svg","Gemini","Google AI plan"],["other","","Other","OpenRouter, Cursor, Grok…"]];
+  function provName() { return PROV.filter(function (p) { return p[0] === provider; })[0][2]; }
+  function render() {
+    $("steps").innerHTML = STEPS.map(function (s, i) {
+      var c = i < step ? "is-done" : i === step ? "is-current" : "";
+      return '<button class="eg-onb-step ' + c + '" data-go="' + i + '"' + (i === step ? ' aria-current="step"' : '') + '><span class="eg-onb-bar"><i></i></span>' + (i + 1) + ' · ' + s + '</button>';
+    }).join("");
+    var h = "";
+    if (step === 0) {
+      var ok = bridge === "ok";
+      h = '<div class="eg-onb-eyebrow">Step 1 of 3</div><h1 class="eg-onb-title">Connect Ergo to this computer</h1>' +
+        '<p class="eg-onb-lede">Ergo Bridge is a small helper app. It lets Ergo use your AI subscription, read your project files and run tools — all locally.</p>' +
+        '<div class="eg-onb-body"><div class="eg-onb-status"><span class="eg-onb-orb ' + (ok ? "is-ok" : "is-searching") + '"><i data-i="' + (ok ? "check" : "plug") + '"></i></span><div>' +
+        (ok ? '<div class="eg-onb-status-title">Ergo Bridge is running</div><div class="eg-onb-status-text">Connected at <code>localhost:5174</code></div>'
+            : '<div class="eg-onb-status-title">Looking for Ergo Bridge…</div><div class="eg-onb-status-text">Not installed yet? <a href="#" style="color:var(--accent-text);text-decoration:none">Download for Linux</a></div>') +
+        '</div></div>' +
+        '<button class="eg-onb-disclose" id="adv"><i data-i="' + (adv ? "chevron-down" : "chevron-right") + '"></i>Advanced: port and launch command</button>' +
+        (adv ? '<div class="eg-onb-facts"><div><i data-i="hash"></i>Port <code>5174</code></div><div><i data-i="terminal"></i><code>ergo-bridge start --port 5174</code></div></div>' : '') + '</div>';
+    } else if (step === 1) {
+      h = '<div class="eg-onb-eyebrow">Step 2 of 3</div><h1 class="eg-onb-title">Choose the AI that does the work</h1>' +
+        '<p class="eg-onb-lede">Use a plan you already pay for, or an API key billed per use. You can add more later.</p>' +
+        '<div class="eg-onb-body"><div class="eg-seg" role="radiogroup" style="align-self:flex-start"><button class="eg-seg-item" role="radio" data-mode="sub" aria-checked="' + (mode === "sub") + '">My subscription</button><button class="eg-seg-item" role="radio" data-mode="key" aria-checked="' + (mode === "key") + '">API key</button></div>' +
+        '<div class="eg-onb-tiles" role="radiogroup" aria-label="Provider">' + PROV.map(function (p) {
+          return '<button class="eg-onb-tile" role="radio" data-prov="' + p[0] + '" aria-checked="' + (p[0] === provider) + '"><span class="eg-onb-tile-mark">' + (p[1] ? '<img src="' + p[1] + '" alt="" class="eg-onb-tile-icon" width="20" height="20">' : '<i data-i="ellipsis"></i>') + '</span><span><span class="eg-onb-tile-name" style="display:block">' + p[2] + '</span><span class="eg-onb-tile-sub">' + (mode === "sub" ? p[3] : "Paste a key") + '</span></span><span class="eg-onb-tile-check"><i data-i="check"></i></span></button>';
+        }).join("") + '</div>' +
+        (mode === "key" ? '<label class="eg-field"><span class="eg-field-label">' + provName() + ' API key</span><input class="eg-input eg-input-mono" style="height:40px" placeholder="Paste your key"><span class="eg-field-help">Stored in ~/.ergo/config, never sent anywhere but ' + provName() + '.</span></label>'
+          : '<div class="eg-onb-facts"><div><i data-i="shield"></i>You sign in on ' + provName() + '\'s own page. Ergo never sees your password.</div></div>') + '</div>';
+    } else {
+      var done = model === "done", busy = model === "busy";
+      h = '<div class="eg-onb-eyebrow">Step 3 of 3 · Optional</div><h1 class="eg-onb-title">Add a small local model</h1>' +
+        '<p class="eg-onb-lede">Qwen 2.5 Coder 0.5B runs on this computer for quick background decisions and autocomplete. What it reads stays here.</p>' +
+        '<div class="eg-onb-body"><div class="eg-onb-status" style="align-items:flex-start"><span class="eg-onb-orb ' + (done ? "is-ok" : busy ? "is-searching" : "") + '"><i data-i="' + (done ? "check" : "cpu") + '"></i></span><div style="flex:1">' +
+        (done ? '<div class="eg-onb-status-title">Installed</div><div class="eg-onb-status-text">It starts automatically when Ergo needs it.</div>'
+          : busy ? '<div class="eg-onb-status-title">Downloading… ' + pct + '%</div><div class="eg-onb-status-text">' + Math.round(509 * pct / 100) + ' of 509 MB · you can continue meanwhile</div><div class="eg-onb-meter"><i style="width:' + pct + '%"></i></div>'
+          : '<div class="eg-onb-status-title">509 MB download</div><div class="eg-onb-status-text">Model 491 MB + runner 18 MB</div>') +
+        '</div></div><div class="eg-onb-facts"><div><i data-i="folder"></i>Saved in <code>~/.ergo/local-model</code></div><div><i data-i="shield"></i>No admin rights needed · remove it anytime in Settings</div></div></div>';
+    }
+    var panel = $("panel"); panel.innerHTML = '<div class="eg-onb-panel' + (shown === step ? " is-static" : dir < 0 ? " is-back" : "") + '">' + h + "</div>"; shown = step;
+    $("back").style.visibility = step ? "visible" : "hidden";
+    $("skip").style.display = step === 0 ? "none" : "";
+    var next = $("next");
+    if (step === 0) { next.disabled = bridge !== "ok"; next.innerHTML = 'Continue<i data-i="arrow-right"></i>'; }
+    else if (step === 1) { next.disabled = false; next.innerHTML = mode === "sub" ? "Connect " + provName() + '<i data-i="arrow-up-right"></i>' : 'Save key<i data-i="arrow-right"></i>'; }
+    else { next.disabled = false; next.innerHTML = model === "idle" ? 'Download<i data-i="download"></i>' : 'Open the workspace<i data-i="arrow-right"></i>'; $("skip").style.display = model === "idle" ? "" : "none"; }
+    E.hydrateIcons(document);
+  }
+  function go(n) { dir = n > step ? 1 : -1; step = Math.max(0, Math.min(2, n)); render(); if (step === 0 && bridge !== "ok") setTimeout(function () { bridge = "ok"; render(); }, 1400); }
+  document.addEventListener("click", function (e) {
+    var t = e.target.closest("button, a"); if (!t) return;
+    if (t.tagName === "A") e.preventDefault();
+    if (t.dataset.go && +t.dataset.go < step) go(+t.dataset.go);
+    else if (t.dataset.prov) { provider = t.dataset.prov; render(); }
+    else if (t.dataset.mode) { mode = t.dataset.mode; render(); }
+    else if (t.id === "adv") { adv = !adv; render(); }
+    else if (t.id === "back") go(step - 1);
+    else if (t.id === "skip") { if (step < 2) go(step + 1); }
+    else if (t.id === "next") {
+      if (step < 2) go(step + 1);
+      else if (model === "idle") { model = "busy"; render(); var iv = setInterval(function () { pct = Math.min(100, pct + 7); if (pct >= 100) { clearInterval(iv); model = "done"; } render(); }, 160); }
+      else { step = 0; bridge = "searching"; model = "idle"; pct = 0; go(0); }
+    }
+  });
+  go(0);
+})();
+</script>
+</body></html>
