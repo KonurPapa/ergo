@@ -1025,6 +1025,8 @@ export interface BibleSections {
   references?: string[];
   /** The project's learned rules (insights.ts), fixed at run start: every agent of the run reads them here. */
   projectRules?: string[];
+  /** The user's one-time notes for this run (Run dialog): every agent of the run reads them; later runs don't. */
+  runNotes?: string;
   requiredMcps: string[];
   allowedRoots: string[];
 }

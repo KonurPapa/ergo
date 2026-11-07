@@ -81,7 +81,7 @@ import {
   Activity,
 } from 'lucide-react';
 import { getPref, setPref, subscribePrefs } from '../lib/userPrefs';
-import { Banner, Button, Dialog, EmptyState, Icon, IconButton, MenuButton, RunRow, SegmentedControl, StatusDot, StatusIcon, STATUS_LABEL, PriorityIcon, PRIORITY_LABEL, type Priority, type DesignTaskStatus, type MenuItem } from './ui';
+import { Banner, Button, EmptyState, Icon, IconButton, MenuButton, RunRow, SegmentedControl, StatusDot, StatusIcon, STATUS_LABEL, PriorityIcon, PRIORITY_LABEL, type Priority, type DesignTaskStatus, type MenuItem } from './ui';
 import { EFFORT_LABELS } from '../lib/agentPipeline/modelRouter';
 import { formatTokens } from '../lib/agentDisplay';
 import { MOD, SHIFT } from '../lib/shortcuts';
@@ -557,7 +557,6 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   onOpenModels,
 }) => {
   // The Queued button asks before running the task out of turn.
-  const [confirmRunNow, setConfirmRunNow] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [overviewText, setOverviewText] = useState('');
   const [buildVerificationText, setBuildVerificationText] = useState('');
@@ -1752,7 +1751,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                     Queued {queuePosition != null ? queuePosition + 1 : ''}
                   </span>
                   {onRunQueuedNow && (
-                    <Button size="sm" variant="ghost" onClick={() => setConfirmRunNow(true)}>
+                    <Button size="sm" variant="ghost" onClick={onRunQueuedNow}>
                       Run now instead
                     </Button>
                   )}
@@ -2475,8 +2474,9 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
               disabled={!canRun}
               title={!canRun ? 'Runs need the bridge' : undefined}
               onClick={() => {
-                if (isQueued) {
-                  setConfirmRunNow(true);
+                // A queued task asks "Run it now?" (App's run dialog) before leaving the queue.
+                if (isQueued && onRunQueuedNow) {
+                  onRunQueuedNow();
                   return;
                 }
                 onExecuteTask(task);
@@ -2487,31 +2487,6 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
           </>
         )}
       </div>
-
-      <Dialog
-        open={confirmRunNow}
-        title="Run it now?"
-        description="This task is already queued. Running it now starts it alongside the task that's running, and it leaves the queue."
-        onClose={() => setConfirmRunNow(false)}
-        width={420}
-        footer={
-          <>
-            <span className="eg-spacer" />
-            <Button onClick={() => setConfirmRunNow(false)}>Keep it queued</Button>
-            <Button
-              variant="primary"
-              onClick={() => {
-                setConfirmRunNow(false);
-                onRunQueuedNow?.();
-              }}
-            >
-              Run in parallel
-            </Button>
-          </>
-        }
-      >
-        {null}
-      </Dialog>
 
       {isMcpModalOpen && (
         <TaskMcpToolsModal

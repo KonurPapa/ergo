@@ -154,6 +154,8 @@ export interface LaunchCliRunParams {
   relatedSources?: string;
   /** The project's learned rules for this task (formatProjectRules): every agent of the run gets them. */
   projectRules?: string;
+  /** The user's one-time notes from the Run dialog: every agent of this run gets them (not later runs). */
+  runNotes?: string;
   /** The task's `/skill` and `@file` commands, resolved by App (taskReferences.ts): the manager prompt shows them. */
   references?: TaskReferenceContext;
   /**
@@ -554,6 +556,8 @@ interface PersistedRunState {
   relatedSources?: string;
   /** The project's learned rules at launch: the run's later agents (workers, verifier, a resumed manager) get the same. */
   projectRules?: string;
+  /** The user's one-time notes for this run (Run dialog): every agent of the run gets them. */
+  runNotes?: string;
   /** The run's TASK_CONTEXT.md under the storage root (cliBible.ts): the brief as handed over, the log, the prompt. */
   bibleFilePath?: string;
   /** The manager's launch prompt, exactly as sent (kept for the bible). */
@@ -959,6 +963,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     ...(run.relatedContext ? { relatedContext: run.relatedContext } : {}),
     ...(run.relatedSources ? { relatedSources: run.relatedSources } : {}),
     ...(run.projectRules ? { projectRules: run.projectRules } : {}),
+    ...(run.runNotes ? { runNotes: run.runNotes } : {}),
     ...(run.codeSearch ? { codeSearchAvailable: true, ...(run.codeSearchPath ? { codeSearchPath: run.codeSearchPath } : {}) } : {}),
     ...(run.likelyFiles?.length ? { likelyFiles: run.likelyFiles } : {}),
     ...(run.references ? { references: run.references } : {}),
@@ -3616,6 +3621,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       relatedContext,
       relatedSources,
       projectRules,
+      runNotes,
       references,
       verifierEnabled,
       needsVerifier,
@@ -3691,6 +3697,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         ...(relatedContext && relatedContext.trim() ? { relatedContext: relatedContext.trim() } : {}),
         ...(relatedSources && relatedSources.trim() ? { relatedSources: relatedSources.trim() } : {}),
         ...(projectRules && projectRules.trim() ? { projectRules: projectRules.trim() } : {}),
+        ...(runNotes && runNotes.trim() ? { runNotes: runNotes.trim() } : {}),
         ...(references ? { references } : {}),
         // Claude Code and Codex reach the ergo-memory server per agent (its URL names the session); Gemini and
         // Antigravity share one config entry, so they run skills without the workspace tools (and their checklist is

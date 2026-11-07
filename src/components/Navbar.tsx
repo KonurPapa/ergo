@@ -1,6 +1,6 @@
 import React from 'react';
 import { type ProjectData } from '../types';
-import { ChevronDown, Download, FileCode, FolderGit2, FolderOpen, ListPlus, Moon, PanelRight, Plus, Search, Settings, Sun } from 'lucide-react';
+import { ChevronDown, Download, FileCode, FolderGit2, FolderOpen, ListPlus, Moon, PanelRight, Play, Plus, Search, Settings, Sun } from 'lucide-react';
 import { Button, IconButton, Icon, Kbd, MenuButton, type MenuItem } from './ui';
 import { MOD, SHIFT } from '../lib/shortcuts';
 import ergoIcon from '../assets/ergo_icon_2.png';
@@ -17,6 +17,8 @@ interface NavbarProps {
   onOpenPalette: () => void;
   /** ⇧⌘D: Draft tasks. */
   onOpenDraft: () => void;
+  /** The Run screen: the selected task, every task of a list, or the next N in order. */
+  onOpenRun: () => void;
   isDetailOpen: boolean;
   onToggleDetail: () => void;
   isSettingsOpen: boolean;
@@ -28,7 +30,7 @@ interface NavbarProps {
 }
 
 /**
- * The top bar (TopBar in the design): brand, project switcher, search / ⌘K, Draft tasks, detail-pane toggle and
+ * The top bar (TopBar in the design): brand, project switcher, search / ⌘K, Run, Draft tasks, detail-pane toggle and
  * settings. Nothing else — save state, bridge and agent live in the status bar.
  */
 export const Navbar: React.FC<NavbarProps> = ({
@@ -41,6 +43,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onExportProject,
   onOpenPalette,
   onOpenDraft,
+  onOpenRun,
   isDetailOpen,
   onToggleDetail,
   isSettingsOpen,
@@ -91,6 +94,9 @@ export const Navbar: React.FC<NavbarProps> = ({
       </button>
       <span className="eg-spacer" />
 
+      <Button variant="secondary" icon={Play} onClick={onOpenRun} className="eg-topbar-run" title="Run the selected task, a whole list, or the next few tasks">
+        <span className="eg-hide-sm">Run</span>
+      </Button>
       <Button variant="ghost" icon={ListPlus} kbd={[SHIFT, MOD, 'D']} onClick={onOpenDraft} className="eg-topbar-draft">
         <span className="eg-hide-sm">Draft tasks</span>
       </Button>

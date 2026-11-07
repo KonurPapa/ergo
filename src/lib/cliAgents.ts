@@ -249,6 +249,11 @@ export interface CliRunPromptContext {
    * them as a PROJECT RULES section, and verifier checks them.
    */
   projectRules?: string;
+  /**
+   * The user's one-time notes for this run (typed in the Run dialog): every agent of the run gets them as a NOTES FOR
+   * THIS RUN section. They are not part of the task or its brief, and later runs don't get them.
+   */
+  runNotes?: string;
 }
 
 export interface CliWorkerPiece {
@@ -459,6 +464,17 @@ function buildProjectRulesSection(ctx: Pick<CliRunPromptContext, 'projectRules'>
   return rules ? [rules] : [];
 }
 
+/** The NOTES FOR THIS RUN section (the user's one-time notes from the Run dialog), or nothing. */
+function buildRunNotesSection(ctx: Pick<CliRunPromptContext, 'runNotes'>): string[] {
+  const notes = (ctx.runNotes || '').trim();
+  return notes
+    ? [
+        `NOTES FOR THIS RUN (from the user, for this run only):\n${notes.slice(0, MAX_INSTRUCTIONS_CHARS)}\n` +
+          `Treat them as part of the task: where they narrow or change what the task asks, follow the notes.`,
+      ]
+    : [];
+}
+
 /**
  * CHECKLIST IN ERGO: a manager with the workspace tools checks off the task's open checklist items in Ergo as it
  * finishes them (the user sees them struck through on the board); the run's completion checks off the rest.
@@ -487,6 +503,7 @@ export function buildManagerCliPrompt(task: TaskItem, brief: AgentContextItem | 
   sections.push(...buildRelatedSection(ctx, brief));
   sections.push(...formatReferenceSections(ctx.references, { workspaceTools: Boolean(ctx.workspaceTools) }));
   sections.push(...buildProjectRulesSection(ctx));
+  sections.push(...buildRunNotesSection(ctx));
 
   sections.push(
     `YOUR ROLE:\n` +
@@ -603,6 +620,7 @@ export function buildWorkerCliPrompt(
 
   sections.push(...buildRelatedSection(ctx, brief));
   sections.push(...buildProjectRulesSection(ctx));
+  sections.push(...buildRunNotesSection(ctx));
 
   sections.push(
     `RULES:\n` +
@@ -651,6 +669,7 @@ export function buildVerifierCliPrompt(
 
   sections.push(...buildTaskContentSections(task, brief, 'TASK UNDER REVIEW'));
   sections.push(...buildProjectRulesSection(ctx));
+  sections.push(...buildRunNotesSection(ctx));
 
   const completion = (ctx.completionMarkdown || '').trim();
   const completionSource = memoryOn(ctx)

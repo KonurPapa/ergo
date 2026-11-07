@@ -177,6 +177,12 @@ export class BibleStore {
       out.push(...s.projectRules.map((r) => `- ${r}`), '');
     }
 
+    if (s.runNotes && s.runNotes.trim()) {
+      out.push('## Notes for This Run (from the user, for this run only)');
+      out.push('_Treat them as part of the task: where they narrow or change what the task asks, follow the notes. Verifier checks them._');
+      out.push(s.runNotes.trim(), '');
+    }
+
     out.push('## Run Environment');
     out.push(`- **Required MCPs**: ${s.requiredMcps.length > 0 ? s.requiredMcps.join(', ') : '(none — pure reasoning/text)'}`);
     out.push(`- **Allowed Boundaries**: ${s.allowedRoots.length > 0 ? s.allowedRoots.join(', ') : s.metadata.projectPath}`);

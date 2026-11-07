@@ -93,6 +93,8 @@ export type ExecuteTaskOptions = Partial<AgentPipelineOptions> & {
    * a follow-up): the run's step totals and the returned task / brief `totalUsage` add to it instead of starting at 0.
    */
   baseUsage?: TokenUsage;
+  /** The user's one-time notes from the Run dialog: every agent of this run reads them in the bible. */
+  runNotes?: string;
 };
 
 const PERMISSION_LABELS: Record<PermissionLevel, string> = {
@@ -132,7 +134,7 @@ export async function executeTaskWithAi(
 
   const runId = makeRunId();
   const runDir = BibleStore.runDirFor(project.id || slugify(project.name || 'project'), task.id, runId);
-  const { getPermissionLevel: liveLevelSource, steering, baseUsage, ...staticOptions } = options || {};
+  const { getPermissionLevel: liveLevelSource, steering, baseUsage, runNotes, ...staticOptions } = options || {};
   steering?.attach(runId);
   const resolvedOptions: AgentPipelineOptions = { ...DEFAULT_AGENT_PIPELINE_OPTIONS, ...staticOptions };
   if (aiConfig.provider === 'ollama') {
@@ -318,6 +320,7 @@ export async function executeTaskWithAi(
     // Bible + tools (fixed for the whole run — task-boundary decisions). In-app agents always have the workspace tools.
     if (ctx.references) summary.sections.references = formatReferenceSections(ctx.references, { workspaceTools: true });
     if (baseline.projectRules.length > 0) summary.sections.projectRules = baseline.projectRules.map((r) => r.text);
+    if (runNotes && runNotes.trim()) summary.sections.runNotes = runNotes.trim();
     bible = new BibleStore(summary.sections, runDir);
     const locks = new FileLockRegistry(runDir);
     const isResumed = task.status === 'partly_done' || brief?.status === 'partly_done' || Boolean(brief?.buildAndVerification && brief.buildAndVerification.trim().length > 0);

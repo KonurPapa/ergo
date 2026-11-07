@@ -1111,7 +1111,7 @@ interface SwimLaneColumnProps {
   // Freeform text selection or task card handler to create AI task
   onCreateTaskFromSelection?: (selectedText: string, laneId: string, laneTitle: string, sourceTask?: TaskItemType) => void;
   /** Run several tasks of a lane: one after another (queued) or all at once. */
-  onRunTasks?: (tasks: TaskItemType[], laneId: string, laneTitle: string, mode: BatchRunMode) => void;
+  onRunTasks?: (tasks: TaskItemType[], laneId: string, laneTitle: string, mode: BatchRunMode, notes?: string) => void;
   onScheduleTask?: (taskId: string | number, scheduledIso: string, cronExpr?: string) => void;
   // Selected lane action drawer props
   isAssistantOpen?: boolean;
@@ -3324,7 +3324,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
           tasks={laneTasks}
           initialSelectedIds={batchModal.selectedIds}
           onClose={() => setBatchModal(null)}
-          onConfirm={(selected, mode) => onRunTasks?.(selected, lane.id, lane.title, mode)}
+          onConfirm={(selected, mode, notes) => onRunTasks?.(selected, lane.id, lane.title, mode, notes)}
         />
       )}
       {scheduleModalTask && (
@@ -3376,7 +3376,7 @@ interface TaskPaneProps {
   onSwimLaneMarkdownChange?: (laneId: string, newMarkdown: string) => void;
   onCreateTaskFromSelection?: (selectedText: string, laneId: string, laneTitle: string, sourceTask?: TaskItemType) => void;
   /** Run several tasks of a lane: one after another (queued) or all at once. */
-  onRunTasks?: (tasks: TaskItemType[], laneId: string, laneTitle: string, mode: BatchRunMode) => void;
+  onRunTasks?: (tasks: TaskItemType[], laneId: string, laneTitle: string, mode: BatchRunMode, notes?: string) => void;
   onScheduleTask?: (taskId: string | number, scheduledIso: string, cronExpr?: string) => void;
   autocompleteSettings?: import('../types').AutocompleteSettings;
   onUpdateTaskMcpTools?: (taskId: string | number, toolNames: string[]) => void;

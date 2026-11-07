@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Play, Check } from 'lucide-react';
 import { Button, Dialog, Switch } from './ui';
 import { type TaskItem } from '../types';
+import { RunNotesField } from './RunTaskDialog';
 
 export type BatchRunMode = 'sequence' | 'parallel';
 
@@ -12,7 +13,8 @@ interface BatchRunModalProps {
   tasks: TaskItem[];
   /** Tasks ticked when the modal opens. */
   initialSelectedIds: Array<string | number>;
-  onConfirm: (selectedTasks: TaskItem[], mode: BatchRunMode) => void;
+  /** `notes`: the one-time notes every chosen task's run gets (empty when none). */
+  onConfirm: (selectedTasks: TaskItem[], mode: BatchRunMode, notes: string) => void;
 }
 
 /**
@@ -22,6 +24,7 @@ interface BatchRunModalProps {
 export const BatchRunModal: React.FC<BatchRunModalProps> = ({ isOpen, onClose, tasks, initialSelectedIds, onConfirm }) => {
   const [selected, setSelected] = useState<Set<string>>(() => new Set(initialSelectedIds.map(String)));
   const [parallel, setParallel] = useState(false);
+  const [notes, setNotes] = useState('');
 
   if (!isOpen) return null;
 
@@ -64,7 +67,7 @@ export const BatchRunModal: React.FC<BatchRunModalProps> = ({ isOpen, onClose, t
             icon={Play}
             disabled={chosen.length === 0}
             onClick={() => {
-              onConfirm(chosen, parallel ? 'parallel' : 'sequence');
+              onConfirm(chosen, parallel ? 'parallel' : 'sequence', notes.trim());
               onClose();
             }}
           >
@@ -104,6 +107,9 @@ export const BatchRunModal: React.FC<BatchRunModalProps> = ({ isOpen, onClose, t
             </button>
           );
         })}
+      </div>
+      <div style={{ marginTop: 'var(--space-4)' }}>
+        <RunNotesField value={notes} onChange={setNotes} several />
       </div>
     </Dialog>
   );

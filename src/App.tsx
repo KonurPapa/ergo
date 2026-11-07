@@ -131,6 +131,7 @@ import { Circle, CircleCheck, CornerDownRight, Download, FileCode, FileText, Fol
 import { StatusBar } from './components/StatusBar';
 import { CommandPalette, type PaletteItem } from './components/CommandPalette';
 import { AskDialogHost } from './components/ui/askDialogs';
+import { RunScreen, RunTaskDialog, type RunDialogRequest, type RunLane, type RunScreenChoice } from './components/RunTaskDialog';
 import { SETTINGS_PAGES, type SettingsPage } from './lib/settingsPages';
 import { SettingsScreen } from './components/SettingsScreen';
 import { MOD, SHIFT, matches } from './lib/shortcuts';
@@ -177,6 +178,9 @@ function describePermissionRequest(prompt: McpToolPermissionPrompt): string {
 
 export /** Stable empty lane list (a fresh [] each render would look like a workspace change). */
 const EMPTY_SWIM_LANES: SwimLaneDoc[] = [];
+
+/** handleExecuteTask's options: a follow-up continues the last run; startOver relaunches; runNotes are one-time notes. */
+type ExecuteTaskOpts = { followUp?: string; startOver?: boolean; runNotes?: string };
 
 function App() {
   // Folder & Local Storage State
@@ -702,6 +706,8 @@ function App() {
   const steeringCallbacksRef = useRef<Map<string, TaskMessageOptions>>(new Map());
   const cliLaunchingRef = useRef<Set<string>>(new Set());
   const preLaunchMessagesRef = useRef<Map<string, Array<{ text: string; opts: TaskMessageOptions }>>>(new Map());
+  // The Run dialog's one-time notes of each task waiting in the queue, given to its run when its turn comes.
+  const queuedRunNotesRef = useRef<Map<string, string>>(new Map());
 
   // Running Jobs & Queued Tasks State (Persisted in RUNNING_JOBS.json)
   const [queuedTaskIds, setQueuedTaskIds] = useState<(string | number)[]>([]);
@@ -2239,10 +2245,22 @@ function App() {
   // Trigger In-Place Task Execution
   // If a CLI agent is configured, spawn a terminal session inside the Build & Verification card.
   // Otherwise, run executeTaskWithAi in place and stream logs directly into Build & Verification and Completion.
-  const handleExecuteTask = async (task: TaskItem, execOpts?: { followUp?: string; startOver?: boolean }) => {
+  const handleExecuteTask = async (task: TaskItem, execOpts?: ExecuteTaskOpts) => {
     setSelectedTaskId(task.id);
     // A follow-up from the prompt box continues the task's last in-app run instead of starting it over.
     const followUp = typeof execOpts?.followUp === 'string' && execOpts.followUp.trim() ? execOpts.followUp.trim() : '';
+    // The user's one-time notes from the Run dialog: every agent of this run gets them; the task and brief don't.
+    const runNotes = !followUp && typeof execOpts?.runNotes === 'string' ? execOpts.runNotes.trim() : '';
+    const runNotesStep = (runId: string): ExecutionStep => ({
+      id: `step-run-notes-${task.id}-${runId}`,
+      taskId: task.id,
+      time: new Date().toLocaleTimeString(),
+      stage: 'human_input',
+      agentRole: 'manager',
+      title: 'Your notes for this run',
+      detail: `You: "${runNotes}"\n\n↳ Every agent of this run gets them. Later runs don't.`,
+      status: 'success',
+    });
 
     const activeKey = userApiKeys.find((k) => k.id === activeKeyId);
     const effectiveCli = getEffectiveCliAgent(activeKey, cliAgentConfig);
@@ -2289,6 +2307,9 @@ function App() {
       const resumed = await cliRunsRef.current.resumeCliRun(task.id);
       if (!resumed.ok) {
         showToast({ type: 'error', title: 'Could not resume task', message: `"${task.title}": ${resumed.error}`, duration: 8000 });
+      } else if (runNotes) {
+        // The resumed manager already has its prompt: the notes reach it as a message.
+        void cliRunsRef.current.sendUserMessage(task.id, `Notes from the user for the rest of this run: ${runNotes}`);
       }
       return resumed.ok;
     }
@@ -2634,11 +2655,12 @@ function App() {
           brief: findBriefFor(task) || currentBrief,
           launch,
           runId,
-          preSteps: routingStep ? [ctxStep, overviewStep, routingStep] : [ctxStep, overviewStep],
+          preSteps: [ctxStep, ...(runNotes ? [runNotesStep(runId)] : []), overviewStep, ...(routingStep ? [routingStep] : [])],
           priorBriefStatus,
           ...(relatedContext ? { relatedContext } : {}),
           ...(relatedSources ? { relatedSources } : {}),
           ...(projectRules ? { projectRules } : {}),
+          ...(runNotes ? { runNotes } : {}),
           ...(taskReferences ? { references: taskReferences } : {}),
           verifierEnabled,
           needsVerifier: taskNeedsVerifier,
@@ -2769,6 +2791,8 @@ function App() {
         }
         return { ...prev, [task.id]: [] };
       });
+
+      if (runNotes) upsertTaskStep(task.id, { ...runNotesStep(Date.now().toString(36)), cycle: cycleN });
 
       // Set task status to in_progress
       const inProgressTasks = tasksRef.current.map((t) => (String(t.id) === String(task.id) ? { ...t, status: 'in_progress' as const } : t));
@@ -2947,6 +2971,7 @@ function App() {
             getPermissionLevel: () => agentPipelineOptionsRef.current.permissionLevel,
             steering,
             ...(baseUsage ? { baseUsage } : {}),
+            ...(runNotes ? { runNotes } : {}),
           },
           (ollamaFallbackPrompt) => {
             const toastId = `ollama-toast-${task.id}`;
@@ -3377,9 +3402,11 @@ function App() {
         const [nextId, ...rest] = queuedTaskIdsRef.current;
         setQueue(rest);
         const task = queuedTaskFor(nextId);
+        const notes = queuedRunNotesRef.current.get(String(nextId));
+        queuedRunNotesRef.current.delete(String(nextId));
         if (!task) continue;
         stoppedByUserRef.current.delete(String(task.id));
-        const started = await handleExecuteTaskRef.current(task);
+        const started = await handleExecuteTaskRef.current(task, notes ? { runNotes: notes } : undefined);
         if (started) await cliRunsRef.current.waitForCliRun(task.id);
         const stopped = stoppedByUserRef.current.has(String(task.id));
         if (loadedProjectIdRef.current !== projectId || (started && !stopped)) continue;
@@ -3402,18 +3429,26 @@ function App() {
   const runQueueRef = useRef(runQueue);
   runQueueRef.current = runQueue;
 
-  /** Runs several tasks: one after another (the rest wait as Queued), or all at once. */
-  const handleRunTasks = (taskList: TaskItem[], laneId: string, laneTitle: string, mode: 'sequence' | 'parallel') => {
+  /**
+   * Runs several tasks: one after another (the rest wait as Queued), or all at once. `notes` (the Run dialog's
+   * one-time notes) go to every one of these runs; a queued task keeps its notes until its turn.
+   */
+  const handleRunTasks = (taskList: TaskItem[], laneId: string, laneTitle: string, mode: 'sequence' | 'parallel', notes?: string) => {
     // A task already running keeps going; it isn't started again.
     const runnable = taskList.filter((t) => !cliRunsRef.current.hasActiveCliRun(t.id) && String(executingTaskId) !== String(t.id));
     if (runnable.length === 0) return;
     setIsAiPanelOpen(true);
     ensureBriefsForTasks(runnable, laneId, laneTitle);
+    const runNotes = (notes || '').trim();
+    for (const t of runnable) {
+      if (runNotes && mode === 'sequence') queuedRunNotesRef.current.set(String(t.id), runNotes);
+      else queuedRunNotesRef.current.delete(String(t.id));
+    }
 
     if (mode === 'parallel') {
       const chosen = new Set(runnable.map((t) => String(t.id)));
       setQueue(queuedTaskIdsRef.current.filter((id) => !chosen.has(String(id))));
-      for (const task of runnable) void handleExecuteTaskRef.current(task);
+      for (const task of runnable) void handleExecuteTaskRef.current(task, runNotes ? { runNotes } : undefined);
       showToast({ type: 'info', title: 'Tasks started', message: `Running ${runnable.length} tasks at once.`, duration: 3500 });
       return;
     }
@@ -3431,10 +3466,105 @@ function App() {
   };
 
   /** A queued card's button: run it now, alongside whatever is running, instead of waiting its turn. */
-  const handleRunQueuedTaskNow = (taskId: string | number) => {
+  const handleRunQueuedTaskNow = (taskId: string | number, notes?: string) => {
     setQueue(queuedTaskIdsRef.current.filter((id) => String(id) !== String(taskId)));
+    const runNotes = (notes || '').trim() || queuedRunNotesRef.current.get(String(taskId)) || '';
+    queuedRunNotesRef.current.delete(String(taskId));
     const task = queuedTaskFor(taskId);
-    if (task) void handleExecuteTaskRef.current(task);
+    if (task) void handleExecuteTaskRef.current(task, runNotes ? { runNotes } : undefined);
+  };
+
+  // ── Confirm before run (RunTaskDialog) ──
+  // Every run the user starts (a Run button, the palette, ⇧⌘↵, Queue, the top bar's Run screen) asks first: Confirm
+  // runs it as it is, and the notes box adds one-time context for that run. Scheduled runs and runs the in-app
+  // assistant starts don't ask.
+  const [runDialog, setRunDialog] = useState<RunDialogRequest | null>(null);
+  const runDialogOpenRef = useRef(false);
+  runDialogOpenRef.current = runDialog !== null;
+
+  const laneOfTask = (t: TaskItem) => {
+    const id = t.swimLaneId || activeProject?.swimLanes?.[0]?.id || 'lane-default';
+    return { id, title: activeProject?.swimLanes?.find((l) => l.id === id)?.title || 'TODO.md' };
+  };
+
+  /** Asks before running one task; on Confirm it runs (startOver relaunches a run stopped partway). */
+  const requestRunTask = (task: TaskItem, opts: { startOver?: boolean; restart?: boolean; ensureBrief?: boolean } = {}) => {
+    const key = String(task.id);
+    if (queuedTaskIdsRef.current.some((id) => String(id) === key)) {
+      requestRunQueuedTaskNow(task.id);
+      return;
+    }
+    const paused = !opts.startOver && !opts.restart && cliRunsRef.current.isCliRunPaused(task.id);
+    const hasRun = (taskExecutionStepsRef.current[task.id] || taskExecutionStepsRef.current[key] || []).length > 0;
+    const [title, confirmLabel, description] = opts.restart
+      ? ['Restart the run?', 'Restart', 'Stops the agents working on this task and launches a new run.']
+      : opts.startOver
+        ? ['Start the task over?', 'Start over', 'Launches a new run from the beginning instead of resuming the stopped one.']
+        : paused
+          ? ['Resume the task?', 'Resume', 'The run picks up where it stopped. Notes reach its manager as a message.']
+          : hasRun
+            ? ['Run the task again?', 'Run again', undefined]
+            : ['Run the task?', 'Run task', undefined];
+    setRunDialog({
+      kind: 'task',
+      task,
+      title,
+      confirmLabel,
+      description,
+      onConfirm: (notes) => {
+        queuedRunNotesRef.current.delete(key);
+        if (opts.ensureBrief) {
+          const lane = laneOfTask(task);
+          ensureBriefsForTasks([task], lane.id, lane.title);
+        }
+        void handleExecuteTaskRef.current(task, { ...(opts.startOver || opts.restart ? { startOver: true } : {}), ...(notes ? { runNotes: notes } : {}) });
+      },
+    });
+  };
+
+  /** Asks before a queued task runs now instead of waiting its turn. */
+  const requestRunQueuedTaskNow = (taskId: string | number) => {
+    const task = queuedTaskFor(taskId);
+    if (!task) return;
+    setRunDialog({
+      kind: 'task',
+      task,
+      title: 'Run it now?',
+      confirmLabel: 'Run now',
+      description: "This task is queued. Running it now starts it alongside the task that's running, and it leaves the queue.",
+      onConfirm: (notes) => handleRunQueuedTaskNow(taskId, notes),
+    });
+  };
+
+  /** Asks before a task joins the end of the queue; its notes wait with it. */
+  const requestQueueTask = (task: TaskItem) => {
+    setRunDialog({
+      kind: 'task',
+      task,
+      title: 'Queue the task?',
+      confirmLabel: 'Queue task',
+      description: 'It runs after the tasks ahead of it in the queue finish.',
+      onConfirm: (notes) => {
+        const lane = laneOfTask(task);
+        handleRunTasks([task], lane.id, lane.title, 'sequence', notes);
+      },
+    });
+  };
+  const requestRunTaskRef = useRef(requestRunTask);
+  requestRunTaskRef.current = requestRunTask;
+  const requestQueueTaskRef = useRef(requestQueueTask);
+  requestQueueTaskRef.current = requestQueueTask;
+
+  /** The top bar's Run screen: started what the user chose. */
+  const handleRunScreenChoice = (choice: RunScreenChoice) => {
+    if (choice.scope === 'task') {
+      const lane = laneOfTask(choice.task);
+      ensureBriefsForTasks([choice.task], lane.id, lane.title);
+      queuedRunNotesRef.current.delete(String(choice.task.id));
+      void handleExecuteTaskRef.current(choice.task, choice.notes ? { runNotes: choice.notes } : undefined);
+      return;
+    }
+    handleRunTasks(choice.tasks, choice.lane.id, choice.lane.title, choice.parallel ? 'parallel' : 'sequence', choice.notes);
   };
 
   // Finds the human task and AI execution card an archive request refers to.
@@ -4653,6 +4783,14 @@ function App() {
     return removed;
   };
 
+  // The Run screen's lists: each swim lane's tasks in document order (tasks without a lane belong to the first).
+  const runLanes = useMemo<RunLane[]>(() => {
+    const lanes = activeProject?.swimLanes?.length ? activeProject.swimLanes : [{ id: 'lane-default', title: 'TODO.md' }];
+    const live = tasks.filter((t) => !t.isArchived);
+    const laneIdOf = (t: TaskItem) => (lanes.some((l) => l.id === t.swimLaneId) ? t.swimLaneId : lanes[0].id);
+    return lanes.map((l) => ({ id: l.id, title: l.title, tasks: live.filter((t) => laneIdOf(t) === l.id) }));
+  }, [activeProject?.swimLanes, tasks]);
+
   const runningTaskIds = useMemo(() => {
     const validTaskIds = new Set<string>([
       ...tasks.map((t) => String(t.id)),
@@ -4680,6 +4818,7 @@ function App() {
     });
     return ids;
   }, [tasks, briefs, terminalSessions, executingTaskId, runningJobs]);
+  const runBusyIds = useMemo(() => new Set([...runningTaskIds, ...queuedTaskIds].map(String)), [runningTaskIds, queuedTaskIds]);
 
   // A task picked in the document (click, caret, Open brief) shows its card in the detail pane. Each pick counts,
   // even of the same task, so going back to the runs view and clicking the task again reopens it.
@@ -4805,8 +4944,6 @@ function App() {
   );
 
   const paletteItems = useMemo<PaletteItem[]>(() => {
-    const laneFor = (t: TaskItem) => t.swimLaneId || activeProject?.swimLanes?.[0]?.id || 'lane-default';
-    const laneTitleFor = (t: TaskItem) => activeProject?.swimLanes?.find((l) => l.id === t.swimLaneId)?.title || 'TODO.md';
     const openTask = (t: TaskItem) => {
       setSelectedTaskId(t.id);
       window.dispatchEvent(new CustomEvent('ergo:focus-task', { detail: { taskId: t.id } }));
@@ -4833,8 +4970,8 @@ function App() {
               if (!isAiPanelOpen) handleToggleAiPanel();
             },
           },
-          { label: 'Run', icon: Play, kbd: [SHIFT, MOD, '↵'], run: () => void handleExecuteTask(t) },
-          { label: 'Queue', icon: Layers, run: () => handleRunTasks([t], laneFor(t), laneTitleFor(t), 'sequence') },
+          { label: 'Run', icon: Play, kbd: [SHIFT, MOD, '↵'], run: () => requestRunTaskRef.current(t) },
+          { label: 'Queue', icon: Layers, run: () => requestQueueTaskRef.current(t) },
         ],
       }));
     const seen = new Set<string>();
@@ -4905,12 +5042,11 @@ function App() {
         handleToggleAiPanel();
       } else if (matches(e, 'Enter', { mod: true, shift: true })) {
         // ⇧⌘↵ runs the task on the current line (creating its brief first, like the line's Run).
+        if (runDialogOpenRef.current) return;
         const task = tasksRef.current.find((t) => String(t.id) === String(selectedTaskIdRef.current));
         if (!task) return;
         e.preventDefault();
-        const laneId = task.swimLaneId || 'lane-default';
-        ensureBriefsForTasksRef.current([task], laneId, 'TODO.md');
-        void handleExecuteTaskRef.current(task);
+        requestRunTaskRef.current(task, { ensureBrief: true });
       } else if (matches(e, '.', { mod: true, shift: true })) {
         if (selectedTaskIdRef.current == null) return;
         e.preventDefault();
@@ -4936,6 +5072,7 @@ function App() {
         onExportProject={handleExportProject}
         onOpenPalette={() => setIsPaletteOpen(true)}
         onOpenDraft={() => setIsDraftModalOpen(true)}
+        onOpenRun={() => setRunDialog({ kind: 'screen' })}
         isDetailOpen={isAiPanelOpen}
         onToggleDetail={handleToggleAiPanel}
         isSettingsOpen={settingsPage !== null}
@@ -4974,11 +5111,7 @@ function App() {
               showTaskDetail(id);
               if (!isAiPanelOpen) handleToggleAiPanel();
             }}
-            onRunTask={(task) => {
-              const laneId = task.swimLaneId || activeProject?.swimLanes?.[0]?.id || 'lane-default';
-              ensureBriefsForTasks([task], laneId, activeProject?.swimLanes?.find((l) => l.id === laneId)?.title || 'TODO.md');
-              void handleExecuteTaskRef.current(task);
-            }}
+            onRunTask={(task) => requestRunTask(task, { ensureBrief: true })}
             onStopTask={(task) => handleTerminateAgent(task.id)}
             onOpenDraftModal={() => setIsDraftModalOpen(true)}
             onMarkdownChange={(newMd) => handleSwimLaneMarkdownChange(activeProject?.swimLanes?.[0]?.id || 'lane-default', newMd)}
@@ -5016,8 +5149,8 @@ function App() {
               selectedTaskId={selectedTaskId}
               runningTaskIds={runningTaskIds}
               queuedTaskIds={queuedTaskIds}
-              onRunQueuedTaskNow={handleRunQueuedTaskNow}
-              onQueueTask={(task) => handleRunTasks([task], task.swimLaneId || activeProject?.swimLanes?.[0]?.id || 'lane-default', activeProject?.swimLanes?.find((l) => l.id === task.swimLaneId)?.title || 'TODO.md', 'sequence')}
+              onRunQueuedTaskNow={requestRunQueuedTaskNow}
+              onQueueTask={requestQueueTask}
               isBridgeConnected={bridgeStatus.isConnected}
               mcpServers={mcpServers}
               onUpdateTaskMcpTools={handleUpdateTaskMcpTools}
@@ -5026,7 +5159,7 @@ function App() {
               runsViewRequest={runsViewRequest}
               onSaveBrief={handleSaveBrief}
               onLiveBriefChange={handleLiveBriefChange}
-              onExecuteTask={handleExecuteTask}
+              onExecuteTask={(task, opts) => requestRunTask(task, { startOver: opts?.startOver })}
               onTerminateAgent={handleTerminateAgent}
               onUpdateBriefWithAi={handleUpdateBriefWithAi}
               onSyncOverviewWithTask={handleSyncOverviewWithTask}
@@ -5043,7 +5176,7 @@ function App() {
               onPermissionChoice={handlePermissionChoice}
               onHumanInputChoice={handleHumanInputChoice}
               onOllamaFallbackChoice={handleOllamaFallbackChoice}
-              onRestartSession={handleExecuteTask}
+              onRestartSession={(task) => requestRunTask(task, { restart: true })}
               onKillSession={handleKillSession}
               onKillAgentSession={handleKillAgentSession}
               onSendTaskMessage={handleSendTaskMessage}
@@ -5095,6 +5228,10 @@ function App() {
       />
 
       <AskDialogHost />
+      {runDialog?.kind === 'task' && <RunTaskDialog key={String(runDialog.task.id)} request={runDialog} onClose={() => setRunDialog(null)} />}
+      {runDialog?.kind === 'screen' && (
+        <RunScreen lanes={runLanes} selectedTaskId={selectedTaskId} busyIds={runBusyIds} onClose={() => setRunDialog(null)} onRun={handleRunScreenChoice} />
+      )}
       <CommandPalette open={isPaletteOpen} onClose={() => setIsPaletteOpen(false)} items={paletteItems} />
 
       {/* Modal 1: Create New Project Directory */}

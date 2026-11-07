@@ -433,3 +433,43 @@ select.eg-input { padding-right: var(--space-6); cursor: pointer; }
 .dlg-provider[aria-checked="true"] { background: var(--surface-3); border-color: var(--line-control); box-shadow: inset 0 0 0 1px var(--line-control); }
 .dlg-provider-logo { display: inline-grid; place-items: center; flex: none; width: 20px; height: 20px; color: var(--ink-subtle); }
 .dlg-provider-logo img { width: 16px; height: 16px; object-fit: contain; }
+
+/* Run dialogs (RunTaskDialog.tsx): the top bar's Run screen and the confirm-before-run box */
+.run-dialog-task { margin-bottom: var(--space-3); color: var(--ink); font-weight: 500; overflow-wrap: anywhere; }
+.run-notes { margin-top: var(--space-1); }
+.run-notes-input { height: auto; min-height: 88px; padding: var(--space-2) var(--space-3); line-height: calc(20px * var(--type-scale)); resize: vertical; }
+.run-options { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-4); }
+.run-option { border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-1); transition: border-color var(--duration-fast) var(--ease-out); }
+.run-option.is-on { border-color: var(--accent); }
+.run-option-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 40px;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.run-option-head:disabled { cursor: default; }
+.run-option.is-disabled .run-option-title { color: var(--ink-disabled); }
+.run-option-mark { flex: none; width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--line-control); }
+.run-option.is-on .run-option-mark { border: 4px solid var(--accent); }
+.run-option-title { flex: none; font-weight: 500; }
+.run-option-meta { flex: 1; min-width: 0; text-align: right; color: var(--ink-subtle); font-size: calc(12px * var(--type-scale)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-option-body { padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) * 2 + 14px); }
+.run-option-controls { flex-wrap: wrap; gap: var(--space-2); color: var(--ink-muted); }
+.run-option-switch { cursor: pointer; color: var(--ink-muted); }
+.run-lane-select { width: auto; min-width: 140px; max-width: 100%; }
+.run-count-input { width: 64px; text-align: center; }
+.run-option-help { margin: var(--space-2) 0; color: var(--ink-subtle); font-size: calc(12px * var(--type-scale)); }
+.run-option-empty { margin: var(--space-2) 0 0; color: var(--ink-subtle); }
+.run-preview { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.run-preview li { display: flex; gap: var(--space-2); align-items: baseline; color: var(--ink); min-width: 0; }
+.run-preview-n { flex: none; width: 16px; color: var(--ink-subtle); font-variant-numeric: tabular-nums; text-align: right; }
+.run-preview-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-preview-more { color: var(--ink-subtle) !important; padding-left: 24px; }
