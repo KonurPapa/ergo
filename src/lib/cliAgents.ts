@@ -3,6 +3,7 @@ import { hasUsableOverview } from './overviewUtils';
 import { isTaskBrief } from './agentPipeline/taskBrief';
 import { COMPLETION_RECORD_FORMAT, COMPLETION_RECORD_RULES, QUESTION_RULES } from './humanFacingOutput';
 import { formatReferenceSections, type TaskReferenceContext } from './taskReferences';
+import { HANDOFF_TEMPLATE } from './agentPipeline/compaction';
 
 export const CLI_AGENT_PRESETS: CliAgentPreset[] = [
   {
@@ -786,6 +787,19 @@ export function buildFollowUpMessage(userMessage: string, ctx: Pick<CliRunPrompt
   );
 }
 
+/**
+ * A message for a manager whose work was being checked by the verifier: Ergo stopped that check, so the manager acts on
+ * the message and writes its completion record again (the verifier then checks the updated work).
+ */
+export function buildLateSteerMessage(userMessage: string, ctx: Pick<CliRunPromptContext, 'runDirRel' | 'verifierEnabled'>): string {
+  return oneLine(
+    `${oneLine(userMessage, MAX_FOLLOW_UP_CHARS)} ` +
+      `(Ergo: the user sent this while your work was being checked, so that check was stopped. Act on it, then overwrite ` +
+      `${runFile(ctx, 'completion.md')} with your updated completion record as your final action${ctx.verifierEnabled ? '; verifier checks it again' : ''}.)`,
+    MAX_FOLLOW_UP_CHARS + 600
+  );
+}
+
 /** What a stopped run's manager was waiting on when it was stopped (Ergo restarts it on resume). */
 export type ResumeWaitingOn = 'workers' | 'verifier' | undefined;
 
@@ -838,6 +852,38 @@ export function buildResumedManagerPrompt(
     (wait ? `\n${wait}` : '') +
     (user ? `\n\nTHE USER'S MESSAGE ON RESUMING:\n${user.slice(0, MAX_FOLLOW_UP_CHARS)}` : '');
   return `${head}\n\n${originalPrompt}`;
+}
+
+/** The handoff note a worker writes when Ergo rotates it (a `handoff` signal, bridge protocol 8). */
+export function workerHandoffFile(ctx: Pick<CliRunPromptContext, 'runDirRel'>, pieceId: string): string {
+  return runFile(ctx, `handoff-${pieceId}.md`);
+}
+
+/**
+ * Typed into a worker whose conversation has grown past its context threshold: it writes a structured handoff note and
+ * stops; a fresh worker on the same model continues the piece from the note.
+ */
+export function buildWorkerHandoffRequest(ctx: Pick<CliRunPromptContext, 'runDirRel'>, pieceId: string): string {
+  return (
+    `CONTEXT ROTATION (from Ergo): your conversation is getting long, so a fresh session on the same model will take over this ` +
+    `piece. Finish only the step you are on (leave no file half-edited), then write a handoff note to ${workerHandoffFile(ctx, pieceId)} ` +
+    `in exactly this structure, with exact file paths, identifiers, line numbers, commands and error messages:\n\n${HANDOFF_TEMPLATE}\n\n` +
+    `Do NOT write your result file and do not continue the piece after writing the note: stop and wait. If the piece is ` +
+    `already done, write your result file as usual instead.`
+  );
+}
+
+/**
+ * Appended to the original prompt of a worker that continues a rotated one. The original prompt comes first and
+ * unchanged, so the CLI's system prompt, tools and the piece prompt stay a cached prefix for the new process.
+ */
+export function buildWorkerRotationNote(handoff: string, rotation: number): string {
+  return (
+    `CONTINUING FROM A HANDOFF (context rotation ${rotation}): an earlier session on this same piece wrote the note below ` +
+    `before its context was reset. Its changes are already in the files. Trust the note for what was done and what failed, ` +
+    `re-read only the lines you are about to change, and continue with its Next Immediate Actions. Do not start the piece over.\n\n` +
+    `${handoff.trim().slice(0, 12_000)}`
+  );
 }
 
 /** Note on top of the prompt of a worker restarted after its run was stopped. */

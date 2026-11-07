@@ -393,7 +393,7 @@ export async function syncTaskOverviewWithAi(
   project: ProjectData,
   aiConfig: AIProviderConfig,
   connectedMcps: MCPServer[],
-  options: { relatedCandidatesPrompt?: string; priorKnowledge?: string; referencesNote?: string; projectRules?: string } = {}
+  options: { relatedCandidatesPrompt?: string; priorKnowledge?: string; referencesNote?: string; projectRules?: string; userDirection?: string } = {}
 ): Promise<{ overview: string; relatedTaskIds: string[]; relatedSelectionMade: boolean; taskRating?: TaskRating }> {
   if (aiConfig.provider !== 'none' && aiConfig.provider !== 'mock' && (aiConfig.apiKey || aiConfig.provider === 'ollama')) {
     try {
@@ -407,6 +407,7 @@ export async function syncTaskOverviewWithAi(
         priorKnowledge: options.priorKnowledge,
         referencesNote: options.referencesNote,
         projectRules: options.projectRules,
+        userDirection: options.userDirection,
       });
       const response = await callAiEngine(user, system, aiConfig, 'general', 'text');
       // The selection line goes first: it may sit after a code fence the model wrapped the brief in.
@@ -427,7 +428,14 @@ export async function syncTaskOverviewWithAi(
   }
 
   // No model ran, so nothing was selected.
-  return { overview: buildOfflineTaskBrief(task, currentOverview), relatedTaskIds: [], relatedSelectionMade: false };
+  const offline = buildOfflineTaskBrief(task, currentOverview);
+  const direction = options.userDirection?.trim();
+  return {
+    // Without a model the user's direction is kept verbatim, so the manager still gets it.
+    overview: direction ? `${offline}\n\n**Direction from the user:**\n${direction}` : offline,
+    relatedTaskIds: [],
+    relatedSelectionMade: false,
+  };
 }
 
 // ─── Task Execution Pipeline Helpers ────────────────────────────────────────

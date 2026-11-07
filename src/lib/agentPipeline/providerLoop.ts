@@ -31,7 +31,6 @@ import { toAnthropicTools, toGeminiTools, toOpenAiTools } from './toolSchemas';
 import {
   applySummary,
   clearOldToolResults,
-  compactionThreshold,
   contextWindowFor,
   renderForSummary,
   SUMMARY_INSTRUCTIONS,
@@ -39,28 +38,74 @@ import {
   tailStart,
   estimatePromptTokens,
   clipToolResultsToFit,
+  CompactionGate,
+  HANDOFF_INSTRUCTIONS,
+  HANDOFF_SUMMARY_INSTRUCTIONS,
+  SHORT_CONTEXT_RULE,
+  withClosingInstruction,
   type ConversationShape
 } from './compaction';
 import { peekModelCatalog } from '../modelCatalog/catalog';
 import { PRICE_SNAPSHOT } from '../modelCatalog/priceSnapshot';
 import { priceUsage, resolveAliasModelId } from '../modelCatalog/pricing';
 
-/** Prompt size at which this loop compacts its conversation (null: never). */
-function compactionTokensFor(req: ToolLoopRequest): number | null {
+/** When a short-context-capable loop compacts (see CompactionGate). */
+function compactionGateFor(req: ToolLoopRequest, provider: string): CompactionGate {
   const models = (peekModelCatalog() ?? PRICE_SNAPSHOT).models;
-  return compactionThreshold({ provider: req.provider, model: req.model, setting: req.compaction, models });
+  return new CompactionGate({ provider, model: req.model, setting: req.compaction, models, kind: 'api' });
 }
 
 /**
- * Compacts a loop's conversation in place: the same model summarizes all but the newest tool exchanges (one extra call,
- * no tools); if that fails, old tool output is cleared instead. Returns true when the conversation changed.
+ * The loop's system prompt; a short-context agent loop also gets the rule to look things up on demand (at the end, so
+ * the shared bible and role prompt before it stay a cached prefix).
  */
-async function compactConversation(req: ToolLoopRequest, messages: any[], shape: ConversationShape, usage: TokenUsage): Promise<boolean> {
-  const tail = tailStart(messages, shape);
+function systemTextFor(req: ToolLoopRequest, gate: CompactionGate, tools: ToolDefinition[]): string {
+  const base = joinSystem(req);
+  return gate.shortContext && tools.length > 0 && gate.threshold() !== null ? `${base}\n\n${SHORT_CONTEXT_RULE}` : base;
+}
+
+/**
+ * Asks the loop's own model for a summary on the conversation itself: the same request (model, system prompt, tools,
+ * options) with one closing instruction, so the history is read from the provider's prompt cache. Returns the
+ * summary text, or null when the reply had none (a tool call instead, an error).
+ */
+type InPlaceSummarizer = (instruction: string) => Promise<string | null>;
+
+/**
+ * Compacts a loop's conversation in place: the same model summarizes all but the newest tool exchanges; if that fails,
+ * old tool output is cleared instead. Short-context loops ask for a structured handoff on the conversation itself
+ * (`summarizeInPlace`, cache-friendly) and fall back to a separate summary call. Returns true when the conversation
+ * changed.
+ */
+async function compactConversation(
+  req: ToolLoopRequest,
+  messages: any[],
+  shape: ConversationShape,
+  usage: TokenUsage,
+  opts: { gate?: CompactionGate; model?: string; summarizeInPlace?: InPlaceSummarizer } = {}
+): Promise<boolean> {
+  const shortContext = Boolean(opts.gate?.shortContext);
+  const tail = tailStart(messages, shape, opts.gate?.keepExchanges);
   if (tail < 0) return clearOldToolResults(messages) > 0;
+  if (opts.summarizeInPlace) {
+    try {
+      // Short context restarts from a structured handoff; the near-window net (Anthropic) keeps its summary.
+      const note = await opts.summarizeInPlace(shortContext ? HANDOFF_INSTRUCTIONS : `Do not call any tools in this reply. ${SUMMARY_INSTRUCTIONS}`);
+      if (note?.trim()) {
+        applySummary(messages, shape, note, tail);
+        return true;
+      }
+      console.warn('[Ergo Provider] Handoff note came back empty; summarizing separately.');
+    } catch (err) {
+      if (req.signal?.aborted) throw err;
+      console.warn('[Ergo Provider] Handoff note failed; summarizing separately.', err);
+    }
+  }
   try {
     const res = await runToolLoop({
       ...req,
+      // The model the loop is on now (a rejected model may have been swapped for the fallback).
+      ...(opts.model ? { model: opts.model } : {}),
       tools: [],
       maxRounds: 1,
       maxTokens: 4000,
@@ -69,7 +114,7 @@ async function compactConversation(req: ToolLoopRequest, messages: any[], shape:
       sharedContext: '',
       stableSystem: SUMMARY_SYSTEM,
       volatileSystem: undefined,
-      initialUserMessage: `${renderForSummary(messages.slice(0, tail))}\n\n---\n${SUMMARY_INSTRUCTIONS}`,
+      initialUserMessage: `${renderForSummary(messages.slice(0, tail))}\n\n---\n${shortContext ? HANDOFF_SUMMARY_INSTRUCTIONS : SUMMARY_INSTRUCTIONS}`,
       onToolCalls: undefined,
       onFirstResponse: undefined,
       drainSteering: undefined
@@ -448,6 +493,28 @@ export async function runToolLoop(req: ToolLoopRequest): Promise<ToolLoopResult>
 
 // ─── Anthropic ──────────────────────────────────────────────────────────────
 
+function anthropicHeaders(apiKey: string): Record<string, string> {
+  return {
+    'Content-Type': 'application/json',
+    'x-api-key': apiKey,
+    'anthropic-version': '2023-06-01',
+    'anthropic-dangerous-direct-browser-access': 'true'
+  };
+}
+
+function anthropicUsage(data: any): TokenUsage {
+  const cacheRead = data.usage?.cache_read_input_tokens || 0;
+  const cacheWrite = data.usage?.cache_creation_input_tokens || 0;
+  return {
+    // Anthropic's input_tokens excludes cache reads/writes; count them so totals reflect the real prompt size.
+    inputTokens: (data.usage?.input_tokens || 0) + cacheRead + cacheWrite,
+    outputTokens: data.usage?.output_tokens || 0,
+    cachedInputTokens: cacheRead,
+    cacheWriteTokens: cacheWrite,
+    calls: 1
+  };
+}
+
 async function runAnthropic(req: ToolLoopRequest, tools: ToolDefinition[], usage: TokenUsage): Promise<ToolLoopResult> {
   if (!req.apiKey) return makeResult('', 0, 0, usage, 'error', 'Anthropic API key missing.');
   const system: any[] = [];
@@ -456,10 +523,14 @@ async function runAnthropic(req: ToolLoopRequest, tools: ToolDefinition[], usage
   if (req.stableSystem?.trim()) system.push({ type: 'text', text: req.stableSystem, cache_control: { type: 'ephemeral' } });
   if (req.volatileSystem?.trim()) system.push({ type: 'text', text: req.volatileSystem });
 
-  const messages: any[] = [{ role: 'user', content: req.initialUserMessage }];
+  // Anthropic caches at most 4 marked points. Tools render before the system prompt, so a marked system block already
+  // caches them: the tool list's marker moves to the task message, so a compaction (which keeps the task word for word
+  // and replaces what follows) re-reads the task from cache instead of re-writing it.
+  const systemCached = system.some((b) => b.cache_control);
+  const messages: any[] = [{ role: 'user', content: [{ type: 'text', text: req.initialUserMessage, cache_control: { type: 'ephemeral' } }] }];
   const anthropicTools = tools.length > 0 ? toAnthropicTools(tools) : undefined;
-  if (anthropicTools && anthropicTools.length > 0) {
-    // Cache breakpoint on the last tool caches all tool definitions across turns
+  if (anthropicTools && anthropicTools.length > 0 && !systemCached) {
+    // No cached system block: the last tool's marker caches the tool definitions across turns.
     anthropicTools[anthropicTools.length - 1].cache_control = { type: 'ephemeral' };
   }
   let lastText = '';
@@ -468,40 +539,43 @@ async function runAnthropic(req: ToolLoopRequest, tools: ToolDefinition[], usage
   let lastToolResultMessage: any | null = null;
   let activeModel = req.model || 'claude-opus-5-5';
   let effortDisabled = false;
-  const compactAt = compactionTokensFor(req);
+  const gate = compactionGateFor(req, 'anthropic');
   let lastPromptTokens = 0;
-  let lastCompactRound = -1;
+
+  const currentEffort = () => (effortDisabled ? undefined : anthropicEffortFor(activeModel, req.effort));
+  const buildBody = (msgs: any[], effort: ReturnType<typeof currentEffort>): any => {
+    const body: any = { model: activeModel, max_tokens: req.maxTokens ?? 16000, system, messages: msgs };
+    if (anthropicTools) body.tools = anthropicTools;
+    if (effort) body.output_config = { effort };
+    return body;
+  };
+  const summarizeInPlace: InPlaceSummarizer = async (instruction) => {
+    // The loop's own request (model, system, tools, effort; tool_choice untouched, since changing it invalidates the
+    // message cache) plus the instruction after the newest tool results: the whole history is a cache read.
+    const outcome = await postJsonWithRetry('https://api.anthropic.com/v1/messages', anthropicHeaders(req.apiKey!), buildBody(withClosingInstruction(messages, 'anthropic', instruction), currentEffort()), req.signal, 'Anthropic');
+    if (!outcome.ok) return null;
+    const data = outcome.json || {};
+    const delta = anthropicUsage(data);
+    priceDelta(delta, activeModel);
+    addUsage(usage, delta);
+    req.onUsage?.(delta);
+    const content: any[] = Array.isArray(data.content) ? data.content : [];
+    return content.filter((b) => b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n').trim() || null;
+  };
 
   for (let round = 1; round <= req.maxRounds; round++) {
     throwIfAborted(req.signal);
-    // Not on back-to-back rounds: a compaction that couldn't shrink the prompt enough shouldn't repeat every round.
-    if (compactAt && lastPromptTokens >= compactAt && round > lastCompactRound + 1) {
-      if (await compactConversation(req, messages, 'anthropic', usage)) lastCompactRound = round;
+    if (gate.due(lastPromptTokens)) {
+      // Marked either way: a compaction that failed or could not shrink the prompt waits until it has grown again.
+      await compactConversation(req, messages, 'anthropic', usage, { gate, model: activeModel, summarizeInPlace });
+      gate.compacted();
     }
     // Round boundary: the user's mid-run messages join the end of the conversation.
     appendAnthropicSteering(messages, takeSteering(req));
-    const body: any = {
-      model: activeModel,
-      max_tokens: req.maxTokens ?? 16000,
-      system,
-      messages
-    };
-    if (anthropicTools) body.tools = anthropicTools;
-    const effort = effortDisabled ? undefined : anthropicEffortFor(activeModel, req.effort);
-    if (effort) body.output_config = { effort };
+    const effort = currentEffort();
+    const body = buildBody(messages, effort);
 
-    const outcome = await postJsonWithRetry(
-      'https://api.anthropic.com/v1/messages',
-      {
-        'Content-Type': 'application/json',
-        'x-api-key': req.apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true'
-      },
-      body,
-      req.signal,
-      'Anthropic'
-    );
+    const outcome = await postJsonWithRetry('https://api.anthropic.com/v1/messages', anthropicHeaders(req.apiKey), body, req.signal, 'Anthropic');
     if (!outcome.ok) {
       if (effort && isEffortRejection(outcome)) {
         effortDisabled = true;
@@ -518,20 +592,12 @@ async function runAnthropic(req: ToolLoopRequest, tools: ToolDefinition[], usage
     }
 
     const data = outcome.json || {};
-    const cacheRead = data.usage?.cache_read_input_tokens || 0;
-    const cacheWrite = data.usage?.cache_creation_input_tokens || 0;
-    const delta: TokenUsage = {
-      // Anthropic's input_tokens excludes cache reads/writes; count them so totals reflect the real prompt size.
-      inputTokens: (data.usage?.input_tokens || 0) + cacheRead + cacheWrite,
-      outputTokens: data.usage?.output_tokens || 0,
-      cachedInputTokens: cacheRead,
-      cacheWriteTokens: cacheWrite,
-      calls: 1
-    };
+    const delta = anthropicUsage(data);
     priceDelta(delta, activeModel);
     addUsage(usage, delta);
     req.onUsage?.(delta);
     lastPromptTokens = delta.inputTokens;
+    gate.observe(lastPromptTokens);
     if (!firstResponseFired) {
       firstResponseFired = true;
       req.onFirstResponse?.();
@@ -600,8 +666,9 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (!isOllama) headers.Authorization = `Bearer ${req.apiKey}`;
 
+  const gate = compactionGateFor(req, isOllama ? 'ollama' : req.provider);
   const messages: any[] = [
-    { role: 'system', content: joinSystem(req) },
+    { role: 'system', content: systemTextFor(req, gate, tools) },
     { role: 'user', content: req.initialUserMessage }
   ];
   let oaTools: any[] | undefined = tools.length > 0 ? toOpenAiTools(tools) : undefined;
@@ -611,29 +678,15 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
   let noToolSupport = false;
   let activeModel = req.model || (isOllama ? 'llama3.2' : 'gpt-5.4');
   let effortDisabled = false;
-  const compactAt = compactionTokensFor(req);
+  // OpenAI's own API only: requests with one key are routed to the same cache, so every agent of a task (one shared
+  // bible + tool prefix) and every restart of its conversation reads the same cached prefix.
+  let cacheKeyDisabled = isOllama || Boolean(req.baseUrl);
+  const cacheKey = `ergo-${String(req.taskId ?? 'agent').slice(0, 48)}`;
   let lastPromptTokens = 0;
-  let lastCompactRound = -1;
 
-  for (let round = 1; round <= req.maxRounds; round++) {
-    throwIfAborted(req.signal);
-    // Ollama: also count what is about to be sent. Its reported prompt size is the last round's, without the tool
-    // output just added (and can leave out cached tokens), and an overflow isn't an error: it drops the start of the prompt.
-    const promptTokens = isOllama ? Math.max(lastPromptTokens, estimatePromptTokens(messages, oaTools)) : lastPromptTokens;
-    if (compactAt && promptTokens >= compactAt && round > lastCompactRound + 1) {
-      if (await compactConversation(req, messages, 'openai', usage)) lastCompactRound = round;
-    }
-    if (isOllama && compactAt) {
-      // Still too big (the newest tool results stay verbatim through a compaction): cut the largest down so the prompt
-      // plus the reply fit in num_ctx.
-      const ctxWindow = contextWindowFor({ provider: 'ollama', model: activeModel, setting: req.compaction, models: [] });
-      clipToolResultsToFit(messages, oaTools, ctxWindow - Math.min(req.maxTokens || 4096, Math.floor(ctxWindow / 4)));
-    }
-    // Round boundary: the user's mid-run messages join the end of the conversation.
-    const steering = takeSteering(req);
-    if (steering.length > 0) messages.push({ role: 'user', content: steering.join('\n\n') });
-    const body: any = { model: activeModel, messages };
-    const effort = isOllama || effortDisabled ? undefined : openAiEffortFor(activeModel, req.effort);
+  const currentEffort = () => (isOllama || effortDisabled ? undefined : openAiEffortFor(activeModel, req.effort));
+  const buildBody = (msgs: any[], effort: ReturnType<typeof currentEffort>): any => {
+    const body: any = { model: activeModel, messages: msgs };
     if (isOllama) {
       body.stream = false;
       body.options = {
@@ -648,6 +701,7 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
         else body.max_tokens = req.maxTokens;
       }
       if (effort) body.reasoning_effort = effort;
+      if (!cacheKeyDisabled) body.prompt_cache_key = cacheKey;
     }
     if (oaTools) {
       body.tools = oaTools;
@@ -656,6 +710,54 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
       if (isOllama) body.format = 'json';
       else body.response_format = { type: 'json_object' };
     }
+    return body;
+  };
+  const readUsage = (data: any): TokenUsage =>
+    isOllama
+      ? { inputTokens: data.prompt_eval_count || 0, outputTokens: data.eval_count || 0, cachedInputTokens: 0, cacheWriteTokens: 0, calls: 1 }
+      : {
+          inputTokens: data.usage?.prompt_tokens || 0,
+          outputTokens: data.usage?.completion_tokens || 0,
+          cachedInputTokens: data.usage?.prompt_tokens_details?.cached_tokens || 0,
+          cacheWriteTokens: 0,
+          calls: 1
+        };
+  const summarizeInPlace: InPlaceSummarizer = async (instruction) => {
+    // Same model, system prompt, tools and options as the loop: only the closing instruction is new.
+    const outcome = await postJsonWithRetry(url, headers, buildBody(withClosingInstruction(messages, 'openai', instruction), currentEffort()), req.signal, providerLabel);
+    if (!outcome.ok) return null;
+    const data = outcome.json || {};
+    const delta = readUsage(data);
+    priceDelta(delta, isOllama ? undefined : activeModel);
+    addUsage(usage, delta);
+    req.onUsage?.(delta);
+    const message = isOllama ? data.message : data.choices?.[0]?.message;
+    const text = typeof message?.content === 'string' ? message.content : '';
+    // A tool call written as text (common on Ollama) is not a note.
+    return text.trim() && extractToolCallsFromContent(text, tools).length === 0 ? text : null;
+  };
+
+  for (let round = 1; round <= req.maxRounds; round++) {
+    throwIfAborted(req.signal);
+    // Ollama: also count what is about to be sent. Its reported prompt size is the last round's, without the tool
+    // output just added (and can leave out cached tokens), and an overflow isn't an error: it drops the start of the prompt.
+    const promptTokens = isOllama ? Math.max(lastPromptTokens, estimatePromptTokens(messages, oaTools)) : lastPromptTokens;
+    if (gate.due(promptTokens)) {
+      // Marked either way: a compaction that failed or could not shrink the prompt waits until it has grown again.
+      await compactConversation(req, messages, 'openai', usage, { gate, model: activeModel, summarizeInPlace });
+      gate.compacted();
+    }
+    if (isOllama && gate.threshold() !== null) {
+      // Still too big (the newest tool results stay verbatim through a compaction): cut the largest down so the prompt
+      // plus the reply fit in num_ctx.
+      const ctxWindow = contextWindowFor({ provider: 'ollama', model: activeModel, setting: req.compaction, models: [] });
+      clipToolResultsToFit(messages, oaTools, ctxWindow - Math.min(req.maxTokens || 4096, Math.floor(ctxWindow / 4)));
+    }
+    // Round boundary: the user's mid-run messages join the end of the conversation.
+    const steering = takeSteering(req);
+    if (steering.length > 0) messages.push({ role: 'user', content: steering.join('\n\n') });
+    const effort = currentEffort();
+    const body = buildBody(messages, effort);
 
     let outcome = await postJsonWithRetry(url, headers, body, req.signal, providerLabel);
     if (!outcome.ok && isOllama && oaTools && /does not support tools/i.test(outcome.errorMessage || '')) {
@@ -667,6 +769,11 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
       outcome = await postJsonWithRetry(url, headers, body, req.signal, 'Ollama');
     }
     if (!outcome.ok) {
+      if (body.prompt_cache_key && /prompt_cache_key/i.test(outcome.errorMessage || '')) {
+        cacheKeyDisabled = true;
+        round--;
+        continue;
+      }
       if (effort && isEffortRejection(outcome)) {
         effortDisabled = true;
         round--;
@@ -682,19 +789,13 @@ async function runOpenAiCompatible(req: ToolLoopRequest, tools: ToolDefinition[]
     }
 
     const data = outcome.json || {};
-    const delta: TokenUsage = isOllama
-      ? { inputTokens: data.prompt_eval_count || 0, outputTokens: data.eval_count || 0, cachedInputTokens: 0, cacheWriteTokens: 0, calls: 1 }
-      : {
-          inputTokens: data.usage?.prompt_tokens || 0,
-          outputTokens: data.usage?.completion_tokens || 0,
-          cachedInputTokens: data.usage?.prompt_tokens_details?.cached_tokens || 0,
-          cacheWriteTokens: 0,
-          calls: 1
-        };
+    const delta = readUsage(data);
     priceDelta(delta, isOllama ? undefined : activeModel);
     addUsage(usage, delta);
     req.onUsage?.(delta);
-    lastPromptTokens = delta.inputTokens;
+    // Ollama reports only the tokens it evaluated (a reused KV-cache prefix is left out): count what was sent.
+    lastPromptTokens = isOllama ? Math.max(delta.inputTokens, estimatePromptTokens(messages, oaTools)) : delta.inputTokens;
+    gate.observe(lastPromptTokens);
     if (!firstResponseFired) {
       firstResponseFired = true;
       req.onFirstResponse?.();
@@ -781,14 +882,52 @@ async function runGemini(req: ToolLoopRequest, tools: ToolDefinition[], usage: T
   let toolCallCount = 0;
   let firstResponseFired = false;
   let effortDisabled = false;
-  const compactAt = compactionTokensFor(req);
+  const gate = compactionGateFor(req, 'gemini');
+  const systemText = systemTextFor(req, gate, tools);
   let lastPromptTokens = 0;
-  let lastCompactRound = -1;
+
+  const currentThinking = () => (effortDisabled ? undefined : geminiThinkingFor(activeModel, req.effort));
+  const buildBody = (turns: any[], thinkingConfig: ReturnType<typeof currentThinking>): any => {
+    const body: any = {
+      systemInstruction: { parts: [{ text: systemText }] },
+      contents: turns
+    };
+    const generationConfig: Record<string, any> = {};
+    if (geminiTools) body.tools = geminiTools;
+    else if (req.responseFormat === 'json') generationConfig.responseMimeType = 'application/json';
+    if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
+    if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
+    return body;
+  };
+  const readUsage = (data: any): TokenUsage => ({
+    inputTokens: data.usageMetadata?.promptTokenCount || 0,
+    // Thinking tokens are billed as output.
+    outputTokens: (data.usageMetadata?.candidatesTokenCount || 0) + (data.usageMetadata?.thoughtsTokenCount || 0),
+    cachedInputTokens: data.usageMetadata?.cachedContentTokenCount || 0,
+    cacheWriteTokens: 0,
+    calls: 1
+  });
+  const summarizeInPlace: InPlaceSummarizer = async (instruction) => {
+    // Same model, system instruction, tools and config as the loop (implicit caching matches on the prefix).
+    const body = buildBody(withClosingInstruction(contents, 'gemini', instruction), currentThinking());
+    const outcome = await postJsonWithRetry(urlFor(activeModel), { 'Content-Type': 'application/json' }, body, req.signal, 'Gemini');
+    if (!outcome.ok) return null;
+    const data = outcome.json || {};
+    const delta = readUsage(data);
+    priceDelta(delta, activeModel);
+    addUsage(usage, delta);
+    req.onUsage?.(delta);
+    const parts: any[] = data.candidates?.[0]?.content?.parts || [];
+    // Thought summaries are not the note.
+    return parts.filter((p) => typeof p.text === 'string' && !p.thought).map((p) => p.text).join('\n').trim() || null;
+  };
 
   for (let round = 1; round <= req.maxRounds; round++) {
     throwIfAborted(req.signal);
-    if (compactAt && lastPromptTokens >= compactAt && round > lastCompactRound + 1) {
-      if (await compactConversation(req, contents, 'gemini', usage)) lastCompactRound = round;
+    if (gate.due(lastPromptTokens)) {
+      // Marked either way: a compaction that failed or could not shrink the prompt waits until it has grown again.
+      await compactConversation(req, contents, 'gemini', usage, { gate, model: activeModel, summarizeInPlace });
+      gate.compacted();
     }
     // Round boundary: the user's mid-run messages join the end of the conversation.
     const steering = takeSteering(req);
@@ -797,16 +936,8 @@ async function runGemini(req: ToolLoopRequest, tools: ToolDefinition[], usage: T
       if (last?.role === 'user') last.parts.push(...steering.map((text) => ({ text })));
       else contents.push({ role: 'user', parts: steering.map((text) => ({ text })) });
     }
-    const body: any = {
-      systemInstruction: { parts: [{ text: joinSystem(req) }] },
-      contents
-    };
-    const generationConfig: Record<string, any> = {};
-    if (geminiTools) body.tools = geminiTools;
-    else if (req.responseFormat === 'json') generationConfig.responseMimeType = 'application/json';
-    const thinkingConfig = effortDisabled ? undefined : geminiThinkingFor(activeModel, req.effort);
-    if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
-    if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
+    const thinkingConfig = currentThinking();
+    const body = buildBody(contents, thinkingConfig);
 
     const outcome = await postJsonWithRetry(urlFor(activeModel), { 'Content-Type': 'application/json' }, body, req.signal, 'Gemini');
     if (!outcome.ok) {
@@ -825,18 +956,12 @@ async function runGemini(req: ToolLoopRequest, tools: ToolDefinition[], usage: T
     }
 
     const data = outcome.json || {};
-    const delta: TokenUsage = {
-      inputTokens: data.usageMetadata?.promptTokenCount || 0,
-      // Thinking tokens are billed as output.
-      outputTokens: (data.usageMetadata?.candidatesTokenCount || 0) + (data.usageMetadata?.thoughtsTokenCount || 0),
-      cachedInputTokens: data.usageMetadata?.cachedContentTokenCount || 0,
-      cacheWriteTokens: 0,
-      calls: 1
-    };
+    const delta = readUsage(data);
     priceDelta(delta, activeModel);
     addUsage(usage, delta);
     req.onUsage?.(delta);
     lastPromptTokens = delta.inputTokens;
+    gate.observe(lastPromptTokens);
     if (!firstResponseFired) {
       firstResponseFired = true;
       req.onFirstResponse?.();
@@ -900,18 +1025,69 @@ async function runCliSubscription(req: ToolLoopRequest, tools: ToolDefinition[],
   let lastText = '';
   let toolCallCount = 0;
 
+  let toolsInstruction = '';
+  if (tools.length > 0) {
+    toolsInstruction = `\n\n## Available Tools:\n` +
+      tools.map((t) => `- ${t.name}: ${t.description}\n  Parameters: ${JSON.stringify(t.inputSchema)}`).join('\n') +
+      `\n\nTo call a tool, you MUST output a tool call block formatted as:\n<tool_call>{"name": "<tool_name>", "args": {<arguments>}}</tool_call>\n` +
+      `When you are finished, reply with your summary ending with "STATUS: DONE".`;
+  }
+
+  // Every round is a fresh CLI process that is handed the whole conversation, so it grows without bound: short context
+  // restarts it from the task + a handoff note. Claude Code stays as it was (its cache trade-off is decided separately).
+  const gate = binary !== 'claude' && tools.length > 0 ? compactionGateFor({ ...req, model: cliModel || req.model }, binary) : null;
+  const estimateSent = () => Math.ceil((systemText.length + conversationHistory.length + toolsInstruction.length) / 3.5);
+  /** One CLI call on the conversation so far plus the handoff request (same CLI, model and system prompt: a cached prefix). */
+  const summarizeHeadless = async (): Promise<string | null> => {
+    const res = await fetch(bridgeClient.getApiUrl('/api/cli/execute'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cli: binary,
+        prompt: `${conversationHistory}\n\n---\nDo not call tools or run commands in this reply. ${HANDOFF_SUMMARY_INSTRUCTIONS}`,
+        systemPrompt: systemText,
+        responseFormat: 'text',
+        model: cliModel,
+        effort: req.effort,
+        permissionLevel: req.getPermissionLevel?.() ?? req.permissionLevel,
+        timeoutMs: 60_000,
+        env: {}
+      }),
+      signal: req.signal
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    const note = typeof data?.output === 'string' ? data.output.trim() : '';
+    const reported = data?.usage;
+    const delta: TokenUsage = reported && (reported.inputTokens > 0 || reported.outputTokens > 0)
+      ? { inputTokens: reported.inputTokens || 0, outputTokens: reported.outputTokens || 0, cachedInputTokens: reported.cachedInputTokens || 0, cacheWriteTokens: reported.cacheWriteTokens || 0, calls: 1 }
+      : { inputTokens: estimateSent(), outputTokens: Math.ceil(note.length / 4), cachedInputTokens: 0, cacheWriteTokens: 0, calls: 1, estimated: true };
+    if (typeof reported?.costUsd === 'number') delta.costUsd = reported.costUsd;
+    else priceDelta(delta, cliModel);
+    addUsage(usage, delta);
+    req.onUsage?.(delta);
+    return note && extractToolCallsFromContent(note, tools).length === 0 ? note : null;
+  };
+
   for (let round = 1; round <= req.maxRounds; round++) {
     throwIfAborted(req.signal);
     // Round boundary: the user's mid-run messages join the end of the conversation.
     const steering = takeSteering(req);
     if (steering.length > 0) conversationHistory += `\n\n${steering.join('\n\n')}`;
 
-    let toolsInstruction = '';
-    if (tools.length > 0) {
-      toolsInstruction = `\n\n## Available Tools:\n` +
-        tools.map((t) => `- ${t.name}: ${t.description}\n  Parameters: ${JSON.stringify(t.inputSchema)}`).join('\n') +
-        `\n\nTo call a tool, you MUST output a tool call block formatted as:\n<tool_call>{"name": "<tool_name>", "args": {<arguments>}}</tool_call>\n` +
-        `When you are finished, reply with your summary ending with "STATUS: DONE".`;
+    if (gate?.due(estimateSent())) {
+      try {
+        const note = await summarizeHeadless();
+        if (note) {
+          // The task stays first and unchanged (the cached prefix); the note replaces everything after it.
+          conversationHistory = `${req.initialUserMessage}\n\n[Handoff note from your earlier work on this task — older messages were compacted to save context]\n${note}`;
+        }
+      } catch (err) {
+        if (req.signal?.aborted) throw err;
+        console.warn('[Ergo Provider] Headless CLI handoff failed; keeping the full conversation.', err);
+      }
+      // Also after a failed attempt: the next one waits until the conversation has grown again.
+      gate.compacted();
     }
 
     // Subscription runs sign in as the user: never hand the CLI its own provider's API key (req.apiKey can be a
@@ -956,6 +1132,7 @@ async function runCliSubscription(req: ToolLoopRequest, tools: ToolDefinition[],
 
     lastText = data.output || '';
     req.onFirstResponse?.();
+    gate?.observe(estimateSent());
 
     // Prefer the usage the CLI reported (claude --output-format json, codex --json); otherwise estimate ~4 chars/token.
     const reported = data.usage;

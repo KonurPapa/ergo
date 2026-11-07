@@ -49,7 +49,7 @@ import {
 import { buildRunOutcomeRecord } from './escalation';
 import { familyForTarget } from '../modelCatalog/availability';
 import { runVerifier, type VerifierResult } from './verifier';
-import { evaluateVerifierNecessity, type ExecuteTaskOptions } from './index';
+import { MAX_USER_PASSES, evaluateVerifierNecessity, type ExecuteTaskOptions } from './index';
 import { runLogger } from './logger';
 import { isStraightforwardTask, runManager, type ManagerRunResult } from './manager';
 import { pipelineRunKey, recallPipelineRun, rememberPipelineRun } from './runRegistry';
@@ -317,10 +317,14 @@ export async function continueTaskWithAi(
     let verifier: VerifierResult | undefined;
     let diagnostics: string | undefined;
     let attempt = 1;
-    const maxAttempts = 1 + Math.max(0, resolvedOptions.maxVerifierRetries);
+    let maxAttempts = 1 + Math.max(0, resolvedOptions.maxVerifierRetries);
+    // Passes the manager made for the user's messages sent after its work (see executeTaskWithAi).
+    let userPasses = 0;
+    let managerFollowUp = { message, priorState };
+    for (;;) {
     for (; attempt <= maxAttempts; attempt++) {
       ctx.steering?.setManagerDone(false);
-      mgr = await runManager(ctx, runBible, tools, locks, attempt, diagnostics, { message, priorState });
+      mgr = await runManager(ctx, runBible, tools, locks, attempt, diagnostics, managerFollowUp);
       ctx.steering?.setManagerDone(true);
       for (const f of mgr.createdFiles) createdFiles.add(f);
       const filesArray = Array.from(createdFiles);
@@ -361,6 +365,25 @@ export async function continueTaskWithAi(
       });
     }
     if (attempt > maxAttempts) attempt = maxAttempts;
+    if (!mgr || !ctx.steering?.hasPendingForManager() || userPasses >= MAX_USER_PASSES) break;
+    userPasses++;
+    attempt += 1;
+    maxAttempts = attempt;
+    diagnostics = undefined;
+    managerFollowUp = {
+      message: (ctx.steering.drain('manager') || []).map((it) => it.text).join('\n\n'),
+      priorState: runBible.renderEventLog({ last: 15 }),
+    };
+    runBible.appendEvent({ actor: 'user', kind: 'info', text: `Message after the manager finished its work: ${managerFollowUp.message}` });
+    ctx.emit({
+      id: `step-user-pass-${userPasses}`,
+      stage: 'retry',
+      agentRole: 'manager',
+      title: 'Your message: the manager continues',
+      detail: 'You sent a message while the work was being checked — the manager takes it now, then it is checked again.',
+      status: 'success',
+    });
+    }
     if (!mgr) throw new Error('Manager did not run.');
     workModels = ctx.aiConfig;
 
@@ -388,7 +411,7 @@ export async function continueTaskWithAi(
       built: appendTo(previousBuild, `**Follow-up (${date}):**\n${result.updatedBrief.buildAndVerification}`),
       ...(brief?.overviewDocument ? { overviewDocument: brief.overviewDocument } : {}),
     };
-    return { updatedBrief: withOutcome(updatedBrief, outcome, attempt - 1), updatedTask: result.updatedTask, runId };
+    return { updatedBrief: withOutcome(updatedBrief, outcome, attempt - 1 - userPasses), updatedTask: result.updatedTask, runId };
   } catch (err: any) {
     const aborted = isAbortError(err);
     const errorText = aborted ? 'stopped by user' : `error: ${err?.message || String(err)}`;

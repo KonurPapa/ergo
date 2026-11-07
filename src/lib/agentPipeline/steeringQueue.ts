@@ -3,9 +3,12 @@
  *
  * App pushes messages; each agent loop (providerLoop) drains the ones meant for it at its next round boundary and
  * appends them to the END of its conversation as a user turn (earlier turns, tools and the cached prefix are never
- * touched). A message addressed to a worker that is no longer running goes to the manager; once the manager's loops
- * are done for the attempt, the Verifier takes the manager's messages. Whatever no loop took by the end of the run
- * is returned by close() and continues the run as a follow-up.
+ * touched). A message addressed to a worker that is no longer running goes to the manager.
+ *
+ * Every stage takes the user's direction: while the brief is written the Summary takes them (and rewrites the brief
+ * when one arrives during its call); once the manager's loops are done for the attempt (verifier, cleaner), they stay
+ * queued and the pipeline runs the manager again with them before the completion log (hasPendingForManager). Whatever
+ * no loop took by the end of the run is returned by close() and continues the run as a follow-up.
  */
 import type { AgentRole } from '../../types';
 
@@ -83,6 +86,11 @@ export class SteeringQueue {
     this.managerDone = done;
   }
 
+  /** True between the manager's work and its next pass (verifier, cleaner, completion log). */
+  isManagerDone(): boolean {
+    return this.managerDone;
+  }
+
   /**
    * Called by an agent loop at a round boundary: removes and returns the messages for this agent (and reports each
    * delivery). Worker loops take only their own; the manager also takes messages for workers that are no longer
@@ -93,8 +101,7 @@ export class SteeringQueue {
     const forManager = (it: SteeringItem) => !it.pieceId || !this.activeWorkers.has(it.pieceId);
     const take = (it: SteeringItem): boolean => {
       if (role === 'worker') return Boolean(pieceId) && it.pieceId === pieceId;
-      if (role === 'manager') return forManager(it);
-      if (role === 'verifier') return this.managerDone && forManager(it);
+      if (role === 'manager' || role === 'summary') return forManager(it);
       return false;
     };
     const taken = this.items.filter(take);
@@ -108,6 +115,11 @@ export class SteeringQueue {
       }
     }
     return taken;
+  }
+
+  /** Messages waiting for the manager (or the brief writer): the pipeline runs the manager again for them. */
+  hasPendingForManager(): boolean {
+    return this.items.some((it) => !it.pieceId || !this.activeWorkers.has(it.pieceId));
   }
 
   /** drain() formatted for appending to a conversation. */

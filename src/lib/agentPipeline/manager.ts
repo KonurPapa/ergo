@@ -443,7 +443,7 @@ export async function runManager(
       id: directStepId,
       stage: 'subagent',
       agentRole: 'manager',
-      title: attempt > 1 ? `Manager AI: Direct Remediation (Attempt ${attempt})` : 'Manager AI: Direct Execution (Solo Mode)',
+      title: attempt > 1 && priorFailureDiagnostics ? `Manager AI: Direct Remediation (Attempt ${attempt})` : attempt > 1 ? 'Manager AI: Continuing with your message' : 'Manager AI: Direct Execution (Solo Mode)',
       detail: 'Executing straightforward deliverable directly without worker fan-out for token efficiency…',
       status: 'running'
     });
@@ -695,7 +695,7 @@ export async function runManager(
     id: decomposeStepId,
     stage: 'decompose',
     agentRole: 'manager',
-    title: attempt > 1 ? `Manager AI: Re-planning after verifier failure (attempt ${attempt})` : 'Manager AI: Decomposing the Brief into Puzzle Pieces',
+    title: attempt > 1 && priorFailureDiagnostics ? `Manager AI: Re-planning after verifier failure (attempt ${attempt})` : attempt > 1 ? 'Manager AI: Planning your message on top of the finished work' : 'Manager AI: Decomposing the Brief into Puzzle Pieces',
     detail: 'Reading the bible and splitting the "Done when" criteria into setup / build / verify / edge pieces with disjoint file scopes…',
     status: 'running'
   });

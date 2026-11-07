@@ -1,15 +1,21 @@
 /**
- * Context compaction for Ergo's own API agent loops (Anthropic / OpenAI / Gemini API keys, Ollama).
+ * Context compaction for Ergo's own API agent loops (Anthropic / OpenAI / Gemini API keys, Ollama) and the thresholds
+ * Ergo uses to rotate CLI agents (a worker that nears its threshold writes a handoff note and a fresh process continues).
  *
- * CLI agents (Claude Code, Codex, Gemini CLI) compact themselves and are left alone. For the API loops, compaction is a
- * safety net near the context window, not a cost saver: with prompt caching, re-reading old context is cheap and a
- * compaction re-writes the whole prefix, so compacting early costs more than it saves (replayed on real sessions: +2–28%
- * at 50–80k for sessions under 150k). Ollama is the case that matters: past num_ctx it silently drops the start of the
- * prompt, system prompt included.
+ * Two strategies:
+ *  - Short context (every provider but Anthropic): "stop, summarize & restart" well before the window. Once the
+ *    conversation reaches its threshold (DEFAULT_AUTO_COMPACT_TOKENS, or the user's), the agent writes a structured
+ *    handoff note and the conversation restarts as the original task + that note + the newest tool exchange. Prompt
+ *    caches survive it: the handoff is asked for on the agent's own conversation (same model, system prompt and tools,
+ *    so the whole history is a cache read), and the restarted conversation keeps the task message byte-identical, so system + tools + task stay a cached prefix. OpenAI, Gemini and xAI cache prefixes automatically
+ *    with no write premium; Ollama reuses its KV cache for the shared prefix (and skips re-evaluating it).
+ *  - Near the window (Anthropic): a safety net at 80%. Anthropic reads cached context at 0.1x or less but writes it at
+ *    1.25x, so re-reading old context is cheap and every restart re-writes the new prefix; compacting early cost more
+ *    than it saved on replayed sessions (+2–28% at 50–80k for sessions under 150k).
  *
- * Strategy: the same model summarizes everything but the newest few tool exchanges, which stay verbatim. Replayed on
- * real sessions this kept the agent's next step on track; clearing old tool output instead (still the fallback when
- * the summary call fails) sent it off track or re-reading files. Pure functions, no browser or Node APIs.
+ * Summaries come from the same model; the newest tool exchanges stay verbatim. Clearing old tool output instead (the
+ * fallback when the summary call fails) sent agents off track or re-reading files on replays. Pure functions, no
+ * browser or Node APIs.
  */
 import type { ContextCompactionSetting } from '../../types';
 import type { CatalogModel } from '../modelCatalog/types';
@@ -24,14 +30,48 @@ const AUTO_WINDOW_SHARE = 0.8;
 export const DEFAULT_OLLAMA_CONTEXT = 16_384;
 const FALLBACK_WINDOW = 128_000;
 const MIN_MANUAL_TOKENS = 2_000;
-/** Newest tool exchanges kept verbatim through a compaction: the agent is usually still working from them. */
+/** Newest tool exchanges kept verbatim through a near-window compaction: the agent is usually still working from them. */
 export const KEEP_RECENT_EXCHANGES = 4;
+/** Newest tool exchanges kept through a short-context restart: the one the agent is acting on right now. */
+export const SHORT_CONTEXT_KEEP_EXCHANGES = 1;
+/**
+ * Short context, automatic: compact (or rotate a CLI worker) once the conversation reaches this many tokens, unless the
+ * user set their own threshold.
+ */
+export const DEFAULT_AUTO_COMPACT_TOKENS = 60_000;
+/**
+ * Room a conversation always gets above its fixed start (system prompt, tools, task). Less thrashes: measured on Claude
+ * Code (Sonnet 5.5, 2026-11-05), a ~33k start under a 60k trigger refilled within three file reads after every
+ * compaction until the session gave up with the task unfinished.
+ */
+const MIN_WORKING_TOKENS = 40_000;
+/**
+ * Lowest trigger Ergo gives Claude Code. Its own start is ~20–35k tokens (system prompt, tools, task), so lower
+ * triggers thrash (see above); 100k is also the floor of CLAUDE_CODE_AUTO_COMPACT_WINDOW, the documented setting.
+ */
+export const MIN_CLAUDE_CODE_COMPACT_TOKENS = 100_000;
+/** A CLI rotation never waits past this share of the window (the CLIs' own compaction starts around here). */
+const SHORT_CONTEXT_WINDOW_SHARE = 0.6;
+/** A restarted conversation must grow at least this much before the next restart (no back-to-back summaries). */
+const MIN_GROWTH_BETWEEN_COMPACTIONS = 4_000;
 
 export interface CompactionInput {
   provider?: string;
   model?: string;
   setting?: ContextCompactionSetting;
   models: readonly CatalogModel[];
+  /** Prompt tokens of the conversation's fixed start (its first call): short-context thresholds sit a budget above it. */
+  baseTokens?: number;
+  /** An Ergo API loop, or a CLI agent Ergo rotates. */
+  kind?: 'api' | 'cli';
+}
+
+/**
+ * Providers whose agents run short-context (stop, summarize & restart) instead of compacting only near the window.
+ * Anthropic stays on the near-window safety net: its cache-write premium makes early restarts cost more (see top).
+ */
+export function usesShortContext(provider?: string): boolean {
+  return provider !== 'anthropic';
 }
 
 /** The model's context window: the profile's value, else the catalog's, else a conservative guess. */
@@ -41,15 +81,88 @@ export function contextWindowFor({ provider, model, setting, models }: Compactio
   return findModelPrice(models, model)?.contextTokens || FALLBACK_WINDOW;
 }
 
+/** The user's own threshold (auto mode with a size, or the older "custom size" mode), if any. */
+export function userCompactionTokens(setting?: ContextCompactionSetting): number | undefined {
+  return setting && setting.mode !== 'off' && setting.tokens && setting.tokens > 0 ? Math.max(Math.round(setting.tokens), MIN_MANUAL_TOKENS) : undefined;
+}
+
 /** Prompt size (tokens) at which to compact, or null for never. */
 export function compactionThreshold(input: CompactionInput): number | null {
   const setting = input.setting;
   if (setting?.mode === 'off') return null;
   const window = contextWindowFor(input);
-  if (setting?.mode === 'manual' && setting.tokens && setting.tokens > 0) {
-    return Math.min(Math.max(Math.round(setting.tokens), MIN_MANUAL_TOKENS), window);
+  const nearWindow = Math.floor(window * AUTO_WINDOW_SHARE);
+  const chosen = userCompactionTokens(setting);
+  // Anthropic: the near-window safety net unless the user picked a size (its cache economics, see top).
+  if (!usesShortContext(input.provider)) return chosen ? Math.min(chosen, window) : nearWindow;
+  const kind = input.kind ?? 'api';
+  const target = Math.max(chosen ?? DEFAULT_AUTO_COMPACT_TOKENS, Math.max(0, input.baseTokens ?? 0) + MIN_WORKING_TOKENS);
+  // A CLI rotation has to beat the CLI's own compaction; an API loop only has to stay inside the window.
+  const cap = kind === 'cli' ? Math.floor(window * SHORT_CONTEXT_WINDOW_SHARE) : nearWindow;
+  return Math.min(cap, target);
+}
+
+/**
+ * Environment that makes Claude Code auto-compact at the user's threshold (it keeps its own compaction; Ergo only
+ * moves the trigger). CLAUDE_CODE_AUTO_COMPACT_WINDOW takes 100k–1M and is capped at the model's window; thresholds
+ * under MIN_CLAUDE_CODE_COMPACT_TOKENS are raised to it. Empty when the user set no threshold: Claude Code's defaults stand.
+ */
+export function claudeCodeCompactionEnv(setting?: ContextCompactionSetting): Record<string, string> {
+  const tokens = userCompactionTokens(setting);
+  if (!tokens) return {};
+  return { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(Math.min(Math.max(tokens, MIN_CLAUDE_CODE_COMPACT_TOKENS), 1_000_000)) };
+}
+
+/**
+ * When a loop compacts. Short-context loops learn their fixed start from the first call and restart a budget above it;
+ * after a compaction the conversation has to grow again before the next one, so a restart that could not shrink the
+ * prompt enough (a huge kept tool result) is not repeated every round.
+ */
+export class CompactionGate {
+  private base = 0;
+  private floor = 0;
+  private awaitingFloor = false;
+  private readonly input: CompactionInput;
+  constructor(input: CompactionInput) {
+    this.input = input;
   }
-  return Math.floor(window * AUTO_WINDOW_SHARE);
+
+  /** The short-context strategy (restart from a structured handoff), or the near-window safety net. */
+  get shortContext(): boolean {
+    return usesShortContext(this.input.provider);
+  }
+
+  /** Newest tool exchanges a compaction keeps verbatim. */
+  get keepExchanges(): number {
+    return this.shortContext ? SHORT_CONTEXT_KEEP_EXCHANGES : KEEP_RECENT_EXCHANGES;
+  }
+
+  /** The threshold for the conversation seen so far (null: never). */
+  threshold(): number | null {
+    return compactionThreshold({ ...this.input, baseTokens: this.base });
+  }
+
+  /** Records the prompt size of a call that was just made. */
+  observe(promptTokens: number): void {
+    if (promptTokens <= 0) return;
+    if (!this.base) this.base = promptTokens;
+    if (this.awaitingFloor) {
+      this.floor = promptTokens;
+      this.awaitingFloor = false;
+    }
+  }
+
+  /** Should the loop compact before sending a prompt of this size? */
+  due(promptTokens: number): boolean {
+    const at = this.threshold();
+    if (!at || promptTokens < at || this.awaitingFloor) return false;
+    return !this.floor || promptTokens >= this.floor + MIN_GROWTH_BETWEEN_COMPACTIONS;
+  }
+
+  /** The conversation was just compacted: the next call's size is the new floor. */
+  compacted(): void {
+    this.awaitingFloor = true;
+  }
 }
 
 /**
@@ -69,6 +182,43 @@ export const SUMMARY_INSTRUCTIONS =
   'instructions the user added; 2. files and code examined or changed, with the important function names, signatures, ' +
   'line numbers and snippets; 3. facts learned from tool output the rest of the task depends on; 4. errors hit and how they ' +
   'were fixed; 5. what is done, what is in progress, and the next step. Keep exact identifiers. Plain text, no preamble.';
+
+/**
+ * The structured handoff note of a short-context restart (and of a CLI worker's rotation). Unstructured summaries
+ * drop operational detail (exact paths, failed attempts, the next step); a fixed template keeps it.
+ */
+export const HANDOFF_TEMPLATE =
+  '# Task State Handoff\n' +
+  '- Goal: the objective and scope, plus every instruction the user added along the way\n' +
+  '- Progress & Discoveries: files read or changed (exact paths, line ranges), root causes confirmed, facts from tool output the rest of the task depends on\n' +
+  '- Current Blockers & Failed Attempts: errors hit and approaches that did not work, so they are not tried again\n' +
+  '- Next Immediate Actions: the exact next 1-2 steps\n' +
+  '- Key Workspace Context: branches, running servers, build / test commands and anything else in the environment you rely on';
+
+/** Asked on the agent's own conversation, so the history it summarizes is read from the prompt cache. */
+export const HANDOFF_INSTRUCTIONS =
+  'CONTEXT HANDOFF. Do not call any tools in this reply. To keep your context short, this conversation is about to be ' +
+  'reset: you will continue the same task from the original task message, the note you write now, and your newest ' +
+  'tool result. Write the note in exactly this structure, keeping exact file paths, identifiers, line numbers, commands ' +
+  'and error messages:\n\n' +
+  HANDOFF_TEMPLATE +
+  '\n\nReply with the note only, no preamble.';
+
+/** Summary prompt for the fallback call that reads a rendered transcript (the same structure). */
+export const HANDOFF_SUMMARY_INSTRUCTIONS =
+  'Write a handoff note for the conversation above so the agent can continue the task from it alone. Use exactly this ' +
+  'structure, keeping exact file paths, identifiers, line numbers, commands and error messages:\n\n' +
+  HANDOFF_TEMPLATE +
+  '\n\nThe note only, no preamble.';
+
+/**
+ * System-prompt rule for short-context agents: their older turns are replaced, so they should look things up on
+ * demand instead of loading large files into the conversation.
+ */
+export const SHORT_CONTEXT_RULE =
+  'CONTEXT IS KEPT SHORT: your older turns are periodically replaced by a handoff note you write. Look things up with ' +
+  'tools when you need them (search, then read the specific lines) rather than reading whole large files or dumping ' +
+  'long command output, and name exact paths and identifiers in your replies.';
 
 /** Per tool result in the text the summarizer reads: the summary call itself has to fit in the window. */
 const SUMMARY_RESULT_CHARS = 3_000;
@@ -136,15 +286,46 @@ export function tailStart(messages: any[], shape: ConversationShape, keep = KEEP
   return -1;
 }
 
-/** Replaces everything between the task and `tail` with the summary, in place. */
+/** Each conversation's task message as it was before its first compaction (the note of a later one replaces it). */
+const originalTasks = new WeakMap<any[], any>();
+
+/**
+ * Replaces everything between the task and `tail` with the summary, in place. The task message keeps its original
+ * content first and byte for byte (so it stays a cached prefix); the summary follows it, replacing an earlier one.
+ */
 export function applySummary(messages: any[], shape: ConversationShape, summary: string, tail: number): void {
   const head = headLength(shape);
-  const note = `\n\n[Summary of your earlier work on this task — older messages were compacted to save context]\n${summary.trim()}`;
-  const task = { ...messages[head - 1] };
-  if (shape === 'gemini') task.parts = [...(task.parts || []), { text: note }];
-  else if (typeof task.content === 'string') task.content += note;
-  else task.content = [...(Array.isArray(task.content) ? task.content : []), { type: 'text', text: note }];
+  const current = messages[head - 1];
+  if (!originalTasks.has(messages)) originalTasks.set(messages, shape === 'gemini' ? [...(current.parts || [])] : current.content);
+  const original = originalTasks.get(messages);
+  const note = `\n\n[Handoff note from your earlier work on this task — older messages were compacted to save context]\n${summary.trim()}`;
+  const task = { ...current };
+  if (shape === 'gemini') task.parts = [...original, { text: note }];
+  else if (typeof original === 'string') task.content = original + note;
+  else task.content = [...(Array.isArray(original) ? original : []), { type: 'text', text: note }];
   messages.splice(0, messages.length, ...messages.slice(0, head - 1), task, ...messages.slice(tail));
+}
+
+/**
+ * The conversation plus one closing instruction, for a summary asked on the conversation itself: the history stays a
+ * byte-identical prefix of the request. Returns a new array; `messages` is not changed.
+ */
+export function withClosingInstruction(messages: any[], shape: ConversationShape, text: string): any[] {
+  if (shape === 'anthropic') {
+    const last = messages[messages.length - 1];
+    // Anthropic turns alternate too: the instruction follows the newest tool results in their user message (after
+    // the cache marker on the last result, so everything before it is still read from cache).
+    if (last?.role === 'user') {
+      const content = Array.isArray(last.content) ? last.content : [{ type: 'text', text: String(last.content ?? '') }];
+      return [...messages.slice(0, -1), { ...last, content: [...content, { type: 'text', text }] }];
+    }
+    return [...messages, { role: 'user', content: text }];
+  }
+  if (shape !== 'gemini') return [...messages, { role: 'user', content: text }];
+  const last = messages[messages.length - 1];
+  // Gemini turns alternate: a conversation that ends on the user's tool results gets the instruction as one more part.
+  if (last?.role === 'user') return [...messages.slice(0, -1), { ...last, parts: [...(last.parts || []), { text }] }];
+  return [...messages, { role: 'user', parts: [{ text }] }];
 }
 
 // ─── Fallback: clearing old tool output ─────────────────────────────────────

@@ -158,6 +158,9 @@ export function inferTaskKind(text: string): TaskKind {
   return 'other';
 }
 
+/** How many times a message sent while the brief is written can make the Summary write it again. */
+const MAX_BRIEF_REWRITES = 2;
+
 export async function runSummary(ctx: PipelineContext, baseline: BaselineContext): Promise<SummaryResult> {
   const { task, brief, connectedMcps } = ctx;
   const usage = emptyUsage();
@@ -197,22 +200,41 @@ export async function runSummary(ctx: PipelineContext, baseline: BaselineContext
 
     try {
       const skill = await loadPipelineSkill('task-brief');
-      const result = await runToolLoop(
-        buildToolLoopRequest(ctx, 'summary', {
-          stableSystem: `${skill}\n\n${OUTPUT_CONTRACT}`,
-          sharedContext: '',
-          tools: [],
-          initialUserMessage: userMessage,
-          maxRounds: 1,
-          maxTokens: 6000,
-          responseFormat: 'json'
-        })
-      );
-      addUsage(usage, result.usage);
-      if (result.stopReason === 'error') {
-        console.warn('[Ergo Summary] model call failed, using fallback overview:', result.error);
+      // The user's prompt-box messages while the brief is written go into it; one that arrives during the call
+      // rewrites the brief with every message so far (at most MAX_BRIEF_REWRITES times).
+      const userDirection: string[] = [];
+      for (let pass = 0; ; pass++) {
+        const result = await runToolLoop(
+          buildToolLoopRequest(ctx, 'summary', {
+            stableSystem: `${skill}\n\n${OUTPUT_CONTRACT}`,
+            sharedContext: '',
+            tools: [],
+            initialUserMessage: userMessage,
+            maxRounds: 1,
+            maxTokens: 6000,
+            responseFormat: 'json',
+            drainSteering: () => {
+              userDirection.push(...(ctx.steering?.drainTexts('summary') ?? []));
+              return [...userDirection];
+            }
+          })
+        );
+        addUsage(usage, result.usage);
+        if (result.stopReason === 'error') {
+          console.warn('[Ergo Summary] model call failed, using fallback overview:', result.error);
+        }
+        parsed = parseJsonLoose(result.text) || undefined;
+        throwIfAborted(ctx.signal);
+        if (pass >= MAX_BRIEF_REWRITES || !ctx.steering?.hasPendingForManager()) break;
+        ctx.emit({
+          id: 'step-overview',
+          stage: 'overview',
+          agentRole: 'summary',
+          title: 'Summary AI: Rewriting the Brief with Your Message',
+          detail: 'You sent a message while the brief was being written: writing it again with your direction…',
+          status: 'running'
+        });
       }
-      parsed = parseJsonLoose(result.text) || undefined;
     } catch (e) {
       if (isAbortError(e)) throw e;
       console.warn('[Ergo Summary] failed, using fallback overview:', e);

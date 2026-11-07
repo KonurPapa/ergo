@@ -50,6 +50,8 @@ export interface CliAgentNotesBridgeProps {
   runActive?: boolean;
   /** What the agent is doing right now (AgentLiveStatus), above the prompt box. */
   liveStatus?: React.ReactNode;
+  /** The task pane's pinned prompt box takes messages instead of this view's own input. */
+  hideSteerInput?: boolean;
 }
 
 /** Screen size the Notes view renders the agent's output at until the bridge reports the PTY's real size. */
@@ -77,6 +79,7 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
   onSendMessage,
   runActive = true,
   liveStatus,
+  hideSteerInput = false,
 }) => {
   const [detectedPrompt, setDetectedPrompt] = useState<CliDetectedPrompt | null>(initialPrompt);
   const [activityFeed, setActivityFeed] = useState<ActivityFeedItem[]>([]);
@@ -562,9 +565,10 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
         )}
       </div>
 
-      {liveStatus}
+      {!hideSteerInput && liveStatus}
 
       {/* ── Mid-Task Steering Prompt Box ── */}
+      {!hideSteerInput && (
       <form onSubmit={handleSteerSubmit} className="cli-notes-steer-form">
         <div className="steer-input-wrapper">
           <input
@@ -589,6 +593,7 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
           </button>
         </div>
       </form>
+      )}
     </div>
   );
 };

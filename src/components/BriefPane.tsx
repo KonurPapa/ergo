@@ -15,12 +15,15 @@ import {
   type EffortLevel,
   type UserApiKey,
   type PermissionDecision,
-  type PermissionLevel
+  type PermissionLevel,
+  type TaskCycle
 } from '../types';
 import { AgentTerminal } from './AgentTerminal';
 import { ResizableTerminalContainer } from './ResizableTerminalContainer';
 import { CliAgentNotesBridge } from './CliAgentNotesBridge';
-import { TaskPromptBox } from './TaskPromptBox';
+import { TaskPromptBox, type TaskPromptTarget } from './TaskPromptBox';
+import { TaskStageBars, type StageBarState } from './TaskStageBars';
+import { cycleNoteForDisplay, joinCompletionCycles, partitionStepsByCycle, splitCompletionByCycle, taskCycles } from '../lib/taskThread';
 import { AgentLiveStatus } from './AgentLiveStatus';
 import { RunSurveyCard } from './RunSurveyCard';
 import type { TaskMessageOptions, TaskMessageResult } from '../lib/taskMessages';
@@ -57,6 +60,7 @@ import {
   X,
   FileText,
   ChevronDown,
+  ChevronRight,
   Sparkles,
   Wrench,
   Archive,
@@ -72,15 +76,12 @@ import {
   Cpu,
   Settings2,
   Unplug,
-  CircleX,
-  CircleDot,
   Pencil,
   ListChecks,
-  ArrowLeft,
   Activity,
 } from 'lucide-react';
 import { getPref, setPref, subscribePrefs } from '../lib/userPrefs';
-import { Banner, Button, Dialog, EmptyState, Icon, IconButton, MenuButton, RunRow, SegmentedControl, StatusDot, StatusIcon, STATUS_LABEL, Tabs, type DesignTaskStatus, type MenuItem } from './ui';
+import { Banner, Button, Dialog, EmptyState, Icon, IconButton, MenuButton, RunRow, SegmentedControl, StatusDot, StatusIcon, STATUS_LABEL, PriorityIcon, PRIORITY_LABEL, type Priority, type DesignTaskStatus, type MenuItem } from './ui';
 import { EFFORT_LABELS } from '../lib/agentPipeline/modelRouter';
 import { formatTokens } from '../lib/agentDisplay';
 import { MOD, SHIFT } from '../lib/shortcuts';
@@ -397,15 +398,38 @@ function orderBriefs(briefs: AgentContextItem[], tasks: TaskItem[], mode: AiSort
 /** React key for an agent's views: a relaunch reuses the ptySessionId, so the launch id forces a fresh attach. */
 const agentViewKey = (s: SpawnedSession) => `${s.ptySessionId}|${s.spawnId || s.runId || s.session.spawnedAt}`;
 
-type TaskStageKey = 'related' | 'overview' | 'actions' | 'completion';
+type TaskStageKey = 'overview' | 'actions' | 'completion' | 'related';
 
-/** The detail pane's tabs, in run order: Related · Overview · Runs · Notes. A tab stays disabled until the run reaches it. */
+/** The detail pane's stages, in run order: Related · Brief · Runs · Notes. A stage stays disabled until the run reaches it. */
 const TASK_STAGES: ReadonlyArray<{ key: TaskStageKey; label: string }> = [
   { key: 'related', label: 'Related' },
-  { key: 'overview', label: 'Overview' },
+  { key: 'overview', label: 'Brief' },
   { key: 'actions', label: 'Runs' },
   { key: 'completion', label: 'Notes' },
 ];
+/** A follow-up reuses the run's related tasks and brief: its block has only Runs · Notes. */
+const FOLLOW_UP_STAGES: ReadonlyArray<{ key: TaskStageKey; label: string }> = TASK_STAGES.filter(
+  (s) => s.key === 'actions' || s.key === 'completion'
+);
+
+/** A cycle's outcome on its collapsed timeline row. */
+const CYCLE_OUTCOME: Record<string, { label: string; status: DesignTaskStatus }> = {
+  passed: { label: 'Verified', status: 'done' },
+  completed: { label: 'Done', status: 'done' },
+  unverified: { label: 'Not verified', status: 'review' },
+  verifier_failed: { label: 'Verification failed', status: 'failed' },
+  failed: { label: 'Failed', status: 'failed' },
+  stopped: { label: 'Stopped', status: 'review' },
+};
+
+/** "Nov 6, 3:02 PM" (empty for cycles saved without a time). */
+const formatCycleTime = (iso: string | undefined): string => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+};
+
+const toBarState = (status: CardStatus): StageBarState => (status === 'queued' ? 'not_started' : status);
 
 /** What a pipeline tool call wants to do: the exact command, the file + diff, or the tool's arguments. */
 const PermissionRequestDetails: React.FC<{ prompt: McpToolPermissionPrompt }> = ({ prompt }) => {
@@ -527,7 +551,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   isBridgeConnected,
   onQueue,
   onClosePane,
-  onBackToRuns,
+  onBackToRuns: _onBackToRuns,
   agentPipelineOptions,
   onSetAgentPipelineOptions,
   onOpenModels,
@@ -715,8 +739,9 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     const wasWorking = prevWorkingRef.current;
     prevWorkingRef.current = isWorking;
 
-    // A run starting opens the Runs tab on it
-    if (!wasWorking && isWorking) setActiveStage('actions');
+    // A run starting: the view follows it from its first stage.
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
+    if (!wasWorking && isWorking) setFollowRun(true);
   }, [isWorking]);
 
   const isContextRunning =
@@ -846,29 +871,93 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     return 'not_started';
   }, [isCompletionWorking, task.isDone, task.status, completionText, executionSteps]);
 
-  // ── Stage tabs: Related Tasks → Overview → Actions → Completion ──
-  // A tab unlocks once the run reaches its stage (Overview is always open: it can be written before a run, and holds the
-  // "no overview yet" hint). The shown tab follows the run: the first stage working, else the furthest one done. A tab
-  // the user picks stays until the run moves to another stage.
-  const stageStatus: Record<TaskStageKey, CardStatus> = {
-    related: relatedTasksStatus,
-    overview: overviewStatus,
-    actions: stepsActionsStatus,
-    completion: completionStatus,
-  };
+  // ── Timeline: the run (cycle 0), then one block per follow-up ──
+  // Earlier cycles collapse to one line each; the newest cycle is open with its stage bars. A follow-up reuses the
+  // run's related tasks and brief, so its stages are Runs · Notes, read from its own steps and completion note.
+  const runActiveEarly = isWorking || isExecuting || agentsWorking;
+  const cycles = React.useMemo(() => taskCycles(brief, executionSteps), [brief, executionSteps]);
+  const latestCycle = Math.max(0, cycles.length - 1);
+  const isFollowUpView = latestCycle > 0;
+  const stepsByCycle = React.useMemo(() => partitionStepsByCycle(executionSteps, cycles.length), [executionSteps, cycles.length]);
+  const notesByCycle = React.useMemo(() => splitCompletionByCycle(completionText), [completionText]);
+  /** The steps of the cycle that is open (all steps while there is no follow-up). */
+  const latestSteps = isFollowUpView ? stepsByCycle[latestCycle] || [] : executionSteps;
+  const latestNote = isFollowUpView ? notesByCycle[latestCycle] || '' : completionText;
+  const followUpRecordRunning = latestSteps.some((s) => (s.stage === 'built_record' || s.stage === 'done') && s.status === 'running');
+  const followUpEnded = Boolean(cycles[latestCycle]?.endedAt) || latestNote.trim().length > 0;
+
+  // ── Stage bars: Related → Brief → Runs → Notes ──
+  // A stage unlocks once the run reaches it (Related and Brief are always open: the brief can be written before a run,
+  // and holds the "no overview yet" hint). The bars fill with the run's progress; the viewed stage follows the run
+  // until the user picks another stage, and follows again once they pick the stage that is running.
+  const stageList = isFollowUpView ? FOLLOW_UP_STAGES : TASK_STAGES;
+  const stageStatus: Record<TaskStageKey, CardStatus> = isFollowUpView
+    ? {
+        related: 'done',
+        overview: 'done',
+        actions: runActiveEarly && !followUpRecordRunning ? 'working' : latestSteps.length > 0 || followUpEnded ? 'done' : 'not_started',
+        completion: runActiveEarly && followUpRecordRunning ? 'working' : followUpEnded && !runActiveEarly ? 'done' : 'not_started',
+      }
+    : {
+        overview: overviewStatus,
+        actions: stepsActionsStatus,
+        completion: completionStatus,
+        related: relatedTasksStatus,
+      };
   const stageReached = (key: TaskStageKey): boolean =>
-    key === 'overview' ||
-    stageStatus[key] !== 'not_started' ||
-    (key === 'actions' && (agentSessions.length > 0 || hasPendingAlert || Boolean(pendingHumanInput))) ||
-    (key === 'completion' && isEditing);
+    stageList.some((s) => s.key === key) &&
+    (key === 'overview' ||
+      key === 'related' ||
+      stageStatus[key] !== 'not_started' ||
+      (key === 'actions' && (agentSessions.length > 0 || hasPendingAlert || Boolean(pendingHumanInput))) ||
+      (key === 'completion' && isEditing));
   const currentStage: TaskStageKey =
-    TASK_STAGES.find((s) => stageStatus[s.key] === 'working')?.key ??
-    [...TASK_STAGES].reverse().find((s) => stageStatus[s.key] === 'done')?.key ??
-    'overview';
+    stageList.find((s) => stageStatus[s.key] === 'working')?.key ??
+    [...stageList].reverse().find((s) => stageStatus[s.key] === 'done')?.key ??
+    stageList[0].key;
+  const [followRun, setFollowRun] = useState(true);
+  // A new task or a new cycle: follow the run again.
   React.useLayoutEffect(() => {
-    setActiveStage(currentStage);
-  }, [currentStage, task.id]);
+    setFollowRun(true);
+  }, [task.id, latestCycle]);
+  React.useLayoutEffect(() => {
+    if (followRun) setActiveStage(currentStage);
+  }, [currentStage, followRun, task.id, latestCycle]);
   const shownStage: TaskStageKey = stageReached(activeStage) ? activeStage : currentStage;
+  /** The user picked a stage: it stays in view (the run carries on) until they pick the stage that is running. */
+  const pickStage = (key: TaskStageKey) => {
+    if (!stageReached(key)) return;
+    setActiveStage(key);
+    setFollowRun(key === currentStage);
+  };
+  /** Show a stage from elsewhere in the pane (status line, Details): the open cycle's, else the run's (cycle 0) expanded. */
+  const showStage = (key: TaskStageKey) => {
+    if (stageList.some((s) => s.key === key)) pickStage(key);
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
+    else setExpandedCycles((prev) => ({ ...prev, 0: key }));
+  };
+  // The panel slides in from the side the view moved to (onboarding-style); the first panel shown doesn't slide.
+  const shownStageIdx = stageList.findIndex((s) => s.key === shownStage);
+  const slideRef = useRef<{ key: string; idx: number; dir: number }>({ key: `${latestCycle}:${shownStage}`, idx: shownStageIdx, dir: 0 });
+  const slideKey = `${latestCycle}:${shownStage}`;
+  if (slideRef.current.key !== slideKey) {
+    slideRef.current = { key: slideKey, idx: shownStageIdx, dir: shownStageIdx >= slideRef.current.idx ? 1 : -1 };
+  }
+  const slideClass = slideRef.current.dir === 0 ? 'is-static' : slideRef.current.dir < 0 ? 'is-back' : '';
+
+  // Earlier cycles: which are expanded, and the stage each one shows.
+  const [expandedCycles, setExpandedCycles] = useState<Record<number, TaskStageKey | undefined>>({});
+  React.useEffect(() => {
+    setExpandedCycles({});
+  }, [task.id]);
+  // A follow-up starting scrolls its block into view.
+  const latestCycleRef = useRef<HTMLDivElement>(null);
+  const prevLatestCycleRef = useRef(latestCycle);
+  useEffect(() => {
+    const prev = prevLatestCycleRef.current;
+    prevLatestCycleRef.current = latestCycle;
+    if (latestCycle > prev) latestCycleRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [latestCycle]);
 
   // Determine what to display in Section 2 (Build & Verification / Steps & Actions)
   const showExecutionSteps = viewModeSection2 === 'steps' && !isEditing;
@@ -1212,6 +1301,27 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   const sendTaskMessage = onSendTaskMessage
     ? (text: string, opts: TaskMessageOptions) => onSendTaskMessage(task, text, opts)
     : undefined;
+  // Who the prompt box can address besides the manager: CLI agents working right now, or in-app pipeline workers.
+  const promptTargets = React.useMemo<TaskPromptTarget[]>(
+    () => [
+      ...agentSessions
+        .filter((s) => s.role !== 'manager' && isAgentWorking(s.status))
+        .map((s) => ({ id: s.ptySessionId, label: s.label, opts: { ptySessionId: s.ptySessionId } })),
+      ...(agentSessions.length === 0 ? pipelineWorkerTargets.map((w) => ({ id: w.pieceId, label: w.label, opts: { pieceId: w.pieceId } })) : []),
+    ],
+    [agentSessions, pipelineWorkerTargets]
+  );
+  // The open cycle's completion note is edited on its own; the log stays one document (cycles joined in order).
+  const setLatestNote = (text: string) => {
+    if (!isFollowUpView) {
+      handleFieldChange('completion', text);
+      return;
+    }
+    const parts = [...notesByCycle];
+    while (parts.length <= latestCycle) parts.push('');
+    parts[latestCycle] = text;
+    handleFieldChange('completion', joinCompletionCycles(parts));
+  };
 
   // Prompts on agents the user isn't looking at in the Notes view (or any prompt while in Steps view).
   const offscreenPromptAgents = agentsWithPrompt.filter(
@@ -1303,6 +1413,92 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     );
   };
 
+  /** An earlier cycle on the timeline: one line (when, the user's message, how it ended), expandable read-only. */
+  const renderEarlierCycle = (c: TaskCycle) => {
+    const shown = expandedCycles[c.n];
+    const isOpen = shown !== undefined;
+    const outcome = c.outcome ? CYCLE_OUTCOME[c.outcome] : c.endedAt ? undefined : CYCLE_OUTCOME.stopped;
+    const stages = c.n === 0 ? TASK_STAGES : FOLLOW_UP_STAGES;
+    const steps = stepsByCycle[c.n] || [];
+    const note = notesByCycle[c.n] || '';
+    const cycleContext = c.n === 0 ? [...steps].reverse().find((st) => st.stage === 'context' && st.baselineContext)?.baselineContext : undefined;
+    const view = shown ?? 'completion';
+    const time = formatCycleTime(c.startedAt);
+    return (
+      <React.Fragment key={c.n}>
+        <button
+          type="button"
+          className="eg-cycle-row"
+          aria-expanded={isOpen}
+          onClick={() => setExpandedCycles((prev) => ({ ...prev, [c.n]: isOpen ? undefined : 'completion' }))}
+          title={isOpen ? 'Collapse' : 'Show what was done'}
+        >
+          <ChevronRight size={14} />
+          <span className="eg-cycle-row-name">{c.n === 0 ? 'Run' : `Follow-up ${c.n}`}</span>
+          {time && <span className="eg-cycle-row-time">{time}</span>}
+          <span className="eg-cycle-row-msg">{c.n > 0 && c.message ? `“${c.message}”` : ''}</span>
+          {outcome && (
+            <span className="eg-cycle-row-outcome">
+              <StatusIcon status={outcome.status} />
+              {outcome.label}
+            </span>
+          )}
+        </button>
+        {isOpen && (
+          <div className="eg-cycle-expanded">
+            {c.n > 0 && c.message && <p className="eg-cycle-msg">{c.message}</p>}
+            <TaskStageBars<TaskStageKey>
+              label={c.n === 0 ? 'Run stages' : `Follow-up ${c.n} stages`}
+              value={view}
+              onChange={(key) => setExpandedCycles((prev) => ({ ...prev, [c.n]: key }))}
+              items={stages.map(({ key, label }) => ({ id: key, label, state: 'done' as const }))}
+            />
+            <div key={`${c.n}:${view}`} className="eg-stagepanel is-static ai-sub-card-body stage-panel eg-tabpanel" role="tabpanel">
+              {view === 'related' && (
+                <RelatedTasksPanel baselineContext={cycleContext} isSearching={false} isSelecting={false} canOpenTask={canOpenRelatedTask} onOpenTask={onOpenRelatedTask} />
+              )}
+              {view === 'overview' && (
+                <div className="brief-markdown-render">
+                  <MarkdownRenderer content={summaryDocContent || overviewText || '_No brief was saved._'} />
+                </div>
+              )}
+              {view === 'actions' &&
+                (steps.length === 0 ? (
+                  <div className="ai-card-hint">No steps were recorded for this {c.n === 0 ? 'run' : 'follow-up'}.</div>
+                ) : (
+                  <div className="execution-steps">
+                    {steps.map((step) => (
+                      <div key={step.id} className={`step-card ${step.status} stage-${step.stage}`}>
+                        <div className="step-header">
+                          <div className="step-title">
+                            <StepStatusIcon step={step} size={13} />
+                            {step.agentRole && <AgentRoleBadge role={step.agentRole} pieceId={step.pieceId} />}
+                            <span style={{ fontSize: '0.8rem' }}>{step.title}</span>
+                          </div>
+                          <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>{step.time}</span>
+                        </div>
+                        <div className="step-detail">
+                          <MarkdownRenderer content={step.detail} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              {view === 'completion' &&
+                (note ? (
+                  <div className="brief-markdown-render">
+                    <MarkdownRenderer content={c.n > 0 ? cycleNoteForDisplay(note) : note} />
+                  </div>
+                ) : (
+                  <div className="ai-card-hint">No completion note was written{c.endedAt ? '' : ' (it was stopped first)'}.</div>
+                ))}
+            </div>
+          </div>
+        )}
+      </React.Fragment>
+    );
+  };
+
   const categoryName =
     task.category?.trim() && task.category !== 'AI Workspace' && task.category !== 'Untitled'
       ? cleanHeading(task.category)
@@ -1320,7 +1516,6 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
             ? 'review'
             : 'todo';
   const lineLabel = task.sourceLine != null ? `${fileName}:${task.sourceLine + 1}` : null;
-  const notes = task.subtasks ?? [];
   const usage = brief?.totalUsage ?? task.totalUsage;
   const tokenTotal = usage ? usage.inputTokens + usage.outputTokens : 0;
   const effortLevel = agentPipelineOptions?.effortLevel ?? 'medium';
@@ -1330,7 +1525,68 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   };
   const canRun = isBridgeConnected !== false;
   const completionNote = (brief?.completion || '').trim();
-  const outcome = brief?.lastRunOutcome?.outcome;
+  const taskPriority: Priority = ((task as any).priority as Priority) || 'medium';
+
+  const dstatus = React.useMemo(() => {
+    const runOutcome = brief?.lastRunOutcome?.outcome;
+    const runAt = brief?.lastRunOutcome?.at ? new Date(brief.lastRunOutcome.at) : null;
+    const dateStr = runAt ? runAt.toLocaleDateString([], { month: 'short', day: 'numeric' }) : null;
+
+    if (isWorking) {
+      return {
+        status: 'progress' as DesignTaskStatus,
+        text: 'Running',
+        metaDate: dateStr ? `since ${dateStr}` : null,
+        metaAction: null,
+      };
+    }
+    if (runOutcome === 'failed' || runOutcome === 'verifier_failed') {
+      return {
+        status: 'failed' as DesignTaskStatus,
+        text: runOutcome === 'failed' ? 'Last run failed' : 'Verification failed',
+        metaDate: dateStr,
+        metaAction: completionNote ? 'see Notes' : 'see Runs',
+      };
+    }
+    if (runOutcome === 'stopped') {
+      return {
+        status: 'review' as DesignTaskStatus,
+        text: 'Run stopped',
+        metaDate: dateStr,
+        metaAction: 'see Runs',
+      };
+    }
+    if (statusKind === 'review') {
+      return {
+        status: 'review' as DesignTaskStatus,
+        text: 'Ready for review',
+        metaDate: dateStr,
+        metaAction: completionNote ? 'see Notes' : 'see Runs',
+      };
+    }
+    if (isQueued) {
+      return {
+        status: 'queued' as DesignTaskStatus,
+        text: `Queued ${queuePosition != null ? queuePosition + 1 : ''}`.trim(),
+        metaDate: 'waiting in queue',
+        metaAction: null,
+      };
+    }
+    if (task.isDone) {
+      return {
+        status: 'done' as DesignTaskStatus,
+        text: 'Done',
+        metaDate: dateStr,
+        metaAction: null,
+      };
+    }
+    return {
+      status: 'todo' as DesignTaskStatus,
+      text: 'To do',
+      metaDate: null,
+      metaAction: null,
+    };
+  }, [isWorking, brief?.lastRunOutcome, statusKind, isQueued, queuePosition, task.isDone, completionNote]);
 
   const moreItems: MenuItem[] = [
     ...(isStoppedPartway
@@ -1341,15 +1597,20 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
         ]
       : []),
     ...(hasRunBefore && !isStoppedPartway ? [{ label: 'Run again', icon: RotateCcw, onSelect: () => onExecuteTask(task) }, { separator: true } as const] : []),
-    {
-      label: 'Edit overview',
-      icon: Edit3,
-      onSelect: () => {
-        setIsEditing(true);
-        setViewModeSection2('notes');
-        setActiveStage('overview');
-      },
-    },
+    // The brief belongs to the run (cycle 0); a follow-up's block has no Brief stage to edit it in.
+    ...(isFollowUpView
+      ? []
+      : [
+          {
+            label: 'Edit brief',
+            icon: Edit3,
+            onSelect: () => {
+              setIsEditing(true);
+              setViewModeSection2('notes');
+              pickStage('overview');
+            },
+          },
+        ]),
     {
       label: scheduledJob && scheduledJob.status === 'pending' ? 'Edit schedule' : 'Schedule',
       icon: Calendar,
@@ -1399,143 +1660,149 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   return (
     <div ref={cardRef} className={`eg-taskdetail ${isWorking ? 'is-running' : ''}`}>
       <div className="eg-detail-head eg-detail-head-task">
-        {onBackToRuns && (
-          <Button variant="ghost" size="sm" icon={ArrowLeft} onClick={onBackToRuns} className="eg-back-btn" title="Back to all runs">
-            All runs
-          </Button>
-        )}
-        <span className="eg-detail-crumb">{fileName.replace(/\.md$/i, '')}</span>
-        {categoryName && (
-          <>
-            <span className="eg-crumb-sep">›</span>
-            <span className="eg-detail-crumb is-current">{categoryName}</span>
-          </>
-        )}
+        <span>{categoryName || 'Tasks'}</span>
         <span className="eg-spacer" />
         <MenuButton align="end" width={240} items={moreItems} trigger={(p) => <IconButton {...p} icon={MoreHorizontal} size="sm" label="More" />} />
         {onClosePane && <IconButton icon={X} size="sm" label={`Close (${MOD}J)`} onClick={onClosePane} />}
       </div>
 
       <div className="eg-detail-body">
+        {/* Only the task text: enough to tell which task this is (the brief is in its own stage). */}
         <h1 className="eg-detail-title">{brief?.title || task.title}</h1>
-        {notes.length > 0 ? (
-          <div className="eg-detail-desc">
-            <ul className="eg-detail-notes">
-              {notes.map((n, i) => (
-                <li key={i} className={n.isDone ? 'is-done' : undefined}>
-                  <MarkdownRenderer content={n.text} />
-                </li>
-              ))}
-            </ul>
-            <p className="eg-detail-hint">From {fileName.replace(/\.md$/i, '')}. Edit the lines in the document to change this.</p>
-          </div>
-        ) : !brief?.sourceTaskId && brief?.sourceContent ? (
-          <div className="eg-detail-desc">
-            <MarkdownRenderer content={brief.sourceContent} />
-          </div>
-        ) : null}
 
-        <div className="eg-props">
-          <span className="eg-prop-k">Status</span>
-          <span className="eg-prop-v">
-            <span className="eg-chip">
-              <StatusIcon status={statusKind} />
-              {STATUS_LABEL[statusKind]}
-            </span>
-          </span>
-          {lineLabel && (
-            <>
-              <span className="eg-prop-k">Line</span>
-              <span className="eg-prop-v eg-mono-sm">{lineLabel}</span>
-            </>
-          )}
-          {isQueued && (
-            <>
-              <span className="eg-prop-k">Queue</span>
-              <span className="eg-prop-v">
-                <span className="eg-chip">
-                  <StatusIcon status="queued" />
-                  Queued {queuePosition != null ? queuePosition + 1 : ''}
-                </span>
-                {onRunQueuedNow && (
-                  <Button size="sm" variant="ghost" onClick={() => setConfirmRunNow(true)}>
-                    Run now instead
-                  </Button>
+        <details className="eg-dstatus">
+          <summary>
+            <StatusIcon status={dstatus.status} />
+            <span className="eg-dstatus-text">{dstatus.text}</span>
+            {(dstatus.metaDate || dstatus.metaAction) && (
+              <span className="eg-dstatus-meta">
+                {dstatus.metaDate && `· ${dstatus.metaDate}`}
+                {dstatus.metaAction && (
+                  <>
+                    {' · '}
+                    <button
+                      type="button"
+                      className="eg-dstatus-link"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        if (dstatus.metaAction === 'see Notes') showStage('completion');
+                        else if (dstatus.metaAction === 'see Runs') showStage('actions');
+                      }}
+                    >
+                      {dstatus.metaAction}
+                    </button>
+                  </>
                 )}
               </span>
-            </>
-          )}
-          {scheduledJob && scheduledJob.status === 'pending' && (
-            <>
-              <span className="eg-prop-k">Scheduled</span>
-              <span className="eg-prop-v">
-                <button type="button" className="eg-chip eg-chip-btn" onClick={() => onOpenScheduleModal?.(task)}>
-                  <Icon icon={Clock} size="sm" />
-                  {new Date(scheduledJob.scheduledTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                  {scheduledJob.cronExpression ? ` · ${scheduledJob.cronExpression}` : ''}
-                </button>
+            )}
+            <span className="eg-dstatus-more">
+              Details
+              <Icon icon={ChevronDown} size="sm" />
+            </span>
+          </summary>
+          <div className="eg-props">
+            <span className="eg-prop-k">Status</span>
+            <span className="eg-prop-v">
+              <span className="eg-chip">
+                <StatusIcon status={statusKind} />
+                {STATUS_LABEL[statusKind]}
               </span>
-            </>
-          )}
-          {relatedSelectedCount > 0 && (
-            <>
-              <span className="eg-prop-k">Related</span>
-              <span className="eg-prop-v">
-                <button type="button" className="eg-chip eg-chip-btn" onClick={() => setActiveStage('related')}>
-                  {relatedSelectedCount} related task{relatedSelectedCount === 1 ? '' : 's'}
-                </button>
+            </span>
+            <span className="eg-prop-k">Priority</span>
+            <span className="eg-prop-v">
+              <span className="eg-chip">
+                <PriorityIcon priority={taskPriority} />
+                {PRIORITY_LABEL[taskPriority]}
               </span>
-            </>
-          )}
-          {activeTaskTools.length > 0 && (
-            <>
-              <span className="eg-prop-k">Tools</span>
-              <span className="eg-prop-v">
-                <button type="button" className="eg-chip eg-chip-btn" onClick={() => setIsMcpModalOpen(true)}>
-                  {activeTaskTools.length} selected
-                </button>
-              </span>
-            </>
-          )}
-          {tokenTotal ? (
-            <>
-              <span className="eg-prop-k">Tokens</span>
-              <span className="eg-prop-v eg-tabular">{formatTokens(tokenTotal)}</span>
-            </>
-          ) : null}
-        </div>
+            </span>
+            {activeTaskTools.length > 0 && (
+              <>
+                <span className="eg-prop-k">Tools</span>
+                <span className="eg-prop-v">
+                  {activeTaskTools.map((tool, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      className="eg-chip eg-chip-btn"
+                      onClick={() => setIsMcpModalOpen(true)}
+                    >
+                      {tool}
+                    </button>
+                  ))}
+                </span>
+              </>
+            )}
+            {lineLabel && (
+              <>
+                <span className="eg-prop-k">Line</span>
+                <span className="eg-prop-v">
+                  <span className="eg-chip">
+                    <span className="eg-mono" style={{ fontSize: '11px' }}>{lineLabel}</span>
+                  </span>
+                </span>
+              </>
+            )}
+            {isQueued && (
+              <>
+                <span className="eg-prop-k">Queue</span>
+                <span className="eg-prop-v">
+                  <span className="eg-chip">
+                    <StatusIcon status="queued" />
+                    Queued {queuePosition != null ? queuePosition + 1 : ''}
+                  </span>
+                  {onRunQueuedNow && (
+                    <Button size="sm" variant="ghost" onClick={() => setConfirmRunNow(true)}>
+                      Run now instead
+                    </Button>
+                  )}
+                </span>
+              </>
+            )}
+            {(task as any).blocks && (
+              <>
+                <span className="eg-prop-k">Blocks</span>
+                <span className="eg-prop-v">
+                  <span className="eg-chip">{(task as any).blocks}</span>
+                </span>
+              </>
+            )}
+            {scheduledJob && scheduledJob.status === 'pending' && (
+              <>
+                <span className="eg-prop-k">Scheduled</span>
+                <span className="eg-prop-v">
+                  <button type="button" className="eg-chip eg-chip-btn" onClick={() => onOpenScheduleModal?.(task)}>
+                    <Icon icon={Clock} size="sm" />
+                    {new Date(scheduledJob.scheduledTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    {scheduledJob.cronExpression ? ` · ${scheduledJob.cronExpression}` : ''}
+                  </button>
+                </span>
+              </>
+            )}
+            {relatedSelectedCount > 0 && (
+              <>
+                <span className="eg-prop-k">Related</span>
+                <span className="eg-prop-v">
+                  <button type="button" className="eg-chip eg-chip-btn" onClick={() => showStage('related')}>
+                    {relatedSelectedCount} related task{relatedSelectedCount === 1 ? '' : 's'}
+                  </button>
+                </span>
+              </>
+            )}
+            {tokenTotal ? (
+              <>
+                <span className="eg-prop-k">Tokens</span>
+                <span className="eg-prop-v eg-tabular">{formatTokens(tokenTotal)}</span>
+              </>
+            ) : null}
+          </div>
+        </details>
 
         {!canRun && (
           <Banner
             icon={Unplug}
             title="Runs are paused — the bridge isn't reachable"
             text="Tasks and briefs still save to TODO.md. Queued runs start when it's back."
-            className="eg-detail-banner"
-          />
-        )}
-        {!runActive && hasRunBefore && !task.isDone && outcome && (
-          <Banner
-            tone={outcome === 'failed' || outcome === 'verifier_failed' ? 'danger' : 'warning'}
-            icon={outcome === 'failed' || outcome === 'verifier_failed' ? CircleX : CircleDot}
-            title={
-              outcome === 'failed'
-                ? 'The last run failed'
-                : outcome === 'verifier_failed'
-                  ? "The last run didn't pass verification"
-                  : outcome === 'stopped'
-                    ? 'You stopped the last run'
-                    : 'Ready for your review'
-            }
-            text={
-              completionNote
-                ? 'The completion note is under Notes.'
-                : "The agent didn't write a completion note — check its terminal output under Runs."
-            }
-            actions={
-              <Button size="sm" onClick={() => setActiveStage(completionNote ? 'completion' : 'actions')}>
-                {completionNote ? 'Read the note' : 'Open runs'}
-              </Button>
-            }
             className="eg-detail-banner"
           />
         )}
@@ -1558,58 +1825,49 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
             <RunSurveyCard record={brief?.lastRunOutcome} hidden={runActive} />
 
             {/* ═══════════════════════════════════════════════════════════
-                STAGES: one tab per stage, unlocked as the run reaches it
+                TIMELINE: earlier cycles (one line each), then the open one
+               ═══════════════════════════════════════════════════════════ */}
+            {cycles.length > 1 && (
+              <div className="eg-timeline-earlier">{cycles.slice(0, -1).map((c) => renderEarlierCycle(c))}</div>
+            )}
+
+            <div className="eg-cycle" ref={latestCycleRef}>
+            {isFollowUpView && (
+              <>
+                <div className="eg-cycle-head">
+                  <b>Follow-up {latestCycle}</b>
+                  {formatCycleTime(cycles[latestCycle]?.startedAt) && <span>{formatCycleTime(cycles[latestCycle]?.startedAt)}</span>}
+                </div>
+                {cycles[latestCycle]?.message && <p className="eg-cycle-msg">{cycles[latestCycle].message}</p>}
+              </>
+            )}
+
+            {/* ═══════════════════════════════════════════════════════════
+                STAGES: one bar per stage, filled as the run reaches it
                ═══════════════════════════════════════════════════════════ */}
             <div className={`stage-tabs-card stage-${shownStage} ${shownStage === 'actions' && hasPendingAlert ? 'has-pending-alert' : ''}`}>
-              <div className="eg-detail-tabs">
-                <Tabs<TaskStageKey>
-                  value={shownStage}
-                  onChange={(key) => {
-                    if (stageReached(key)) setActiveStage(key);
-                  }}
-                  items={TASK_STAGES.map(({ key, label }) => {
-                    const status = stageStatus[key];
-                    const attention = key === 'actions' && hasPendingAlert;
-                    return {
-                      id: key,
-                      label,
-                      disabled: !stageReached(key),
-                      title: stageReached(key) ? undefined : `${label} opens when a run gets here`,
-                      count: key === 'related' && relatedSelectedCount > 0 ? relatedSelectedCount : key === 'actions' && runCount > 0 ? runCount : undefined,
-                      marker: attention ? <StatusDot state="warning" label="Waiting for you" /> : status === 'working' ? <StatusDot state="live" label="Working" /> : undefined,
-                    };
-                  })}
-                />
-                <span className="eg-detail-tabs-actions">
-                  {isEditing ? (
-                    <>
-                      <Button size="sm" variant="ghost" onClick={handleCancel}>
-                        Cancel
-                      </Button>
-                      <Button size="sm" icon={Save} onClick={handleSave}>
-                        Save
-                      </Button>
-                    </>
-                  ) : (shownStage === 'overview' || shownStage === 'completion') ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      icon={Pencil}
-                      onClick={() => {
-                        setIsEditing(true);
-                        setViewModeSection2('notes');
-                      }}
-                    >
-                      Edit
-                    </Button>
-                  ) : null}
-                </span>
-              </div>
-              {shownStage === 'overview' && (
-                <div className="eg-detail-meta">
-                  {brief?.overviewSource === 'user' ? 'Overview · edited by you' : brief?.overviewSource === 'generated' ? 'Overview · written by the agent' : 'Overview'}
-                </div>
-              )}
+              <TaskStageBars<TaskStageKey>
+                label={isFollowUpView ? `Follow-up ${latestCycle} stages` : 'Task stages'}
+                value={shownStage}
+                onChange={pickStage}
+                items={stageList.map(({ key, label }, idx) => {
+                  const status = stageStatus[key];
+                  const attention = key === 'actions' && hasPendingAlert;
+                  // A progress bar: every stage before the furthest one the run reached counts as passed.
+                  const passed = stageList.slice(idx + 1).some((later) => stageStatus[later.key] === 'done' || stageStatus[later.key] === 'working');
+                  return {
+                    id: key,
+                    label,
+                    state: status === 'working' ? 'working' : passed ? 'done' : toBarState(status),
+                    disabled: !stageReached(key),
+                    title: stageReached(key) ? undefined : `${label} opens when the run gets here`,
+                    count: key === 'related' && relatedSelectedCount > 0 ? relatedSelectedCount : key === 'actions' && runCount > 0 && !isFollowUpView ? runCount : undefined,
+                    marker: attention ? <StatusDot state="warning" label="Waiting for you" /> : status === 'working' ? <StatusDot state="live" label="Working" /> : undefined,
+                  };
+                })}
+              />
+
+              <div key={slideKey} className={`eg-stagepanel ${slideClass}`}>
 
               {shownStage === 'related' && (
                 <div className="ai-sub-card-body stage-panel" role="tabpanel">
@@ -1624,7 +1882,39 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
               )}
 
               {shownStage === 'overview' && (
-                <div className="ai-sub-card-body stage-panel" role="tabpanel">
+                <div className="ai-sub-card-body stage-panel eg-tabpanel" role="tabpanel">
+                  <div className="eg-panelhead">
+                    <span>
+                      {brief?.overviewSource === 'user'
+                        ? 'Brief · edited by you'
+                        : brief?.overviewSource === 'generated'
+                          ? 'Brief · written by the agent'
+                          : 'Working brief'}
+                    </span>
+                    <span className="eg-spacer" />
+                    {isEditing ? (
+                      <>
+                        <Button size="sm" variant="ghost" onClick={handleCancel}>
+                          Cancel
+                        </Button>
+                        <Button size="sm" icon={Save} onClick={handleSave}>
+                          Save
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        icon={Pencil}
+                        onClick={() => {
+                          setIsEditing(true);
+                          setViewModeSection2('notes');
+                        }}
+                      >
+                        Edit
+                      </Button>
+                    )}
+                  </div>
                   {bibleFilePath && (
                     <button
                       type="button"
@@ -1826,8 +2116,8 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   <div className="actions-view-switcher-bar">
                     <span className="actions-switcher-label">
                       {showExecutionSteps
-                        ? executionSteps.length > 0
-                          ? `${executionSteps.length} action${executionSteps.length === 1 ? '' : 's'}`
+                        ? latestSteps.length > 0
+                          ? `${latestSteps.length} action${latestSteps.length === 1 ? '' : 's'}`
                           : 'Execution Steps'
                         : shownAgent
                           ? `Notes · ${shownAgent.label}`
@@ -1915,12 +2205,12 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 
                       {/* Execution Steps */}
                       <div className="execution-steps">
-                        {executionSteps.length === 0 ? (
+                        {latestSteps.length === 0 ? (
                           <div className="ai-card-hint" style={{ margin: '0.4rem 0' }}>
                             No execution steps recorded yet. Agent actions and tool logs will appear here when the task runs.
                           </div>
                         ) : (
-                          executionSteps.map((step) => (
+                          latestSteps.map((step) => (
                             <div key={step.id} className={`step-card ${step.status} stage-${step.stage}`} style={step.stage === 'mcp_call' && step.pieceId ? { marginLeft: '0.65rem' } : undefined}>
                               <div className="step-header">
                                 <div className="step-title">
@@ -1963,17 +2253,6 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                         )}
                       </div>
 
-                      {sendTaskMessage && hasEverRun && (
-                        <div style={{ padding: '0.4rem 0.1rem 0.2rem' }}>
-                          <TaskPromptBox
-                            running={runActive}
-                            onSend={sendTaskMessage}
-                            status={liveStatusFor(nowRunningAgent, true)}
-                            workerTargets={agentSessions.length === 0 ? pipelineWorkerTargets : []}
-                            hint={agentSessions.length > 0 && runActive ? 'Goes to the manager (pick an agent in the Notes view to message it directly).' : undefined}
-                          />
-                        </div>
-                      )}
                     </div>
                   ) : (
                     /* Sub-view 2: Notes View (the run's agents, one at a time, clearly labelled + Notes editor) */
@@ -2050,18 +2329,13 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                               }
                               runActive={runActive}
                               liveStatus={isAgentWorking(shownAgent.status) ? liveStatusFor(shownAgent, false) : null}
+                              hideSteerInput
                             />
                           )}
                         </div>
                       )}
 
-                      {!shownAgent && sendTaskMessage && hasEverRun && (
-                        <div style={{ padding: '0.55rem 0.75rem 0' }}>
-                          <TaskPromptBox running={runActive} onSend={sendTaskMessage} workerTargets={pipelineWorkerTargets} status={liveStatusFor(null, false)} />
-                        </div>
-                      )}
-
-                      {agentSessions.length === 0 && !(sendTaskMessage && hasEverRun) && (
+                      {agentSessions.length === 0 && (
                         <div className="ai-card-hint" style={{ padding: '0.55rem 0.75rem' }}>
                           The task's agents appear here while it runs.
                         </div>
@@ -2072,8 +2346,44 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
               )}
 
               {shownStage === 'completion' && (
-                <div className="ai-sub-card-body stage-panel" role="tabpanel">
-                  {isCompletionWorking && completionText.trim().length > 0 && (
+                <div className="ai-sub-card-body stage-panel eg-tabpanel" role="tabpanel">
+                  <div className="eg-panelhead">
+                    <span>
+                      {isFollowUpView ? `Follow-up ${latestCycle}` : 'Completion'}
+                      {isFollowUpView
+                        ? cycles[latestCycle]?.endedAt
+                          ? ` · ${formatCycleTime(cycles[latestCycle].endedAt)}`
+                          : ''
+                        : brief?.lastRunOutcome?.at
+                          ? ` · ${new Date(brief.lastRunOutcome.at).toLocaleDateString([], { month: 'short', day: 'numeric' })}`
+                          : ''}
+                      {brief?.lastRunOutcome?.family ? ` · ${brief.lastRunOutcome.family}` : ''}
+                    </span>
+                    <span className="eg-spacer" />
+                    {isEditing ? (
+                      <>
+                        <Button size="sm" variant="ghost" onClick={handleCancel}>
+                          Cancel
+                        </Button>
+                        <Button size="sm" icon={Save} onClick={handleSave}>
+                          Save
+                        </Button>
+                      </>
+                    ) : (latestNote || !isCompletionWorking) ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        icon={Pencil}
+                        onClick={() => {
+                          setIsEditing(true);
+                          setViewModeSection2('notes');
+                        }}
+                      >
+                        Edit
+                      </Button>
+                    ) : null}
+                  </div>
+                  {isCompletionWorking && latestNote.trim().length > 0 && (
                     <div className="stage-panel-note">
                       <Loader2 size={10} className="spin-animate" />
                       <span>Updating…</span>
@@ -2084,16 +2394,16 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                       ref={completionRef}
                       className="obsidian-card-textarea"
                       placeholder="Record outcomes, commits, test results, pull requests, follow-ups..."
-                      value={completionText}
-                      onChange={(e) => handleFieldChange('completion', e.target.value)}
-                      onKeyDown={(e) => handleMarkdownAutoWrap(e, (val) => handleFieldChange('completion', val))}
+                      value={latestNote}
+                      onChange={(e) => setLatestNote(e.target.value)}
+                      onKeyDown={(e) => handleMarkdownAutoWrap(e, setLatestNote)}
                       onFocus={() => setActiveFocusedRef(completionRef)}
                       rows={4}
                     />
-                  ) : completionText ? (
+                  ) : latestNote ? (
                     <div className="brief-body" style={{ padding: '0.55rem 0.5rem 0.15rem' }}>
                       <div className="brief-markdown-render">
-                        <MarkdownRenderer content={completionText} />
+                        <MarkdownRenderer content={isFollowUpView ? cycleNoteForDisplay(latestNote) : latestNote} />
                       </div>
                     </div>
                   ) : isCompletionWorking ? (
@@ -2108,11 +2418,20 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   )}
                 </div>
               )}
+              </div>
+            </div>
             </div>
           </div>
         </div>
       )}
       </div>
+
+      {/* The prompt box, under the timeline in every stage: direction mid-run, a follow-up once the task finished. */}
+      {sendTaskMessage && hasEverRun && (
+        <div className="eg-detail-composer">
+          <TaskPromptBox running={runActive} onSend={sendTaskMessage} targets={promptTargets} status={liveStatusFor(nowRunningAgent, true)} />
+        </div>
+      )}
 
       <div className="eg-detail-foot">
         <MenuButton
@@ -2128,25 +2447,26 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
         />
         <span className="eg-spacer" />
         {runActive ? (
-          <>
-            <span className="eg-detail-foot-note eg-hide-sm">Changes land in your working tree.</span>
-            {(onTerminateAgent || onKillSession) && (
-              <Button
-                variant="danger"
-                icon={Square}
-                kbd={[SHIFT, MOD, '.']}
-                onClick={() => (onTerminateAgent ? onTerminateAgent(task.id) : onKillSession?.(task.id))}
-              >
-                Stop
-              </Button>
-            )}
-          </>
+          (onTerminateAgent || onKillSession) && (
+            <Button
+              variant="danger"
+              icon={Square}
+              kbd={[SHIFT, MOD, '.']}
+              onClick={() => (onTerminateAgent ? onTerminateAgent(task.id) : onKillSession?.(task.id))}
+            >
+              Stop
+            </Button>
+          )
         ) : (
           <>
             {!isQueued && onQueue && (
-              <Button icon={Layers} onClick={onQueue} title={canRun ? 'Run after the tasks already queued' : 'Runs when the bridge is back'}>
-                {canRun ? 'Queue' : 'Queue for later'}
-              </Button>
+              <IconButton
+                icon={Layers}
+                variant="ghost"
+                label="Add to queue"
+                title={`Add to queue ⌥${MOD}↵`}
+                onClick={onQueue}
+              />
             )}
             <Button
               variant="primary"

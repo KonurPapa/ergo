@@ -82,6 +82,7 @@ import { OnboardingScreen } from './components/OnboardingScreen';
 import { ToastContainer, type ToastMessage } from './components/Toast';
 import { executeTaskWithAi, syncTaskOverviewWithAi } from './lib/ai';
 import { continueTaskWithAi } from './lib/agentPipeline/continuation';
+import { nextCycleNumber, withCycleEnded, withCycleStarted } from './lib/taskThread';
 import { SteeringQueue } from './lib/agentPipeline/steeringQueue';
 import { recordSteeringMessage } from './lib/agentPipeline/steeringLog';
 import { pipelineRunKey, recallPipelineRun } from './lib/agentPipeline/runRegistry';
@@ -1581,6 +1582,7 @@ function App() {
         cwd: resolveProjectCwd(),
         roles,
         startEscalation,
+        compaction: activeKey?.contextCompaction ?? aiConfig.contextCompaction,
       };
     }
     const cliRolesFrom = (decisions: RoutingResult['decisions']) => {
@@ -1637,6 +1639,7 @@ function App() {
       smallModel: smallModelCallConfig(aiConfig),
       cwd: resolveProjectCwd(),
       roles,
+      compaction: activeKey?.contextCompaction ?? aiConfig.contextCompaction,
       ...(retryRoles.length ? { retryRoles } : {}),
       startEscalation,
     };
@@ -2344,6 +2347,12 @@ function App() {
           status: 'running',
         };
         setTaskSteps([ctxStepBase]);
+        // A run from the start begins a new timeline (the old follow-ups go with the old run's steps).
+        if (currentBrief?.thread?.length) {
+          const restarted = { ...currentBrief, thread: withCycleStarted(undefined, { n: 0, runId }) };
+          syncAndSaveProjectRef.current(tasksRef.current, briefsRef.current.map((b) => (b === currentBrief ? restarted : b)), true);
+          currentBrief = restarted;
+        }
         const relatedRequest = buildRelatedTasksRequest(activeProjectId, latestTaskFor(task), currentBrief);
         const related: RelatedTasksResponse = await findRelatedTasksSoft(relatedRequest, { signal: launchController.signal });
         if (launchController.signal.aborted) return;
@@ -2382,6 +2391,8 @@ function App() {
         if (taskReferences) ctxStep = { ...ctxStep, detail: `${ctxStep.detail}\n\nTask commands:\n${describeTaskReferences(taskReferences)}` };
         // Stage 2 (selection): made by the overview call below, or the selection saved with a reused overview.
         let selectedRelatedTaskIds: string[] | undefined;
+        // The user's prompt-box messages that went into the brief (CLI runs; see absorbBriefMessages).
+        const briefDirection: string[] = [];
         if (hasValidOverview) {
           selectedRelatedTaskIds = resolveSavedRelatedIds(currentBrief?.overviewDocument, relatedPool);
         }
@@ -2411,17 +2422,53 @@ function App() {
             // straight to the manager: the brief carries what bears on the task.
             const priorKnowledge = formatPriorKnowledge(await prefetchPromptMemory(activeProjectId, taskMemoryQuery(latestTaskFor(task))));
             if (launchController.signal.aborted) return;
-            const synced = await syncTaskOverviewWithAi(
-              latestTaskFor(task),
-              // Unstamped text (a draft, or a freeform brief's source text) is still useful input for the Summary.
-              existingOverviewText || currentBrief?.sourceContent || '',
-              activeProject,
-              // Auto model selection writes the overview with the tiny model (it also rates the task for the picks).
-              autoModels ? tinyCloudCallConfig(aiConfig) ?? aiConfig : aiConfig,
-              mcpServers,
-              { relatedCandidatesPrompt, priorKnowledge, referencesNote: formatReferenceNoteForBrief(taskReferences), projectRules }
-            );
-            if (launchController.signal.aborted) return;
+            // Prompt-box messages sent before or while the brief is written go into the brief (instead of waiting for
+            // the manager); one that arrives during the call has the brief written again with every message so far.
+            const absorbBriefMessages = (): number => {
+              const waiting = preLaunchMessagesRef.current.get(String(task.id)) || [];
+              preLaunchMessagesRef.current.delete(String(task.id));
+              for (const m of waiting) {
+                briefDirection.push(m.text);
+                recordSteeringMessage({ taskId: String(task.id), runId, role: 'summary', text: m.text, phase: 'mid-run', projectId: activeProjectId, taskTitle: task.title });
+                m.opts.onDelivered?.();
+              }
+              return waiting.length;
+            };
+            absorbBriefMessages();
+            let synced: Awaited<ReturnType<typeof syncTaskOverviewWithAi>>;
+            for (let pass = 0; ; pass++) {
+              synced = await syncTaskOverviewWithAi(
+                latestTaskFor(task),
+                // Unstamped text (a draft, or a freeform brief's source text) is still useful input for the Summary.
+                existingOverviewText || currentBrief?.sourceContent || '',
+                activeProject,
+                // Auto model selection writes the overview with the tiny model (it also rates the task for the picks).
+                autoModels ? tinyCloudCallConfig(aiConfig) ?? aiConfig : aiConfig,
+                mcpServers,
+                {
+                  relatedCandidatesPrompt,
+                  priorKnowledge,
+                  referencesNote: formatReferenceNoteForBrief(taskReferences),
+                  projectRules,
+                  ...(briefDirection.length ? { userDirection: briefDirection.join('\n\n') } : {}),
+                }
+              );
+              if (launchController.signal.aborted) return;
+              if (pass >= 2 || absorbBriefMessages() === 0) break;
+              setTaskSteps([
+                ctxStep,
+                {
+                  id: overviewStepId,
+                  taskId: task.id,
+                  time: new Date().toLocaleTimeString(),
+                  stage: 'overview',
+                  agentRole: 'summary',
+                  title: 'Summary AI: Rewriting the Brief with Your Message',
+                  detail: 'You sent a message while the brief was being written: writing it again with your direction…',
+                  status: 'running',
+                },
+              ]);
+            }
             const syncedOverview = synced.overview;
             // Bridge offline: no selection was possible (undefined, not "none needed"). The model skipped the question:
             // fall back to the candidates that clearly stand out locally.
@@ -2464,6 +2511,12 @@ function App() {
           } catch (err) {
             if (launchController.signal.aborted) return;
             overviewFailed = true;
+            // The brief never got the user's messages: the manager gets them instead.
+            if (briefDirection.length > 0) {
+              const key = String(task.id);
+              preLaunchMessagesRef.current.set(key, [...briefDirection.map((text) => ({ text, opts: {} })), ...(preLaunchMessagesRef.current.get(key) || [])]);
+              briefDirection.length = 0;
+            }
             if (related.success) selectedRelatedTaskIds = strictRelatedFallback(relatedPool);
             console.warn('[Ergo CLI Task] Overview generation error, continuing with fallback:', err);
           }
@@ -2510,7 +2563,8 @@ function App() {
             ? 'Reusing the saved overview from an earlier run (no new Summary call). Edit the task to regenerate it.'
             : overviewFailed || !overviewText
               ? 'Overview generation failed; the agent works from the task title and checklist.'
-              : 'Folded the task and its related tasks into a short working brief: the manager works from it.',
+              : 'Folded the task and its related tasks into a short working brief: the manager works from it.' +
+                briefDirection.map((text) => `\n\n↳ You: "${text}" — written into the brief.`).join(''),
           status: overviewText ? 'success' : 'warning',
           ...(overviewDocument ? { overviewDocument } : {}),
         };
@@ -2611,7 +2665,14 @@ function App() {
           projectId: activeProjectId,
           taskTitle: task.title,
         });
-        const who = delivery.role === 'worker' ? `worker ${delivery.pieceId || ''}`.trim() : delivery.role === 'verifier' ? 'Verifier' : 'manager';
+        const who =
+          delivery.role === 'worker'
+            ? `worker ${delivery.pieceId || ''}`.trim()
+            : delivery.role === 'summary'
+              ? 'brief writer (the brief is written with it)'
+              : delivery.role === 'verifier'
+                ? 'Verifier'
+                : 'manager';
         upsertTaskStep(task.id, {
           id: `step-steer-${delivery.item.id}`,
           status: 'success',
@@ -2657,6 +2718,11 @@ function App() {
         ? extractTaskTokenSummary(currentTask, currentBrief, taskExecutionStepsRef.current[task.id] || taskExecutionStepsRef.current[String(task.id)])
         : undefined;
       const baseUsage = priorTokens?.hasUsage ? priorTokens.totalUsage : undefined;
+      // The task's timeline: a follow-up is the next cycle, a run from the start (or a resume of one) is cycle 0.
+      const cycleStartedAt = new Date().toISOString();
+      const cycleN = followUp
+        ? nextCycleNumber(currentBrief, taskExecutionStepsRef.current[task.id] || taskExecutionStepsRef.current[String(task.id)] || [])
+        : 0;
 
       setTaskExecutionSteps((prev) => {
         const existing = prev[task.id] || prev[String(task.id)] || [];
@@ -2669,6 +2735,7 @@ function App() {
               ...settled,
               {
                 id: `step-followup-${Date.now()}`,
+                cycle: cycleN,
                 stage: 'human_input' as const,
                 agentRole: 'manager' as const,
                 title: 'Follow-up: continuing the task',
@@ -2707,6 +2774,15 @@ function App() {
       const inProgressTasks = tasksRef.current.map((t) => (String(t.id) === String(task.id) ? { ...t, status: 'in_progress' as const } : t));
       tasksRef.current = inProgressTasks;
       setTasks(inProgressTasks);
+      // Open the cycle on the timeline (a resumed run keeps its cycle 0).
+      if (currentBrief && (followUp || !isResuming)) {
+        const nextBriefs = briefsRef.current.map((b) =>
+          b === currentBrief
+            ? { ...b, thread: withCycleStarted(b.thread, { n: cycleN, startedAt: cycleStartedAt, ...(followUp ? { message: followUp } : {}) }) }
+            : b
+        );
+        syncAndSaveProjectRef.current(inProgressTasks, nextBriefs, true);
+      }
 
       let controller: AbortController | null = null;
       try {
@@ -2724,7 +2800,8 @@ function App() {
           activeProject,
           aiConfig,
           mcpServers,
-          (stepUpdate) => {
+          (rawStepUpdate) => {
+            const stepUpdate: ExecutionStep = { ...rawStepUpdate, cycle: cycleN };
             setTaskExecutionSteps((prev) => {
               const existing = prev[task.id] || prev[String(task.id)] || [];
               const idx = existing.findIndex((s) => s.id === stepUpdate.id);
@@ -2921,11 +2998,20 @@ function App() {
             (b.id && b.id === res.updatedBrief.id) ||
             b.title.trim().toLowerCase() === res.updatedBrief.title.trim().toLowerCase()
         );
+        // The cycle closes on the timeline (opened above; a brief made during this run gets its cycle now).
+        const threadBefore = existingBriefIdx !== -1 ? latestBriefs[existingBriefIdx].thread : undefined;
+        const openThread = threadBefore?.some((c) => c.n === cycleN)
+          ? threadBefore
+          : withCycleStarted(threadBefore, { n: cycleN, startedAt: cycleStartedAt, ...(followUp ? { message: followUp } : {}) });
+        const finishedBrief: AgentContextItem = {
+          ...res.updatedBrief,
+          thread: withCycleEnded(openThread, cycleN, res.updatedBrief.lastRunOutcome?.outcome),
+        };
         let nextBriefs: AgentContextItem[];
         if (existingBriefIdx !== -1) {
-          nextBriefs = latestBriefs.map((b, idx) => (idx === existingBriefIdx ? res.updatedBrief : b));
+          nextBriefs = latestBriefs.map((b, idx) => (idx === existingBriefIdx ? finishedBrief : b));
         } else {
-          nextBriefs = [...latestBriefs, res.updatedBrief];
+          nextBriefs = [...latestBriefs, finishedBrief];
         }
 
         // Update running job to completed
@@ -3109,10 +3195,11 @@ function App() {
     // 1. A CLI run is working (or a follow-up reopened it): its agents.
     if (cliRunsRef.current.hasActiveCliRun(task.id)) return cliRunsRef.current.sendUserMessage(task.id, message, opts);
 
-    // 2. A CLI run is still being prepared (overview, model routing): the manager gets it once it has started.
+    // 2. A CLI run is still being prepared: while the brief is written it goes into the brief, after that the manager
+    //    gets it once it has started.
     if (cliLaunchingRef.current.has(key)) {
       preLaunchMessagesRef.current.set(key, [...(preLaunchMessagesRef.current.get(key) || []), { text: message, opts }]);
-      return { ok: true, delivery: 'queued', target: 'Manager' };
+      return { ok: true, delivery: 'queued', target: 'the brief / Manager' };
     }
 
     // 3. An in-app pipeline run is working: its agent loops take the message at their next round boundary.

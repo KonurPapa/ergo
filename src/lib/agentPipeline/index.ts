@@ -59,6 +59,9 @@ export interface VerifierEvaluation {
  * Step 5 Verifier runs when the task's "Verification" switch is on (on by default) AND the AI summary
  * determined that independent verifier is required for the task scope. When on, it runs on every attempt.
  */
+/** How many extra manager passes the user's messages can start in one run (the next message is a follow-up). */
+export const MAX_USER_PASSES = 3;
+
 export function evaluateVerifierNecessity(params: {
   verification: boolean;
   attempt: number;
@@ -403,11 +406,16 @@ export async function executeTaskWithAi(
     let verifier: VerifierResult | undefined;
     let diagnostics: string | undefined;
     let attempt = 1;
-    const maxAttempts = 1 + Math.max(0, resolvedOptions.maxVerifierRetries);
+    let maxAttempts = 1 + Math.max(0, resolvedOptions.maxVerifierRetries);
+    // Passes the manager made for the user's messages sent after its work (not failures: no step-up, not retries).
+    let userPasses = 0;
+    // A user pass: the user's messages as a follow-up on the work so far (continue, don't start over).
+    let passFollowUp: { message: string; priorState: string } | undefined;
+    for (;;) {
     for (; attempt <= maxAttempts; attempt++) {
       ctx.steering?.setManagerDone(false);
-      mgr = await runManager(ctx, bible, tools, locks, attempt, diagnostics);
-      // The user's messages for the manager now go to verifier (or continue the run as a follow-up after it).
+      mgr = await runManager(ctx, bible, tools, locks, attempt, diagnostics, passFollowUp);
+      // Messages sent from here on (verifier, cleaner) run the manager once more before the completion log.
       ctx.steering?.setManagerDone(true);
       for (const f of mgr.createdFiles) createdFiles.add(f);
 
@@ -498,6 +506,26 @@ export async function executeTaskWithAi(
       await stepUpForRetry(attempt);
     }
     if (attempt > maxAttempts) attempt = maxAttempts;
+    if (!mgr || !ctx.steering?.hasPendingForManager() || userPasses >= MAX_USER_PASSES) break;
+    userPasses++;
+    attempt += 1;
+    maxAttempts = attempt;
+    diagnostics = undefined;
+    passFollowUp = {
+      message: (ctx.steering.drain('manager') || []).map((it) => it.text).join('\n\n'),
+      priorState: bible.renderEventLog({ last: 15 })
+    };
+    bible.appendEvent({ actor: 'user', kind: 'info', text: `Message after the manager finished its work: ${passFollowUp.message}` });
+    await bible.persist();
+    ctx.emit({
+      id: `step-user-pass-${userPasses}`,
+      stage: 'retry',
+      agentRole: 'manager',
+      title: 'Your message: the manager continues',
+      detail: 'You sent a message while the work was being checked — the manager takes it now, then it is checked again.',
+      status: 'success'
+    });
+    }
     if (!mgr) throw new Error('Manager did not run.');
 
     const result = await runLogger(ctx, bible, {
@@ -520,7 +548,7 @@ export async function executeTaskWithAi(
     const outcome: RunOutcome = verifier
       ? verifier.verdict === 'pass' ? 'passed' : verifier.verdict === 'fail' ? 'verifier_failed' : 'unverified'
       : mgr.allCriteriaPass ? 'completed' : 'failed';
-    return { ...result, updatedBrief: withRunOutcome(withOverviewDoc(result.updatedBrief), outcome, attempt - 1) };
+    return { ...result, updatedBrief: withRunOutcome(withOverviewDoc(result.updatedBrief), outcome, attempt - 1 - userPasses) };
   } catch (err: any) {
     if (isAbortError(err)) {
       console.log('%c[Ergo Agent Pipeline] ── Terminated by User ──', 'color: #ef4444; font-weight: bold;');

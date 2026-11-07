@@ -54,7 +54,7 @@ export interface PolicyResult {
  * Signal files an agent writes into its run dir when it reaches a milestone. The verifier's signal keeps its
  * original wire name ('qa-verdict', file qa.md) so older bridges still report it.
  */
-export type AgentSignalKind = 'delegate' | 'worker-done' | 'complete' | 'qa-verdict' | 'question';
+export type AgentSignalKind = 'delegate' | 'worker-done' | 'complete' | 'qa-verdict' | 'question' | 'handoff';
 
 /** The verifier's role on the bridge wire and in PTY keys: older bridges only know it as 'qa'. */
 const WIRE_VERIFIER_ROLE = 'qa';

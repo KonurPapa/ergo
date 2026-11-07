@@ -22,8 +22,14 @@
  *      Optional: with an older bridge the line only shows that the agent is working (AgentLiveStatus.tsx).
  *  7 — task agents' terminals are saved on disk: /api/pty/history (list), /api/pty/history/delete, replay of a saved
  *      terminal on attach, spawn `taskTitle`. Optional: with an older bridge terminals live only in its memory.
+ *  8 — context rotation for CLI workers: /api/pty/usage reports `usage.context` (the conversation's current and starting
+ *      size, the window when known) and a worker's handoff-<piece>.md arrives as a `handoff` signal. Optional: with an
+ *      older bridge CLI workers are never rotated (they compact themselves).
  */
-export const BRIDGE_PROTOCOL = 7;
+export const BRIDGE_PROTOCOL = 8;
+
+/** First protocol whose bridge reports session context sizes and workers' handoff notes (CLI worker rotation). */
+export const HANDOFF_PROTOCOL = 8;
 
 /** First protocol whose bridge stores learned rules (namespace `insights`). */
 export const INSIGHTS_PROTOCOL = 5;

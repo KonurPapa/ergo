@@ -105,3 +105,68 @@
 .run-survey-card.is-answered { background: transparent !important; color: var(--ink-subtle) !important; }
 .run-survey-btn { height: 24px; border-radius: var(--radius-sm); background: var(--surface-1) !important; border: 1px solid var(--line-strong) !important; color: var(--ink) !important; font-size: calc(12px * var(--type-scale)) !important; }
 .run-survey-btn:hover { background: var(--surface-2) !important; color: var(--ink) !important; }
+
+/* ── Task header: the task text only, a size down from page titles ── */
+.eg-taskdetail .eg-detail-title { font-size: calc(17px * var(--type-scale)); line-height: calc(24px * var(--type-scale)); letter-spacing: -0.2px; }
+
+/* ── Stage bars (Related · Brief · Runs · Notes): ink = the run's progress, green = the stage being viewed ── */
+.eg-stagebars { display: grid; gap: var(--space-2); margin-top: var(--space-2); }
+.eg-stagebar { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 0 0 var(--space-2); border: 0; background: transparent; color: var(--ink-subtle); font: inherit; font-size: calc(12px * var(--type-scale)); line-height: calc(16px * var(--type-scale)); font-weight: 500; text-align: left; cursor: pointer; transition: color var(--duration-fast) var(--ease-out); }
+.eg-stagebar:hover { color: var(--ink); }
+.eg-stagebar:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-xs); }
+.eg-stagebar[disabled] { color: var(--ink-disabled); cursor: default; }
+.eg-stagebar.is-done { color: var(--ink-muted); }
+.eg-stagebar.is-working, .eg-stagebar.is-viewed { color: var(--ink); }
+.eg-stagebar-track { position: relative; display: block; width: 100%; height: 3px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
+.eg-stagebar-track i { position: absolute; top: 0; bottom: 0; left: 0; width: 0; border-radius: inherit; background: var(--ink); transition: width 320ms var(--ease-out), background-color 200ms var(--ease-out); }
+.eg-stagebar.is-done .eg-stagebar-track i { width: 100%; }
+.eg-stagebar.is-working .eg-stagebar-track i { width: 40%; animation: eg-stagebar-run 1.6s var(--ease-out) infinite; }
+.eg-stagebar.is-viewed .eg-stagebar-track i { width: 100%; background: var(--accent); animation: none; transform: none; }
+.eg-stagebar-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.eg-stagebar-label .eg-count { color: var(--ink-subtle); font-weight: 400; }
+@keyframes eg-stagebar-run { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+
+/* The panel slides in from the side the viewed stage moved to (as the onboarding steps do) */
+.eg-stagepanel { animation: eg-stage-slide-fwd 320ms var(--ease-out) both; }
+.eg-stagepanel.is-back { animation-name: eg-stage-slide-back; }
+.eg-stagepanel.is-static { animation: none; }
+@keyframes eg-stage-slide-fwd { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes eg-stage-slide-back { from { opacity: 0; transform: translateX(-24px); } to { opacity: 1; transform: translateX(0); } }
+
+/* ── Timeline: the run, then one block per follow-up (oldest first) ── */
+.eg-timeline-earlier { display: flex; flex-direction: column; gap: 2px; margin: 0 0 var(--space-3); }
+.eg-cycle-row { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: 32px; padding: 0 var(--space-2); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--ink-muted); font: inherit; font-size: calc(12px * var(--type-scale)); line-height: calc(16px * var(--type-scale)); text-align: left; cursor: pointer; transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out); }
+.eg-cycle-row:hover { background: var(--surface-2); color: var(--ink); }
+.eg-cycle-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.eg-cycle-row .eg-icon, .eg-cycle-row > svg { flex: none; color: var(--ink-subtle); transition: transform var(--duration-fast) var(--ease-out); }
+.eg-cycle-row[aria-expanded="true"] > svg:first-child { transform: rotate(90deg); }
+.eg-cycle-row-name { flex: none; color: var(--ink); font-weight: 500; }
+.eg-cycle-row-time { flex: none; color: var(--ink-subtle); font-variant-numeric: tabular-nums; }
+.eg-cycle-row-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eg-cycle-row-outcome { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--ink-subtle); }
+.eg-cycle-expanded { padding: var(--space-1) 0 var(--space-3) var(--space-6); border-bottom: 1px solid var(--line); margin-bottom: var(--space-2); }
+.eg-cycle { scroll-margin-top: var(--space-4); }
+.eg-cycle-head { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-2) 0; color: var(--ink-subtle); font-size: calc(12px * var(--type-scale)); line-height: calc(16px * var(--type-scale)); }
+.eg-cycle-head b { color: var(--ink); font-weight: 500; }
+.eg-cycle-head::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.eg-cycle-msg { margin: 0 0 var(--space-2); padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--surface-2); color: var(--ink); font-size: calc(13px * var(--type-scale)); line-height: calc(20px * var(--type-scale)); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ── Prompt box pinned above the footer: direction mid-run, a follow-up after it ── */
+.eg-detail-composer { flex: none; padding: var(--space-3) var(--space-6) 0; border-top: 1px solid var(--line); }
+.eg-detail-composer + .eg-detail-foot { border-top: 0; }
+.eg-detail-composer .task-prompt-box { padding: 0; }
+.eg-composer-textarea { display: block; width: 100%; max-height: 160px; resize: none; border: 0; background: transparent; font: inherit; field-sizing: content; }
+.eg-composer-textarea::placeholder { color: var(--ink-subtle); }
+.eg-composer-foot .task-prompt-hint { color: var(--ink-subtle); font-size: calc(12px * var(--type-scale)); }
+.eg-composer-foot .task-prompt-target { height: 22px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: transparent; color: var(--ink-muted); font: inherit; font-size: calc(12px * var(--type-scale)); cursor: pointer; }
+.eg-composer-foot .task-prompt-target.is-active { border-color: transparent; background: var(--accent-subtle); color: var(--accent-text); }
+.eg-composer-targets { display: flex; align-items: center; gap: 4px; min-width: 0; flex-wrap: wrap; }
+
+@media (max-width: 720px) {
+  .eg-detail-composer { padding-left: var(--space-4); padding-right: var(--space-4); }
+  .eg-cycle-expanded { padding-left: var(--space-2); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .eg-stagebar.is-working .eg-stagebar-track i { animation: none; width: 60%; }
+  .eg-stagepanel { animation: none; }
+}

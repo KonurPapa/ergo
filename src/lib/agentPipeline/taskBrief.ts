@@ -29,6 +29,8 @@ export interface TaskBriefPromptInput {
   priorKnowledge?: string;
   /** What the task's `/skill` and `@file` commands are (formatReferenceNoteForBrief); empty when it has none. */
   referencesNote?: string;
+  /** The user's prompt-box messages sent while the brief was being written: the brief must reflect them. */
+  userDirection?: string;
   /** The project's learned rules for this task (formatProjectRules); empty when it has none. */
   projectRules?: string;
 }
@@ -59,6 +61,9 @@ export function buildTaskBriefPrompts(input: TaskBriefPromptInput): { system: st
     ...(task.summaryNote?.trim() ? [`SUMMARY NOTE:\n${task.summaryNote.trim()}`] : []),
     `SUBTASKS:\n${subtasks || '(none)'}`,
     ...(input.referencesNote?.trim() ? [`TASK COMMANDS (/name invokes a skill, @path references a file):\n${input.referencesNote.trim()}`] : []),
+    ...(input.userDirection?.trim()
+      ? [`DIRECTION FROM THE USER (sent while this brief was being written — it overrides the task text where they conflict):\n${input.userDirection.trim()}`]
+      : []),
     ...(input.currentOverview?.trim()
       ? [`CURRENT OVERVIEW (an earlier draft or the user's notes; keep what is still right):\n${input.currentOverview.trim()}`]
       : []),

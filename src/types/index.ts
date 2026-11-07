@@ -89,6 +89,25 @@ export interface AgentContextItem {
   overviewDocument?: OverviewDocument;
   /** How the last run of this task ended and which models it used: a rerun after a failure starts one rung higher. */
   lastRunOutcome?: RunOutcomeRecord;
+  /**
+   * The task's timeline: cycle 0 is the run, each follow-up sent after it finished is one more cycle. Reset when the
+   * task is run again from the start. Each cycle's completion note is its section of `completion` (lib/taskThread).
+   */
+  thread?: TaskCycle[];
+}
+
+/** One cycle of a task's timeline (see AgentContextItem.thread). */
+export interface TaskCycle {
+  /** 0 = the run itself; 1, 2 … = follow-ups. */
+  n: number;
+  /** ISO time the cycle started. */
+  startedAt: string;
+  /** ISO time it finished (unset while it works, or when it was stopped). */
+  endedAt?: string;
+  /** The user's follow-up message, in full (follow-ups only). */
+  message?: string;
+  runId?: string;
+  outcome?: RunOutcome;
 }
 
 /**
@@ -275,12 +294,13 @@ export interface AgentModelConfig {
 }
 
 /**
- * When Ergo's API / Ollama agent loops compact their conversation (CLI agents use their own compaction).
- * auto: at 80% of the model's context window · manual: at `tokens` · off: never.
+ * When agents compact their conversation: Ergo's API / Ollama loops, rotated Codex / Gemini CLI workers, and Claude
+ * Code's own auto-compaction trigger. auto: at `tokens`, else the default (compaction.ts) · off: never.
+ * 'manual' is the older "custom size" mode, read as auto with `tokens`.
  */
 export interface ContextCompactionSetting {
   mode: 'auto' | 'manual' | 'off';
-  /** manual: compact once the conversation reaches this many tokens. */
+  /** Compact once the conversation reaches this many tokens (absent: the default). */
   tokens?: number;
   /** The model's context window when Ergo can't look it up (custom / local models). Ollama also runs with it as num_ctx. */
   windowTokens?: number;
@@ -630,6 +650,8 @@ export interface ExecutionStep {
   overviewDocument?: OverviewDocument;
   /** Assembled zero-token baseline context (vector memory hits + project guidelines) */
   baselineContext?: AssembledBaselineContext;
+  /** Timeline cycle this step belongs to (AgentContextItem.thread): 0 or unset = the run, n = follow-up n. */
+  cycle?: number;
 }
 
 export interface AssembledMemoryHit {

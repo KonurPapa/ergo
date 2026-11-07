@@ -170,6 +170,19 @@ button.eg-agent:hover { background: var(--surface-2); }
 .eg-prop-v { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 24px; font-size: 12px; color: var(--ink-muted); }
 .eg-prop-v .eg-chip { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 6px; border-radius: var(--radius-xs); color: var(--ink); }
 .eg-prop-v .eg-chip:hover { background: var(--surface-2); }
+.eg-dstatus { margin: var(--space-2) 0 var(--space-4); border-bottom: 1px solid var(--line); padding-bottom: var(--space-3); }
+.eg-dstatus summary { display: flex; align-items: center; gap: var(--space-2); cursor: pointer; user-select: none; list-style: none; font-size: 13px; line-height: 20px; min-height: 24px; }
+.eg-dstatus summary::-webkit-details-marker { display: none; }
+.eg-dstatus summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-xs); }
+.eg-dstatus-text { color: var(--ink); font-weight: 500; }
+.eg-dstatus-meta { color: var(--ink-subtle); font-size: 12px; }
+.eg-dstatus-more { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; color: var(--ink-subtle); font-size: 12px; cursor: pointer; padding: 2px 6px; border-radius: var(--radius-xs); transition: color var(--duration-fast) var(--ease-out), background-color var(--duration-fast) var(--ease-out); }
+.eg-dstatus summary:hover .eg-dstatus-more { color: var(--ink); background: var(--surface-2); }
+.eg-dstatus-more .eg-icon, .eg-dstatus-more svg, .eg-dstatus-more [data-i] { transition: transform var(--duration-fast) var(--ease-out); width: 14px; height: 14px; }
+.eg-dstatus[open] .eg-dstatus-more .eg-icon, .eg-dstatus[open] .eg-dstatus-more svg, .eg-dstatus[open] .eg-dstatus-more [data-i] { transform: rotate(180deg); }
+.eg-dstatus > .eg-props { margin: var(--space-3) 0 0; padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.eg-panelhead { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); color: var(--ink-subtle); font-size: 12px; line-height: 16px; min-height: 28px; }
+.eg-panelhead span:first-child { color: var(--ink-subtle); }
 .eg-section-label { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-6) 0 var(--space-2); color: var(--ink-subtle); font-size: 12px; font-weight: 500; }
 
 /* ---------- Document editor (HumanWorkspace: TODO.md, edited like a doc) ---------- */

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { type AIProviderId, type AgentRole, type UserApiKey, type CliDetectedAgent, type AuthMode, type ContextCompactionSetting } from '../types';
-import { compactionThreshold, contextWindowFor, DEFAULT_OLLAMA_CONTEXT } from '../lib/agentPipeline/compaction';
+import { compactionThreshold, contextWindowFor, DEFAULT_OLLAMA_CONTEXT, DEFAULT_AUTO_COMPACT_TOKENS, MIN_CLAUDE_CODE_COMPACT_TOKENS, usesShortContext } from '../lib/agentPipeline/compaction';
 import { PRICE_SNAPSHOT } from '../lib/modelCatalog/priceSnapshot';
 import {
   SUPPORTED_AI_PROVIDERS,
@@ -282,7 +282,8 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     setCustomCliCommand(k.cliCustomCommand || matchedPreset?.command || '');
     setCliExtraArgs(k.cliExtraArgs !== undefined ? k.cliExtraArgs : (matchedPreset?.defaultArgs || ''));
     setCliExecutionMode(k.cliExecutionMode || 'interactive');
-    setCompactMode(k.contextCompaction?.mode || 'auto');
+    // The older "custom size" mode is automatic with a threshold.
+    setCompactMode(k.contextCompaction?.mode === 'off' ? 'off' : 'auto');
     setCompactTokensText(k.contextCompaction?.tokens ? String(k.contextCompaction.tokens) : '');
     setWindowTokensText(k.contextCompaction?.windowTokens ? String(k.contextCompaction.windowTokens) : '');
     setIsCliCustomized(Boolean(
@@ -664,25 +665,46 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
     };
     const tokens = toTokens(compactTokensText);
     const windowTokens = toTokens(windowTokensText);
-    const mode = compactMode === 'manual' && !tokens ? 'auto' : compactMode;
-    if (mode === 'auto' && !windowTokens) return undefined;
-    return { mode, ...(mode === 'manual' && tokens ? { tokens } : {}), ...(windowTokens ? { windowTokens } : {}) };
+    const mode = compactMode === 'off' ? 'off' : 'auto';
+    if (mode === 'auto' && !tokens && !windowTokens) return undefined;
+    return { mode, ...(mode === 'auto' && tokens ? { tokens } : {}), ...(windowTokens ? { windowTokens } : {}) };
+  };
+
+  /** The CLI a subscription profile runs, by executable name ("codex", "gemini", "claude"…), or '' for other profiles. */
+  const profileCli = (): string => {
+    if (authMode !== 'cli_subscription' || providerId === 'ollama') return '';
+    const agent = detectedCliAgents.find((a) => a.id === selectedCliId);
+    const cmd = customCliCommand.trim() || agent?.detectedPath || subPreset?.command || '';
+    return (cmd.split(/[\\/]/).pop() || '').split(/\s+/)[0].replace(/\.(exe|cmd)$/i, '').toLowerCase();
   };
 
   /** What the current form values mean for this profile, one line. */
   const compactionPreview = (): string => {
-    if (authMode === 'cli_subscription' && providerId !== 'ollama') {
-      return 'This profile runs a CLI agent (Claude Code, Codex, Gemini CLI), which compacts with its own built-in, model-tuned settings. This setting applies to API-key and Ollama agents.';
-    }
+    const k = (n: number) => `${Math.round(n / 1000)}k`;
     const setting = compactionFromForm();
+    const cli = profileCli();
+    const chosen = setting?.tokens;
+    if (authMode === 'cli_subscription' && providerId !== 'ollama') {
+      if (cli === 'claude') {
+        if (setting?.mode === 'off' || !chosen) return 'Claude Code compacts its own conversation with its built-in settings. Set a threshold to move its auto-compaction to that size.';
+        return chosen < MIN_CLAUDE_CODE_COMPACT_TOKENS
+          ? `Claude Code auto-compacts at ${k(MIN_CLAUDE_CODE_COMPACT_TOKENS)} tokens, its lowest safe point: its own prompt and tools take ~20–35k, and lower thresholds made it compact over and over until it gave up.`
+          : `Claude Code auto-compacts at about ${k(chosen)} tokens (its own compaction, Ergo only sets the point; capped at the model's window).`;
+      }
+      if (cli !== 'codex' && cli !== 'gemini') return 'This CLI compacts with its own built-in settings.';
+      if (setting?.mode === 'off') return 'Off: workers keep one session and the CLI compacts it itself.';
+      return `A worker whose conversation reaches ${k(chosen || DEFAULT_AUTO_COMPACT_TOKENS)} tokens writes a handoff note and a fresh session on the same model continues from it (never later than 60% of the window). Needs an up-to-date bridge.`;
+    }
     if (setting?.mode === 'off') {
       return 'Off: agents keep their whole conversation. Past the window the provider rejects the call — Ollama silently drops the start of the prompt.';
     }
     const input = { provider: providerId, model: roleConfigs.manager?.model || undefined, setting, models: PRICE_SNAPSHOT.models };
-    const k = (n: number) => `${Math.round(n / 1000)}k`;
     const window = contextWindowFor(input);
     const at = compactionThreshold(input) ?? window;
-    return `Summarizes older context at ${k(at)} tokens (window ${k(window)}${setting?.mode === 'manual' ? '' : ', 80%'}). The newest 4 tool exchanges stay word for word.`;
+    if (!usesShortContext(providerId)) {
+      return `Summarizes older context at ${k(at)} tokens (window ${k(window)}${chosen ? '' : ', 80%'}). The newest 4 tool exchanges stay word for word.`;
+    }
+    return `At ${k(at)} tokens (window ${k(window)}) the agent writes a structured handoff note and continues from the task plus that note. The handoff is asked on the same cached conversation and the task message stays word for word, so the prompt cache carries over.`;
   };
 
   // Context compaction: under the Ollama settings for Ollama profiles (its small windows are where it matters, and it's
@@ -702,16 +724,17 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
       <div>
         <div style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-bright)' }}>Context compaction</div>
         <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.15rem', lineHeight: 1.45 }}>
-          When an agent's conversation nears the model's context window, the same model summarizes the older part so the run can
-          continue. {providerId === 'ollama'
-            ? 'On by default for local models: their windows are small, and past the window Ollama silently drops the start of the prompt.'
-            : 'Matters most for Ollama, whose windows are small. CLI agents (Claude Code, Codex, Gemini CLI) use their own compaction.'}
+          Keeps agents' conversations short: the same model writes a structured handoff note and the agent continues from it,
+          with the prompt cache carried over. {providerId === 'ollama'
+            ? 'Past the window Ollama silently drops the start of the prompt, so this matters most for local models.'
+            : providerId === 'anthropic'
+              ? 'Anthropic agents compact only near the window for now: re-reading cached context is cheap there.'
+              : 'Codex and Gemini CLI workers are rotated to a fresh session on the same model; Claude Code keeps its own compaction at this threshold.'}
         </div>
       </div>
       <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
         {([
-          ['auto', 'Automatic (near the window)'],
-          ['manual', 'Custom size'],
+          ['auto', 'Automatic'],
           ['off', 'Off']
         ] as const).map(([mode, label]) => (
           <button
@@ -733,10 +756,10 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
           </button>
         ))}
       </div>
-      {compactMode === 'manual' && (
+      {compactMode !== 'off' && (
         <div>
           <label style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>
-            Compact when the conversation reaches (tokens):
+            Compact when the conversation reaches (tokens, blank for the default):
           </label>
           <input
             type="text"
@@ -744,7 +767,7 @@ export const AiCredentialsModal: React.FC<AiCredentialsModalProps> = ({
             className="input-text"
             value={compactTokensText}
             onChange={(e) => setCompactTokensText(e.target.value)}
-            placeholder="e.g. 60000"
+            placeholder={providerId === 'anthropic' && authMode !== 'cli_subscription' ? '80% of the window' : String(DEFAULT_AUTO_COMPACT_TOKENS)}
             style={{ width: '12rem', fontSize: '0.82rem', fontFamily: 'monospace' }}
           />
         </div>

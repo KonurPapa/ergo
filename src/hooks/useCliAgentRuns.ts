@@ -18,6 +18,7 @@ import type {
   AgentSessionRole,
   AgentSessionStatus,
   CliDetectedPrompt,
+  ContextCompactionSetting,
   ExecutionStep,
   HumanInputPrompt,
   PermissionLevel,
@@ -57,6 +58,7 @@ import {
   buildCliArgsForTask,
   buildContinuationPrompt,
   buildFollowUpMessage,
+  buildLateSteerMessage,
   buildManagerCliPrompt,
   buildTaskContentText,
   buildVerifierCliPrompt,
@@ -67,6 +69,8 @@ import {
   buildResumedWorkerNote,
   buildWorkerCliPrompt,
   buildWorkersDoneMessage,
+  buildWorkerHandoffRequest,
+  buildWorkerRotationNote,
   hasUserPermissionOverride,
   parseCliResumeId,
   parseDelegatePlan,
@@ -85,9 +89,13 @@ import { buildRunOutcomeRecord } from '../lib/agentPipeline/escalation';
 import { familyForTarget } from '../lib/modelCatalog/availability';
 import { recordSteeringMessage } from '../lib/agentPipeline/steeringLog';
 import type { TaskMessageOptions, TaskMessageResult } from '../lib/taskMessages';
-import { QUESTION_SIGNAL_PROTOCOL } from '../lib/bridgeProtocol';
+import { HANDOFF_PROTOCOL, QUESTION_SIGNAL_PROTOCOL } from '../lib/bridgeProtocol';
+import { claudeCodeCompactionEnv, compactionThreshold } from '../lib/agentPipeline/compaction';
+import { peekModelCatalog } from '../lib/modelCatalog/catalog';
+import { PRICE_SNAPSHOT } from '../lib/modelCatalog/priceSnapshot';
 import { bridgeSupportsTaskReferences, type TaskReferenceContext } from '../lib/taskReferences';
 import { executeWorkspaceToolAction } from '../lib/workspaceMcp';
+import { stampNewSteps, withCycleEnded, withCycleRemoved, withCycleStarted } from '../lib/taskThread';
 
 // ─── Public types ─────────────────────────────────────────────────────────────────────
 
@@ -114,7 +122,18 @@ export interface CliLaunchConfig {
   retryRoles?: Array<Partial<Record<AgentSessionRole, RunStageModel>>>;
   /** Rungs this run started above its plan (the task's last run failed or was stopped). */
   startEscalation?: number;
+  /** The profile's context-compaction setting: when a worker is rotated to a fresh session (bridge protocol 8). */
+  compaction?: ContextCompactionSetting;
 }
+
+/** Most context rotations of one worker piece (a safety net against a piece that never gets smaller). */
+const MAX_WORKER_ROTATIONS = 10;
+
+/**
+ * CLIs whose workers Ergo rotates: their logs report the conversation's size (codex, gemini). Claude Code compacts
+ * itself (at the user's threshold, claudeCodeCompactionEnv): its compaction keeps the process and the warm cache.
+ */
+const ROTATING_CLIS = new Set(['codex', 'gemini']);
 
 export interface LaunchCliRunParams {
   task: TaskItem;
@@ -256,12 +275,29 @@ function runKeyOf(projectId: string, taskKey: string | number): string {
  * Codex, Gemini CLI) and falls back to a transcript-length estimate (flagged `estimated`) for other CLIs.
  */
 export async function fetchCliSessionUsage(sessionId: string): Promise<TokenUsage | null> {
+  return (await fetchCliSessionReading(sessionId))?.usage ?? null;
+}
+
+/** The conversation's size now and at its first call, and the model's window when the CLI logs it (protocol 8). */
+export interface CliSessionContext {
+  tokens: number;
+  start: number;
+  window?: number;
+}
+
+/** A session's usage and, from bridge protocol 8, the size of its conversation now. */
+export async function fetchCliSessionReading(sessionId: string): Promise<{ usage: TokenUsage; context?: CliSessionContext } | null> {
   try {
     const res = await fetch(bridgeClient.getApiUrl(`/api/pty/usage?sessionId=${encodeURIComponent(sessionId)}`));
     if (!res.ok) return null;
     const u = (await res.json())?.usage;
     if (!u || typeof u.inputTokens !== 'number') return null;
-    return {
+    const c = u.context;
+    const context: CliSessionContext | undefined =
+      c && typeof c.tokens === 'number' && c.tokens > 0
+        ? { tokens: c.tokens, start: typeof c.start === 'number' ? c.start : 0, ...(typeof c.window === 'number' && c.window > 0 ? { window: c.window } : {}) }
+        : undefined;
+    const usage: TokenUsage = {
       inputTokens: u.inputTokens || 0,
       outputTokens: u.outputTokens || 0,
       cachedInputTokens: u.cachedInputTokens || 0,
@@ -271,6 +307,7 @@ export async function fetchCliSessionUsage(sessionId: string): Promise<TokenUsag
       ...(typeof u.costUsd === 'number' ? { costUsd: u.costUsd } : {}),
       ...(u.costPartial ? { costPartial: true } : {}),
     };
+    return context ? { usage, context } : { usage };
   } catch {
     return null;
   }
@@ -497,6 +534,8 @@ interface RunWorker {
   resultFile?: string;
   /** Was working when the run was stopped: restarted on resume, told to continue its piece. */
   resumed?: boolean;
+  /** Times its context was rotated: a fresh session on the same model continued from the worker's handoff note. */
+  rotations?: number;
 }
 
 interface PersistedRunState {
@@ -837,7 +876,11 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     const key = run.taskKey;
     // Steps state belongs to the open project; a run of another project must not write into it.
     if (run.projectId && run.projectId !== d.projectId) return;
-    const apply = (rec: Record<string | number, ExecutionStep[]>) => ({ ...rec, [key]: fn(rec[key] || []) });
+    // New steps belong to the run's current cycle (0 = the run, n = follow-up n) for the task's timeline.
+    const apply = (rec: Record<string | number, ExecutionStep[]>) => {
+      const prev = rec[key] || [];
+      return { ...rec, [key]: stampNewSteps(prev, fn(prev), run.followUps ?? 0) };
+    };
     d.taskExecutionStepsRef.current = apply(d.taskExecutionStepsRef.current);
     d.setTaskExecutionSteps((prev) => {
       const next = apply(prev);
@@ -999,18 +1042,24 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     return note;
   };
 
+  /** The prompt and model each worker step was launched with: a rotated worker restarts on exactly these. */
+  const workerLaunchRef = useRef<Map<string, { prompt: string; stage: RunStageModel }>>(new Map());
+  /** Worker processes asked for a handoff note (spawn id → when). */
+  const rotationAskedRef = useRef<Map<string, number>>(new Map());
+
   /** Spawn one agent PTY for a run. Returns the session on success, or an error message. */
   const spawnAgent = async (
     run: RunState,
     role: AgentSessionRole,
-    opts: { pieceId?: string; label: string; prompt: string; resumeSessionId?: string }
-  ): Promise<{ ok: true; session: SpawnedSession } | { ok: false; error: string; cancelled?: boolean }> => {
+    opts: { pieceId?: string; label: string; prompt: string; resumeSessionId?: string; stage?: RunStageModel }
+  ): Promise<{ ok: true; session: SpawnedSession; stage: RunStageModel } | { ok: false; error: string; cancelled?: boolean }> => {
     const launch = await ensureLaunch(run);
     if (!launch) return { ok: false, error: 'No CLI agent is configured for the active AI profile.' };
 
     const ptySessionId = runSessionId(run, role, opts.pieceId);
     const level = depsRef.current.agentPipelineOptionsRef.current.permissionLevel;
-    const roleCfg = launch.roles[role] || {};
+    // A rotated worker restarts on the model it was launched with (a verifier retry may have stepped the role up since).
+    const roleCfg = opts.stage || launch.roles[role] || {};
     const isClaude = baseCommandName(launch.cmd) === 'claude';
     const claudeSessionId = isClaude ? opts.resumeSessionId || crypto.randomUUID() : undefined;
     const args = buildCliArgsForTask(launch.cmd, launch.extraArgs, opts.prompt, launch.hasApiKey, {
@@ -1062,7 +1111,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       cmd: launch.cmd,
       args,
       cwd: launch.cwd,
-      env: launch.env,
+      // Claude Code keeps its own compaction; the user's threshold only moves its trigger.
+      env: isClaude ? { ...launch.env, ...claudeCodeCompactionEnv(launch.compaction) } : launch.env,
       permissionLevel: level,
       spawnId,
       cols: 120,
@@ -1109,7 +1159,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     );
     if (baseStatusRef.current.get(ptySessionId) === 'starting') baseStatusRef.current.set(ptySessionId, 'running');
     if (role === 'manager' && res.cwd && run.launch) run.launch = { ...run.launch, cwd: res.cwd };
-    return { ok: true, session: findSession(ptySessionId) || session };
+    return { ok: true, session: findSession(ptySessionId) || session, stage: { ...roleCfg } };
   };
 
   /** A message Ergo typed into the agent was submitted: settle the prompt-box message it was, if any. */
@@ -1416,8 +1466,84 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     const piecePrompt = buildWorkerCliPrompt(task, latestBrief(run), w.piece, runCtx(run, memoryHits));
     const prompt = w.resumed ? `${buildResumedWorkerNote()}\n\n${piecePrompt}` : piecePrompt;
     const res = await spawnAgent(run, 'worker', { pieceId: w.piece.id, label, prompt });
+    if (res.ok) workerLaunchRef.current.set(w.stepId, { prompt, stage: res.stage });
     if (!res.ok && res.cancelled && run.paused) return;
     if (!res.ok) finishWorker(run, w, false, res.cancelled ? 'Stopped before it started.' : `Worker could not start: ${res.error}`);
+  };
+
+  // ── context rotation (bridge protocol 8) ──
+  // A worker whose conversation passes its threshold is asked for a structured handoff note; a fresh process on the
+  // same model, under the same terminal, continues from it. The fresh prompt is the original one, byte for byte,
+  // with the note after it, so the CLI's system prompt, tools and the piece prompt stay a cached prefix.
+
+  /** Is this worker process over its context threshold? Returns the threshold, or null. */
+  const rotationThreshold = (run: RunState, w: RunWorker, context: CliSessionContext): number | null => {
+    const launch = run.launch;
+    if (!launch) return null;
+    const cli = baseCommandName(launch.cmd);
+    if (!ROTATING_CLIS.has(cli)) return null;
+    const setting = launch.compaction;
+    if (setting?.mode === 'off') return null;
+    const stage = workerLaunchRef.current.get(w.stepId)?.stage ?? launch.roles.worker;
+    const at = compactionThreshold({
+      provider: cli,
+      model: stage?.model,
+      // The window the CLI's own log names beats a catalog guess (the CLI default model has no name here).
+      setting: setting?.windowTokens || !context.window ? setting : { ...(setting ?? { mode: 'auto' }), windowTokens: context.window },
+      models: (peekModelCatalog() ?? PRICE_SNAPSHOT).models,
+      baseTokens: context.start,
+      kind: 'cli',
+    });
+    return at && context.tokens >= at ? at : null;
+  };
+
+  const maybeRotateWorker = (s: SpawnedSession, context: CliSessionContext | undefined) => {
+    if (!context || s.role !== 'worker' || !s.spawnId || !s.session.isActive || s.pendingPrompt) return;
+    if (rotationAskedRef.current.has(s.spawnId)) return;
+    if ((bridgeClient.getStatus().bridgeInfo?.protocol ?? 0) < HANDOFF_PROTOCOL) return;
+    const run = runForSession(s);
+    if (!run || run.finalized || run.deferredFinalize || run.paused) return;
+    const w = [...run.workers].reverse().find((x) => x.ptySessionId === s.ptySessionId);
+    if (!w || w.status !== 'running' || (w.rotations ?? 0) >= MAX_WORKER_ROTATIONS) return;
+    const at = rotationThreshold(run, w, context);
+    if (!at) return;
+    // Each process is asked once: one that ignores the request finishes its piece in its own session.
+    rotationAskedRef.current.set(s.spawnId, Date.now());
+    const k = (n: number) => `${Math.round(n / 1000)}k`;
+    void (async () => {
+      const sent = await typeIntoAgent(s.ptySessionId, buildWorkerHandoffRequest(runCtx(run), w.piece.id));
+      patchStep(run, w.stepId, (st) => ({
+        ...st,
+        detail: `${st.detail}\n\n${sent ? '↻' : '⚠'} Context at ${k(context.tokens)} tokens (rotates at ${k(at)}): ${
+          sent ? 'asked the worker for a handoff note; a fresh session on the same model continues from it.' : 'Ergo could not ask the worker for a handoff note, so it continues in this session.'
+        }`,
+      }));
+    })();
+  };
+
+  /** The worker wrote the handoff note it was asked for: a fresh session on the same model continues the piece. */
+  const rotateWorker = async (run: RunState, w: RunWorker, handoff: string, file: string) => {
+    const launched = workerLaunchRef.current.get(w.stepId);
+    // After a reload the launch prompt is gone: rebuild it (the same prompt, minus the memory hits of that launch).
+    const base = launched?.prompt ?? buildWorkerCliPrompt(latestTask(run), latestBrief(run), w.piece, runCtx(run));
+    w.rotations = (w.rotations ?? 0) + 1;
+    saveRunState(run);
+    const label = `Worker ${w.piece.id} · ${truncate(w.piece.title, 40)}`;
+    const prompt = `${base}\n\n${buildWorkerRotationNote(handoff, w.rotations)}`;
+    // Same pty key: the bridge replaces the old process and the worker's terminal follows the new one.
+    const res = await spawnAgent(run, 'worker', { pieceId: w.piece.id, label, prompt, ...(launched?.stage ? { stage: launched.stage } : {}) });
+    if (res.ok) {
+      // The original prompt is kept: the next rotation appends its note to it, not to this one.
+      workerLaunchRef.current.set(w.stepId, { prompt: base, stage: launched?.stage ?? res.stage });
+      patchStep(run, w.stepId, (st) => ({
+        ...st,
+        status: 'running',
+        detail: `${st.detail}\n\n↻ Rotation ${w.rotations}: a fresh session${res.stage.model ? ` on ${res.stage.model}` : ''} continues from the handoff note (${file}).`,
+      }));
+      return;
+    }
+    if (res.cancelled && run.paused) return;
+    finishWorker(run, w, false, res.cancelled ? 'Stopped while its context was being rotated.' : `Worker could not restart after its context rotation: ${res.error}`);
   };
 
   const launchQueuedWorkers = (run: RunState) => {
@@ -1493,6 +1619,20 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
   };
 
   const verifierStepId = (run: RunState) => `step-verifier-${run.taskKey}-${run.runId}-${run.verifierRuns}`;
+
+  /** Stop the verifier's check (the user sent the manager a message): its attempt is rolled back and runs again on the next record. */
+  const interruptVerifier = (run: RunState) => {
+    if (!run.verifierActive) return;
+    patchStep(run, verifierStepId(run), {
+      status: 'cancelled',
+      detail: 'Stopped: you sent the manager a message — the work is checked again once the manager is done.',
+    });
+    run.verifierActive = false;
+    run.verifierRuns = Math.max(0, run.verifierRuns - 1);
+    saveRunState(run);
+    setSessionStatus(run.managerSessionId, 'running');
+    void killAgentSessions({ sessionId: runSessionId(run, 'verifier') });
+  };
 
   // ── Finalize ──
   const finalizeRun = async (run: RunState, opts: FinalizeOptions): Promise<void> => {
@@ -1762,6 +1902,10 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       humanReview: humanReviewText,
       followUps: '',
       completionRunId: completionKeyOf(run),
+      thread:
+        opts.reason === 'stopped'
+          ? existing?.thread
+          : withCycleEnded(existing?.thread, followUp, runOutcomeFor(opts.reason, verifier?.verdict, failedRun)),
       lastRunOutcome: buildRunOutcomeRecord({
         runId: run.runId,
         outcome: runOutcomeFor(opts.reason, verifier?.verdict, failedRun),
@@ -2271,7 +2415,14 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       );
       const briefs = d.briefsRef.current;
       const idx = findBriefIndex(briefs, run.taskId, task.title);
-      const nextBriefs = idx === -1 ? briefs : briefs.map((b, i) => (i === idx ? { ...b, status: 'in_progress' } : b));
+      const nextBriefs =
+        idx === -1
+          ? briefs
+          : briefs.map((b, i) =>
+              i === idx
+                ? { ...b, status: 'in_progress', thread: withCycleStarted(b.thread, { n: run.followUps!, message, runId: run.runId }) }
+                : b
+            );
       d.syncAndSaveProject(nextTasks, nextBriefs, true);
     }
     reviveRunJob(run);
@@ -2283,6 +2434,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
   const undoReopen = (run: RunState, snapshot: ReopenSnapshot, error: string) => {
     const d = depsRef.current;
     patchStep(run, run.managerStepId, (st) => ({ ...st, status: 'error', detail: `${st.detail}\n\n✗ ${error}` }));
+    const failedCycle = run.followUps ?? 0;
     run.finalized = true;
     run.followUps = snapshot.followUps;
     run.followUpText = snapshot.followUpText;
@@ -2303,7 +2455,9 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       const briefs = d.briefsRef.current;
       const idx = findBriefIndex(briefs, run.taskId, run.taskTitle);
       const nextBriefs =
-        idx === -1 || snapshot.briefStatus === undefined ? briefs : briefs.map((b, i) => (i === idx ? { ...b, status: snapshot.briefStatus! } : b));
+        idx === -1 || snapshot.briefStatus === undefined
+          ? briefs
+          : briefs.map((b, i) => (i === idx ? { ...b, status: snapshot.briefStatus!, thread: withCycleRemoved(b.thread, failedCycle) } : b));
       d.syncAndSaveProject(nextTasks, nextBriefs, true);
     }
   };
@@ -2542,6 +2696,12 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         clearQuestion(run, 'success', `You answered from the prompt box: "${truncate(message, 400)}"`);
         return steerLiveAgent(run, target, buildQuestionAnswerMessage(question, message), opts, 'mid-run');
       }
+      if (target && target.role === 'manager' && run.verifierActive) {
+        // The work is being checked: stop that check, the manager acts on the message and writes its record again,
+        // and the verifier checks the updated work (still the same cycle).
+        interruptVerifier(run);
+        return steerLiveAgent(run, target, buildLateSteerMessage(message, runCtx(run)), opts, 'mid-run');
+      }
       if (target) return steerLiveAgent(run, target, message, opts, 'mid-run');
       // The manager exited while workers / verifier still run: the message continues the run once they finish.
       run.pendingFollowUps = [...(run.pendingFollowUps || []), message];
@@ -2718,6 +2878,16 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
           const s = findSession(ev.sessionId);
           if (s && s.spawnId && s.runId === run.runId && s.status === 'done') void killAgentSessions({ sessionId: ev.sessionId });
         }, 3000);
+        return;
+      }
+      case 'handoff': {
+        if (ev.role !== 'worker' || run.finalized || run.deferredFinalize || run.paused) return;
+        const w = [...run.workers].reverse().find((x) => x.ptySessionId === ev.sessionId);
+        if (!w || w.status !== 'running') return;
+        // Only a note Ergo asked this process for rotates the worker.
+        const s = findSession(ev.sessionId);
+        if (!s?.spawnId || !rotationAskedRef.current.has(s.spawnId)) return;
+        await rotateWorker(run, w, ev.content, ev.file);
         return;
       }
       case 'question': {
@@ -3352,6 +3522,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
   applyRunUsageRef.current = applyRunUsage;
   const noteSpawnUsageRef = useRef(noteSpawnUsage);
   noteSpawnUsageRef.current = noteSpawnUsage;
+  const maybeRotateWorkerRef = useRef(maybeRotateWorker);
+  maybeRotateWorkerRef.current = maybeRotateWorker;
   const activeSessionKey = terminalSessions
     .filter((s) => s.session.isActive && s.spawnId)
     .map((s) => `${s.ptySessionId}@${s.spawnId}`)
@@ -3363,12 +3535,13 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       const active = sessionsRef.current.filter((s) => s.session.isActive && s.spawnId);
       const touchedRuns = new Set<RunState>();
       for (const s of active) {
-        const usage = await fetchCliSessionUsage(s.ptySessionId);
+        const reading = await fetchCliSessionReading(s.ptySessionId);
         if (cancelled) return;
-        if (usage && s.spawnId) {
+        if (reading && s.spawnId) {
           const run = runForSession(s);
-          noteSpawnUsageRef.current(s.spawnId, usage, run);
+          noteSpawnUsageRef.current(s.spawnId, reading.usage, run);
           if (run) touchedRuns.add(run);
+          maybeRotateWorkerRef.current(s, reading.context);
         }
       }
       for (const run of touchedRuns) applyRunUsageRef.current(run);
@@ -3585,6 +3758,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         validation: '',
         humanReview: '',
         followUps: '',
+        // A run from the start begins a new timeline.
+        thread: withCycleStarted(undefined, { n: 0, runId }),
       } as AgentContextItem;
       const nextBriefs = briefIdx === -1 ? [...briefs, resetBrief] : briefs.map((b, i) => (i === briefIdx ? resetBrief : b));
       // Workers / verifier build their prompts from this when the run's project isn't the open one.

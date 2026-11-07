@@ -481,6 +481,21 @@ button.eg-agent:hover { background: var(--surface-2); }
 .eg-mono-sm { font-family: var(--font-mono); font-size: calc(11px * var(--type-scale)); line-height: calc(16px * var(--type-scale)); color: var(--ink-muted); }
 .eg-tabular { font-variant-numeric: tabular-nums; }
 .eg-props { margin: var(--space-6) 0; }
+.eg-dstatus { margin: var(--space-2) 0 var(--space-4); border-bottom: 1px solid var(--line); padding-bottom: var(--space-3); }
+.eg-dstatus summary { display: flex; align-items: center; gap: var(--space-2); cursor: pointer; user-select: none; list-style: none; font-size: calc(13px * var(--type-scale)); line-height: calc(20px * var(--type-scale)); min-height: 24px; }
+.eg-dstatus summary::-webkit-details-marker { display: none; }
+.eg-dstatus summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-xs); }
+.eg-dstatus-text { color: var(--ink); font-weight: 500; }
+.eg-dstatus-meta { color: var(--ink-subtle); font-size: calc(12px * var(--type-scale)); }
+.eg-dstatus-more { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; color: var(--ink-subtle); font-size: calc(12px * var(--type-scale)); cursor: pointer; padding: 2px 6px; border-radius: var(--radius-xs); transition: color var(--duration-fast) var(--ease-out), background-color var(--duration-fast) var(--ease-out); }
+.eg-dstatus summary:hover .eg-dstatus-more { color: var(--ink); background: var(--surface-2); }
+.eg-dstatus-more .eg-icon, .eg-dstatus-more svg, .eg-dstatus-more [data-i] { transition: transform var(--duration-fast) var(--ease-out); width: 14px; height: 14px; }
+.eg-dstatus[open] .eg-dstatus-more .eg-icon, .eg-dstatus[open] .eg-dstatus-more svg, .eg-dstatus[open] .eg-dstatus-more [data-i] { transform: rotate(180deg); }
+.eg-dstatus > .eg-props { margin: var(--space-3) 0 0; padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.eg-dstatus-link { border: 0; background: transparent; color: inherit; font: inherit; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.eg-dstatus-link:hover { color: var(--ink); }
+.eg-panelhead { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); color: var(--ink-subtle); font-size: calc(12px * var(--type-scale)); line-height: calc(16px * var(--type-scale)); min-height: 28px; }
+.eg-panelhead span:first-child { color: var(--ink-subtle); }
 
 /* ---------- Runs view (the detail pane's default) ---------- */
 .eg-detail-head-task { padding-left: var(--space-3); }

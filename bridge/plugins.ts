@@ -649,6 +649,23 @@ interface BridgeUsage {
   costUsd?: number;
   /** Some calls have tokens but no price. */
   costPartial?: boolean;
+  /**
+   * PTY sessions (protocol 8): the size of the session's conversation now — the newest call's prompt, cached tokens
+   * included — and of its first call (the CLI's fixed start), plus the model's window when the CLI's log names it.
+   */
+  context?: SessionContext;
+}
+
+interface SessionContext {
+  tokens: number;
+  start: number;
+  window?: number;
+}
+
+/** Prompt size of one call's usage object (Anthropic counts cache reads / writes outside input_tokens). */
+function promptTokensOf(u: any): number {
+  const n = normalizeUsageObject(u);
+  return n ? n.inputTokens : 0;
 }
 
 /** Prices the bridge uses for usage costs: the model catalog's latest list once loaded, else the bundled snapshot. */
@@ -4189,7 +4206,7 @@ interface PtyUsageMeta {
 
 /** 'qa' is the verifier's wire name (kept so apps and bridges of every protocol version agree). */
 type BridgeAgentRole = 'manager' | 'worker' | 'qa';
-type AgentSignalKind = 'delegate' | 'worker-done' | 'complete' | 'qa-verdict' | 'question';
+type AgentSignalKind = 'delegate' | 'worker-done' | 'complete' | 'qa-verdict' | 'question' | 'handoff';
 
 interface AgentSignalRecord {
   signal: AgentSignalKind;
@@ -4311,6 +4328,9 @@ async function readClaudeSessionUsage(sessionId: string, cwd: string): Promise<B
   }
   if (byMessage.size === 0) return null;
   const total = emptyBridgeUsage();
+  // The main conversation's first and newest call (subagents run their own conversations).
+  const main = Array.from(byMessage.entries()).filter(([key]) => key.startsWith(`${log.file}:`)).map(([, v]) => promptTokensOf(v.usage)).filter((t) => t > 0);
+  if (main.length > 0) total.context = { tokens: main[main.length - 1], start: main[0] };
   // Each response names its model (a subagent or /model switch can differ), so each is priced on its own.
   for (const { usage, model } of byMessage.values()) {
     const delta = normalizeUsageObject(usage);
@@ -4484,14 +4504,24 @@ async function readCodexSessionUsage(meta: PtyUsageMeta): Promise<BridgeUsage | 
   if (!file) return null;
   let last: BridgeUsage | null = null;
   let turns = 0;
+  let context: SessionContext | undefined;
   for (const ev of await readJsonlFile(file)) {
     const info = ev?.payload?.info ?? ev?.msg?.info;
     if ((ev?.payload?.type === 'token_count' || ev?.msg?.type === 'token_count') && info?.total_token_usage) {
       last = normalizeUsageObject(info.total_token_usage);
       turns++;
+      // last_token_usage is the newest call; its input_tokens include the cached ones.
+      const now = promptTokensOf(info.last_token_usage);
+      if (now > 0) {
+        const window = Number(info.model_context_window) || undefined;
+        context = { tokens: now, start: context?.start || now, ...(window ? { window } : {}) };
+      }
     }
   }
-  if (last) last.calls = Math.max(1, turns);
+  if (last) {
+    last.calls = Math.max(1, turns);
+    if (context) last.context = context;
+  }
   return last;
 }
 
@@ -4602,7 +4632,11 @@ async function readGeminiCliSessionUsage(meta: PtyUsageMeta): Promise<BridgeUsag
   const session = await findGeminiSession(meta);
   const total = emptyBridgeUsage();
   for (const msg of Array.isArray(session?.messages) ? session.messages : []) {
-    if (msg?.tokens) addBridgeUsage(total, normalizeUsageObject(msg.tokens));
+    if (!msg?.tokens) continue;
+    const delta = normalizeUsageObject(msg.tokens);
+    addBridgeUsage(total, delta);
+    // Each model message's input is that call's whole prompt (cached tokens included).
+    if (delta && delta.inputTokens > 0) total.context = { tokens: delta.inputTokens, start: total.context?.start || delta.inputTokens };
   }
   return total.calls > 0 ? total : null;
 }
@@ -5350,7 +5384,13 @@ function signalFilesFor(session: PtySessionState): Array<{ name: string; signal:
     ];
   }
   if (session.role === 'worker') {
-    return session.pieceId && SAFE_PIECE_ID_RE.test(session.pieceId) ? [{ name: `worker-${session.pieceId}.md`, signal: 'worker-done' }] : [];
+    return session.pieceId && SAFE_PIECE_ID_RE.test(session.pieceId)
+      ? [
+          { name: `worker-${session.pieceId}.md`, signal: 'worker-done' },
+          // Context rotation (protocol 8): the worker's handoff note; a fresh worker on the same model continues from it.
+          { name: `handoff-${session.pieceId}.md`, signal: 'handoff' },
+        ]
+      : [];
   }
   return [{ name: 'qa.md', signal: 'qa-verdict' }];
 }
@@ -7319,6 +7359,7 @@ const SIGNAL_MEMORY_KIND: Record<AgentSignalKind, AgentNoteKind> = {
   'worker-done': 'worker',
   'qa-verdict': 'verifier',
   question: 'note',
+  handoff: 'note',
 };
 
 function sessionMemoryMeta(session: PtySessionState): ChunkMetadata {
@@ -7354,7 +7395,8 @@ function renderDelegatePlan(json: string): string {
  */
 async function ingestRunSignal(session: PtySessionState, name: string, signal: AgentSignalKind, text: string): Promise<void> {
   // A question is for the user, not knowledge for later agents.
-  if (!session.runId || signal === 'question') return;
+  // A question is for the user, a handoff note only for the worker that continues from it.
+  if (!session.runId || signal === 'question' || signal === 'handoff') return;
   const title =
     signal === 'delegate' ? 'Delegation plan'
     : signal === 'complete' ? 'Completion record'
