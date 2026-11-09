@@ -18,8 +18,11 @@ import {
   connectGithubMcp,
   disconnectGithubMcp,
   getGithubMcpStatus,
+  getAllProvidersOAuthStatus,
+  disconnectProviderOAuth,
   checkAllMcpUpdates
 } from '../lib/mcpClient';
+import { OAuthConnectModal } from './OAuthConnectModal';
 import { GITHUB_MCP_TOOLS } from '../lib/githubMcpTools';
 import { WORKSPACE_MCP_TOOLS } from '../lib/workspaceMcp';
 import {
@@ -440,6 +443,9 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   const [showGhToken, setShowGhToken] = useState(false);
   const [ghAccountInfo, setGhAccountInfo] = useState<{ username?: string; name?: string; avatarUrl?: string } | null>(null);
 
+  // 1-Click OAuth Direct Connect modal state
+  const [selectedOAuthServer, setSelectedOAuthServer] = useState<MCPServer | null>(null);
+
   // Generic External Server modal state (for Slack, Notion, GCal, etc.)
   const [selectedExternalModalServer, setSelectedExternalModalServer] = useState<MCPServer | null>(null);
   const [genericEndpointInput, setGenericEndpointInput] = useState('');
@@ -499,10 +505,25 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
       } else {
         setProjectFolders([]);
       }
-      getGithubMcpStatus()
-        .then((st) => {
-          if (st.configured) {
-            setGhAccountInfo({ username: st.username, name: st.name, avatarUrl: st.avatarUrl });
+      getAllProvidersOAuthStatus()
+        .then((providers) => {
+          if (providers['mcp-github']?.configured) {
+            const gh = providers['mcp-github'];
+            setGhAccountInfo({ username: gh.username, name: gh.name, avatarUrl: gh.avatarUrl });
+          }
+          if (onUpdateServer) {
+            mcpServers.forEach((s) => {
+              const pInfo = providers[s.id];
+              if (pInfo && pInfo.configured && s.status !== 'connected') {
+                onUpdateServer({
+                  ...s,
+                  status: 'connected',
+                  authUsername: pInfo.username,
+                  authAvatarUrl: pInfo.avatarUrl,
+                  authEmail: pInfo.email
+                });
+              }
+            });
           }
         })
         .catch(() => { });
@@ -649,44 +670,46 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
   };
 
   const handleConnectExternal = async (server: MCPServer) => {
-    // 1. GitHub Server Handling
-    if (server.id === 'mcp-github') {
-      if (server.status === 'connected') {
-        // Disconnect GitHub
-        setConnectingServerId(server.id);
-        try {
-          await disconnectGithubMcp();
-          if (onUpdateServer) {
-            onUpdateServer({
-              ...server,
-              status: 'disconnected',
-              authUsername: undefined,
-              authHeader: undefined,
-              error: undefined
-            });
-          } else {
-            onToggleConnectServer(server.id);
-          }
-          setGhAccountInfo(null);
-        } finally {
-          setConnectingServerId(null);
-        }
-        return;
-      }
+    // 1. If currently connected, disconnect cleanly
+    if (server.status === 'connected') {
+      const confirmed = await askConfirm({
+        title: `Disconnect ${server.name}?`,
+        text: `This will remove active credentials and disable ${server.tools.length} agent tools for ${server.name}.`,
+        confirmLabel: 'Disconnect',
+        danger: true
+      });
+      if (!confirmed) return;
 
-      // If disconnected, open the GitHub Authentication modal
-      setGhAuthError(null);
-      setIsGhAuthModalOpen(true);
+      setConnectingServerId(server.id);
+      try {
+        if (server.id === 'mcp-github') {
+          await disconnectGithubMcp();
+          setGhAccountInfo(null);
+        } else if (!server.isCustom) {
+          await disconnectProviderOAuth(server.id);
+        }
+
+        if (onUpdateServer) {
+          onUpdateServer({
+            ...server,
+            status: 'disconnected',
+            authUsername: undefined,
+            authAvatarUrl: undefined,
+            authEmail: undefined,
+            authHeader: undefined,
+            error: undefined
+          });
+        } else {
+          onToggleConnectServer(server.id);
+        }
+      } finally {
+        setConnectingServerId(null);
+      }
       return;
     }
 
-    // 2. Custom User-Added Server
+    // 2. Custom User-Added Server (SSE / remote HTTP)
     if (server.isCustom && server.endpoint) {
-      if (server.status === 'connected') {
-        onToggleConnectServer(server.id);
-        return;
-      }
-
       setConnectingServerId(server.id);
       try {
         const disc = await discoverRemoteMcpTools(server.endpoint, server.authHeader);
@@ -722,21 +745,8 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
       return;
     }
 
-    // 3. Other Preset External Apps (Slack, GCal, Salesforce, Notion)
-    if (server.status === 'connected') {
-      onToggleConnectServer(server.id);
-      return;
-    }
-
-    // Prompt user for credentials / endpoint URL
-    const guide = MCP_EXTERNAL_SETUP_GUIDES[server.id];
-    setSelectedExternalModalServer(server);
-    setGenericEndpointInput(server.endpoint || guide?.defaultEndpoint || '');
-    setGenericTokenInput(server.authHeader || '');
-    setGenericAuthError(null);
-    setShowGenericToken(false);
-    setIsMcpGuideExpanded(false);
-    setCopiedSnippet(false);
+    // 3. Preset Direct OAuth Integrations (GitHub, Google, Slack, Notion, Salesforce)
+    setSelectedOAuthServer(server);
   };
 
   const handleConnectGithub = async (e?: React.FormEvent) => {
@@ -1088,6 +1098,7 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                 const isConnecting = connectingServerId === server.id;
                 const isExpanded = !!expandedServerIds[server.id];
                 const account = server.authUsername || (server.id === 'mcp-github' ? ghAccountInfo?.username : undefined);
+                const avatar = server.authAvatarUrl || (server.id === 'mcp-github' ? ghAccountInfo?.avatarUrl : undefined);
                 return (
                   <div key={server.id} className="eg-srow eg-settings-top">
                     <div className="eg-srow-text">
@@ -1097,9 +1108,12 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                       </div>
                       <div className="eg-srow-help">
                         {isConnected ? (
-                          <span className="eg-settings-inline">
+                          <span className="eg-settings-inline" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
                             <StatusDot state="success" />
-                            Connected{account ? ` as @${account}` : ''}
+                            {avatar && (
+                              <img src={avatar} alt="" style={{ width: 16, height: 16, borderRadius: '50%', objectFit: 'cover' }} />
+                            )}
+                            <span>Connected{account ? ` as @${account.replace(/^@/, '')}` : ''}</span>
                             {server.tools.length > 0 ? ` · ${server.tools.length} ${server.tools.length === 1 ? 'tool' : 'tools'}` : ''}
                           </span>
                         ) : (
@@ -1121,14 +1135,13 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                       {isConnected && server.tools.length > 0 && (
                         <IconButton icon={RefreshCw} label="Refresh tools" size="sm" disabled={isConnecting} onClick={() => void refreshServerTools(server)} />
                       )}
-                      {server.id === 'mcp-github' && isConnected && (
+                      {server.serverType === 'external_oauth' && isConnected && (
                         <IconButton
                           icon={Key}
-                          label="Change GitHub token"
+                          label={`Manage ${server.name} credentials`}
                           size="sm"
                           onClick={() => {
-                            setGhAuthError(null);
-                            setIsGhAuthModalOpen(true);
+                            setSelectedOAuthServer(server);
                           }}
                         />
                       )}
@@ -1240,6 +1253,27 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
 
   const subModals = (
     <>
+      {/* 1-Click OAuth Direct Connect Modal */}
+      <OAuthConnectModal
+        isOpen={Boolean(selectedOAuthServer)}
+        server={selectedOAuthServer}
+        onClose={() => setSelectedOAuthServer(null)}
+        onConnected={(updated) => {
+          if (onUpdateServer) {
+            onUpdateServer(updated);
+          } else {
+            onToggleConnectServer(updated.id);
+          }
+          if (updated.id === 'mcp-github') {
+            setGhAccountInfo({
+              username: updated.authUsername,
+              avatarUrl: updated.authAvatarUrl
+            });
+          }
+          setSelectedOAuthServer(null);
+        }}
+      />
+
       {/* GitHub Authentication Modal */}
       {isGhAuthModalOpen && (
         <div
@@ -3246,17 +3280,16 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                          {server.id === 'mcp-github' && isConnected && (
+                          {server.serverType === 'external_oauth' && isConnected && (
                             <button
                               type="button"
                               className="btn btn-secondary"
                               style={{ padding: '0.25rem 0.45rem', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setGhAuthError(null);
-                                setIsGhAuthModalOpen(true);
+                                setSelectedOAuthServer(server);
                               }}
-                              title="Configure GitHub Token"
+                              title={`Manage ${server.name} Credentials`}
                             >
                               <Key size={12} />
                               <span>Key</span>
@@ -3306,19 +3339,22 @@ export const McpHubModal: React.FC<McpHubModalProps> = ({
                           <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>{server.description}</p>
 
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-dim)', paddingTop: '0.4rem', borderTop: '1px solid var(--border-subtle)' }}>
-                            <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                               <span style={{ width: 6, height: 6, borderRadius: '50%', background: isConnected ? 'var(--accent-emerald)' : 'var(--text-dim)' }} />
-                              <span>{isConnected ? 'Active & Ready' : 'Disconnected'}</span>
+                              <span>{isConnected ? 'Active & Ready' : 'Ready to Connect'}</span>
                               {isConnected && (server.authUsername || (server.id === 'mcp-github' && ghAccountInfo?.username)) && (
-                                <span style={{ color: 'var(--accent-cyan)', fontWeight: 600, fontSize: '0.72rem', background: 'var(--accent-subtle)', padding: '1px 6px', borderRadius: '4px' }}>
-                                  @{server.authUsername || ghAccountInfo?.username}
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--accent-cyan)', fontWeight: 600, fontSize: '0.72rem', background: 'var(--accent-subtle)', padding: '2px 8px', borderRadius: '12px' }}>
+                                  {(server.authAvatarUrl || (server.id === 'mcp-github' && ghAccountInfo?.avatarUrl)) && (
+                                    <img src={server.authAvatarUrl || ghAccountInfo?.avatarUrl} alt="" style={{ width: 14, height: 14, borderRadius: '50%', objectFit: 'cover' }} />
+                                  )}
+                                  <span>@{((server.authUsername || ghAccountInfo?.username) || '').replace(/^@/, '')}</span>
                                 </span>
                               )}
                             </span>
                             <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={server.endpoint}>
-                              {server.id === 'mcp-github'
-                                ? (isConnected ? 'Stdio MCP (@modelcontextprotocol/server-github)' : 'Personal Token Required')
-                                : (server.endpoint ? server.endpoint.replace('https://', '').replace('http://', '') : 'Configuration Required')}
+                              {isConnected
+                                ? 'OAuth Active · Ready'
+                                : (server.isCustom ? (server.endpoint ? server.endpoint.replace('https://', '').replace('http://', '') : 'Endpoint Required') : '1-Click Direct Connect')}
                             </span>
                           </div>
 

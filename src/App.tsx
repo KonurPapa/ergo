@@ -513,20 +513,23 @@ function App() {
     }).catch(() => { });
   }, []);
 
-  // Sync GitHub MCP status on startup
+  // Sync OAuth provider MCP statuses on startup
   useEffect(() => {
-    fetch(bridgeClient.getApiUrl('/api/mcp/github/status'))
+    fetch(bridgeClient.getApiUrl('/api/mcp/providers/status'))
       .then((res) => res.json())
       .then((data) => {
-        if (data && data.configured) {
+        if (data && data.providers) {
           setMcpServers((prev) =>
             prev.map((s) => {
-              if (s.id !== 'mcp-github') return s;
+              const pInfo = data.providers[s.id];
+              if (!pInfo || !pInfo.configured) return s;
               return {
                 ...s,
                 status: 'connected',
-                authUsername: data.username,
-                tools: (s.tools && s.tools.length >= 26) ? s.tools : GITHUB_MCP_TOOLS
+                authUsername: pInfo.username,
+                authAvatarUrl: pInfo.avatarUrl,
+                authEmail: pInfo.email,
+                tools: (s.id === 'mcp-github' && (!s.tools || s.tools.length < 26)) ? GITHUB_MCP_TOOLS : s.tools
               };
             })
           );

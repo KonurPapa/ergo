@@ -906,3 +906,141 @@ export async function disconnectGithubMcp(): Promise<{ success: boolean; error?:
   }
 }
 
+export interface DeviceFlowStartResult {
+  success: boolean;
+  provider?: string;
+  deviceCode?: string;
+  userCode?: string;
+  verificationUri?: string;
+  verificationUriComplete?: string;
+  expiresIn?: number;
+  interval?: number;
+  error?: string;
+}
+
+export interface DeviceFlowPollResult {
+  success: boolean;
+  status: 'pending' | 'slow_down' | 'completed' | 'expired' | 'denied' | string;
+  interval?: number;
+  user?: {
+    login: string;
+    name?: string;
+    avatarUrl?: string;
+    email?: string;
+  };
+  tools?: MCPTool[];
+  error?: string;
+}
+
+export interface ProviderOAuthInfo {
+  configured: boolean;
+  username?: string;
+  name?: string;
+  avatarUrl?: string;
+  email?: string;
+  scopes?: string;
+  authType?: string;
+  connectedAt?: string;
+}
+
+/**
+ * Initiate GitHub OAuth Device Flow (RFC 8628) for 1-click browser sign in
+ */
+export async function startGithubDeviceOAuth(clientId?: string): Promise<DeviceFlowStartResult> {
+  try {
+    const res = await apiFetch('/api/mcp/oauth/device/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      return {
+        success: false,
+        error: data.error || `Failed to start GitHub sign-in (status ${res.status})`
+      };
+    }
+    return data;
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || 'Network error initiating GitHub login'
+    };
+  }
+}
+
+/**
+ * Poll GitHub Device Flow status until user completes browser authorization
+ */
+export async function pollGithubDeviceOAuth(deviceCode: string, clientId?: string): Promise<DeviceFlowPollResult> {
+  try {
+    const res = await apiFetch('/api/mcp/oauth/device/poll', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceCode, clientId })
+    });
+    const data = await res.json();
+    return data;
+  } catch (err: any) {
+    return {
+      success: false,
+      status: 'error',
+      error: err?.message || 'Network error polling GitHub authorization'
+    };
+  }
+}
+
+/**
+ * Query configured status for all external OAuth providers (GitHub, Google, Slack, Notion)
+ */
+export async function getAllProvidersOAuthStatus(): Promise<Record<string, ProviderOAuthInfo>> {
+  try {
+    const res = await apiFetch('/api/mcp/providers/status');
+    if (res.ok) {
+      const data = await res.json();
+      return data.providers || {};
+    }
+  } catch {}
+  return {};
+}
+
+/**
+ * Connect any external provider directly with account metadata & optional token
+ */
+export async function connectProviderOAuth(
+  serverId: string,
+  authData: { token?: string; username?: string; name?: string; avatarUrl?: string; email?: string; endpoint?: string; authType?: string }
+): Promise<{ success: boolean; user?: { username: string; name?: string; avatarUrl?: string }; error?: string }> {
+  try {
+    const res = await apiFetch('/api/mcp/oauth/provider/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serverId, authData })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      return { success: false, error: data.error || `Failed to connect ${serverId}` };
+    }
+    return data;
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error connecting provider' };
+  }
+}
+
+/**
+ * Disconnect an external provider
+ */
+export async function disconnectProviderOAuth(serverId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await apiFetch('/api/mcp/oauth/provider/disconnect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serverId })
+    });
+    const data = await res.json();
+    return { success: Boolean(data?.success) };
+  } catch (err: any) {
+    return { success: false, error: err?.message };
+  }
+}
+

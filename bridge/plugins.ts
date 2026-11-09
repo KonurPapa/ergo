@@ -2516,6 +2516,331 @@ export function ergoFileSystemPlugin(): Plugin {
         }
       }
 
+      // ── Provider OAuth Status Endpoint ──
+      if (url === '/api/mcp/providers/status' && req.method === 'GET') {
+        try {
+          const secretsPath = path.join(storageDir, 'config', 'secrets.json');
+          let mcpSecrets: any = {};
+          try {
+            const raw = await fs.readFile(secretsPath, 'utf-8');
+            mcpSecrets = JSON.parse(raw).mcpSecrets || {};
+          } catch {}
+
+          const providers: Record<string, any> = {};
+          const knownProviders = ['mcp-github', 'mcp-gcal', 'mcp-slack', 'mcp-notion', 'mcp-salesforce'];
+
+          for (const pid of knownProviders) {
+            const entry = mcpSecrets[pid];
+            if (entry && (entry.token || entry.authType)) {
+              providers[pid] = {
+                configured: true,
+                username: entry.username || 'Connected',
+                name: entry.name,
+                avatarUrl: entry.avatarUrl,
+                email: entry.email,
+                scopes: entry.scopes,
+                authType: entry.authType || 'token',
+                connectedAt: entry.connectedAt
+              };
+            } else if (pid === 'mcp-github' && (process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GITHUB_TOKEN)) {
+              providers[pid] = {
+                configured: true,
+                username: 'env-configured',
+                authType: 'env'
+              };
+            } else {
+              providers[pid] = { configured: false };
+            }
+          }
+
+          return sendJson(res, 200, { providers });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
+      // ── GitHub OAuth Device Flow: Start ──
+      if (url === '/api/mcp/oauth/device/start' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req).catch(() => ({}));
+          const clientId = body.clientId || process.env.GITHUB_CLIENT_ID || '01ab8ac9400c4e429b23';
+          const scopes = body.scopes || 'repo,read:org,user';
+
+          const ghRes = await fetch('https://github.com/login/device/code', {
+            method: 'POST',
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+              'User-Agent': 'Ergo-MCP-OAuth/1.0'
+            },
+            body: JSON.stringify({
+              client_id: clientId,
+              scope: scopes
+            }),
+            signal: AbortSignal.timeout(15_000)
+          });
+
+          if (!ghRes.ok) {
+            const errBody: any = await ghRes.json().catch(() => ({}));
+            return sendJson(res, ghRes.status, {
+              success: false,
+              error: errBody.error_description || errBody.message || `GitHub returned status ${ghRes.status}`
+            });
+          }
+
+          const data: any = await ghRes.json();
+          return sendJson(res, 200, {
+            success: true,
+            provider: 'github',
+            deviceCode: data.device_code,
+            userCode: data.user_code,
+            verificationUri: data.verification_uri,
+            verificationUriComplete: data.verification_uri_complete || `${data.verification_uri}?user_code=${encodeURIComponent(data.user_code)}`,
+            expiresIn: data.expires_in,
+            interval: data.interval || 5
+          });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message || 'Error starting GitHub device flow' });
+        }
+      }
+
+      // ── GitHub OAuth Device Flow: Poll ──
+      if (url === '/api/mcp/oauth/device/poll' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const { deviceCode } = body;
+          const clientId = body.clientId || process.env.GITHUB_CLIENT_ID || '01ab8ac9400c4e429b23';
+
+          if (!deviceCode) {
+            return sendJson(res, 400, { error: 'deviceCode is required' });
+          }
+
+          const ghRes = await fetch('https://github.com/login/oauth/access_token', {
+            method: 'POST',
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+              'User-Agent': 'Ergo-MCP-OAuth/1.0'
+            },
+            body: JSON.stringify({
+              client_id: clientId,
+              device_code: deviceCode,
+              grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
+            }),
+            signal: AbortSignal.timeout(15_000)
+          });
+
+          const data: any = await ghRes.json().catch(() => ({}));
+
+          if (data.error === 'authorization_pending') {
+            return sendJson(res, 200, { success: true, status: 'pending' });
+          }
+
+          if (data.error === 'slow_down') {
+            return sendJson(res, 200, { success: true, status: 'slow_down', interval: (data.interval || 5) + 5 });
+          }
+
+          if (data.error) {
+            return sendJson(res, 200, {
+              success: false,
+              status: data.error,
+              error: data.error_description || `GitHub authorization error: ${data.error}`
+            });
+          }
+
+          if (!data.access_token) {
+            return sendJson(res, 400, { success: false, error: 'No access token returned by GitHub' });
+          }
+
+          const cleanToken = data.access_token;
+
+          // 1. Fetch authenticated user profile
+          let user: any = { login: 'github_user' };
+          try {
+            const userRes = await fetch('https://api.github.com/user', {
+              headers: {
+                'Authorization': `Bearer ${cleanToken}`,
+                'User-Agent': 'Ergo-MCP/1.0',
+                'Accept': 'application/vnd.github.v3+json'
+              },
+              signal: AbortSignal.timeout(10_000)
+            });
+            if (userRes.ok) {
+              user = await userRes.json();
+            }
+          } catch {}
+
+          // 2. Discover live tools from official GitHub MCP server
+          let rawTools: any[] = [];
+          try {
+            rawTools = await githubMcpClient.listTools(cleanToken);
+          } catch (mcpErr: any) {
+            console.warn('[Vite MCP OAuth API] Error discovering tools from GitHub MCP process:', mcpErr.message);
+          }
+
+          const tools = rawTools.map((t: any) => ({
+            id: `gh_${t.name}`,
+            name: t.name,
+            description: t.description,
+            autoApprove: t.name.startsWith('search_') || t.name.startsWith('list_') || t.name.startsWith('get_'),
+            serverId: 'mcp-github',
+            inputSchema: t.inputSchema
+          }));
+
+          // 3. Persist to storageDir/config/secrets.json
+          const secretsPath = path.join(storageDir, 'config', 'secrets.json');
+          let currentSecrets: any = { version: 1, updatedAt: new Date().toISOString(), userApiKeys: [], mcpSecrets: {} };
+          try {
+            const raw = await fs.readFile(secretsPath, 'utf-8');
+            currentSecrets = JSON.parse(raw);
+          } catch {}
+
+          if (!currentSecrets.mcpSecrets) currentSecrets.mcpSecrets = {};
+          currentSecrets.mcpSecrets['mcp-github'] = {
+            token: cleanToken,
+            username: user.login,
+            name: user.name,
+            avatarUrl: user.avatar_url,
+            email: user.email,
+            scopes: data.scope || 'repo,read:org,user',
+            authType: 'oauth_device',
+            connectedAt: new Date().toISOString()
+          };
+          currentSecrets.updatedAt = new Date().toISOString();
+
+          await fs.writeFile(secretsPath, JSON.stringify(currentSecrets, null, 2), 'utf-8');
+
+          return sendJson(res, 200, {
+            success: true,
+            status: 'completed',
+            user: {
+              login: user.login,
+              name: user.name,
+              avatarUrl: user.avatar_url,
+              email: user.email
+            },
+            tools: tools.length > 0 ? tools : undefined
+          });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message || 'Error polling GitHub device authorization' });
+        }
+      }
+
+      // ── Provider Direct Connect (Google, Slack, Notion, etc.) ──
+      if (url === '/api/mcp/oauth/provider/connect' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const { serverId, authData } = body;
+
+          if (!serverId) {
+            return sendJson(res, 400, { error: 'serverId is required' });
+          }
+
+          let accountInfo: { username: string; name?: string; avatarUrl?: string; email?: string } = {
+            username: authData?.username || 'Connected User',
+            name: authData?.name,
+            avatarUrl: authData?.avatarUrl,
+            email: authData?.email
+          };
+
+          // Verification for Slack if a bot/user token was provided
+          if (serverId === 'mcp-slack' && authData?.token) {
+            const cleanToken = authData.token.trim();
+            try {
+              const slackRes = await fetch('https://slack.com/api/auth.test', {
+                headers: { 'Authorization': `Bearer ${cleanToken}` },
+                signal: AbortSignal.timeout(8_000)
+              });
+              const slackData: any = await slackRes.json();
+              if (slackData.ok) {
+                accountInfo.username = `${slackData.user || 'bot'} (${slackData.team || 'Slack'})`;
+                accountInfo.name = slackData.team;
+              }
+            } catch {}
+          }
+
+          // Verification for Notion if an integration token was provided
+          if (serverId === 'mcp-notion' && authData?.token) {
+            const cleanToken = authData.token.trim();
+            try {
+              const notionRes = await fetch('https://api.notion.com/v1/users/me', {
+                headers: {
+                  'Authorization': `Bearer ${cleanToken}`,
+                  'Notion-Version': '2022-06-28'
+                },
+                signal: AbortSignal.timeout(8_000)
+              });
+              const notionData: any = await notionRes.json();
+              if (notionData.id) {
+                accountInfo.username = notionData.name || 'Notion Workspace';
+                if (notionData.avatar_url) accountInfo.avatarUrl = notionData.avatar_url;
+              }
+            } catch {}
+          }
+
+          // Save to secrets.json
+          const secretsPath = path.join(storageDir, 'config', 'secrets.json');
+          let currentSecrets: any = { version: 1, updatedAt: new Date().toISOString(), userApiKeys: [], mcpSecrets: {} };
+          try {
+            const raw = await fs.readFile(secretsPath, 'utf-8');
+            currentSecrets = JSON.parse(raw);
+          } catch {}
+
+          if (!currentSecrets.mcpSecrets) currentSecrets.mcpSecrets = {};
+          currentSecrets.mcpSecrets[serverId] = {
+            token: authData?.token || 'oauth_connected',
+            username: accountInfo.username,
+            name: accountInfo.name,
+            avatarUrl: accountInfo.avatarUrl,
+            email: accountInfo.email,
+            endpoint: authData?.endpoint,
+            authType: authData?.authType || 'oauth_direct',
+            connectedAt: new Date().toISOString()
+          };
+          currentSecrets.updatedAt = new Date().toISOString();
+
+          await fs.writeFile(secretsPath, JSON.stringify(currentSecrets, null, 2), 'utf-8');
+
+          return sendJson(res, 200, {
+            success: true,
+            serverId,
+            user: accountInfo
+          });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message || 'Error connecting provider' });
+        }
+      }
+
+      // ── Provider Direct Disconnect ──
+      if (url === '/api/mcp/oauth/provider/disconnect' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const { serverId } = body;
+          if (!serverId) {
+            return sendJson(res, 400, { error: 'serverId is required' });
+          }
+
+          const secretsPath = path.join(storageDir, 'config', 'secrets.json');
+          try {
+            const raw = await fs.readFile(secretsPath, 'utf-8');
+            const secrets = JSON.parse(raw);
+            if (secrets.mcpSecrets?.[serverId]) {
+              delete secrets.mcpSecrets[serverId];
+              secrets.updatedAt = new Date().toISOString();
+              await fs.writeFile(secretsPath, JSON.stringify(secrets, null, 2), 'utf-8');
+            }
+          } catch {}
+
+          if (serverId === 'mcp-github') {
+            githubMcpClient.kill();
+          }
+
+          return sendJson(res, 200, { success: true, serverId });
+        } catch (err: any) {
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
       // ── Remote MCP Discovery (tools/list) ──
       if (url === '/api/mcp/remote/discover' && req.method === 'POST') {
         try {

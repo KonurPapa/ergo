@@ -157,6 +157,8 @@ export interface MCPServer {
   isCustom?: boolean;
   authHeader?: string;
   authUsername?: string;
+  authAvatarUrl?: string;
+  authEmail?: string;
   error?: string;
 }
 
