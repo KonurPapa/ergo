@@ -4,7 +4,7 @@
  * a way to ask its main process to check for an update. A bridge run from a checkout (`npm run dev`, `npm run bridge`)
  * has no host and reports kind 'source'.
  */
-import { BRIDGE_PROTOCOL, type BridgeInfo, type BridgeUpdateState } from '../src/lib/bridgeProtocol.ts';
+import { BRIDGE_PROTOCOL, type BridgeInfo, type BridgeProblem, type BridgeUpdateState } from '../src/lib/bridgeProtocol.ts';
 
 export interface BridgeHost {
   version: string;
@@ -35,10 +35,19 @@ export function activeSessionCount(): number {
   }
 }
 
+const problems = new Map<BridgeProblem['code'], string>();
+
+/** Record (message) or clear (null) something that keeps this bridge from working; the web app shows how to fix it. */
+export function setBridgeProblem(code: BridgeProblem['code'], message: string | null): void {
+  if (message) problems.set(code, message);
+  else problems.delete(code);
+}
+
 export function bridgeInfo(): BridgeInfo {
+  const reported = Array.from(problems, ([code, message]) => ({ code, message }));
   return host
-    ? { protocol: BRIDGE_PROTOCOL, version: host.version, kind: 'desktop', update: host.getUpdate() }
-    : { protocol: BRIDGE_PROTOCOL, version: 'source', kind: 'source' };
+    ? { protocol: BRIDGE_PROTOCOL, version: host.version, kind: 'desktop', update: host.getUpdate(), problems: reported }
+    : { protocol: BRIDGE_PROTOCOL, version: 'source', kind: 'source', problems: reported };
 }
 
 /** Starts an update; false when this bridge can't update itself (it runs from a checkout). */

@@ -75,7 +75,12 @@ function start() {
     if (app.isPackaged) setStartAtLogin(true);
     writeSettings({ ...settings, setUpAt: new Date().toISOString() });
     onReady = 'announce';
-  } else if (onReady === 'nothing' && !process.argv.includes(AT_LOGIN_ARG)) {
+  } else if (process.platform === 'linux' && app.isPackaged && isStartAtLogin()) {
+    // A downloaded AppImage often lands somewhere new (a reinstall, AppImageLauncher's renamed copy): point the login
+    // entry at the one running now, or the next login starts the old, possibly broken, copy.
+    setStartAtLogin(true);
+  }
+  if (settings.setUpAt && onReady === 'nothing' && !process.argv.includes(AT_LOGIN_ARG)) {
     // macOS gives login launches no marker, so opening it there never opens the browser by itself.
     onReady = isProtocolLaunch(process.argv) ? 'announce' : process.platform === 'darwin' ? 'nothing' : 'open-ergo';
   }

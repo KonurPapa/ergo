@@ -6,6 +6,7 @@
  * prompts, auto-approvals, signals and exits on one Server-Sent Events stream.
  */
 import { bridgeClient } from './bridgeClient';
+import { clearBridgeFailure, isBridgeSideError, reportBridgeFailure } from './bridgeHealth';
 import type { AgentSessionRole, CliDetectedPrompt, PermissionLevel } from '../types';
 
 export interface SpawnAgentRequest {
@@ -140,11 +141,17 @@ async function postJson<T>(endpoint: string, body: unknown): Promise<T | null> {
   }
 }
 
-/** Launch (or relaunch — an existing session with the same id is killed first) one agent PTY. */
+/**
+ * Launch (or relaunch — an existing session with the same id is killed first) one agent PTY. A failure that comes from
+ * the bridge app itself (e.g. node-pty didn't load) is reported to bridgeHealth, which shows how to fix the bridge.
+ */
 export function spawnAgentSession(req: SpawnAgentRequest): Promise<SpawnAgentResponse> {
-  return postJson<SpawnAgentResponse>('/api/pty/spawn', { ...req, role: toWireRole(req.role) }).then(
-    (r) => r ?? { success: false, error: 'Bridge unreachable' }
-  );
+  return postJson<SpawnAgentResponse>('/api/pty/spawn', { ...req, role: toWireRole(req.role) }).then((r) => {
+    const res = r ?? { success: false, error: 'Bridge unreachable' };
+    if (res.success) clearBridgeFailure();
+    else if (isBridgeSideError(res.error)) reportBridgeFailure(res.error!);
+    return res;
+  });
 }
 
 /** A task agent's terminal saved on the user's machine (bridge protocol 7): replayable after a reload or restart. */

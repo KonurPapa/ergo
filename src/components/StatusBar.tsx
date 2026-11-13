@@ -8,6 +8,9 @@ import { SUPPORTED_AI_PROVIDERS } from '../lib/aiProviders';
 import { useAgentActivity, useTick } from '../hooks/useAgentActivity';
 import { agentNameForCmd, formatElapsed } from '../lib/agentDisplay';
 import { AgentStatus, Button, Icon, Menu, Popover, StatusDot, type MenuItem } from './ui';
+import { useBridgeHealth } from '../hooks/useBridgeHealth';
+import { explainBridgeError } from '../lib/bridgeHealth';
+import { BridgeFixSteps } from './BridgeUpdateBanner';
 
 interface StatusBarProps {
   bridgeStatus: BridgeStatus;
@@ -93,6 +96,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   const [openPop, setOpenPop] = useState<'bridge' | 'agent' | null>(null);
 
   const state = bridgeState(bridgeStatus);
+  const health = useBridgeHealth(bridgeStatus);
+  const broken = state === 'connected' && health.state === 'broken' ? health : null;
   const download = getBridgeDownload();
   const hosted = bridgeClient.isHostedWeb();
 
@@ -127,13 +132,21 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       <button
         ref={setBridgeAnchor}
         type="button"
-        className={`eg-sb-item ${state === 'unreachable' ? 'is-attention' : ''}`}
+        className={`eg-sb-item ${state === 'unreachable' || broken ? 'is-attention' : ''}`}
         onClick={() => setOpenPop(openPop === 'bridge' ? null : 'bridge')}
         aria-expanded={openPop === 'bridge'}
-        title={state === 'connected' ? `Bridge connected at ${bridgeStatus.bridgeUrl}` : undefined}
+        title={broken ? "Ergo Bridge can't start agents: click for how to fix it" : state === 'connected' ? `Bridge connected at ${bridgeStatus.bridgeUrl}` : undefined}
       >
-        <StatusDot state={state === 'connected' ? 'success' : state === 'connecting' ? 'live' : 'warning'} />
-        {state === 'connected' ? 'Bridge' : state === 'connecting' ? 'Connecting' : <span className="eg-sb-strong">Bridge unreachable</span>}
+        <StatusDot state={broken ? 'danger' : state === 'connected' ? 'success' : state === 'connecting' ? 'live' : 'warning'} />
+        {broken ? (
+          <span className="eg-sb-strong">Bridge needs fixing</span>
+        ) : state === 'connected' ? (
+          'Bridge'
+        ) : state === 'connecting' ? (
+          'Connecting'
+        ) : (
+          <span className="eg-sb-strong">Bridge unreachable</span>
+        )}
       </button>
 
       <button
@@ -170,18 +183,33 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       <Popover anchor={bridgeAnchor} open={openPop === 'bridge'} onClose={() => setOpenPop(null)} placement="above" width={380}>
         <div className="eg-menu eg-bridge-pop" role="dialog" aria-labelledby="eg-bridge-pop-title">
           <div className="eg-hstack">
-            <StatusDot state={state === 'connected' ? 'success' : state === 'connecting' ? 'live' : 'warning'} />
+            <StatusDot state={broken ? 'danger' : state === 'connected' ? 'success' : state === 'connecting' ? 'live' : 'warning'} />
             <span className="eg-banner-title" id="eg-bridge-pop-title">
-              {state === 'connected' ? 'Bridge connected' : state === 'connecting' ? 'Connecting to the bridge' : 'Bridge unreachable'}
+              {broken
+                ? 'Ergo Bridge needs fixing'
+                : state === 'connected'
+                  ? 'Bridge connected'
+                  : state === 'connecting'
+                    ? 'Connecting to the bridge'
+                    : 'Bridge unreachable'}
             </span>
             <span className="eg-spacer" />
             {state !== 'connected' && <span className="eg-subtle eg-caption">{sinceLabel(bridgeStatus.lastHeartbeat)}</span>}
           </div>
-          {state === 'connected' ? (
+          {broken ? (
+            <>
+              <p className="eg-bridge-pop-text">
+                It's connected but can't start agents on this computer. {explainBridgeError(broken.message)} This is a problem with the
+                Ergo Bridge app, not with your tasks or your AI account.
+              </p>
+              <BridgeFixSteps status={bridgeStatus} message={broken.message} latest={broken.latest} updateAvailable={broken.updateAvailable} />
+            </>
+          ) : state === 'connected' ? (
             <p className="eg-bridge-pop-text">
               The bridge is the small Ergo helper on your computer that starts agents and reads your files. It's running at{' '}
               <code>{bridgeStatus.bridgeUrl}</code>
               {bridgeStatus.bridgeInfo?.version ? ` (version ${bridgeStatus.bridgeInfo.version})` : ''}.
+              {health.state === 'update-available' && ` Version ${health.latest} is available: it installs by itself when no agents are running.`}
             </p>
           ) : (
             <>

@@ -78,24 +78,41 @@ export function getBridgeDownload(): { platform: string; url: string } | null {
   return null;
 }
 
-let publishedAssets: Promise<Set<string> | null> | null = null;
+/** The newest published Ergo Bridge release: its version (no leading v; null before the first release) and files. */
+interface LatestBridgeRelease {
+  version: string | null;
+  assets: Set<string>;
+}
+
+let latestRelease: Promise<LatestBridgeRelease | null> | null = null;
+
+/** Fetched once per page load; null when GitHub doesn't answer (offline, or its 60-requests-an-hour anonymous limit). */
+function fetchLatestBridgeRelease(): Promise<LatestBridgeRelease | null> {
+  latestRelease ??= fetch(BRIDGE_LATEST_RELEASE_API)
+    .then(async (res) => {
+      if (res.status === 404) return { version: null, assets: new Set<string>() };
+      if (!res.ok) return null;
+      const release = await res.json();
+      const tag = typeof release.tag_name === 'string' ? release.tag_name.replace(/^v/, '') : null;
+      return { version: tag, assets: new Set<string>((release.assets ?? []).map((asset: { name: string }) => asset.name)) };
+    })
+    .catch(() => null);
+  return latestRelease;
+}
 
 /**
  * Whether the latest GitHub release has the installer at `url`. A published asset link downloads the file straight
  * away (GitHub serves it as an attachment, so the page stays put); one that isn't published yet lands on GitHub's 404
- * page. Resolves null when GitHub doesn't answer (offline, or its 60-requests-an-hour anonymous limit).
+ * page. Resolves null when GitHub doesn't answer.
  */
 export async function isBridgeDownloadPublished(url: string): Promise<boolean | null> {
-  publishedAssets ??= fetch(BRIDGE_LATEST_RELEASE_API)
-    .then(async (res) => {
-      if (res.status === 404) return new Set<string>();
-      if (!res.ok) return null;
-      const release = await res.json();
-      return new Set<string>((release.assets ?? []).map((asset: { name: string }) => asset.name));
-    })
-    .catch(() => null);
-  const assets = await publishedAssets;
-  return assets ? assets.has(url.slice(url.lastIndexOf('/') + 1)) : null;
+  const release = await fetchLatestBridgeRelease();
+  return release ? release.assets.has(url.slice(url.lastIndexOf('/') + 1)) : null;
+}
+
+/** The newest published Ergo Bridge version (e.g. "0.8.0"); null when unknown or nothing is published yet. */
+export async function latestBridgeVersion(): Promise<string | null> {
+  return (await fetchLatestBridgeRelease())?.version ?? null;
 }
 
 /**

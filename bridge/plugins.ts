@@ -43,7 +43,7 @@ import { createMemoryStore, embedWithMemoryModel, MEMORY_NAMESPACES, AGENT_NOTE_
 import { CodeIndexManager, SKIP_DIR } from '../src/lib/codeIndex/codeIndex.ts';
 import { rankPaths } from '../src/lib/pathRank.ts';
 import { WORKSPACE_MCP_TOOLS } from '../src/lib/workspaceMcp.ts';
-import { bridgeInfo, hostFilePicker, requestBridgeUpdate, setActiveSessionCounter } from './selfUpdate.ts';
+import { bridgeInfo, hostFilePicker, requestBridgeUpdate, setActiveSessionCounter, setBridgeProblem } from './selfUpdate.ts';
 import { parseScoutFiles, scoutSystemPrompt, scoutUserPrompt, SCOUT_MAX_TURNS, SCOUT_TIMEOUT_MS } from '../src/lib/codeIndex/fileScout.ts';
 import type {
   AgentNoteKind,
@@ -5617,13 +5617,41 @@ let nodePtyModule: Promise<any> | null = null;
 function loadNodePty(): Promise<any> {
   if (!nodePtyModule) {
     nodePtyModule = import('node-pty')
-      .then((m: any) => m.default ?? m)
+      .then((m: any) => {
+        setBridgeProblem('agents-unavailable', null);
+        return m.default ?? m;
+      })
       .catch((err) => {
         nodePtyModule = null;
-        throw err;
+        const explained = explainNodePtyLoadFailure(err);
+        // Reported with the bridge's info, so the web app says how to fix it before anyone runs a task.
+        setBridgeProblem('agents-unavailable', String(explained?.message || explained));
+        throw explained;
       });
   }
   return nodePtyModule;
+}
+
+/**
+ * node-pty tries build/Release, build/Debug, then prebuilds/<platform>, and reports only the last error. On Linux, which
+ * has no prebuild, that reads "Cannot find module './prebuilds/linux-x64//pty.node'" even when the compiled binary is
+ * present but can't load (e.g. "GLIBC_2.42 not found" from an app built on a newer distro). Load it directly for the
+ * real reason. Only the CommonJS bundle (the desktop app) has require; in the ESM dev bridge this keeps node-pty's error.
+ */
+function explainNodePtyLoadFailure(err: any): any {
+  if (process.platform !== 'linux' || !/Failed to load native module/.test(String(err?.message))) return err;
+  let binary: string;
+  try {
+    binary = path.join(path.dirname(require.resolve('node-pty/package.json')), 'build', 'Release', 'pty.node');
+  } catch {
+    return err;
+  }
+  try {
+    process.dlopen({ exports: {} }, binary);
+    return err;
+  } catch (cause: any) {
+    return new Error(`node-pty's native binary failed to load: ${cause?.message || cause}`, { cause: err });
+  }
 }
 
 function safeWsSend(ws: any, obj: Record<string, unknown>) {
@@ -6915,8 +6943,10 @@ export function ergoPtyPlugin(): Plugin {
         const { WebSocketServer } = await import('ws');
         // Vite installs no unhandledRejection handler, so a native module that fails to load here would take the whole
         // bridge down with it. Terminals report the failure instead.
+        let ptyLoadError = '';
         const pty = await loadNodePty().catch((err) => {
           console.error('[Ergo PTY] Could not load node-pty, so embedded terminals are unavailable:', err);
+          ptyLoadError = String(err?.message || err);
           return null;
         });
 
@@ -7099,7 +7129,7 @@ export function ergoPtyPlugin(): Plugin {
               }
 
               try {
-                if (!pty) throw new Error('Embedded terminals are unavailable: node-pty failed to load (see the terminal running npm run dev).');
+                if (!pty) throw new Error(`Embedded terminals are unavailable: node-pty failed to load. ${ptyLoadError}`);
                 const session = spawnPtySession(pty, {
                   sessionKey,
                   taskId: msg.taskId || sessionKey,

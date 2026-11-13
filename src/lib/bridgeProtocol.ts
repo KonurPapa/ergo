@@ -25,6 +25,9 @@
  *  8 — context rotation for CLI workers: /api/pty/usage reports `usage.context` (the conversation's current and starting
  *      size, the window when known) and a worker's handoff-<piece>.md arrives as a `handoff` signal. Optional: with an
  *      older bridge CLI workers are never rotated (they compact themselves).
+ *      Also `problems` in the bridge's info: what keeps it from working on this computer (e.g. node-pty, which starts
+ *      every agent, failed to load). Optional: with an older bridge the web app recognizes those failures from the
+ *      error an agent start returns (bridgeHealth.ts).
  */
 export const BRIDGE_PROTOCOL = 8;
 
@@ -63,6 +66,14 @@ export interface BridgeUpdateState {
   waitingForSessions?: number;
 }
 
+/** Something that keeps this bridge from working on this computer, whatever the web app asks of it. */
+export interface BridgeProblem {
+  /** agents-unavailable: node-pty, which every agent runs in, failed to load. */
+  code: 'agents-unavailable';
+  /** The technical reason, for "Copy details". */
+  message: string;
+}
+
 export interface BridgeInfo {
   protocol: number;
   /** The installed Ergo Bridge app's version; 'source' when it runs from a checkout (`npm run dev` / `npm run bridge`). */
@@ -70,4 +81,6 @@ export interface BridgeInfo {
   /** desktop: the Ergo Bridge app, which updates itself. source: a checkout, updated with git pull + restart. */
   kind: 'desktop' | 'source';
   update?: BridgeUpdateState;
+  /** Protocol 8+: always present, empty when the bridge works. Missing from older bridges. */
+  problems?: BridgeProblem[];
 }

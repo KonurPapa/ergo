@@ -96,6 +96,7 @@ import { PRICE_SNAPSHOT } from '../lib/modelCatalog/priceSnapshot';
 import { bridgeSupportsTaskReferences, type TaskReferenceContext } from '../lib/taskReferences';
 import { executeWorkspaceToolAction } from '../lib/workspaceMcp';
 import { stampNewSteps, withCycleEnded, withCycleRemoved, withCycleStarted } from '../lib/taskThread';
+import { BRIDGE_FAILURE_SUMMARY, isBridgeSideError } from '../lib/bridgeHealth';
 
 // ─── Public types ─────────────────────────────────────────────────────────────────────
 
@@ -1057,7 +1058,9 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     run: RunState,
     role: AgentSessionRole,
     opts: { pieceId?: string; label: string; prompt: string; resumeSessionId?: string; stage?: RunStageModel }
-  ): Promise<{ ok: true; session: SpawnedSession; stage: RunStageModel } | { ok: false; error: string; cancelled?: boolean }> => {
+  ): Promise<
+    { ok: true; session: SpawnedSession; stage: RunStageModel } | { ok: false; error: string; cancelled?: boolean; bridgeProblem?: boolean }
+  > => {
     const launch = await ensureLaunch(run);
     if (!launch) return { ok: false, error: 'No CLI agent is configured for the active AI profile.' };
 
@@ -1135,6 +1138,9 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
           ? { ...s, status: 'failed', session: { ...s.session, isActive: false, exitCode: -1 }, endedAt: new Date().toISOString() }
           : s
       );
+      // The bridge app itself is broken (e.g. its terminal module didn't load): say so in plain words; the banner
+      // carries the technical reason and the steps to fix it.
+      if (isBridgeSideError(error)) return { ok: false, error: BRIDGE_FAILURE_SUMMARY, bridgeProblem: true };
       return { ok: false, error };
     }
 
@@ -3866,7 +3872,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       const failToast = () =>
         depsRef.current.showToast({
           type: 'error',
-          title: 'Agent failed to start',
+          title: !res.ok && res.bridgeProblem ? 'Ergo Bridge needs fixing' : 'Agent failed to start',
           message: `"${task.title}": ${res.error}`,
           duration: 8000,
         });

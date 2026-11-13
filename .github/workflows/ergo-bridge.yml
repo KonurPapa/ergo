@@ -21,7 +21,8 @@ jobs:
               desktop/release/Ergo-Bridge-Setup.exe
               desktop/release/Ergo-Bridge-Setup.exe.blockmap
               desktop/release/latest.yml
-          - os: ubuntu-latest
+          # Pinned, not ubuntu-latest: node-pty is compiled here and links against the runner's glibc (see the check below).
+          - os: ubuntu-24.04
             platform: --linux
             files: |
               desktop/release/Ergo-Bridge.AppImage
@@ -53,6 +54,26 @@ jobs:
         working-directory: desktop
       - run: npm run dist -- ${{ matrix.platform }} --publish never
         working-directory: desktop
+      # node-pty ships no Linux prebuild, so npm compiles it on the runner against the runner's glibc. v0.7.0 was built
+      # after ubuntu-latest moved past glibc 2.42; its pty.node wouldn't load on Ubuntu 24.04, Mint 22 or Debian 12, and
+      # every task failed to start. Fail the release instead of shipping that.
+      - name: Check native modules load on glibc 2.35 (Ubuntu 22.04)
+        if: matrix.platform == '--linux'
+        working-directory: desktop
+        run: |
+          max=2.35
+          files=$(find release/linux-unpacked/resources/app/node_modules \( -name '*.node' -o -name '*.so' -o -name '*.so.*' \))
+          echo "$files" | grep -q 'node-pty/build/Release/pty.node' || { echo "::error::pty.node is missing from the app"; exit 1; }
+          bad=0
+          for f in $files; do
+            need=$(objdump -T "$f" | grep -o 'GLIBC_2\.[0-9]*' | sed 's/GLIBC_//' | sort -uV | tail -1 || true)
+            echo "glibc ${need:-none}  $f"
+            if [ -n "$need" ] && [ "$(printf '%s\n%s\n' "$need" "$max" | sort -V | tail -1)" != "$max" ]; then
+              echo "::error::$f needs glibc $need, newer than $max"
+              bad=1
+            fi
+          done
+          exit $bad
       - uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.os }}
