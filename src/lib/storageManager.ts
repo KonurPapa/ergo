@@ -1123,6 +1123,34 @@ export class StorageManager {
   }
 
   /**
+   * Takes a project off Ergo's project list without deleting anything: its folder (projects/<id>: task lists, briefs,
+   * run history, its Allowed Folders) moves to removed-projects/<id>-<date>, which the project scan doesn't read.
+   * Moving it back into projects/ brings the project back. Needs the bridge (a browser folder handle can't move
+   * folders).
+   */
+  public async moveProjectOutOfList(folderPath: string): Promise<{ success: boolean; movedTo?: string; error?: string }> {
+    const rel = folderPath.replace(/\\/g, '/').replace(/\/+$/, '');
+    const name = rel.split('/').pop() || '';
+    if (!/^projects\/[^/]+$/.test(rel) || !name) {
+      return { success: false, error: `"${folderPath}" isn't a project folder Ergo can move.` };
+    }
+    const stamp = new Date().toISOString().replace(/[:T]/g, '-').replace(/\..*$/, '');
+    const movedTo = `removed-projects/${name}-${stamp}`;
+    try {
+      const res = await this.apiFetch('/api/files/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldPath: rel, newPath: movedTo }),
+      });
+      if (res.ok) return { success: true, movedTo };
+      const data = await res.json().catch(() => ({}));
+      return { success: false, error: data.error || `The bridge couldn't move the folder (HTTP ${res.status}).` };
+    } catch (err: any) {
+      return { success: false, error: err?.message || "The bridge isn't reachable." };
+    }
+  }
+
+  /**
    * Delete a single media file from disk.
    */
   public async deleteMediaFile(relPath: string): Promise<void> {

@@ -2,7 +2,21 @@ import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ExternalLink, CheckSquare, Square, FileCode } from 'lucide-react';
-import { openFileInIdeOrSystem } from '../lib/mcpClient';
+import { FILE_LINK_PROPS, parseFileRef, remarkFileLinks, splitFileLinks, type FileRef } from '../lib/fileLinks';
+import { openFileRef } from '../lib/ideLinks';
+import { FileLinkText, FileRefLink } from './FileLink';
+
+const REMARK_PLUGINS = [remarkGfm, remarkFileLinks];
+
+/** The file reference remarkFileLinks put on a linked path. */
+function linkedFileRef(node: unknown): FileRef | null {
+  const props = (node as { properties?: Record<string, unknown> } | undefined)?.properties;
+  const filePath = props?.[FILE_LINK_PROPS.path];
+  if (typeof filePath !== 'string' || !filePath) return null;
+  const line = Number(props?.[FILE_LINK_PROPS.line]) || undefined;
+  const column = Number(props?.[FILE_LINK_PROPS.column]) || undefined;
+  return { path: filePath, ...(line ? { line } : {}), ...(line && column ? { column } : {}) };
+}
 
 interface MarkdownRendererProps {
   content: string;
@@ -24,6 +38,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   onOpenFile
 }) => {
   if (!content) return null;
+  const openRef = (ref: FileRef) => (onOpenFile ? onOpenFile(ref.path) : void openFileRef(ref));
 
   return (
     <div
@@ -31,7 +46,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
       style={style}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={REMARK_PLUGINS}
         components={{
           // Headings
           h1: ({ children }) => <h1 className="md-h1">{children}</h1>,
@@ -45,27 +60,33 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
           del: ({ children }) => <del className="md-del">{children}</del>,
 
           // Links
-          a: ({ href, children }) => {
-            const isLocalFile = href && (
+          a: ({ node, href, children }) => {
+            // A path found in the text (remarkFileLinks): opens in the editor at its line.
+            const found = linkedFileRef(node);
+            if (found) {
+              return (
+                <FileRefLink fileRef={found} onOpen={openRef}>
+                  {children}
+                </FileRefLink>
+              );
+            }
+            const isExternalWeb = href && (href.startsWith('http://') || href.startsWith('https://'));
+            const isLocalFile = href && !isExternalWeb && (
               href.startsWith('file://') ||
               href.startsWith('projects/') ||
               href.startsWith('.ergo/') ||
               href.startsWith('~/') ||
               href.startsWith('./') ||
-              /\.(ts|tsx|js|jsx|json|py|rs|go|c|cpp|h|css|html|md|toml|yaml|yml|sh|sql)$/i.test(href)
+              /\.(ts|tsx|js|jsx|json|py|rs|go|c|cpp|h|css|html|md|toml|yaml|yml|sh|sql)$/i.test(href) ||
+              // `[x](src/a.ts#L42)`, `[x](src/a.ts:42:7)`
+              Boolean(parseFileRef(href, { inCode: true }))
             );
 
-            const isExternalWeb = href && (href.startsWith('http://') || href.startsWith('https://'));
-
-            const handleClick = async (e: React.MouseEvent) => {
+            const handleClick = (e: React.MouseEvent) => {
               e.stopPropagation();
               if (isLocalFile && !isExternalWeb) {
                 e.preventDefault();
-                if (onOpenFile) {
-                  onOpenFile(href);
-                } else {
-                  await openFileInIdeOrSystem(href);
-                }
+                openRef(parseFileRef(href, { inCode: true }) ?? { path: href });
               }
             };
 
@@ -76,7 +97,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
                 rel={isExternalWeb ? 'noopener noreferrer' : undefined}
                 className={`md-link ${isLocalFile ? 'md-file-link' : ''}`}
                 onClick={handleClick}
-                title={isLocalFile ? `Open ${href} in IDE / Editor` : undefined}
+                title={isLocalFile ? `Open ${href} in your editor` : undefined}
               >
                 {isLocalFile && <FileCode size={12} className="md-file-icon" />}
                 <span>{children}</span>
@@ -90,7 +111,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
           },
 
           // Code blocks & inline code
-          code: ({ className: codeClassName, children, ...props }) => {
+          code: ({ className: codeClassName, children, node: _node, ...props }) => {
             const isCodeBlock = codeClassName && codeClassName.includes('language-');
             const codeString = String(children).replace(/\n$/, '');
 
@@ -108,6 +129,22 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
               );
             }
 
+            // Paths in code spans open in the editor too: a span that is one path becomes the link itself.
+            const parts = typeof children === 'string' ? splitFileLinks(codeString, { inCode: true }) : [];
+            if (parts.length === 1 && parts[0].kind === 'file') {
+              return (
+                <FileRefLink fileRef={parts[0].ref} asCode onOpen={openRef}>
+                  {codeString}
+                </FileRefLink>
+              );
+            }
+            if (parts.length > 1) {
+              return (
+                <code className="md-inline-code" {...props}>
+                  <FileLinkText text={codeString} inCode onOpen={openRef} />
+                </code>
+              );
+            }
             return <code className="md-inline-code" {...props}>{children}</code>;
           },
 

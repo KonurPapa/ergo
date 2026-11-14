@@ -37,12 +37,17 @@ export function renderInlineKeepingSpaces(state: any, node: any) {
 
 /**
  * Whether an empty paragraph is a blank line the user made (kept as a `&nbsp;` line). A task with no text yet
- * (first block of a list item) and the editor's own trailing empty paragraph are left empty.
+ * (first block of a list item) and the editor's own trailing empty paragraph are left empty, unless the task holds a
+ * code block or image under its empty title.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function isKeptBlankLine(node: any, parent: any, index: number): boolean {
   if (node.content.size > 0 || !parent) return false;
-  if (parent.type.name === 'listItem' && index === 0) return false;
+  // A task's empty title above its code block or image is kept (as `&nbsp;`), or the task would load back without one.
+  if (parent.type.name === 'listItem' && index === 0) {
+    const next = parent.childCount > 1 ? parent.child(1) : null;
+    return !!next && (next.type.name === 'codeBlock' || next.type.name === 'image');
+  }
   if (parent.type.name === 'doc' && index === parent.childCount - 1) return false;
   return true;
 }
@@ -58,6 +63,19 @@ export function blankLineMarkdownIt(md: any) {
       if (tokens[i + 1].content.trim() !== NBSP_ENTITY) continue;
       tokens[i + 1].content = '';
       tokens[i + 1].children = [];
+      // In a tight list the paragraph is rendered bare (hidden); an empty bare paragraph renders as nothing, and a
+      // task's empty title above its code block was lost. Render it as a real (empty) paragraph, and mark the list
+      // tight explicitly, since a <p> in it would otherwise read as a loose list.
+      if (tokens[i].hidden) {
+        tokens[i].hidden = false;
+        if (tokens[i + 2]?.type === 'paragraph_close') tokens[i + 2].hidden = false;
+        for (let j = i - 1; j >= 0; j--) {
+          if (tokens[j].level === tokens[i].level - 2 && /_list_open$/.test(tokens[j].type)) {
+            tokens[j].attrSet('data-tight', 'true');
+            break;
+          }
+        }
+      }
     }
   });
 }

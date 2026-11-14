@@ -24,6 +24,53 @@ export function stripHeaderComments(markdown: string): string {
 }
 
 /**
+ * A lane's markdown from the editor's body: the editor never sees the file's leading comment lines (`<!-- Swimlane
+ * Title: … -->`, `<!-- Project: … -->`, see stripHeaderComments), so they are put back from the lane's previous
+ * markdown. Without them the first edit dropped the lane's saved name from its file.
+ */
+export function withHeaderComments(body: string, previous: string | undefined): string {
+  const firstLine = body.split('\n').find((l) => l.trim() !== '');
+  if (!previous || firstLine?.trim().startsWith('<!--')) return body;
+  const header: string[] = [];
+  for (const line of previous.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('<!--')) header.push(line);
+    else if (trimmed !== '' || /^\s*<!--\s*ARCHIVE\s*-->/i.test(line)) break;
+  }
+  if (header.length === 0 || header.some((l) => /^\s*<!--\s*ARCHIVE\s*-->/i.test(l))) return body;
+  return `${header.join('\n')}\n\n${body.replace(/^\s*\n/, '')}`;
+}
+
+/** A line ending in a markdown line break: an unescaped trailing backslash (Shift+Enter in the editor). */
+const endsInHardBreak = (t: string) => /(^|[^\\])(\\\\)*\\$/.test(t.trimEnd());
+
+/**
+ * The last line of a title (or sub-item) that line `i` starts: past `i` while each line ends in a line break and the
+ * next is an indented continuation (not a list item or a code fence). `i` itself when the title has no line break.
+ */
+function titleLastLine(lines: string[], i: number): number {
+  let last = i;
+  while (endsInHardBreak(splitAnchor(lines[last]).text) && last + 1 < lines.length) {
+    const next = lines[last + 1];
+    if (!/^\s+\S/.test(next) || /^\s*([*+-]|\d+\.)\s/.test(next) || /^\s*(`{3,}|~{3,})/.test(next)) break;
+    last++;
+  }
+  return last;
+}
+
+/**
+ * A title that goes on over line breaks, read as one line: joined with spaces, so a title struck through across the
+ * break still reads as done. The lines after `i` are only read, never consumed.
+ */
+function withHardBreakLines(text: string, lines: string[], i: number): string {
+  const last = titleLastLine(lines, i);
+  if (last === i) return text;
+  const parts = [text];
+  for (let j = i + 1; j <= last; j++) parts.push(splitAnchor(lines[j]).text.trim());
+  return parts.map((t, k) => (k < parts.length - 1 ? t.trimEnd().slice(0, -1).trimEnd() : t)).join(' ');
+}
+
+/**
  * Internal helper to parse a block of task markdown lines into TaskItem array
  */
 function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArchived: boolean = false): { items: TaskItem[]; headerComments: string; bodyMarkdown: string } {
@@ -38,9 +85,28 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
   let categoryCounter = 0;
   let currentTask: TaskItem | null = null;
   const commentLines: string[] = [];
+  // The fenced code block the line is in, if any. Its lines are code, never tasks, headings or comments.
+  let fence: { char: string; len: number } | null = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+
+    if (fence) {
+      if (isFenceClose(line, fence)) fence = null;
+      continue;
+    }
+    const fenceOpen = line.match(FENCE_OPEN_RE);
+    if (fenceOpen) {
+      fence = { char: fenceOpen[2][0], len: fenceOpen[2].length };
+      // Indented, the code block belongs to the task above (it stays that task's); at the margin it ends the list.
+      if (!fenceOpen[1] || !currentTask) {
+        currentTask = null;
+        isHeadingActive = false;
+        currentCategory = isArchived ? 'Archive' : 'Untitled';
+        categoryCounter = 0;
+      }
+      continue;
+    }
 
     // Capture header comments
     if (line.trim().startsWith('<!--')) {
@@ -78,7 +144,13 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
     // Subtask bullet lines (indented bullet or numbered item under currentTask)
     const subtaskMatch = line.match(/^(\t+|\s{2,})([*+-]|\d+\.)\s+(.*)$/);
     if (subtaskMatch && currentTask) {
-      let subtext = splitAnchor(subtaskMatch[3]).text.trim();
+      let subtext = withHardBreakLines(splitAnchor(subtaskMatch[3]).text.trim(), lines, i);
+      // A sub-item that opens with a code block (older files): no text of its own, and the fence runs on below.
+      const subFence = subtext.match(FENCE_OPEN_RE);
+      if (subFence) {
+        fence = { char: subFence[2][0], len: subFence[2].length };
+        subtext = '';
+      }
       // Check if item is marked done via unescaped strikethrough or checkbox
       const isDone = isUnescapedDone(subtext);
       const subHuman = isUnescapedHumanReview(subtext);
@@ -118,7 +190,12 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
       }
 
       const numberedSplit = splitAnchor(numberedMatch[2]);
-      let rawTitle = numberedSplit.text.trim();
+      let rawTitle = withHardBreakLines(numberedSplit.text.trim(), lines, i);
+      const numberedFence = rawTitle.match(FENCE_OPEN_RE);
+      if (numberedFence) {
+        fence = { char: numberedFence[2][0], len: numberedFence[2].length };
+        rawTitle = '';
+      }
       const isDone = isUnescapedDone(rawTitle);
       const isHumanReview = isUnescapedHumanReview(rawTitle);
 
@@ -164,7 +241,12 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
       }
 
       const bulletSplit = splitAnchor(bulletMatch[1]);
-      let rawTitle = bulletSplit.text.trim();
+      let rawTitle = withHardBreakLines(bulletSplit.text.trim(), lines, i);
+      const bulletFence = rawTitle.match(FENCE_OPEN_RE);
+      if (bulletFence) {
+        fence = { char: bulletFence[2][0], len: bulletFence[2].length };
+        rawTitle = '';
+      }
       const isDone = isUnescapedDone(rawTitle);
       const isHumanReview = isUnescapedHumanReview(rawTitle);
 
@@ -193,6 +275,9 @@ function parseTaskItemsBlock(markdown: string, startIdOffset: number = 0, isArch
       items.push(currentTask);
       continue;
     }
+
+    // An indented line under a task is more of that task (a screenshot, a second paragraph): the task goes on.
+    if (currentTask && /^(\t|\s{2,})\S/.test(line)) continue;
 
     // Generic paragraph text outside of lists and headings
     if (line.trim() !== '') {
@@ -349,9 +434,10 @@ export function serializeTodoMarkdown(
  * Serializes tasks back to a lane's TODO markdown without disturbing what the editor wrote.
  *
  * `serializeTodoMarkdown` rebuilds the file from parsed tasks, which flattens nested sub-subtasks,
- * drops inline formatting (bold, links) and any prose between lists. When the tasks still match the
- * original document, the original text is kept verbatim; when only done-state differs, just those
- * lines are patched. Anything structural falls back to a full re-serialize.
+ * drops inline formatting (bold, links) and any prose between lists, and reads a task with struck words in it as
+ * done. So the original text is kept: tasks that still match keep their lines verbatim (only a changed done-state is
+ * patched), a task that is gone (archived, deleted) loses just its own lines, and a task that is new gets lines of
+ * its own beside the task before it. Only a change the lines can't express falls back to a full re-serialize.
  */
 export function serializeTodoMarkdownPreserving(
   items: TaskItem[],
@@ -363,39 +449,66 @@ export function serializeTodoMarkdownPreserving(
 
   const active = items.filter((i) => !i.isArchived);
   const original = parseTodoMarkdown(originalMarkdown).items;
-  if (original.length !== active.length) return fallback();
+  if (original.length === 0 || original.some((t) => t.sourceLine === undefined)) return fallback();
 
   const lines = originalMarkdown.split('\n');
   const patches = new Map<number, boolean>(); // line index -> desired done state
 
-  for (let t = 0; t < original.length; t++) {
-    const before = original[t];
-    const after = active[t];
-    if (
-      before.title !== after.title ||
-      before.isUnordered !== after.isUnordered ||
-      before.category !== after.category ||
-      before.subtasks.length !== after.subtasks.length
-    ) {
-      return fallback();
+  const sameTask = (before: TaskItem, after: TaskItem) =>
+    before.title === after.title &&
+    before.isUnordered === after.isUnordered &&
+    before.category === after.category &&
+    before.subtasks.length === after.subtasks.length &&
+    before.subtasks.every((bs, k) => bs.text === after.subtasks[k].text);
+
+  // Line up the tasks with the original ones, in order: originals skipped over are gone, tasks with no original are new.
+  const removed: number[] = [];
+  const inserted: Array<{ after: number; item: TaskItem }> = []; // after: index of the original it follows, -1 = first
+  let next = 0;
+  for (const after of active) {
+    let k = next;
+    while (k < original.length && !sameTask(original[k], after)) k++;
+    if (k === original.length) {
+      inserted.push({ after: next - 1, item: after });
+      continue;
     }
-    if (before.isDone !== after.isDone && before.sourceLine !== undefined) {
-      patches.set(before.sourceLine, after.isDone);
-    }
-    for (let s = 0; s < before.subtasks.length; s++) {
-      const bs = before.subtasks[s];
+    for (let r = next; r < k; r++) removed.push(r);
+    next = k + 1;
+    const before = original[k];
+    if (before.isDone !== after.isDone) patches.set(before.sourceLine!, after.isDone);
+    before.subtasks.forEach((bs, s) => {
       const as = after.subtasks[s];
-      if (bs.text !== as.text) return fallback();
-      if (bs.isDone !== as.isDone && bs.sourceLine !== undefined) {
-        patches.set(bs.sourceLine, as.isDone);
-      }
-    }
+      if (bs.isDone !== as.isDone && bs.sourceLine !== undefined) patches.set(bs.sourceLine, as.isDone);
+    });
+  }
+  for (let r = next; r < original.length; r++) removed.push(r);
+  // A new task goes beside the task before it, under the same header; anything else is a reorganisation.
+  for (const { after, item } of inserted) {
+    const neighbour = original[after] ?? original[0];
+    if (neighbour.category !== item.category) return fallback();
   }
 
   for (const [lineIdx, done] of patches) {
     const m = lines[lineIdx]?.match(/^(\s*(?:[-*+]|\d+\.)\s+)(.*?)(\s*)$/);
     if (!m) return fallback();
     const [, prefix, rawContent, trailing] = m;
+    // A title with a line break: the ~~ wrap opens on its first line and closes at the end of its last one (closed
+    // after the break's backslash, it would escape a tilde and end the break).
+    const last = titleLastLine(lines, lineIdx);
+    if (last !== lineIdx) {
+      const { text, id } = splitAnchor(rawContent);
+      const head = text.trimEnd().slice(0, -1).trimEnd(); // without the break's backslash
+      const tail = lines[last].match(/^(\s*)(.*?)(\s*)$/)!;
+      if (done) {
+        lines[lineIdx] = `${prefix}~~${withAnchor(head, id)}\\${trailing}`;
+        lines[last] = `${tail[1]}${tail[2]}~~${tail[3]}`;
+      } else {
+        if (!head.startsWith('~~') || !tail[2].endsWith('~~')) return fallback();
+        lines[lineIdx] = `${prefix}${withAnchor(head.slice(2), id)}\\${trailing}`;
+        lines[last] = `${tail[1]}${tail[2].slice(0, -2)}${tail[3]}`;
+      }
+      continue;
+    }
     // The task's anchor stays outside the ~~done~~ wrap.
     const { text, id } = splitAnchor(rawContent);
     const content = text.trimEnd();
@@ -407,8 +520,86 @@ export function serializeTodoMarkdownPreserving(
       lines[lineIdx] = `${prefix}${withAnchor(unwrapped[1], id)}${trailing}`;
     }
   }
+  if (removed.length === 0 && inserted.length === 0) return lines.join('\n').trim();
 
-  return lines.join('\n').trim();
+  // Each original task's lines: its own line, then everything indented under it, without the blank lines after.
+  const blockEnd = (start: number) => {
+    let end = start + 1;
+    for (let i = start + 1; i < lines.length; i++) {
+      if (/^\S/.test(lines[i]) || /^ \d+\.\s/.test(lines[i])) break;
+      if (lines[i].trim() !== '') end = i + 1;
+    }
+    return end;
+  };
+  const blocks = original.map((t) => ({ start: t.sourceLine!, end: blockEnd(t.sourceLine!) }));
+  const replaced: Array<string[] | null> = lines.map((l) => [l]);
+  for (const r of removed) {
+    const { start, end } = blocks[r];
+    for (let i = start; i < end; i++) replaced[i] = null;
+    // Don't leave the blank lines on both sides of the removed task behind as a double gap.
+    if (end < lines.length && lines[end].trim() === '' && (start === 0 || lines[start - 1].trim() === '')) replaced[end] = null;
+  }
+  for (const { after, item } of inserted) {
+    const title = item.isDone ? `~~${item.title}~~` : item.title;
+    const own = [`${item.isUnordered ? '-' : '1.'} ${withAnchor(title, item.anchorId ?? null)}`];
+    for (const sub of item.subtasks) {
+      own.push(`    - ${sub.isHumanReview ? '**human review** - ' : ''}${sub.isDone ? `~~${sub.text}~~` : sub.text}`);
+    }
+    const anchorBlock = blocks[Math.max(0, after)];
+    // Loose lists (a blank line between tasks) get one between the new task and its neighbour too.
+    const loose = anchorBlock.end < lines.length && lines[anchorBlock.end].trim() === '';
+    if (after < 0) {
+      replaced[anchorBlock.start] = [...own, ...(loose ? [''] : []), ...(replaced[anchorBlock.start] ?? [])];
+    } else {
+      const at = anchorBlock.end - 1;
+      replaced[at] = [...(replaced[at] ?? []), ...(loose ? [''] : []), ...own];
+    }
+  }
+  // Keep where each line came from, so a list that lost its first task still starts at that task's number.
+  const runStart = new Map<number, number>();
+  for (const run of orderedListRuns(lines)) for (const i of run) runStart.set(i, parseInt(lines[run[0]].trim(), 10));
+  const out: string[] = [];
+  const startOf: Array<number | undefined> = [];
+  replaced.forEach((group, i) => group?.forEach((line, k) => {
+    out.push(line);
+    startOf.push(k === 0 && line === lines[i] ? runStart.get(i) : undefined);
+  }));
+  for (const run of orderedListRuns(out)) {
+    const start = run.map((i) => startOf[i]).find((n) => n !== undefined) ?? parseInt(out[run[0]].trim(), 10);
+    const width = String(start + run.length - 1).length;
+    run.forEach((i, n) => {
+      out[i] = out[i].replace(/^ ?\d+\./, `${String(start + n).padStart(width, ' ')}.`);
+    });
+  }
+  return out.join('\n').trim();
+}
+
+/** The line indices of each top-level ordered list's items, list by list (code blocks skipped). */
+function orderedListRuns(lines: string[]): number[][] {
+  const runs: number[][] = [];
+  let run: number[] = [];
+  const flush = () => {
+    if (run.length > 0) runs.push(run);
+    run = [];
+  };
+  let fence: { char: string; len: number } | null = null; // inside a code block nothing is a list item
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (fence) {
+      if (isFenceClose(line, fence)) fence = null;
+      continue;
+    }
+    const open = line.match(FENCE_OPEN_RE);
+    if (open) {
+      fence = { char: open[2][0], len: open[2].length };
+      if (!open[1]) flush();
+      continue;
+    }
+    if (/^ ?\d+\.\s/.test(line)) run.push(i);
+    else if (/^\S/.test(line)) flush(); // a header, paragraph or bullet at the margin ends the list
+  }
+  flush();
+  return runs;
 }
 
 /**
@@ -488,6 +679,14 @@ export function syncBriefsWithTasks(
   }
 
   return updatedBriefs;
+}
+
+// A fenced code block's opening line: up to its indent, three or more backticks (no backtick after) or tildes.
+const FENCE_OPEN_RE = /^(\s*)(`{3,}(?=[^`]*$)|~{3,})/;
+
+function isFenceClose(line: string, fence: { char: string; len: number }): boolean {
+  const m = line.match(/^\s*(`{3,}|~{3,})\s*$/);
+  return !!m && m[1][0] === fence.char && m[1].length >= fence.len;
 }
 
 function isUnescapedDone(text: string): boolean {

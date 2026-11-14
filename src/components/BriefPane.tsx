@@ -78,6 +78,10 @@ import {
   Unplug,
   Pencil,
   ListChecks,
+  NotebookPen,
+  Folder,
+  CalendarDays,
+  ArrowDownAZ,
   Activity,
 } from 'lucide-react';
 import { getPref, setPref, subscribePrefs } from '../lib/userPrefs';
@@ -88,6 +92,7 @@ import { MOD, SHIFT } from '../lib/shortcuts';
 
 import { RichTextToolbar } from './RichTextToolbar';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { RunChangedFiles } from './RunChangedFiles';
 import { ScheduleTaskModal } from './ScheduleTaskModal';
 import { TaskMcpToolsModal } from './TaskMcpToolsModal';
 import { type ScheduledJob } from '../lib/taskScheduler';
@@ -915,19 +920,29 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     [...stageList].reverse().find((s) => stageStatus[s.key] === 'done')?.key ??
     stageList[0].key;
   const [followRun, setFollowRun] = useState(true);
+  /** The user is peeking at a stage the run hasn't reached: once the run moves on, follow it again. */
+  const peekingRef = useRef(false);
   // A new task or a new cycle: follow the run again.
   React.useLayoutEffect(() => {
+    peekingRef.current = false;
     setFollowRun(true);
   }, [task.id, latestCycle]);
   React.useLayoutEffect(() => {
+    if (!peekingRef.current) return;
+    peekingRef.current = false;
+    setFollowRun(true);
+  }, [currentStage]);
+  React.useLayoutEffect(() => {
     if (followRun) setActiveStage(currentStage);
   }, [currentStage, followRun, task.id, latestCycle]);
-  const shownStage: TaskStageKey = stageReached(activeStage) ? activeStage : currentStage;
+  // Every stage can be viewed, reached or not (an unreached one shows an empty state).
+  const shownStage: TaskStageKey = stageList.some((s) => s.key === activeStage) ? activeStage : currentStage;
   /** The user picked a stage: it stays in view (the run carries on) until they pick the stage that is running. */
   const pickStage = (key: TaskStageKey) => {
-    if (!stageReached(key)) return;
+    if (!stageList.some((s) => s.key === key)) return;
     setActiveStage(key);
     setFollowRun(key === currentStage);
+    peekingRef.current = key !== currentStage && !stageReached(key);
   };
   /** Show a stage from elsewhere in the pane (status line, Details): the open cycle's, else the run's (cycle 0) expanded. */
   const showStage = (key: TaskStageKey) => {
@@ -1811,12 +1826,11 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
         <div className="ai-task-card-body">
           {/* Rich Text Toolbar when editing */}
           {isEditing && (
-            <div className="obsidian-toolbar-row" style={{ marginBottom: '0.75rem' }}>
-              <RichTextToolbar
-                targetRef={activeFocusedRef || overviewRef}
-                compact={true}
-              />
-            </div>
+            <RichTextToolbar
+              className="is-inset"
+              targetRef={activeFocusedRef || overviewRef}
+              compact={true}
+            />
           )}
 
           <div className="brief-container" style={{ padding: 0, gap: '0.45rem' }}>
@@ -1858,8 +1872,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                     id: key,
                     label,
                     state: status === 'working' ? 'working' : passed ? 'done' : toBarState(status),
-                    disabled: !stageReached(key),
-                    title: stageReached(key) ? undefined : `${label} opens when the run gets here`,
+                    title: stageReached(key) ? undefined : `Nothing in ${label} yet: it fills in when the run gets here`,
                     count: key === 'related' && relatedSelectedCount > 0 ? relatedSelectedCount : key === 'actions' && runCount > 0 && !isFollowUpView ? runCount : undefined,
                     marker: attention ? <StatusDot state="warning" label="Waiting for you" /> : status === 'working' ? <StatusDot state="live" label="Working" /> : undefined,
                   };
@@ -1978,7 +1991,25 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                 </div>
               )}
 
-              {shownStage === 'actions' && (
+              {(shownStage === 'actions' || shownStage === 'completion') && !stageReached(shownStage) && (
+                <div className="ai-sub-card-body stage-panel eg-tabpanel" role="tabpanel">
+                  {shownStage === 'actions' ? (
+                    <EmptyState
+                      icon={ListChecks}
+                      title={isFollowUpView ? 'This follow-up hasn\'t started' : 'No runs yet'}
+                      text="Nothing has happened here yet. When the task runs, its agents and their steps show up here."
+                    />
+                  ) : (
+                    <EmptyState
+                      icon={NotebookPen}
+                      title="No notes yet"
+                      text="Nothing has happened here yet. The completion notes are written when the agent finishes (or when you stop it)."
+                    />
+                  )}
+                </div>
+              )}
+
+              {shownStage === 'actions' && stageReached('actions') && (
                 <div className="ai-sub-card-body stage-panel" role="tabpanel" style={{ padding: 0 }}>
                   <BvTokenCounterCard
                     task={task}
@@ -2344,7 +2375,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                 </div>
               )}
 
-              {shownStage === 'completion' && (
+              {shownStage === 'completion' && stageReached('completion') && (
                 <div className="ai-sub-card-body stage-panel eg-tabpanel" role="tabpanel">
                   <div className="eg-panelhead">
                     <span>
@@ -2415,6 +2446,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                       The completion log is written when the agent finishes (or when you stop it).
                     </div>
                   )}
+                  <RunChangedFiles runId={cycles[latestCycle]?.runId || cycles[0]?.runId || brief?.lastRunOutcome?.runId} active={runActive} />
                 </div>
               )}
               </div>
@@ -2438,7 +2470,15 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
           width={220}
           items={modelItems}
           trigger={(p) => (
-            <Button {...p} variant="ghost" icon={Cpu} iconRight={ChevronDown} title="Model selection and effort for runs">
+            <Button
+              {...p}
+              variant="ghost"
+              icon={Cpu}
+              iconRight={ChevronDown}
+              collapsible
+              aria-label={`Models: ${modelSelection === 'auto' ? 'Auto' : 'Manual'} · ${EFFORT_LABELS[effortLevel]}`}
+              title="Model selection and effort for runs"
+            >
               {modelSelection === 'auto' ? 'Auto' : 'Manual'}
               <span className="eg-subtle">· {EFFORT_LABELS[effortLevel]}</span>
             </Button>
@@ -2450,6 +2490,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
             <Button
               variant="danger"
               icon={Square}
+              collapsible
               kbd={[SHIFT, MOD, '.']}
               onClick={() => (onTerminateAgent ? onTerminateAgent(task.id) : onKillSession?.(task.id))}
             >
@@ -2470,6 +2511,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
             <Button
               variant="primary"
               icon={isStoppedPartway ? Play : hasRunBefore ? RotateCcw : Play}
+              collapsible
               kbd={[SHIFT, MOD, '↵']}
               disabled={!canRun}
               title={!canRun ? 'Runs need the bridge' : undefined}
@@ -2805,10 +2847,10 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
                   value={runsSort}
                   onChange={chooseRunsSort}
                   options={[
-                    { id: 'status', label: 'Run status' },
-                    { id: 'category', label: 'Category' },
-                    { id: 'date', label: 'Date' },
-                    { id: 'alpha', label: 'A–Z' },
+                    { id: 'status', label: 'Run status', icon: Activity },
+                    { id: 'category', label: 'Category', icon: Folder },
+                    { id: 'date', label: 'Date', icon: CalendarDays },
+                    { id: 'alpha', label: 'A–Z', icon: ArrowDownAZ },
                   ]}
                 />
               </div>

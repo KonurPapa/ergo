@@ -42,22 +42,32 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
   iconRight?: LucideIcon;
   /** Shortcut hint rendered as Kbd inside the button. */
   kbd?: string | string[];
+  /**
+   * The text can collapse to the icon alone where a container query hides `.eg-btn-label` (the AI workspace when
+   * narrow). A string child also becomes the aria-label and tooltip (the tooltip only shows while the text is hidden).
+   */
+  collapsible?: boolean;
 }
 
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ variant = 'secondary', size = 'md', icon, iconRight, kbd, className, children, type = 'button', ...rest }, ref) => (
-    <button
-      ref={ref}
-      type={type}
-      className={cx('eg-btn', `eg-btn-${variant}`, size !== 'md' && `eg-btn-${size}`, className)}
-      {...rest}
-    >
-      {icon && <Icon icon={icon} />}
-      {children}
-      {iconRight && <Icon icon={iconRight} />}
-      {kbd && <Kbd keys={kbd} />}
-    </button>
-  ),
+  ({ variant = 'secondary', size = 'md', icon, iconRight, kbd, collapsible, className, children, type = 'button', title, 'aria-label': ariaLabel, ...rest }, ref) => {
+    const text = collapsible && typeof children === 'string' ? children : undefined;
+    return (
+      <button
+        ref={ref}
+        type={type}
+        className={cx('eg-btn', `eg-btn-${variant}`, size !== 'md' && `eg-btn-${size}`, collapsible && 'eg-btn-collapsible', className)}
+        aria-label={ariaLabel ?? text}
+        title={title ?? text}
+        {...rest}
+      >
+        {icon && <Icon icon={icon} />}
+        {collapsible ? <span className="eg-btn-label">{children}</span> : children}
+        {iconRight && <Icon icon={iconRight} />}
+        {kbd && <Kbd keys={kbd} />}
+      </button>
+    );
+  },
 );
 Button.displayName = 'Button';
 
@@ -325,7 +335,8 @@ export function SegmentedControl<T extends string>({
   full,
   disabled,
 }: {
-  options: Array<T | { id: T; label: string; title?: string }>;
+  /** An option's icon shows beside its label; where `.eg-seg-label` is hidden (narrow AI workspace) it shows alone. */
+  options: Array<T | { id: T; label: string; title?: string; icon?: LucideIcon }>;
   value: T;
   onChange?: (id: T) => void;
   label?: string;
@@ -337,18 +348,27 @@ export function SegmentedControl<T extends string>({
       {options.map((o) => {
         const id = typeof o === 'string' ? o : o.id;
         const text = typeof o === 'string' ? o : o.label;
+        const icon = typeof o === 'string' ? undefined : o.icon;
         return (
           <button
             key={id}
             type="button"
             role="radio"
-            className="eg-seg-item"
+            className={cx('eg-seg-item', icon && 'has-icon')}
             aria-checked={id === value}
+            aria-label={icon ? text : undefined}
             disabled={disabled}
-            title={typeof o === 'string' ? undefined : o.title}
+            title={typeof o === 'string' ? undefined : (o.title ?? (icon ? text : undefined))}
             onClick={() => onChange?.(id)}
           >
-            {text}
+            {icon ? (
+              <>
+                <Icon icon={icon} />
+                <span className="eg-seg-label">{text}</span>
+              </>
+            ) : (
+              text
+            )}
           </button>
         );
       })}

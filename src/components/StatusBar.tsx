@@ -141,11 +141,11 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         {broken ? (
           <span className="eg-sb-strong">Bridge needs fixing</span>
         ) : state === 'connected' ? (
-          'Bridge'
+          'Connected'
         ) : state === 'connecting' ? (
           'Connecting'
         ) : (
-          <span className="eg-sb-strong">Bridge unreachable</span>
+          <span className="eg-sb-strong">Disconnected</span>
         )}
       </button>
 

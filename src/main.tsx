@@ -9,13 +9,17 @@ import './styles/settings.css'
 import './styles/dialogs.css'
 import './styles/onboarding.css'
 import './styles/accents.css'
+import './styles/views.css'
+import './styles/filelinks.css'
 import App from './App.tsx'
 import { BetaProvider } from './context/BetaContext'
+import { TooltipHost } from './components/ui/TooltipHost'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BetaProvider>
       <App />
+      <TooltipHost />
     </BetaProvider>
   </StrictMode>,
 )

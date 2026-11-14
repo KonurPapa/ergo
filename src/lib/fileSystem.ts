@@ -52,6 +52,28 @@ export async function writeFilesToDisk(
 }
 
 /**
+ * Writes files while the page unloads (refresh, close tab). The normal save path is a chain of awaited requests that
+ * the unload cuts off; a keepalive request is finished by the browser after the page is gone.
+ */
+export function writeFilesOnUnload(files: Array<{ filePath: string; content: string }>): void {
+  if (files.length === 0) return;
+  const body = JSON.stringify({ files });
+  // Browsers cap keepalive bodies at 64 KB. A bigger save goes out as a plain request, which a local bridge
+  // normally still receives before the page is torn down.
+  const keepalive = new Blob([body]).size < 60_000;
+  try {
+    void fetch(bridgeClient.getApiUrl('/api/files/write'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      keepalive,
+    }).catch(() => {});
+  } catch {
+    /* the page is going away; nothing more to do */
+  }
+}
+
+/**
  * Read files directly from disk in the workspace directory.
  */
 export async function readFilesFromDisk(

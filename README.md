@@ -1,48 +1,56 @@
 # Ergo
 
-## Collaborate with AI
+### Human-in-the-Loop AI Task Workspace
 
-**The AI Problem:** It's often an invisible black-box agent that you have to micromanage with prompts, or a token-hungry over-thinker that spends too much time planning and not enough time building.
+**Ergo** is an AI-powered project workspace designed around a core principle: **aligning humans and AI in a shared, transparent mental model.**
 
-**Ergo** is an AI-powered task workspace, designed to align humans and AI in a shared, holistic project environment. 
-
-It provides a clean, scannable task list paired alongside rich, technical briefs. This means you and the AI **share the same working model of your project**, enabling the AI to function more like an actual collaborator and less like a mindless drone. Your output is better because the AI is **closer to your understanding of the whole project**.
-
-Beyond the human/AI synchronization, Ergo also acts as a **Model Context Protocol hub**, allowing **seamless execution of your real-world tools, all from one interface**.
+Rather than treating AI as an unpredictable black-box chatbot or an expensive autonomous agent that burns tokens planning in loops, Ergo pairs a **clean, scannable human task list** with a **rich, automated technical brief**. Coders and non-technical builders alike get complete visibility and control over what the AI builds before, during, and after execution.
 
 ---
 
-## 💡 The Core Vision & Philosophy
+## 💡 The Core Vision: Ending the "Agent Tax"
 
-Modern AI workflows often suffer from the **"Agent Tax"**: autonomous agents loop indefinitely through hidden planning steps, consuming tokens rapidly while leaving users unable to inspect or redirect wrong assumptions before execution.
+Modern autonomous coding agents often suffer from the **"Agent Tax"**: they loop through hidden internal planning steps, consume tens of thousands of tokens, and wander off-course because the human can't inspect or redirect wrong assumptions until it's too late.
 
-Ergo keeps the human in the loop:
-1. **Shared Context**: Dual-layer task architecture ensures humans see a clean, simple task list while AI receives complete, dependency-ordered technical briefs. You're no longer overwhelmed by paragraphs of AI text, and the AI doesn't lose the specificity needed to be effective.
-2. **Action → Pause → Review → Execution**: The AI can draft and organize tasks for you, giving you full visibility to tweak or approve anything before triggering execution. You're always in the driver's seat.
-3. **Unified Workspace**: Task management and task execution occur in the exact same window, so you can manage and execute tasks without ever leaving your workspace.
+Ergo fixes this with three foundational design choices:
+
+1. **Dual-Layer Markdown Architecture**:
+   - **Human Layer (`TODO.md`)**: Terse, clean, and scannable. A native Markdown checklist with subtasks and categories that anyone can read at a glance.
+   - **AI Layer (`TASK_CONTEXT.md` / Working Brief)**: The moment a task runs, Ergo synthesizes an immutable technical brief containing the task goal, constraints, criteria checklists, relevant project rules (`AGENTS.md` / `CLAUDE.md`), and historical learnings.
+2. **Zero-Token Local-First Vector DB**:
+   - A local-first semantic index (`.ergo/memory/`) computes embeddings on your machine using `all-MiniLM-L6-v2` alongside a BM25 keyword index.
+   - **Zero tokens spent on discovery**: Over 85% of relevant code and project files are surfaced deterministically *before* firing an LLM prompt.
+3. **Action → Pause → Review → Execution**:
+   - The AI drafts, organizes, and prioritizes tasks, but you always retain ownership. Inspect, refine, or approve plans with single-click confidence.
 
 ---
 
-## ✨ Key Features
+## ✨ Where Ergo Stands Out
 
-- 📋 **Dual-Layer Architecture**:
-  - **Human Layer (`TODO.md`)**: Terse, clean, scannable tasks for immediate human readability.
-  - **AI Layer (the task's working brief)**: written by each task's first run from the task, its related tasks and the project's memory — the exact spec the manager agent works from.
-- 🤖 **AI Task Drafting**: Turn high-level prompts or rough ideas into structured, prioritized subtasks and implementation plans automatically.
-- 🔌 **Connections & MCP Hub (BYO-MCP)**:
-  - Connect external services (VS Code, Google Workspace, Slack, Asana, Figma, local tools) via standardized Model Context Protocol (MCP) integrations.
-- 🖼️ **Interactive MCP Apps**:
-  - Render live interactive widgets (charts, message composers, calendars, visual boards) directly inside task items upon execution.
-- ⚡ **Bi-Directional Persistence & Live Sync**:
-  - Keep state in sync across UI and local workspace markdown files.
+- 📋 **Steer AI via Native Markdown**: Everything lives in standard, open Markdown files on your local drive. No proprietary database lock-in, no hidden agent prompts.
+- ⚡ **Direct (Solo) Mode vs. Multi-Agent Fan-Out**:
+  - Simple deliverables (standalone scripts, components, quick fixes) execute directly in a lightweight tool loop (max 5 rounds), reducing token consumption by **~90%** (8k–15k tokens vs. 120k+).
+  - Complex systems automatically decompose into verifiable criteria puzzle pieces (`setup`, `build`, `verify`, `edge`).
+- 🖥️ **Hybrid Local Daemon (Ergo Bridge)**:
+  - Run Ergo completely locally, or connect the hosted web app (`ergo.appwrite.network`) to your machine via the lightweight **Ergo Bridge** daemon.
+  - Enjoy the slickness of a modern web workspace with full local filesystem access, private vector search, and interactive terminal PTYs.
+- 🔌 **Universal MCP Hub (BYO-MCP)**:
+  - Connect external tools and services (VS Code, GitHub, Google Workspace, Slack, Figma, local scripts) via the standardized Model Context Protocol (MCP).
+  - Render interactive MCP UI widgets (charts, calendars, message composers) directly inside task cards.
+- 💻 **Integrated CLI Agent Runner**:
+  - Launch and orchestrate external coding agents—including **Claude Code, Antigravity (`agy`), Cursor CLI, Codex, and Aider**—inside embedded xterm.js terminals directly alongside your task list.
+- 🎯 **Auto Model Routing**:
+  - Automatically maps models to tasks based on size and difficulty: *"Size decides the model; difficulty decides the effort."*
 
 ---
 
 ## 🛠️ Architecture & Stack
 
-- **Frontend**: React, TypeScript, Vite, Vanilla/Tailwind CSS
-- **Protocol & Integration**: Model Context Protocol (MCP) Client supporting standard JSON-RPC over WebSockets/SSE and MCP Apps (Interactive UIs)
-- **Data & Storage**: File-system markdown synchronization with structured local state
+- **Frontend**: React 19, TypeScript, Vite, Tiptap Rich Markdown Editor, xterm.js
+- **Local Bridge Daemon**: Node.js, `node-pty`, WebSocket / SSE streaming, loopback security
+- **Semantic Memory**: Local disk-backed vector store (`all-MiniLM-L6-v2`, 384-dim) + BM25 keyword code indexer
+- **Protocol & Extensibility**: Model Context Protocol (MCP) Client (SSE / stdio / WebSockets) & Interactive MCP Apps
+- **Storage**: Bi-directional local Markdown synchronization (`TODO.md`, `TASK_CONTEXT.md`, `.ergo/`)
 
 ---
 
@@ -54,36 +62,48 @@ Ergo keeps the human in the loop:
 
 ### Installation & Running Locally
 
-1. Install dependencies:
+1. **Clone the repository and install dependencies:**
    ```bash
+   git clone https://github.com/KonurPapa/ergo.git
+   cd ergo
    npm install
    ```
 
-2. Start the development server:
+2. **Start the local app and bridge daemon:**
    ```bash
    npm run dev
    ```
 
-3. Open your browser and navigate to `http://localhost:5173`.
+3. **Open your browser** and navigate to `http://localhost:5173`.
 
-### Using the hosted web app with your local device
+---
 
-The hosted app at `https://ergo.appwrite.network` reaches your computer through **Ergo Bridge**, a small background app that runs CLI agents and reads and writes files in `~/.ergo` for it. No website can install or start software by itself, so Ergo Bridge is installed once from the onboarding screen (it offers the right download for Windows, macOS or Linux). After that it starts at login, sits in the system tray, and the hosted app connects to it automatically. Installers are built from `desktop/`; see [desktop/README.md](desktop/README.md) for building and releasing them.
+## 🌐 Using the Hosted Web App with Your Local Device
 
-Developers can run the same bridge from a checkout instead: `npm run dev` (bridge + local web app) or `npm run bridge` (bridge only). The bridge code lives in `bridge/plugins.ts`.
+The hosted version at `https://ergo.appwrite.network` connects to your local machine through **Ergo Bridge**, a small background daemon that runs CLI agents, reads and writes files in `~/.ergo`, and manages local memory.
 
-The bridge only accepts requests from this machine (loopback), and only from Ergo's own page or from allowed origins. The hosted app is allowed by default. To change the default (e.g. after moving to a new domain), edit `HOSTED_APP_ORIGINS` at the top of `bridge/plugins.ts`. To allow additional origins without editing code, create `.env.local` in the project root:
+### Installing Ergo Bridge
+- Download the installer for Windows, macOS, or Linux directly from the onboarding screen in the web app (built from `desktop/`; see [desktop/README.md](desktop/README.md)).
+- The bridge starts on login, lives quietly in your system tray, and connects automatically when you open Ergo in your browser.
 
+### Developer Bridge Mode
+Developers can run the bridge from source instead of installing the desktop binary:
 ```bash
-# Exact https:// origins only — no wildcards, no trailing paths. Comma-separate multiple entries.
-ERGO_ALLOWED_ORIGINS=https://another-ergo-site.example.com
+# Starts both the bridge and local web app
+npm run dev
+
+# Or run the bridge daemon standalone:
+npm run bridge
 ```
 
-Restart the bridge after changing it. Requests from any other website are refused (and logged).
-
-If the hosted app says it can't reach your local bridge, check that Ergo Bridge (or `npm run dev`) is running; the hosted app scans ports 5173–5180 and 3000.
-
-Chrome, Edge, Brave and Firefox also ask before a website may reach apps on your computer. When the browser asks to let the hosted site "access other apps and services on this device", click **Allow** — until you answer, the browser holds every request to the bridge. If you blocked it earlier, allow it again in the site's settings: **Apps on device** in Chrome, Edge and Brave (click the icon left of the address bar → Site settings), or **Access this device** in Firefox's address-bar permissions panel. Safari is not supported.
+### Security & Local Permissions
+- **Loopback Only:** The bridge only accepts requests originating from `localhost` and explicitly allowed origins.
+- **Allowed Origins:** By default, the hosted app (`https://ergo.appwrite.network`) and local ports are allowed. To allow additional domains, create a `.env.local` file:
+  ```bash
+  # Exact https:// origins only (comma-separated, no trailing slashes)
+  ERGO_ALLOWED_ORIGINS=https://another-ergo-site.example.com
+  ```
+- **Browser Device Permissions:** Browsers like Chrome (142+) and Firefox (149+) prompt for permission when a public website requests access to local network services. When prompted to *"access other apps and services on this device"*, click **Allow**.
 
 ---
 

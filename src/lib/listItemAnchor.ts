@@ -8,6 +8,7 @@ import ListItem from '@tiptap/extension-list-item';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { ANCHOR_RE, anchorComment, anchorIdFor } from './taskAnchors';
+import { NBSP_ENTITY } from './preserveWhitespace';
 
 /** markdown-it: take `<!-- ergo:id -->` off the first line of a list item and put it on the item as data-ergo-id. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -65,13 +66,37 @@ export const AnchoredListItem = ListItem.extend({
             state.renderContent(node);
             return;
           }
-          // The anchor goes at the end of the item's first line: just before its first block closes.
+          // A task that opens with a code block or image (the editor gives it a title line, but older files may not
+          // have one): the anchor goes on a line of its own above it. Written after the closing ``` it ended the
+          // fence's last line instead, so the fence never closed and the anchor became code.
+          if (first.type.name === 'codeBlock' || first.type.name === 'image') {
+            state.write(`${NBSP_ENTITY} ${anchorComment(id)}`);
+            state.closeBlock(first);
+            state.renderContent(node);
+            return;
+          }
+          // The anchor goes at the end of the item's first line: just before its first block closes, or before the
+          // first line break (Shift+Enter, written as `\` + newline) when the title has one. After the break it sat on
+          // the second line, where neither the parser nor ensureAnchors looks: every save gave the task a new anchor
+          // (its brief came off) and the old one turned into escaped text that piled up.
           const closeBlock = state.closeBlock;
+          const write = state.write;
           let written = false;
-          state.closeBlock = function (this: unknown, n: PMNode) {
-            if (!written && n === first) {
+          state.write = function (this: unknown, content?: string) {
+            if (!written && content === '\\\n') {
               written = true;
-              state.write(` ${anchorComment(id)}`);
+              write.call(state, ` ${anchorComment(id)}`);
+            }
+            return write.call(state, content);
+          };
+          state.closeBlock = function (this: unknown, n: PMNode) {
+            if (n === first) {
+              // Past the first line: later line breaks (subtasks, other blocks) are left alone.
+              state.write = write;
+              if (!written) {
+                written = true;
+                state.write(` ${anchorComment(id)}`);
+              }
             }
             return closeBlock.call(state, n);
           };
@@ -79,6 +104,7 @@ export const AnchoredListItem = ListItem.extend({
             state.renderContent(node);
           } finally {
             state.closeBlock = closeBlock;
+            state.write = write;
           }
         },
         parse: {

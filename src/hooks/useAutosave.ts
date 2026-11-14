@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { writeFilesToDisk } from '../lib/fileSystem';
+import { writeFilesOnUnload, writeFilesToDisk } from '../lib/fileSystem';
 
 export type AutosaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
 
@@ -57,7 +57,9 @@ export function useAutosave(options: UseAutosaveOptions = {}) {
       const result = await writeFilesToDisk(files);
 
       isSavingRef.current = false;
-      pendingFilesRef.current = null;
+      // Only what this save wrote is done: an edit queued while it was in flight stays pending (clearing it here
+      // made that queued save find nothing to write when its timer fired).
+      if (pendingFilesRef.current === files) pendingFilesRef.current = null;
 
       if (result.success) {
         const savedTime = result.savedAt || new Date().toISOString();
@@ -112,6 +114,8 @@ export function useAutosave(options: UseAutosaveOptions = {}) {
       }
 
       const filesToSave = files || pendingFilesRef.current;
+      // These files supersede anything queued (its timer was just cancelled).
+      pendingFilesRef.current = filesToSave;
       if (!filesToSave || filesToSave.length === 0) {
         return true;
       }
@@ -120,6 +124,22 @@ export function useAutosave(options: UseAutosaveOptions = {}) {
     },
     [executeSave]
   );
+
+  // Refresh or close with a save still waiting on its timer: write it on the way out. Without this the last few
+  // seconds of edits (often a formatting change, the last thing done before reloading) never reached the file.
+  // `pagehide` comes after `beforeunload`, where the lane editors hand over their last, still-debounced edit.
+  useEffect(() => {
+    if (!isEnabled) return;
+    const onPageHide = () => {
+      if (!timerRef.current || !pendingFilesRef.current) return;
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+      writeFilesOnUnload(pendingFilesRef.current);
+      pendingFilesRef.current = null;
+    };
+    window.addEventListener('pagehide', onPageHide);
+    return () => window.removeEventListener('pagehide', onPageHide);
+  }, [isEnabled]);
 
   // Cleanup timer on unmount
   useEffect(() => {

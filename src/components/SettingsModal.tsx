@@ -20,6 +20,7 @@ import {
   CheckCheck,
   AlertCircle,
   FolderOpen,
+  FolderMinus,
   Lock,
   RefreshCw,
   Sun,
@@ -82,6 +83,8 @@ export interface SettingsModalProps {
   onSetAutocompleteSettings?: (next: import('../types').AutocompleteSettings) => void;
   onExportProject?: () => void;
   onOpenRawMarkdownModal?: () => void;
+  /** Takes the open project off Ergo's list (App asks first; its files are kept). */
+  onRemoveProject?: () => void;
   /** Local AI model preference; 'unset' behaves like cloud. */
   localModelMode?: LocalModelMode;
   onSetLocalModelMode?: (mode: 'local' | 'cloud') => void;
@@ -432,6 +435,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   autocompleteSettings = { enabled: true, keybinding: 'Tab' },
   onSetAutocompleteSettings,
   onExportProject,
+  onRemoveProject,
   onOpenRawMarkdownModal,
   localModelMode = 'unset',
   onSetLocalModelMode,
@@ -628,6 +632,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         setIsBetaEnabled={setIsBetaEnabled}
         onExportProject={onExportProject}
         onOpenRawMarkdownModal={onOpenRawMarkdownModal}
+        onRemoveProject={onRemoveProject}
         bridgeStatus={bridgeStatus}
         bridgeUrlInput={bridgeUrlInput}
         setBridgeUrlInput={setBridgeUrlInput}
@@ -1689,6 +1694,7 @@ interface EmbeddedSettingsSectionProps {
   setIsBetaEnabled: (v: boolean) => void;
   onExportProject?: () => void;
   onOpenRawMarkdownModal?: () => void;
+  onRemoveProject?: () => void;
   bridgeStatus: BridgeStatus;
   bridgeUrlInput: string;
   setBridgeUrlInput: (v: string) => void;
@@ -1992,6 +1998,16 @@ const EmbeddedSettingsSection: React.FC<EmbeddedSettingsSectionProps> = (p) => {
         >
           <ExportFormattingToggle compact />
         </SettingsRow>
+        {p.onRemoveProject && (
+          <SettingsRow
+            title="Remove project"
+            help="Takes it off Ergo's project list. Nothing is deleted: its folder moves aside and can be restored."
+          >
+            <Button size="sm" variant="danger" icon={FolderMinus} onClick={p.onRemoveProject}>
+              Remove project
+            </Button>
+          </SettingsRow>
+        )}
       </SettingsGroup>
 
       <SettingsGroup title="Editor">

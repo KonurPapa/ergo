@@ -10,6 +10,7 @@ export type SettingsPage =
   | 'skills'
   | 'integrations'
   | 'bridge'
+  | 'editor'
   | 'appearance'
   | 'shortcuts';
 
@@ -26,6 +27,7 @@ export const SETTINGS_PAGES: ReadonlyArray<{ id: SettingsPage; label: string; gr
   { id: 'skills', label: 'Skills', group: 'agents', keywords: 'skills remember tools' },
   { id: 'integrations', label: 'Integrations', group: 'app', keywords: 'mcp servers connections built-in tools' },
   { id: 'bridge', label: 'Bridge', group: 'app', keywords: 'device bridge download connection' },
+  { id: 'editor', label: 'Editor', group: 'app', keywords: 'ide vs code vscode cursor windsurf jetbrains intellij webstorm zed open files diff links' },
   { id: 'appearance', label: 'Appearance', group: 'app', keywords: 'theme dark light' },
   { id: 'shortcuts', label: 'Shortcuts', group: 'app', keywords: 'keyboard keys' },
 ];

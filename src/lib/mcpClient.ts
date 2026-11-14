@@ -6,6 +6,8 @@ import {
 } from '../types';
 import { executeWorkspaceToolAction } from './workspaceMcp';
 import { bridgeClient } from './bridgeClient';
+import { getPref } from './userPrefs';
+import { IDE_PREF_KEY } from './ideLaunch';
 
 function apiFetch(endpoint: string, init?: RequestInit): Promise<Response> {
   return fetch(bridgeClient.getApiUrl(endpoint), init);
@@ -65,13 +67,23 @@ export async function callMcpTool(
  */
 export async function openFileInIdeOrSystem(
   filePath: string,
-  line?: number
-): Promise<{ success: boolean; opened?: boolean; methodUsed?: string; resolvedPath?: string; error?: string }> {
+  line?: number,
+  opts: { column?: number; root?: string } = {}
+): Promise<{ success: boolean; opened?: boolean; methodUsed?: string; resolvedPath?: string; note?: string; error?: string }> {
   try {
+    // ide: Settings › Editor; projectId: relative paths resolve in (and opening is limited to) the project's folders.
     const res = await apiFetch('/api/files/open', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filePath, line, openInIde: true })
+      body: JSON.stringify({
+        filePath,
+        line,
+        column: opts.column,
+        root: opts.root,
+        openInIde: true,
+        ide: getPref(IDE_PREF_KEY) || undefined,
+        ...(rootsProjectId ? { projectId: rootsProjectId } : {})
+      })
     });
     const data = await res.json();
     return data;
@@ -88,6 +100,9 @@ export async function openFileInIdeOrSystem(
 let rootsProjectId: string | null = null;
 export function setRootsProject(projectId: string | null): void {
   rootsProjectId = projectId;
+}
+export function getRootsProject(): string | null {
+  return rootsProjectId;
 }
 
 /**

@@ -170,3 +170,10 @@
   .eg-stagebar.is-working .eg-stagebar-track i { animation: none; width: 60%; }
   .eg-stagepanel { animation: none; }
 }
+
+/* ── Markdown formatting bar over the brief/notes textareas (RichTextToolbar): the document toolbar, inset ── */
+.eg-toolbar.eg-md-toolbar.is-inset { height: 36px; margin-bottom: var(--space-3); padding: 0 var(--space-1); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-1); overflow-x: auto; scrollbar-width: none; }
+.eg-toolbar.eg-md-toolbar.is-inset::-webkit-scrollbar { display: none; }
+.eg-md-toolbar.is-compact .eg-tb-btn { width: 26px; height: 26px; }
+.eg-md-toolbar.is-compact .eg-tb-btn .eg-icon { width: 15px; height: 15px; }
+.eg-md-toolbar.is-compact .eg-tb-sep { margin: 0 4px; }

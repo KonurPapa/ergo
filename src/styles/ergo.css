@@ -117,6 +117,8 @@ button.eg-agent:hover { background: var(--surface-2); }
 .eg-seg-item:hover { color: var(--ink); }
 .eg-seg-item[aria-checked="true"] { background: var(--surface-3); color: var(--ink); }
 .eg-seg-full { display: flex; } .eg-seg-full .eg-seg-item { flex: 1; }
+.eg-seg-item.has-icon { display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+.eg-seg-item.has-icon .eg-icon { width: 12px; height: 12px; }
 
 /* ---------- Menu ---------- */
 .eg-menu { min-width: 200px; padding: 4px; border-radius: var(--radius-md); background: var(--surface-2); box-shadow: var(--shadow-popover); z-index: var(--z-popover); }
@@ -525,6 +527,14 @@ button.eg-agent:hover { background: var(--surface-2); }
 @container detail (max-width: 420px) {
   .eg-detail-foot .eg-btn-secondary { padding: 0 8px; }
 }
+/* A narrow AI workspace: collapsible buttons and the Runs sort show their icons alone (the label becomes the tooltip). */
+@container detail (max-width: 440px) {
+  .eg-btn-collapsible .eg-btn-label, .eg-btn-collapsible .eg-subtle { display: none; }
+  .eg-btn-collapsible:has(> .eg-icon) { min-width: var(--size-control); padding: 0 6px; gap: 2px; }
+  .eg-btn-collapsible.eg-btn-sm:has(> .eg-icon) { min-width: var(--size-control-sm); padding: 0 4px; }
+  .eg-seg-item.has-icon { padding: 0 6px; }
+  .eg-seg-item.has-icon .eg-seg-label, .eg-runs-sort-label { display: none; }
+}
 
 /* ---------- Brand: the app logo and the Sixtyfour wordmark ---------- */
 .eg-brand-logo { width: 22px; height: 22px; object-fit: contain; border-radius: var(--radius-xs); flex: none; }
@@ -542,3 +552,12 @@ button.eg-brand:hover { background: var(--surface-2); }
 .eg-runs-group .eg-run-btn.is-live { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
 .eg-runs-group .eg-run-btn.is-active { border-color: var(--accent); background: var(--accent-subtle); }
 .eg-run-meta { overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- Tooltip: the one app-wide tooltip (TooltipHost) in place of the browser's title tooltip ---------- */
+.eg-tooltip { position: fixed; top: 0; left: 0; z-index: calc(var(--z-toast) + 10); max-width: 280px; padding: 4px 8px; border-radius: var(--radius-sm); background: var(--surface-3); box-shadow: var(--shadow-popover); color: var(--ink); font-family: var(--font-sans); font-size: calc(12px * var(--type-scale)); font-weight: 400; line-height: calc(16px * var(--type-scale)); white-space: pre-line; overflow-wrap: anywhere; pointer-events: none; opacity: 0; transform: translateY(2px); transition: opacity var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out); }
+.eg-tooltip[data-side="bottom"] { transform: translateY(-2px); }
+.eg-tooltip.is-shown { opacity: 1; transform: none; }
+.eg-tooltip[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .eg-tooltip, .eg-tooltip[data-side="bottom"] { transform: none; transition: none; }
+}

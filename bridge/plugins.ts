@@ -44,6 +44,17 @@ import { CodeIndexManager, SKIP_DIR } from '../src/lib/codeIndex/codeIndex.ts';
 import { rankPaths } from '../src/lib/pathRank.ts';
 import { WORKSPACE_MCP_TOOLS } from '../src/lib/workspaceMcp.ts';
 import { bridgeInfo, hostFilePicker, requestBridgeUpdate, setActiveSessionCounter, setBridgeProblem } from './selfUpdate.ts';
+import {
+  detectIdes,
+  openDiffInIde,
+  openInIde,
+  readRunGitBase,
+  recordRunGitBase,
+  runChangedFiles,
+  writeDeletedStandIn,
+  writeRunBaseFile,
+  type RunGitBase,
+} from './ideGit.ts';
 import { parseScoutFiles, scoutSystemPrompt, scoutUserPrompt, SCOUT_MAX_TURNS, SCOUT_TIMEOUT_MS } from '../src/lib/codeIndex/fileScout.ts';
 import type {
   AgentNoteKind,
@@ -358,6 +369,90 @@ async function loadAllowedRoots(storageDir: string, projectId?: unknown): Promis
     }
   } catch {}
   return roots;
+}
+
+const isInsideRoots = (fullPath: string, roots: string[]) => roots.some((root) => fullPath === root || fullPath.startsWith(root + path.sep));
+
+/** The folder a project's agents work in: its first own Allowed Folder, else its folder in Ergo's storage. */
+async function projectWorkingRoot(storageDir: string, projectId: unknown): Promise<string | null> {
+  const own = await loadProjectFolders(storageDir, projectId);
+  if (own.length > 0) return resolveRootPath(own[0].path);
+  const file = projectFoldersFile(storageDir, projectId);
+  return file ? path.dirname(file) : null;
+}
+
+/** Folders a relative path in a task's text may be relative to, most likely first (all inside the Allowed Folders). */
+async function fileLinkBases(storageDir: string, projectId: unknown, root?: string): Promise<{ bases: string[]; allowed: string[] }> {
+  const allowed = await loadAllowedRoots(storageDir, projectId);
+  const bases: string[] = [];
+  const add = (p: string | null | undefined) => {
+    if (!p) return;
+    const resolved = resolveRootPath(p);
+    if (isInsideRoots(resolved, allowed) && !bases.includes(resolved)) bases.push(resolved);
+  };
+  if (root && root.trim()) add(path.isAbsolute(root.trim()) || root.trim().startsWith('~') ? root : path.join(storageDir, root));
+  add(await projectWorkingRoot(storageDir, projectId));
+  for (const r of allowed.slice(1)) add(r);
+  add(allowed[0]); // Ergo's storage last: `projects/…` and `.ergo/…` paths
+  return { bases, allowed };
+}
+
+type LocatedFile =
+  | { ok: true; fullPath: string; isDirectory: boolean; line: number | null; column: number | null }
+  | { ok: false; status: number; error: string; resolvedPath?: string };
+
+/**
+ * Finds a file a task's text mentions (`src/a.ts`, `~/x.md`, `file:///…`, `/abs/b.ts:42:7`) inside the project's Allowed
+ * Folders. A trailing `:line[:col]` that isn't part of the name is returned as the position.
+ */
+async function locateAllowedFile(storageDir: string, projectId: unknown, rawPath: string, root?: string): Promise<LocatedFile> {
+  let raw = rawPath.trim();
+  if (raw.startsWith('file://')) {
+    raw = raw.replace(/^file:\/\//, '');
+    try {
+      raw = decodeURIComponent(raw);
+    } catch {}
+    if (/^\/[A-Za-z]:[\\/]/.test(raw)) raw = raw.slice(1); // file:///C:/x
+  }
+  const { bases, allowed } = await fileLinkBases(storageDir, projectId, root);
+  const tryPath = async (p: string, line: number | null, column: number | null): Promise<LocatedFile | null> => {
+    const expanded = p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p;
+    const candidates = path.isAbsolute(expanded) ? [path.resolve(expanded)] : bases.map((b) => path.resolve(b, expanded));
+    let outside: string | null = null;
+    for (const c of candidates) {
+      const st = await fs.stat(c).catch(() => null);
+      if (!st) continue;
+      if (!isInsideRoots(c, allowed)) {
+        outside = outside || c;
+        continue;
+      }
+      return { ok: true, fullPath: c, isDirectory: st.isDirectory(), line, column };
+    }
+    if (outside) return { ok: false, status: 403, error: `${p} is outside this project's Allowed Folders.`, resolvedPath: outside };
+    return null;
+  };
+  const direct = await tryPath(raw, null, null);
+  if (direct) return direct;
+  const pos = /^(.*?):(\d+)(?::(\d+))?$/.exec(raw);
+  if (pos && pos[1]) {
+    const withPos = await tryPath(pos[1], Number(pos[2]), pos[3] ? Number(pos[3]) : null);
+    if (withPos) return withPos;
+  }
+  return { ok: false, status: 404, error: `File not found: ${rawPath}` };
+}
+
+/** A run's recorded starting point (git-base.json) and its working folder, looked up in the project's folders. */
+async function locateRunBase(storageDir: string, projectId: unknown, runId: unknown, root?: unknown): Promise<{ base: RunGitBase; cwd: string } | null> {
+  if (typeof runId !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(runId)) return null;
+  const { bases, allowed } = await fileLinkBases(storageDir, projectId, typeof root === 'string' ? root : undefined);
+  for (const b of bases) {
+    const base = await readRunGitBase(path.join(b, '.ergo', 'runs', runId));
+    if (!base) continue;
+    const cwd = path.resolve(base.cwd || b);
+    if (!isInsideRoots(cwd, allowed)) return null;
+    return { base, cwd };
+  }
+  return null;
 }
 
 type BoundaryCheck = { ok: true; fullPath: string } | { ok: false; error: string };
@@ -2267,76 +2362,75 @@ export function ergoFileSystemPlugin(): Plugin {
       }
 
       if (url === '/api/files/open' && req.method === 'POST') {
+        // Opens a file at a line in the user's editor (body.ide: Settings › Editor; Auto-detect when unset). Relative
+        // paths are tried against the task's folder (body.root), the project's working folder, then each Allowed Folder;
+        // only files inside the project's Allowed Folders open.
         try {
           const body = await parseJsonBody(req);
-          const { filePath, line, column, openInIde } = body;
+          const { filePath, line, column, projectId } = body;
           if (!filePath || typeof filePath !== 'string') {
             return sendJson(res, 400, { error: 'filePath is required' });
           }
-
-          let target = filePath.trim();
-          if (target.startsWith('file://')) {
-            target = target.replace(/^file:\/\//, '');
-          }
-          if (target.startsWith('~')) {
-            target = path.join(os.homedir(), target.slice(1));
-          }
-          if (!path.isAbsolute(target)) {
-            target = path.resolve(storageDir, target);
-          }
-
-          let fileStat: any = null;
-          try {
-            fileStat = await fs.stat(target);
-          } catch {
-            return sendJson(res, 404, { error: `File not found: ${filePath}`, resolvedPath: target });
-          }
-
-          // Launch without a shell so file names can never be interpreted as commands.
-          const { spawn, spawnSync } = await import('child_process');
-          const launch = (cmd: string, args: string[]) => {
-            const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
-            child.on('error', (launchErr) => console.warn(`[Ergo File Open] Could not launch ${cmd}:`, launchErr));
-            child.unref();
-          };
-          const isOnPath = (cmd: string) =>
-            spawnSync(process.platform === 'win32' ? 'where' : 'which', [cmd], { stdio: 'ignore' }).status === 0;
-          const lineNum = Number.isInteger(Number(line)) && Number(line) > 0 ? Number(line) : null;
-          const colNum = Number.isInteger(Number(column)) && Number(column) > 0 ? Number(column) : null;
-          const targetWithLine = lineNum ? `${target}:${lineNum}${colNum ? `:${colNum}` : ''}` : target;
-          let opened = false;
-          let methodUsed = '';
-
-          const isCodeFile = /\.(ts|tsx|js|jsx|json|py|rs|go|c|cpp|h|css|html|md|toml|yaml|yml|sh|sql)$/i.test(target);
-          const ideCommands = ['code', 'cursor', 'webstorm', 'subl', 'gedit', 'kate', 'notepad'];
-
-          if (openInIde || isCodeFile) {
-            const ide = ideCommands.find(isOnPath);
-            if (ide) {
-              const supportsGoto = ide === 'code' || ide === 'cursor';
-              launch(ide, supportsGoto && lineNum ? ['-g', targetWithLine] : [target]);
-              opened = true;
-              methodUsed = ide;
-            }
-          }
-
-          if (!opened) {
-            const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer.exe' : 'xdg-open';
-            launch(opener, [target]);
-            opened = true;
-            methodUsed = opener;
-          }
-
+          const found = await locateAllowedFile(storageDir, projectId, filePath, typeof body.root === 'string' ? body.root : undefined);
+          if (!found.ok) return sendJson(res, found.status, { success: false, error: found.error, resolvedPath: found.resolvedPath });
+          const lineNum = Number.isInteger(Number(line)) && Number(line) > 0 ? Number(line) : found.line;
+          const colNum = Number.isInteger(Number(column)) && Number(column) > 0 ? Number(column) : found.column;
+          const opened = await openInIde(body.ide, found.fullPath, lineNum, colNum);
           return sendJson(res, 200, {
             success: true,
-            opened,
-            methodUsed,
+            opened: true,
+            methodUsed: opened.method,
+            ...(opened.note ? { note: opened.note } : {}),
             filePath,
-            resolvedPath: target,
-            isDirectory: fileStat.isDirectory()
+            resolvedPath: found.fullPath,
+            isDirectory: found.isDirectory
           });
         } catch (err: any) {
-          return sendJson(res, 500, { error: err.message });
+          return sendJson(res, 500, { success: false, error: err.message });
+        }
+      }
+
+      if (url === '/api/ide/detect' && req.method === 'GET') {
+        // Settings › Editor: which editors this computer has.
+        return sendJson(res, 200, { success: true, platform: process.platform, ides: await detectIdes() });
+      }
+
+      if (url === '/api/git/run-changes' && req.method === 'POST') {
+        // The files a task run changed (since its first agent started), with +/- line counts.
+        let body: any = {};
+        try {
+          body = await parseJsonBody(req);
+        } catch {}
+        const located = await locateRunBase(storageDir, body.projectId, body.runId, body.root);
+        if (!located) return sendJson(res, 200, { success: true, baseline: false, git: false, files: [] });
+        const { base, cwd } = located;
+        if (!base.git || !base.tree) return sendJson(res, 200, { success: true, baseline: false, git: base.git, files: [] });
+        const changes = await runChangedFiles(base, cwd);
+        if (!changes) return sendJson(res, 200, { success: false, baseline: true, git: true, files: [], error: 'git could not compare the run’s changes.' });
+        return sendJson(res, 200, { success: true, baseline: true, git: true, root: cwd, startedAt: base.at, ...changes });
+      }
+
+      if (url === '/api/files/diff' && req.method === 'POST') {
+        // One file of a run: its content when the run started against now, side by side in the user's editor.
+        let body: any = {};
+        try {
+          body = await parseJsonBody(req);
+        } catch {}
+        const rel = typeof body.path === 'string' ? body.path.trim() : '';
+        if (!rel) return sendJson(res, 400, { success: false, error: 'path is required.' });
+        const located = await locateRunBase(storageDir, body.projectId, body.runId, body.root);
+        if (!located?.base.git || !located.base.tree) return sendJson(res, 404, { success: false, error: 'This run has no recorded starting point to compare with.' });
+        const { base, cwd } = located;
+        const target = path.resolve(cwd, rel);
+        if (!(target === cwd || target.startsWith(cwd + path.sep))) return sendJson(res, 403, { success: false, error: 'That file is outside the run’s folder.' });
+        try {
+          const left = await writeRunBaseFile(base, String(body.runId), path.relative(cwd, target));
+          const exists = Boolean((await fs.stat(target).catch(() => null))?.isFile());
+          const right = exists ? target : await writeDeletedStandIn(String(body.runId), path.relative(cwd, target));
+          const opened = await openDiffInIde(body.ide, left, right, exists ? target : left);
+          return sendJson(res, 200, { success: true, methodUsed: opened.method, mode: opened.mode, ...(opened.note ? { note: opened.note } : {}) });
+        } catch (err: any) {
+          return sendJson(res, 500, { success: false, error: err?.message || String(err) });
         }
       }
 
@@ -6814,6 +6908,8 @@ export function ergoPtyPlugin(): Plugin {
             } catch (err: any) {
               return sendJson(res, 500, { success: false, error: `Could not create the run folder: ${err?.message || err}` });
             }
+            // The repo as it was before the run's first agent, for "changed by this run" (once per run; a few seconds at most).
+            await recordRunGitBase(cwd, runDir).catch(() => {});
           }
           try {
             const pty = await loadNodePty();

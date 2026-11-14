@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useCallback } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { bridgeClient } from '../lib/bridgeClient';
+import { registerTerminalFileLinks } from '../lib/terminalFileLinks';
 import '@xterm/xterm/css/xterm.css';
 
 // spawnIds this page has already sent a launch for. Re-mounts of the same launch (card re-opened, view
@@ -163,6 +164,7 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(containerRef.current);
+    registerTerminalFileLinks(term, cwd); // disposed with the terminal
 
     const safeFit = () => {
       if (containerRef.current && containerRef.current.clientWidth > 0 && containerRef.current.clientHeight > 0) {

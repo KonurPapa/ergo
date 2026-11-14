@@ -62,6 +62,18 @@ export function removePref(key: string): void {
   notify();
 }
 
+/** Removes every preference kept for one project (keys ending in `:<projectId>`, e.g. project_name:<id>). */
+export function removeProjectPrefs(projectId: string): void {
+  const suffix = `:${projectId}`;
+  const keys = Object.keys(prefs).filter((k) => k.endsWith(suffix));
+  if (keys.length === 0) return;
+  const next = { ...prefs };
+  for (const k of keys) delete next[k];
+  prefs = next;
+  scheduleWrite();
+  notify();
+}
+
 /** Called after the preferences load (and whenever they change). */
 export function subscribePrefs(cb: () => void): () => void {
   listeners.add(cb);

@@ -1,0 +1,131 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   Workspace views (projectView.ts): lanes as tabs, lanes side by side, and the
+   kanban board (KanbanBoard.tsx) with its card editor (TaskCardModal.tsx).
+   Tokens only, so both themes follow.
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* Side by side: lanes that don't fit scroll sideways instead of squeezing the pane. */
+.eg-docpane-root { min-width: 0; }
+.eg-docpane-root .swimlanes-wrapper { min-width: 0; overflow-x: auto; overflow-y: hidden; }
+
+/* "3 tasks hidden" — in a lane's header (and a board column's) while Hide done is on. */
+.eg-hidden-chip {
+  display: inline-flex; align-items: center; flex: none; height: 20px; padding: 0 6px;
+  border: 0; border-radius: var(--radius-xs); background: var(--surface-2); color: var(--ink-muted);
+  font-family: inherit; font-size: calc(11px * var(--type-scale)); line-height: calc(14px * var(--type-scale)); font-weight: 500;
+  font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+.eg-hidden-chip:hover { background: var(--surface-3); color: var(--ink); }
+.eg-hidden-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+/* ── Tabs: one lane at a time ── */
+.eg-lane-tabs { display: flex; align-items: center; gap: var(--space-1); flex: none; min-width: 0; padding: 0 var(--space-3); border-bottom: 1px solid var(--line); }
+.eg-lane-tabs .eg-tabs { flex: 0 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; border-bottom: 0; scrollbar-width: none; }
+.eg-lane-tabs .eg-tab { flex: none; max-width: 240px; }
+.eg-lane-tabpanel { display: flex; flex: 1 1 100%; min-width: 0; min-height: 0; }
+.eg-lane-tabpanel[hidden] { display: none; }
+.eg-docpane-root .swimlanes-wrapper.is-tabs .swimlane-column { flex: 1 1 100%; width: auto; min-width: 0; max-width: none; }
+
+/* ── Board ── */
+.eg-board {
+  display: flex; align-items: stretch; gap: var(--space-3); flex: 1; min-width: 0; min-height: 0;
+  padding: var(--space-4); overflow-x: auto; overflow-y: hidden; background: var(--canvas);
+}
+.eg-kcol {
+  display: flex; flex-direction: column; flex: 0 0 300px; min-height: 0;
+  background: var(--surface-1); border-radius: var(--radius-md);
+}
+.eg-kcol.is-no-drop .eg-kcol-body { cursor: not-allowed; opacity: 0.6; }
+.eg-kcol-head { display: flex; align-items: center; gap: var(--space-2); flex: none; height: 40px; padding: 0 var(--space-1) 0 var(--space-3); min-width: 0; }
+.eg-kcol-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-weight: 600; font-size: calc(13px * var(--type-scale)); cursor: default; }
+.eg-kcol-count { flex: none; color: var(--ink-subtle); font-size: calc(11px * var(--type-scale)); font-weight: 500; font-variant-numeric: tabular-nums; }
+.eg-kcol-body { display: flex; flex-direction: column; gap: var(--space-2); flex: 1; min-height: 0; overflow-y: auto; padding: 0 var(--space-2) var(--space-2); }
+.eg-kcol-empty { padding: var(--space-3) var(--space-2); color: var(--ink-subtle); font-size: calc(12px * var(--type-scale)); text-align: center; }
+.eg-kcol-add { justify-content: flex-start; width: 100%; color: var(--ink-subtle); flex: none; }
+.eg-kcol-input { flex: none; }
+.eg-board-add { flex: none; padding-top: 6px; }
+
+/* A card: outlined, on the page color, inside its column's well. */
+.eg-kcard {
+  position: relative; flex: none; padding: var(--space-2) var(--space-3);
+  background: var(--canvas); border: 1px solid var(--line); border-radius: var(--radius-md);
+  cursor: pointer; user-select: none;
+  transition: border-color var(--duration-fast) var(--ease-out), opacity var(--duration-fast) var(--ease-out);
+}
+.eg-kcard:hover { border-color: var(--line-strong); }
+.eg-kcard.is-selected { border-color: var(--line-control); }
+.eg-kcard:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.eg-kcard.is-dragging { opacity: 0.4; }
+.eg-kcard-row { display: flex; align-items: flex-start; gap: var(--space-2); min-width: 0; }
+.eg-kcard-check {
+  display: inline-flex; align-items: center; justify-content: center; flex: none; width: 16px; height: 16px; margin-top: 3px; padding: 0;
+  border: 1.5px solid var(--line-control); border-radius: var(--radius-xs); background: transparent; color: var(--canvas); cursor: pointer;
+}
+.eg-kcard-check:hover { border-color: var(--ink-muted); }
+.eg-kcard-check.is-checked { background: var(--ink-subtle); border-color: var(--ink-subtle); }
+.eg-kcard-check:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.eg-kcard-title {
+  flex: 1; min-width: 0; color: var(--ink); font-size: calc(14px * var(--type-scale)); line-height: calc(22px * var(--type-scale));
+  overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+}
+.eg-kcard.is-done .eg-kcard-title { color: var(--ink-disabled); text-decoration: line-through; }
+.eg-kcard-meta {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1) var(--space-2); min-width: 0; margin-top: var(--space-1); padding-left: 24px;
+  color: var(--ink-subtle); font-size: calc(12px * var(--type-scale)); line-height: calc(16px * var(--type-scale));
+}
+.eg-kcard-tag { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
+.eg-kcard-swatch { flex: none; width: 8px; height: 8px; border-radius: 2px; }
+.eg-kcard-num { flex: none; font-weight: 600; font-variant-numeric: tabular-nums; }
+.eg-kcard-cat { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eg-kcard-subs { display: inline-flex; align-items: center; gap: 4px; flex: none; font-variant-numeric: tabular-nums; }
+.eg-kcard-meta .eg-runstate { max-width: 100%; min-width: 0; }
+/* Open brief · Run on hover / keyboard focus, over the card's top-right corner. */
+.eg-kcard-acts {
+  position: absolute; top: 4px; right: 4px; display: flex; gap: 2px; padding: 1px; border-radius: var(--radius-sm); background: var(--canvas);
+  opacity: 0; pointer-events: none; transition: opacity var(--duration-fast) var(--ease-out);
+}
+.eg-kcard:hover .eg-kcard-acts, .eg-kcard:focus-within .eg-kcard-acts { opacity: 1; pointer-events: auto; }
+/* Where a dragged card will land. */
+.eg-kdrop { flex: none; height: 2px; margin: -5px 2px -3px; border-radius: var(--radius-full); background: var(--focus); }
+
+/* ── Card editor ── */
+.eg-kmodal-title { display: inline-flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.eg-kmodal-lane { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.eg-kmodal-cat { color: var(--ink-subtle); font-size: calc(12px * var(--type-scale)); font-weight: 400; white-space: nowrap; }
+.eg-kmodal .eg-dialog-head .eg-btn.is-pressed { background: var(--surface-3); color: var(--ink); }
+.eg-kmodal-doc {
+  max-height: min(60vh, 560px); overflow-y: auto; padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--canvas);
+}
+.eg-kmodal-doc:focus-within { border-color: var(--line-control); }
+.eg-kmodal-doc .tiptap {
+  min-height: 120px; outline: none; color: var(--ink); font-family: var(--font-sans);
+  font-size: calc(14px * var(--type-scale)); line-height: calc(22px * var(--type-scale));
+}
+.eg-kmodal-doc .tiptap p { margin: 0; }
+.eg-kmodal-doc .tiptap ol, .eg-kmodal-doc .tiptap ul { margin: 0; padding-left: 26px; }
+.eg-kmodal-doc .tiptap li { margin: 2px 0; }
+.eg-kmodal-doc .tiptap li::marker { color: var(--ink-subtle); }
+.eg-kmodal-doc .tiptap > ol > li > p:first-child, .eg-kmodal-doc .tiptap > ul > li > p:first-child { font-weight: 500; }
+.eg-kmodal-doc .tiptap s { color: var(--ink-disabled); }
+.eg-kmodal-doc .tiptap a { color: var(--accent-text); }
+.eg-kmodal-doc .tiptap code { padding: 0 4px; border-radius: var(--radius-xs); background: var(--surface-2); font-family: var(--font-mono); font-size: 0.9em; }
+.eg-kmodal-doc .tiptap pre { margin: var(--space-1) 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--surface-1); overflow-x: auto; }
+.eg-kmodal-doc .tiptap pre code { padding: 0; background: transparent; }
+.eg-kmodal-doc .tiptap img { max-width: 100%; height: auto; border-radius: var(--radius-sm); }
+.eg-kmodal-doc .tiptap p.is-empty::before { content: attr(data-placeholder); float: left; height: 0; color: var(--ink-subtle); pointer-events: none; }
+.eg-kmodal-hint { margin: var(--space-2) 0 0; color: var(--ink-subtle); font-size: calc(12px * var(--type-scale)); line-height: calc(16px * var(--type-scale)); }
+
+/* ── New project: view, number of lists, layout ── */
+.dlg-view-grid { display: grid; grid-template-columns: minmax(0, 1fr) 88px minmax(0, 1fr); gap: var(--space-3); align-items: end; }
+
+@media (max-width: 640px) {
+  .eg-board { padding: var(--space-3); }
+  .eg-kcol { flex-basis: 85vw; }
+  .eg-kcard-acts { opacity: 1; pointer-events: auto; position: static; justify-content: flex-end; margin-top: var(--space-1); background: transparent; }
+  .dlg-view-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .eg-kcard, .eg-kcard-acts, .eg-hidden-chip { transition: none; }
+}

@@ -11,6 +11,7 @@ import {
   Check,
   ChevronDown,
   ChevronLeft,
+  Code,
   Cpu,
   Folder,
   Keyboard,
@@ -36,6 +37,7 @@ import { SettingsModal, type SettingsModalProps } from './SettingsModal';
 import { AiCredentialsModal, type AiCredentialsModalProps } from './AiCredentialsModal';
 import { McpHubModal, type McpHubModalProps } from './McpHubModal';
 import { ArchivedTasksModal, type ArchivedTasksModalProps } from './ArchivedTasksModal';
+import { EditorSettingsPage } from './EditorSettingsPage';
 import { EFFORT_DETAIL_AUTO, EFFORT_DETAIL_MANUAL, MODEL_SELECTION_COPY, PERMISSION_COPY, PERMISSION_LEVELS } from './ExecutionSettingsBar';
 import {
   Banner,
@@ -82,6 +84,7 @@ const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
   skills: Slash,
   integrations: Puzzle,
   bridge: Plug,
+  editor: Code,
   appearance: Sun,
   shortcuts: Keyboard,
 };
@@ -97,6 +100,7 @@ const PAGE_DESCRIPTIONS: Record<SettingsPage, string> = {
   skills: 'Reusable workflows the agent can follow.',
   integrations: "Services agents can use through MCP, and Ergo's built-in tools.",
   bridge: 'The small app that connects Ergo to this computer.',
+  editor: 'Which app opens files, lines and diffs from Ergo.',
   appearance: 'How Ergo looks.',
   shortcuts: `Keyboard shortcuts. Ergo uses ${MOD} as the main modifier on this computer.`,
 };
@@ -527,6 +531,9 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ page, onNavigate
       break;
     case 'bridge':
       body = embeddedSettings('bridge');
+      break;
+    case 'editor':
+      body = <EditorSettingsPage />;
       break;
     case 'appearance':
       body = embeddedSettings('appearance');

@@ -9,21 +9,60 @@ import {
   List,
   ListOrdered,
   Code,
-  FileCode,
+  SquareCode,
   Quote,
   Link,
   Table,
-  Minus
+  Minus,
+  type LucideIcon,
 } from 'lucide-react';
 
 interface RichTextToolbarProps {
   onInsertSyntax?: (prefix: string, suffix?: string, placeholder?: string) => void;
   targetRef?: React.RefObject<HTMLTextAreaElement | HTMLInputElement | null>;
+  /** Smaller buttons (no longer changes colors: the toolbar follows the theme either way). */
   compact?: boolean;
   className?: string;
   style?: React.CSSProperties;
 }
 
+type ToolbarItem =
+  | { divider: true }
+  | { label: string; icon: LucideIcon; prefix: string; suffix: string; placeholder: string; tooltip: string };
+
+const TOOLBAR_ITEMS: ToolbarItem[] = [
+  { label: 'Bold', icon: Bold, prefix: '**', suffix: '**', placeholder: 'bold text', tooltip: 'Bold (**text**)' },
+  { label: 'Italic', icon: Italic, prefix: '*', suffix: '*', placeholder: 'italic text', tooltip: 'Italic (*text*)' },
+  { label: 'Strikethrough', icon: Strikethrough, prefix: '~~', suffix: '~~', placeholder: 'strikethrough text', tooltip: 'Strikethrough (~~text~~)' },
+  { divider: true },
+  { label: 'Heading 1', icon: Heading1, prefix: '# ', suffix: '', placeholder: 'Heading 1', tooltip: 'Heading 1 (# Title)' },
+  { label: 'Heading 2', icon: Heading2, prefix: '## ', suffix: '', placeholder: 'Heading 2', tooltip: 'Heading 2 (## Title)' },
+  { label: 'Heading 3', icon: Heading3, prefix: '### ', suffix: '', placeholder: 'Heading 3', tooltip: 'Heading 3 (### Title)' },
+  { divider: true },
+  { label: 'Bullet list', icon: List, prefix: '- ', suffix: '', placeholder: 'List item', tooltip: 'Bullet list (- item)' },
+  { label: 'Numbered list', icon: ListOrdered, prefix: '1. ', suffix: '', placeholder: 'Numbered item', tooltip: 'Numbered list (1. item)' },
+  { divider: true },
+  { label: 'Inline code', icon: Code, prefix: '`', suffix: '`', placeholder: 'code', tooltip: 'Inline code (`code`)' },
+  { label: 'Code block', icon: SquareCode, prefix: '```\n', suffix: '\n```', placeholder: 'code block content', tooltip: 'Code block (```)' },
+  { label: 'Quote', icon: Quote, prefix: '> ', suffix: '', placeholder: 'Quote text', tooltip: 'Quote (> quote)' },
+  { divider: true },
+  { label: 'Link', icon: Link, prefix: '[', suffix: '](https://example.com)', placeholder: 'link text', tooltip: 'Link ([text](url))' },
+  { label: 'Table', icon: Table, prefix: '| Header 1 | Header 2 |\n| --- | --- |\n| ', suffix: ' | Cell 2 |', placeholder: 'Cell 1', tooltip: 'Table' },
+  { label: 'Horizontal line', icon: Minus, prefix: '\n---\n', suffix: '', placeholder: '', tooltip: 'Horizontal line (---)' },
+];
+
+/** Sets a controlled input's value so React's onChange sees it (a plain `.value =` is swallowed by React's tracker). */
+function setNativeValue(input: HTMLTextAreaElement | HTMLInputElement, value: string) {
+  const proto = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+  if (setter) setter.call(input, value);
+  else input.value = value;
+}
+
+/**
+ * Markdown formatting bar for the AI workspace's brief/notes textareas. Styled like the human-side document toolbar
+ * (.eg-toolbar / .eg-tb-btn / .eg-tb-sep), so it follows the light and dark themes.
+ */
 export const RichTextToolbar: React.FC<RichTextToolbarProps> = ({
   onInsertSyntax,
   targetRef,
@@ -48,7 +87,7 @@ export const RichTextToolbar: React.FC<RichTextToolbarProps> = ({
 
       // Insert at cursor
       const newValue = input.value.substring(0, start) + replacement + input.value.substring(end);
-      input.value = newValue;
+      setNativeValue(input, newValue);
 
       // Trigger change event if React state listener exists
       const event = new Event('input', { bubbles: true });
@@ -62,90 +101,32 @@ export const RichTextToolbar: React.FC<RichTextToolbarProps> = ({
     }
   };
 
-  const toolbarButtons = [
-    { label: 'Bold', icon: Bold, prefix: '**', suffix: '**', placeholder: 'bold text', tooltip: 'Bold (**text**)' },
-    { label: 'Italic', icon: Italic, prefix: '*', suffix: '*', placeholder: 'italic text', tooltip: 'Italic (*text*)' },
-    { label: 'Strikethrough', icon: Strikethrough, prefix: '~~', suffix: '~~', placeholder: 'strikethrough text', tooltip: 'Strikethrough (~~text~~)' },
-    { divider: true },
-    { label: 'Heading 1', icon: Heading1, prefix: '# ', suffix: '', placeholder: 'Heading 1', tooltip: 'Heading 1 (# Title)' },
-    { label: 'Heading 2', icon: Heading2, prefix: '## ', suffix: '', placeholder: 'Heading 2', tooltip: 'Heading 2 (## Title)' },
-    { label: 'Heading 3', icon: Heading3, prefix: '### ', suffix: '', placeholder: 'Heading 3', tooltip: 'Heading 3 (### Title)' },
-    { divider: true },
-    { label: 'Bullet List', icon: List, prefix: '- ', suffix: '', placeholder: 'List item', tooltip: 'Bullet List (- item)' },
-    { label: 'Numbered List', icon: ListOrdered, prefix: '1. ', suffix: '', placeholder: 'Numbered item', tooltip: 'Numbered List (1. item)' },
-    { divider: true },
-    { label: 'Inline Code', icon: Code, prefix: '`', suffix: '`', placeholder: 'code', tooltip: 'Inline Code (`code`)' },
-    { label: 'Code Block', icon: FileCode, prefix: '```\n', suffix: '\n```', placeholder: 'code block content', tooltip: 'Code Block (```)' },
-    { label: 'Quote', icon: Quote, prefix: '> ', suffix: '', placeholder: 'Quote text', tooltip: 'Blockquote (> quote)' },
-    { divider: true },
-    { label: 'Link', icon: Link, prefix: '[', suffix: '](https://example.com)', placeholder: 'link text', tooltip: 'Hyperlink ([text](url))' },
-    { label: 'Table', icon: Table, prefix: '| Header 1 | Header 2 |\n| --- | --- |\n| ', suffix: ' | Cell 2 |', placeholder: 'Cell 1', tooltip: 'Markdown Table' },
-    { label: 'Horizontal Line', icon: Minus, prefix: '\n---\n', suffix: '', placeholder: '', tooltip: 'Horizontal Rule (---)' },
-  ];
-
   return (
     <div
-      className={`rich-text-toolbar ${className}`}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: compact ? '0.2rem' : '0.35rem',
-        background: 'rgba(13, 18, 31, 0.95)',
-        overflowX: 'auto',
-        maxWidth: '100%',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-        ...style
-      }}
+      className={`eg-toolbar eg-md-toolbar${compact ? ' is-compact' : ''} ${className}`.trim()}
+      role="toolbar"
+      aria-label="Formatting"
+      style={style}
     >
-      {toolbarButtons.map((btn, idx) => {
+      {TOOLBAR_ITEMS.map((btn, idx) => {
         if ('divider' in btn) {
-          return (
-            <div
-              key={`div-${idx}`}
-              style={{
-                width: '1px',
-                height: '16px',
-                background: 'var(--border-subtle)',
-                margin: '0 0.15rem'
-              }}
-            />
-          );
+          return <span key={`div-${idx}`} className="eg-tb-sep" aria-hidden="true" />;
         }
-
         const IconComponent = btn.icon;
         return (
           <button
             key={btn.label}
             type="button"
-            className="toolbar-btn"
+            className="eg-tb-btn"
             title={btn.tooltip}
+            aria-label={btn.label}
+            // Keep the caret/selection in the textarea being formatted.
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => applyFormatting(btn.prefix, btn.suffix, btn.placeholder)}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: compact ? '26px' : '28px',
-              height: compact ? '26px' : '28px',
-              borderRadius: '4px',
-              border: '1px solid transparent',
-              background: 'rgba(255, 255, 255, 0.04)',
-              color: 'var(--text-main)',
-              cursor: 'pointer',
-              transition: 'all 0.15s ease',
-              padding: 0
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'var(--accent-primary)';
-              e.currentTarget.style.color = '#fff';
-              e.currentTarget.style.borderColor = 'var(--accent-primary)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.04)';
-              e.currentTarget.style.color = 'var(--text-main)';
-              e.currentTarget.style.borderColor = 'transparent';
-            }}
           >
-            <IconComponent size={compact ? 13 : 14} />
+            <span className="eg-icon" aria-hidden="true">
+              <IconComponent strokeWidth={1.75} />
+            </span>
           </button>
         );
       })}

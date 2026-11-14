@@ -1,6 +1,7 @@
 import React from 'react';
 import { type ProjectData } from '../types';
-import { ChevronDown, Download, FileCode, FolderGit2, FolderOpen, ListPlus, Moon, PanelRight, Play, Plus, Search, Settings, Sun } from 'lucide-react';
+import { ChevronDown, Columns3, Download, FileCode, FolderGit2, FolderMinus, FolderOpen, LayoutList, ListPlus, Moon, PanelRight, PanelsTopLeft, Play, Plus, Search, Settings, SquareKanban, Sun } from 'lucide-react';
+import type { ProjectViewSettings } from '../lib/projectView';
 import { Button, IconButton, Icon, Kbd, MenuButton, type MenuItem } from './ui';
 import { MOD, SHIFT } from '../lib/shortcuts';
 import ergoIcon from '../assets/ergo_icon_2.png';
@@ -10,6 +11,8 @@ interface NavbarProps {
   activeProject: ProjectData;
   onSelectProject: (proj: ProjectData) => void;
   onNewProject: () => void;
+  /** Takes the open project off Ergo's list (asks first; its files are kept). */
+  onRemoveProject?: () => void;
   onOpenFolderPicker?: () => void;
   onOpenRawMarkdownModal: () => void;
   onExportProject?: () => void;
@@ -27,6 +30,10 @@ interface NavbarProps {
   onOpenWelcome: () => void;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
+  /** The project's view: list or board, and (list) lanes side by side or behind tabs. */
+  view?: ProjectViewSettings;
+  laneCount?: number;
+  onChangeView?: (patch: Partial<ProjectViewSettings>) => void;
 }
 
 /**
@@ -38,6 +45,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   activeProject,
   onSelectProject,
   onNewProject,
+  onRemoveProject,
   onOpenFolderPicker,
   onOpenRawMarkdownModal,
   onExportProject,
@@ -51,6 +59,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenWelcome,
   theme,
   onToggleTheme,
+  view,
+  laneCount = 1,
+  onChangeView,
 }) => {
   const projectItems: MenuItem[] = [
     { section: 'Projects' },
@@ -67,7 +78,45 @@ export const Navbar: React.FC<NavbarProps> = ({
     { separator: true },
     { label: 'View TODO.md as markdown', icon: FileCode, onSelect: onOpenRawMarkdownModal },
     ...(onExportProject ? [{ label: 'Export project', icon: Download, onSelect: onExportProject }] : []),
+    ...(onRemoveProject && activeProject
+      ? [
+          { separator: true } as const,
+          {
+            label: projects.length > 1 ? `Remove ${activeProject.name}…` : 'Remove project…',
+            icon: FolderMinus,
+            danger: true,
+            onSelect: onRemoveProject,
+          },
+        ]
+      : []),
   ];
+
+  // View: how this project's lists show — as documents or as a board; several lists side by side or as tabs.
+  const isBoard = view?.style === 'kanban';
+  const viewItems: MenuItem[] = view
+    ? [
+        { section: 'Show tasks as' },
+        { label: 'Document', icon: LayoutList, checked: !isBoard, onSelect: () => onChangeView?.({ style: 'list' }) },
+        { label: 'Kanban board', icon: SquareKanban, checked: isBoard, title: 'Each list is a column of task cards', onSelect: () => onChangeView?.({ style: 'kanban' }) },
+        { section: isBoard ? 'Lists (a board shows them all)' : laneCount > 1 ? 'Lists' : 'Lists (with more than one)' },
+        {
+          label: 'Side by side',
+          icon: Columns3,
+          checked: view.layout === 'columns',
+          disabled: isBoard,
+          title: 'Every list is visible; scroll sideways when they don’t fit',
+          onSelect: () => onChangeView?.({ layout: 'columns' }),
+        },
+        {
+          label: 'Tabs',
+          icon: PanelsTopLeft,
+          checked: view.layout === 'tabs',
+          disabled: isBoard,
+          title: 'One list at a time, with a tab for each',
+          onSelect: () => onChangeView?.({ layout: 'tabs' }),
+        },
+      ]
+    : [];
 
   return (
     <header className="eg-topbar">
@@ -100,6 +149,14 @@ export const Navbar: React.FC<NavbarProps> = ({
       <Button variant="ghost" icon={ListPlus} kbd={[SHIFT, MOD, 'D']} onClick={onOpenDraft} className="eg-topbar-draft">
         <span className="eg-hide-sm">Draft tasks</span>
       </Button>
+      {view && onChangeView && (
+        <MenuButton
+          align="end"
+          width={240}
+          items={viewItems}
+          trigger={(p) => <IconButton {...p} icon={isBoard ? SquareKanban : view.layout === 'tabs' && laneCount > 1 ? PanelsTopLeft : LayoutList} label="View" />}
+        />
+      )}
       <IconButton
         icon={PanelRight}
         label={isDetailOpen ? 'Hide detail pane' : 'Show detail pane'}

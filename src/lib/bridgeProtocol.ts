@@ -28,8 +28,16 @@
  *      Also `problems` in the bridge's info: what keeps it from working on this computer (e.g. node-pty, which starts
  *      every agent, failed to load). Optional: with an older bridge the web app recognizes those failures from the
  *      error an agent start returns (bridgeHealth.ts).
+ *  9 — editor deep links: /api/files/open takes `ide` (Settings › Editor), `column`, `projectId` and `root` (relative
+ *      paths resolve against the task's folders; only files inside the project's Allowed Folders open), plus
+ *      /api/ide/detect, /api/git/run-changes (files a run changed since its first agent started, recorded in
+ *      `.ergo/runs/<runId>/git-base.json`) and /api/files/diff (a run's change to one file as a diff in the editor).
+ *      Optional: with an older bridge paths still open (in its auto-detected editor) but runs list no changed files.
  */
-export const BRIDGE_PROTOCOL = 8;
+export const BRIDGE_PROTOCOL = 9;
+
+/** First protocol whose bridge honors the editor choice and serves run changes and diffs (ideLinks.ts). */
+export const IDE_LINKS_PROTOCOL = 9;
 
 /** First protocol whose bridge reports session context sizes and workers' handoff notes (CLI worker rotation). */
 export const HANDOFF_PROTOCOL = 8;

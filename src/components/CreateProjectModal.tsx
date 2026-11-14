@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { CircleCheck, CircleX, FolderOpen, FileText } from 'lucide-react';
-import { Button, Dialog, Field, Icon, Input } from './ui';
+import { Button, Dialog, Field, Icon, Input, SegmentedControl } from './ui';
+import { defaultLaneTitles, laneFileForTitle, type LaneLayout, type NewProjectView, type ViewStyle } from '../lib/projectView';
 import { createSlug } from '../lib/demoData';
 import { importedLanes, type ImportedLane } from '../lib/markdownImport';
 import { type ProjectData } from '../types';
@@ -14,7 +15,9 @@ interface CreateProjectModalProps {
     description: string,
     initialTodoContent?: string,
     /** Swim lanes beyond TODO.md, from a markdown import. */
-    extraLanes?: ImportedLane[]
+    extraLanes?: ImportedLane[],
+    /** How the workspace shows (list or board), lanes side by side or as tabs, and how many lanes to start with. */
+    view?: NewProjectView
   ) => void;
   storageDirectory?: string;
   existingProjects?: ProjectData[];
@@ -43,8 +46,17 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
   const [imported, setImported] = useState<ImportedLane[] | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
+  // How the workspace shows: a document per list or a kanban board, and how many lists (swim lanes) to start with.
+  const [viewStyle, setViewStyle] = useState<ViewStyle>('list');
+  const [laneLayout, setLaneLayout] = useState<LaneLayout>('columns');
+  const [laneCount, setLaneCount] = useState(1);
 
   if (!isOpen) return null;
+
+  // Imported files make lanes of their own; extra empty ones fill up to the number asked for.
+  const importedLaneCount = imported ? imported.length : 1;
+  const laneTitles = defaultLaneTitles(Math.max(laneCount, importedLaneCount), viewStyle);
+  const blankLaneFiles = laneTitles.slice(importedLaneCount).map((t) => ({ title: t, fileName: laneFileForTitle(t) }));
 
   const currentSlug = createSlug(isFolderTouched ? folderName : name);
   const normalizedStorage = storageDirectory.startsWith('~/')
@@ -252,8 +264,12 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
       currentSlug,
       description.trim(),
       imported ? imported[0].markdown : duplicatedSource?.todoContent,
-      imported ? imported.slice(1) : undefined
+      imported ? imported.slice(1) : undefined,
+      { style: viewStyle, layout: laneLayout, laneCount: Math.max(laneCount, importedLaneCount) }
     );
+    setViewStyle('list');
+    setLaneLayout('columns');
+    setLaneCount(1);
     setImported(null);
     setName('');
     setFolderName('');
@@ -307,6 +323,53 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
             Projects live under <span className="eg-mono" style={{ fontSize: 'calc(11px * var(--type-scale))' }}>{mountPoint}</span>
           </span>
         </label>
+
+        <div className="dlg-view-grid">
+          <Field label="Show tasks as">
+            <SegmentedControl<ViewStyle>
+              label="Show tasks as"
+              full
+              value={viewStyle}
+              onChange={(v) => {
+                setViewStyle(v);
+                // A board with one column is rarely what's meant: start it with the usual three.
+                if (v === 'kanban' && laneCount === 1) setLaneCount(3);
+              }}
+              options={[
+                { id: 'list', label: 'Document', title: 'Each list is a document you type in' },
+                { id: 'kanban', label: 'Kanban board', title: 'Each list is a column of task cards' },
+              ]}
+            />
+          </Field>
+          <Field label="Lists">
+            <Input
+              type="number"
+              min={1}
+              max={12}
+              value={laneCount}
+              onChange={(e) => setLaneCount(Math.max(1, Math.min(12, Math.round(Number(e.target.value) || 1))))}
+              aria-label="Number of lists (swim lanes)"
+              style={{ height: 'var(--size-control)' }}
+            />
+          </Field>
+          {viewStyle === 'list' && laneCount > 1 && (
+            <Field label="Lists show">
+              <SegmentedControl<LaneLayout>
+                label="Lists show"
+                full
+                value={laneLayout}
+                onChange={setLaneLayout}
+                options={[
+                  { id: 'columns', label: 'Side by side', title: 'Every list visible; scroll sideways when they don’t fit' },
+                  { id: 'tabs', label: 'Tabs', title: 'One list at a time, with a tab for each' },
+                ]}
+              />
+            </Field>
+          )}
+        </div>
+        <p className="eg-field-help" style={{ margin: 'calc(-1 * var(--space-2)) 0 0' }}>
+          You can change this later from the view menu in the top bar.
+        </p>
 
         <div>
           <div className="eg-section-label" style={{ marginTop: 'var(--space-2)' }}>Import from markdown (optional)</div>
@@ -405,7 +468,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
               <span style={{ color: 'var(--ink-muted)' }}>{todoPath}</span>
               <span style={{ color: 'var(--ink-subtle)' }}>
                 {'  '}
-                {imported ? `imported from ${imported[0].title}` : duplicatedSource ? `copied from ${duplicatedSource.name}` : 'your task list'}
+                {imported ? `imported from ${imported[0].title}` : duplicatedSource ? `copied from ${duplicatedSource.name}` : viewStyle === 'kanban' ? `column: ${laneTitles[0]}` : 'your task list'}
               </span>
             </div>
             {imported?.slice(1).map((lane) => (
@@ -414,6 +477,14 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
                   {displayFolderPath}/{lane.fileName}
                 </span>
                 <span style={{ color: 'var(--ink-subtle)' }}>{'  '}swim lane: {lane.title}</span>
+              </div>
+            ))}
+            {blankLaneFiles.map((lane) => (
+              <div key={lane.fileName} style={{ paddingLeft: 18 }}>
+                <span style={{ color: 'var(--ink-muted)' }}>
+                  {displayFolderPath}/{lane.fileName}
+                </span>
+                <span style={{ color: 'var(--ink-subtle)' }}>{'  '}{viewStyle === 'kanban' ? 'column' : 'list'}: {lane.title}</span>
               </div>
             ))}
           </div>

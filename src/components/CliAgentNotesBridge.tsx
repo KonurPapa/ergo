@@ -26,6 +26,7 @@ import type {
   PermissionLevel,
 } from '../types';
 import { AgentRoleBadge } from './AgentSessionTabs';
+import { FileLinkText } from './FileLink';
 import { describeTaskMessage, type TaskMessageOptions, type TaskMessageResult } from '../lib/taskMessages';
 import { extractActivityEntries, nowTime, type ActivityFeedItem } from '../lib/cliActivityFeed';
 
@@ -554,8 +555,8 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
                     {item.type === 'status' && <Sparkles size={11} color="var(--text-muted)" />}
                   </div>
                   <div className="feed-item-content">
-                    <span className="feed-item-text">{item.text}</span>
-                    {item.detail && item.detail !== item.text && <code className="feed-item-detail">{item.detail}</code>}
+                    <span className="feed-item-text"><FileLinkText text={item.text} /></span>
+                    {item.detail && item.detail !== item.text && <code className="feed-item-detail"><FileLinkText text={item.detail} inCode /></code>}
                   </div>
                   <span className="feed-item-time">{item.timestamp}</span>
                 </div>

@@ -13,20 +13,10 @@ import {
   type SwimLaneDoc
 } from '../types';
 import { useEditor, EditorContent } from '@tiptap/react';
-import { AnchoredListItem } from '../lib/listItemAnchor';
-import StarterKit from '@tiptap/starter-kit';
-import Strike from '@tiptap/extension-strike';
-import CodeMark from '@tiptap/extension-code';
-import Placeholder from '@tiptap/extension-placeholder';
-import Link from '@tiptap/extension-link';
-import Image from '@tiptap/extension-image';
-import Typography from '@tiptap/extension-typography';
-import { Markdown } from 'tiptap-markdown';
+import { taskEditorExtensions } from '../lib/taskEditorExtensions';
+import { orderLanes, type LaneLayout, type ViewStyle } from '../lib/projectView';
+import { KanbanBoard, laneDisplayName as laneTabName } from './KanbanBoard';
 import { stripHeaderComments, parseSwimLaneMarkdown } from '../lib/parser';
-import { ColorHeading } from '../lib/headingColorNode';
-import { Highlight, MarkdownUnderline } from '../lib/delimitedMarks';
-import { TextColor } from '../lib/textColorMark';
-import { LineSpacingParagraph } from '../lib/lineSpacingMark';
 import { storageManager } from '../lib/storageManager';
 import { getPref, setPref, subscribePrefs } from '../lib/userPrefs';
 import { bridgeClient } from '../lib/bridgeClient';
@@ -41,25 +31,17 @@ import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { canJoin } from '@tiptap/pm/transform';
+import { liftListItem, sinkListItem } from '@tiptap/pm/schema-list';
 import { Fragment, type Node as PMNode } from '@tiptap/pm/model';
 import { MARKDOWN_WRAPPER_PAIRS } from '../lib/markdownEditorUtils';
+import { collectImages, createImageLightboxExtension, insertTaskImage, type TaskImage } from '../lib/taskImages';
+import { ImageLightbox } from './ImageLightbox';
+import { isTaskItemChecked, isUnstrikeableBlock, setTaskItemDone, taskTitleBlock } from '../lib/taskDoneState';
 import { applyExternalMarkdown } from '../lib/editorSync';
 import { createTaskCommandExtension, insertFileReferences, insertSkillCommand, type TaskCommandHandlers, type TaskCommandState } from '../lib/taskCommandExtension';
 import { TaskCommandMenu, type TaskCommandMenuHandle } from './TaskCommandMenu';
 import { getWorkspaceSkills, subscribeWorkspaceSkills } from '../lib/skillsManager';
 import { projectWorkingFolder, skillsBySlug } from '../lib/taskReferences';
-
-// List items carry their task's hidden anchor (listItemAnchor.ts), so briefs stay with a line as it moves.
-const CustomListItem = AnchoredListItem;
-
-// A checked-off task is struck through as a whole, so strikethrough ranks outside every other mark. Ranked inside bold
-// (StarterKit's order) it was closed around bold words, "~~one ~~**~~two~~** ~~three~~", which markdown can't read
-// back: each save turned more of a checked-off task into literal, then escaped, tildes.
-const OuterStrike = Strike.extend({ priority: 1000 });
-
-// Inline code takes no other formatting, except strikethrough: a task with `code` in it has to be struck through as a
-// whole to count as checked off (it never could be with code's default "excludes everything").
-const StrikeableCode = CodeMark.extend({ excludes: 'bold italic underline highlight textColor link' });
 
 import {
   Plus,
@@ -98,7 +80,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { Button, Dialog, IconButton, MenuButton, Popover, RunState } from './ui';
+import { Button, Dialog, IconButton, MenuButton, Popover, RunState, Tabs } from './ui';
 import { HEADER_COLORS, getHeaderColor } from '../lib/headerColors';
 import { isAgentWorking } from './AgentSessionTabs';
 import { useAgentActivity, useTick } from '../hooks/useAgentActivity';
@@ -109,6 +91,7 @@ interface WithMarkdownStorage {
   storage: {
     markdown: {
       getMarkdown: () => string;
+      serializer?: { serialize: (doc: PMNode) => string };
     };
   };
 }
@@ -125,7 +108,10 @@ const collapsedCardsState: Set<string> = (() => {
     return new Set<string>();
   }
 })();
+// Bumped on every collapse / expand, so cached line decorations know to redraw.
+let collapsedCardsVersion = 0;
 function saveCollapsedCards() {
+  collapsedCardsVersion++;
   try {
     localStorage.setItem(COLLAPSED_CARDS_KEY, JSON.stringify([...collapsedCardsState]));
   } catch { /* storage unavailable: state just won't persist */ }
@@ -152,27 +138,6 @@ function saveCollapsedHeaders(laneKey: string, keys: Set<string>) {
     else delete all[laneKey];
     localStorage.setItem(COLLAPSED_HEADERS_KEY, JSON.stringify(all));
   } catch { /* storage unavailable: state just won't persist */ }
-}
-
-// Helper: check if a node (paragraph) is marked as done via strikethrough
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function isNodeChecked(node: any): boolean {
-  if (!node) return false;
-  let hasText = false;
-  let allTextStruck = true;
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  node.descendants((child: any) => {
-    if (child.isText) {
-      hasText = true;
-      const isStruck = child.marks.some((m: any) => m.type.name === 'strike');
-      if (!isStruck) {
-        allTextStruck = false;
-      }
-    }
-  });
-
-  return hasText && allTextStruck;
 }
 
 // Helper: insert a bullet subtask inside the listItem card at the given position
@@ -389,6 +354,28 @@ function placeCaretBesideWidget(view: any, widget: HTMLElement, event: MouseEven
   view.focus();
 }
 
+// Helper: the run of text carrying `markType` that a formatting-delimiter widget at `pos` belongs to: the one starting
+// there ('open') or ending there ('close'), as a whole run of adjacent marked text nodes in the same block.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function markSpanAt(doc: PMNode, pos: number, markType: any, side: 'open' | 'close'): { from: number; to: number } | null {
+  if (pos < 0 || pos > doc.content.size) return null;
+  const $pos = doc.resolve(pos);
+  const parent = $pos.parent;
+  if (!parent.isTextblock) return null;
+  const at = side === 'open' ? $pos.index() : $pos.index() - 1;
+  const marked = (i: number) => i >= 0 && i < parent.childCount && parent.child(i).isText && markType.isInSet(parent.child(i).marks);
+  if (!marked(at)) return null;
+  let first = at;
+  let last = at;
+  while (marked(first - 1)) first--;
+  while (marked(last + 1)) last++;
+  let from = $pos.start();
+  for (let i = 0; i < first; i++) from += parent.child(i).nodeSize;
+  let to = from;
+  for (let i = first; i <= last; i++) to += parent.child(i).nodeSize;
+  return { from, to };
+}
+
 // Extension: Auto-join directly adjacent ordered lists and bullet lists
 const AutoJoinListsExtension = Extension.create({
   name: 'autoJoinLists',
@@ -444,6 +431,8 @@ const AutoJoinListsExtension = Extension.create({
 
 // Extension: every task keeps a title line. Deleting a selection that runs from outside the list into a task's title
 // merges that title into the block above and left the task's subtasks under a parent with no title (`1. - sub`).
+// A task that starts with a code block or an image gets one too: done-ness is its struck title (taskDoneState.ts),
+// and markdown can't put a task's anchor after a code fence. The empty title is kept as a `&nbsp;` line.
 const TitledTasksExtension = Extension.create({
   name: 'titledTasks',
   addProseMirrorPlugins() {
@@ -456,7 +445,7 @@ const TitledTasksExtension = Extension.create({
           const tr = newState.tr;
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           newState.doc.descendants((node: any, pos: number) => {
-            if (node.type.name === 'listItem' && node.firstChild && isListNode(node.firstChild)) {
+            if (node.type.name === 'listItem' && node.firstChild && (isListNode(node.firstChild) || isUnstrikeableBlock(node.firstChild))) {
               tr.insert(tr.mapping.map(pos + 1), paragraph.create());
             }
           });
@@ -795,6 +784,8 @@ const GUTTER_ICONS = {
   calendar: lucideSvg('<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/>'),
   eye: lucideSvg('<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>'),
   archive: lucideSvg('<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>'),
+  indent: lucideSvg('<path d="M21 5H11"/><path d="M21 12H11"/><path d="M21 19H11"/><path d="m3 8 4 4-4 4"/>'),
+  outdent: lucideSvg('<path d="M21 5H11"/><path d="M21 12H11"/><path d="M21 19H11"/><path d="m7 8-4 4 4 4"/>'),
 };
 const QUEUED_GLYPH =
   '<span class="eg-status eg-status-queued" aria-hidden="true"><svg viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2.2 2.2"/></svg></span>';
@@ -812,6 +803,63 @@ function insertTaskBelow(view: any, listItemPos: number) {
   tr.setStoredMarks([]);
   view.dispatch(tr.scrollIntoView());
   view.focus();
+}
+
+/**
+ * The line controls' Indent / Outdent: nests the list item at `itemPos` under the line above (sinkListItem) or lifts
+ * it a level (liftListItem), like Tab / Shift-Tab with the caret on that line. The caret stays where it was when it
+ * was on the line already; otherwise it goes to the end of the line's text.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function shiftListItem(view: any, itemPos: number, dir: 1 | -1) {
+  const item = view.state.doc.nodeAt(itemPos);
+  if (!item || item.type.name !== 'listItem') return;
+  const { $from } = view.state.selection;
+  let onLine = false;
+  for (let d = $from.depth; d > 0; d--) {
+    if ($from.node(d).type.name === 'listItem') {
+      onLine = $from.before(d) === itemPos;
+      break;
+    }
+  }
+  if (!onLine) {
+    const title = taskTitleBlock(item);
+    const at = title ? itemPos + 2 + title.offset + title.node.content.size : itemPos + 1;
+    view.dispatch(view.state.tr.setSelection(Selection.near(view.state.doc.resolve(at))));
+  }
+  const listItem = view.state.schema.nodes.listItem;
+  (dir > 0 ? sinkListItem(listItem) : liftListItem(listItem))(view.state, view.dispatch);
+  view.focus();
+}
+
+/** A sub-item's hover controls at the right end of its line: Outdent and Indent. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function subItemIndentControls(view: any, getPos: () => number | undefined, canIndent: boolean): HTMLElement {
+  const side = document.createElement('span');
+  side.className = 'eg-line-side eg-line-side-sub';
+  side.setAttribute('contenteditable', 'false');
+  const acts = document.createElement('span');
+  acts.className = 'eg-line-acts';
+  const button = (icon: string, label: string, dir: 1 | -1) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'eg-btn eg-btn-ghost eg-btn-icon eg-btn-sm card-action-btn';
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+    btn.innerHTML = `<span class="eg-icon">${icon}</span>`;
+    btn.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const at = getPos();
+      if (at != null) shiftListItem(view, at - 1, dir);
+    });
+    return btn;
+  };
+  acts.appendChild(button(GUTTER_ICONS.outdent, 'Outdent (Shift+Tab)', -1));
+  if (canIndent) acts.appendChild(button(GUTTER_ICONS.indent, 'Indent (Tab)', 1));
+  side.appendChild(acts);
+  return side;
 }
 
 /** The document's top-level task lines (DOM) with their positions, in order. */
@@ -917,14 +965,7 @@ function startTaskDrag(view: any, fromPos: number, down: MouseEvent) {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function caretPastHiddenDone(state: any, dir: 1 | -1): number | null {
-  const isHiddenItem = (node: PMNode) => {
-    if (node.type.name !== 'listItem') return false;
-    let first: PMNode | null = null;
-    node.forEach((child) => {
-      if (!first && child.type.name !== 'bulletList' && child.type.name !== 'orderedList') first = child;
-    });
-    return isNodeChecked(first);
-  };
+  const isHiddenItem = (node: PMNode) => isTaskItemChecked(node);
   let pos: number = state.selection.from;
   for (let guard = 0; guard < 200; guard++) {
     const $pos = state.doc.resolve(pos);
@@ -1279,9 +1320,18 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   };
 
   // ProseMirror decoration extension for UI Checkboxes, Add Subtask, and Active Card highlighting
+  // Screenshots: clicking one (in the text or the selected task's margin strip) opens it full size.
+  const [lightbox, setLightbox] = useState<{ images: TaskImage[]; index: number } | null>(null);
+  const openLightboxRef = useRef<((images: TaskImage[], index: number) => void) | null>(null);
+  openLightboxRef.current = (images, index) => setLightbox({ images, index });
+  const [ImageLightboxExtension] = useState(() => createImageLightboxExtension(`imageLightbox_${lane.id}`, openLightboxRef));
+
   const TaskCheckboxDecorationExtension = Extension.create({
     name: `taskCheckboxDecoration_${lane.id}`,
     addProseMirrorPlugins() {
+      // The last decoration set and what it was built from. TipTap's key commands dispatch empty transactions (two or
+      // three per Backspace) and each one asked for decorations again: unchanged inputs reuse the last set.
+      let cached: { inputs: unknown[]; set: DecorationSet } | null = null;
       return [
         new Plugin({
           key: new PluginKey(`taskCheckboxDecorationPlugin_${lane.id}`),
@@ -1309,6 +1359,12 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
               return false;
             },
             decorations(state) {
+              const inputs: unknown[] = [
+                state.doc, state.selection.from, selectedTaskIdRef.current, runningTaskIdsRef.current,
+                queuedTaskIdsRef.current, laneTasksRef.current, briefsRef.current, pendingHumanInputsRef.current,
+                awaitingTaskIdsRef.current, collapsedCardsVersion,
+              ];
+              if (cached && cached.inputs.every((v, i) => v === inputs[i])) return cached.set;
               const decorations: Decoration[] = [];
               const doc = state.doc;
               const strikeMarkType = state.schema.marks.strike;
@@ -1357,7 +1413,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                     }
                   });
 
-                  const isParentChecked = isNodeChecked(firstBlockNode);
+                  const isParentChecked = isTaskItemChecked(node);
 
                   // 1. Add active, running, done, collapsed, and digit-width classes to the top-level card
                   decorations.push(
@@ -1400,59 +1456,20 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                         const liveNode = liveDoc.nodeAt(listItemPos);
                         if (!liveNode || liveNode.type.name !== 'listItem') return;
 
-                        let liveFirstBlockPos: number | null = null;
-                        let liveFirstBlockNode: any = null;
-                        const liveSubtaskBlocks: { pos: number; node: any }[] = [];
-
-                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                        liveNode.forEach((child: any, offset: number) => {
-                          const childPos: number = listItemPos + 1 + offset;
-                          if (child.type.name !== 'bulletList' && child.type.name !== 'orderedList') {
-                            if (liveFirstBlockPos === null) {
-                              liveFirstBlockPos = childPos;
-                              liveFirstBlockNode = child;
-                            }
-                          } else if (child.type.name === 'bulletList' || child.type.name === 'orderedList') {
-                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                            child.forEach((nestedItem: any, nestedOffset: number) => {
-                              const nestedItemPos: number = childPos + 1 + nestedOffset;
-                              if (nestedItem.type.name === 'listItem') {
-                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                nestedItem.forEach((nestedChild: any, nOffset: number) => {
-                                  if (nestedChild.type.name !== 'bulletList' && nestedChild.type.name !== 'orderedList') {
-                                    liveSubtaskBlocks.push({
-                                      pos: nestedItemPos + 1 + nOffset,
-                                      node: nestedChild,
-                                    });
-                                  }
-                                });
-                              }
-                            });
+                        // Done-ness lives on the task's text; its code blocks and images take no strike (taskDoneState.ts).
+                        // A task with no text yet (only a code block or image) can't be checked off: put the caret on
+                        // its empty title line instead, so it gets one.
+                        const title = taskTitleBlock(liveNode);
+                        if (!title || !title.node.textContent.trim()) {
+                          if (title) {
+                            view.dispatch(view.state.tr.setSelection(TextSelection.near(liveDoc.resolve(listItemPos + 2 + title.offset))));
+                            view.focus();
                           }
-                        });
-
-                        if (!liveFirstBlockNode || liveFirstBlockPos === null) return;
-
-                        const shouldCheck = !isNodeChecked(liveFirstBlockNode);
-                        const tr = view.state.tr;
-                        const fromPos: number = Number(liveFirstBlockPos);
-                        const toPos: number = fromPos + Number(liveFirstBlockNode.nodeSize);
-
-                        if (shouldCheck) {
-                          tr.addMark(fromPos, toPos, strikeMarkType.create());
-                          liveSubtaskBlocks.forEach((sp) => {
-                            const spFrom: number = Number(sp.pos);
-                            const spTo: number = spFrom + Number(sp.node.nodeSize);
-                            tr.addMark(spFrom, spTo, strikeMarkType.create());
-                          });
-                        } else {
-                          tr.removeMark(fromPos, toPos, strikeMarkType);
-                          liveSubtaskBlocks.forEach((sp) => {
-                            const spFrom: number = Number(sp.pos);
-                            const spTo: number = spFrom + Number(sp.node.nodeSize);
-                            tr.removeMark(spFrom, spTo, strikeMarkType);
-                          });
+                          return;
                         }
+                        const shouldCheck = !isTaskItemChecked(liveNode);
+                        const tr = view.state.tr;
+                        setTaskItemDone(tr, listItemPos, shouldCheck, strikeMarkType, true);
 
                         if (onSelectTaskRef.current) {
                           onSelectTaskRef.current(cardTaskId);
@@ -1577,6 +1594,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                   if (runKind === 'review') {
                     decorations.push(Decoration.node(pos, pos + node.nodeSize, { class: 'is-needs-review' }));
                   }
+                  const canIndentTask = doc.resolve(pos).index() > 0;
                   const cardActionsWidget = Decoration.widget(
                     pos + 1,
                     (view, getPos) => {
@@ -1638,6 +1656,14 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                               if (t) onRunTaskRef.current?.(t);
                             })
                       );
+
+                      // Indent: nest the task under the one above (the first task of a list has none).
+                      if (canIndentTask) {
+                        acts.appendChild(iconBtn(GUTTER_ICONS.indent, 'Indent (Tab)', () => {
+                          const at = typeof getPos === 'function' ? getPos() : null;
+                          if (at != null) shiftListItem(view, at - 1, 1);
+                        }));
+                      }
 
                       // More: run several, schedule, archive
                       const menuWrapper = document.createElement('span');
@@ -1739,10 +1765,56 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                     {
                       side: 1,
                       stopEvent: () => true,
-                      key: `${lane.id}|act|${cardKey}|${isCardRunning}|${runKind}|${queuePos}|${isParentChecked}`,
+                      key: `${lane.id}|act|${cardKey}|${isCardRunning}|${runKind}|${queuePos}|${isParentChecked}|${canIndentTask}`,
                     }
                   );
                   decorations.push(cardActionsWidget);
+
+                  // 6. The selected task's images, small, in the right margin under its actions. Click: full size.
+                  if (isCardActive) {
+                    const images = collectImages(node);
+                    if (images.length) {
+                      const imagesKey = images.map((im) => `${im.src.length}:${im.src.slice(0, 48)}:${im.src.slice(-48)}`).join('|');
+                      decorations.push(
+                        Decoration.widget(
+                          pos + 1,
+                          () => {
+                            const strip = document.createElement('div');
+                            strip.className = 'eg-line-media';
+                            strip.setAttribute('contenteditable', 'false');
+                            const label = document.createElement('span');
+                            label.className = 'eg-line-media-label';
+                            label.textContent = images.length === 1 ? '1 image' : `${images.length} images`;
+                            const grid = document.createElement('div');
+                            grid.className = 'eg-line-media-grid';
+                            images.forEach((im, i) => {
+                              const thumb = document.createElement('button');
+                              thumb.type = 'button';
+                              thumb.className = 'eg-line-media-thumb';
+                              thumb.title = im.alt || 'Image';
+                              thumb.setAttribute('aria-label', `Open ${im.alt || 'image'} full size`);
+                              const img = document.createElement('img');
+                              img.src = im.src;
+                              img.alt = '';
+                              img.loading = 'lazy';
+                              img.draggable = false;
+                              thumb.appendChild(img);
+                              thumb.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
+                              thumb.addEventListener('click', (e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                openLightboxRef.current?.(images, i);
+                              });
+                              grid.appendChild(thumb);
+                            });
+                            strip.append(label, grid);
+                            return strip;
+                          },
+                          { side: 1, stopEvent: () => true, key: `${lane.id}|media|${cardKey}|${imagesKey}` }
+                        )
+                      );
+                    }
+                  }
 
                 } else {
                   // Subtask list item
@@ -1758,7 +1830,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                   });
 
                   if (subBlockNode && subBlockPos !== null) {
-                    const isSubChecked = isNodeChecked(subBlockNode);
+                    const isSubChecked = isTaskItemChecked(node);
                     const subText = (subBlockNode.textContent || '').toLowerCase();
                     const isHumanReviewSubtask = subText.includes('**human review**') || subText.includes('human review:') || subText.includes('human review -');
 
@@ -1809,28 +1881,17 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                           const liveNode = liveDoc.nodeAt(itemPos);
                           if (!liveNode || liveNode.type.name !== 'listItem') return;
 
-                          let liveBlockPos: number | null = null;
-                          let liveBlockNode: any = null;
-                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                          liveNode.forEach((child: any, offset: number) => {
-                            if (child.type.name !== 'bulletList' && child.type.name !== 'orderedList' && liveBlockPos === null) {
-                              liveBlockPos = itemPos + 1 + offset;
-                              liveBlockNode = child;
+                          const title = taskTitleBlock(liveNode);
+                          if (!title || !title.node.textContent.trim()) {
+                            if (title) {
+                              view.dispatch(view.state.tr.setSelection(TextSelection.near(liveDoc.resolve(itemPos + 2 + title.offset))));
+                              view.focus();
                             }
-                          });
-
-                          if (!liveBlockNode || liveBlockPos === null) return;
-
-                          const shouldCheck = !isNodeChecked(liveBlockNode);
-                          const tr = view.state.tr;
-                          const fromPos: number = Number(liveBlockPos);
-                          const toPos: number = fromPos + Number(liveBlockNode.nodeSize);
-
-                          if (shouldCheck) {
-                            tr.addMark(fromPos, toPos, strikeMarkType.create());
-                          } else {
-                            tr.removeMark(fromPos, toPos, strikeMarkType);
+                            return;
                           }
+                          const shouldCheck = !isTaskItemChecked(liveNode);
+                          const tr = view.state.tr;
+                          setTaskItemDone(tr, itemPos, shouldCheck, strikeMarkType);
 
                           view.dispatch(tr);
                           view.focus();
@@ -1848,6 +1909,16 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                       { side: -1, stopEvent: () => true, key: `${lane.id}|scb|${++subtaskCounter}|${isSubChecked}|${isHumanReviewSubtask}` }
                     );
                     decorations.push(subtaskCheckboxWidget);
+
+                    // Hover controls at the line's right end: Outdent, and Indent under the sub-item above.
+                    const canIndentSub = doc.resolve(pos).index() > 0;
+                    decorations.push(
+                      Decoration.widget(
+                        pos + 1,
+                        (view, getPos) => subItemIndentControls(view, () => (typeof getPos === 'function' ? getPos() : undefined), canIndentSub),
+                        { side: 1, stopEvent: () => true, key: `${lane.id}|sind|${subtaskCounter}|${canIndentSub}` }
+                      )
+                    );
                   }
                 }
               });
@@ -1875,7 +1946,8 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                 }
               });
 
-              return DecorationSet.create(doc, decorations);
+              cached = { inputs, set: DecorationSet.create(doc, decorations) };
+              return cached.set;
             },
           },
         }),
@@ -2094,8 +2166,16 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       const storage = (currentEd as unknown as WithMarkdownStorage).storage;
       const md = storage?.markdown?.getMarkdown();
       if (typeof md === 'string') {
-        syncedMarkdownRef.current = md;
+        // Nothing the app hasn't got: no save. The editor's own first transaction after loading (its trailing
+        // empty line) reaches here too, and handing it on queued a save of the markdown the editor opened with,
+        // the copy cached in the browser, which then overwrote the file 5 s after a reload, even once the file
+        // had been read and shown. (The base document is compared as markdown: the file's own spelling of the
+        // same content, e.g. its list indents, differs from the editor's.)
+        const base = syncedDocRef.current;
+        const unchanged = md === syncedMarkdownRef.current || (!!base && storage.markdown.serializer?.serialize(base) === md);
         syncedDocRef.current = currentEd.state.doc;
+        if (unchanged) return;
+        syncedMarkdownRef.current = md;
         onMarkdownChangeRef.current(lane.id, md);
       }
     }
@@ -2110,7 +2190,14 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   }, [emitMarkdownChange]);
 
   useEffect(() => {
+    // Refresh / close inside the debounce: hand the last edit to the app now, so the autosave's unload write
+    // (useAutosave, on `pagehide`) includes it.
+    const onBeforeUnload = () => {
+      if (markdownDebounceTimerRef.current) flushMarkdownChange();
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
     return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload);
       flushMarkdownChange();
     };
   }, [flushMarkdownChange]);
@@ -2131,6 +2218,9 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   const MarkdownHoverSyntaxExtension = Extension.create({
     name: `markdownHoverSyntax_${lane.id}`,
     addProseMirrorPlugins() {
+      // The decorations depend on the document alone: an update that leaves it as it was (selection moves, the empty
+      // transactions TipTap's key commands dispatch) reuses the last set instead of walking the document again.
+      let cached: { doc: PMNode; set: DecorationSet } | null = null;
       return [
         new Plugin({
           key: new PluginKey(`markdownHoverSyntaxPlugin_${lane.id}`),
@@ -2162,126 +2252,15 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
               }
             },
             decorations(state) {
+              if (cached && cached.doc === state.doc) return cached.set;
               const decorations: Decoration[] = [];
               const doc = state.doc;
               const schema = state.schema;
+              // Each formatted span's id: its mark and its place among that mark's spans, so typing elsewhere in the
+              // document leaves it (and the keyed widgets below) unchanged.
+              const spanCounts = new Map<string, number>();
 
-              // 1. Codeblocks: reveal ``` graves on hover at top & bottom with click-to-delete
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              doc.descendants((node: any, pos: number) => {
-                if (node.type.name === 'codeBlock') {
-                  const nodeStart = pos;
-                  const nodeEnd = pos + node.nodeSize;
-
-                  decorations.push(
-                    Decoration.node(nodeStart, nodeEnd, {
-                      class: 'md-hover-codeblock-node',
-                    })
-                  );
-
-                  // Header widget with ``` backticks and delete action
-                  decorations.push(
-                    Decoration.widget(
-                      nodeStart + 1,
-                      (view, getPos) => {
-                        const header = document.createElement('div');
-                        header.className = 'md-codeblock-hover-graves-header';
-                        header.setAttribute('contenteditable', 'false');
-                        header.title = 'Click to delete code block backticks (```)';
-
-                        const badge = document.createElement('span');
-                        badge.className = 'md-codeblock-grave-badge';
-                        badge.innerHTML = '<span class="md-grave-chars">```</span><span class="md-grave-delete-hint">delete ```</span>';
-
-                        header.appendChild(badge);
-
-                        header.onclick = (e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          const rawPos = typeof getPos === 'function' ? getPos() : nodeStart;
-                          const currentPos = typeof rawPos === 'number' ? rawPos : nodeStart;
-                          const paragraphType = view.state.schema.nodes.paragraph;
-                          if (paragraphType) {
-                            const tr = view.state.tr;
-                            const resolved = tr.doc.resolve(Math.min(currentPos, tr.doc.content.size));
-                            let depth = resolved.depth;
-                            while (depth > 0 && resolved.node(depth).type.name !== 'codeBlock') {
-                              depth--;
-                            }
-                            if (depth > 0) {
-                              const blockStart = resolved.before(depth);
-                              const blockNode = resolved.node(depth);
-                              const textContent = blockNode.textContent;
-                              const lines = textContent.split('\n');
-                              const paragraphs = lines.map((line: string) =>
-                                paragraphType.create(null, line ? view.state.schema.text(line) : null)
-                              );
-                              tr.replaceWith(blockStart, blockStart + blockNode.nodeSize, paragraphs);
-                              view.dispatch(tr);
-                              view.focus();
-                              scheduleMarkdownChange();
-                            }
-                          }
-                        };
-
-                        return header;
-                      },
-                      { side: -1 }
-                    )
-                  );
-
-                  // Footer widget with closing ``` backticks
-                  decorations.push(
-                    Decoration.widget(
-                      nodeEnd - 1,
-                      (view, getPos) => {
-                        const footer = document.createElement('div');
-                        footer.className = 'md-codeblock-hover-graves-footer';
-                        footer.setAttribute('contenteditable', 'false');
-                        footer.title = 'Click to delete code block backticks (```)';
-
-                        const badge = document.createElement('span');
-                        badge.className = 'md-codeblock-grave-badge';
-                        badge.innerHTML = '<span class="md-grave-chars">```</span>';
-
-                        footer.appendChild(badge);
-
-                        footer.onclick = (e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          const rawPos = typeof getPos === 'function' ? getPos() : nodeStart;
-                          const currentPos = typeof rawPos === 'number' ? rawPos : nodeStart;
-                          const paragraphType = view.state.schema.nodes.paragraph;
-                          if (paragraphType) {
-                            const tr = view.state.tr;
-                            const resolved = tr.doc.resolve(Math.min(currentPos, tr.doc.content.size));
-                            let depth = resolved.depth;
-                            while (depth > 0 && resolved.node(depth).type.name !== 'codeBlock') {
-                              depth--;
-                            }
-                            if (depth > 0) {
-                              const blockStart = resolved.before(depth);
-                              const blockNode = resolved.node(depth);
-                              const textContent = blockNode.textContent;
-                              const lines = textContent.split('\n');
-                              const paragraphs = lines.map((line: string) =>
-                                paragraphType.create(null, line ? view.state.schema.text(line) : null)
-                              );
-                              tr.replaceWith(blockStart, blockStart + blockNode.nodeSize, paragraphs);
-                              view.dispatch(tr);
-                              view.focus();
-                              scheduleMarkdownChange();
-                            }
-                          }
-                        };
-
-                        return footer;
-                      },
-                      { side: 1 }
-                    )
-                  );
-                }
-              });
+              // Code blocks have their own header (language, Convert to text, Copy): codeBlock.ts.
 
               // 2. Inline marks (code, bold, italic, strike): pop up delimiters around text on hover
               const markTypesToTrack = [
@@ -2293,7 +2272,8 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
 
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               doc.descendants((node: any, pos: number) => {
-                if (node.isBlock && node.content.size > 0) {
+                if (!node.isTextblock) return true;
+                if (node.content.size > 0) {
                   markTypesToTrack.forEach(({ name, openChar, closeChar, label }) => {
                     const markType = schema.marks[name];
                     if (!markType) return;
@@ -2326,6 +2306,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                     }
                   });
                 }
+                return false;
               });
 
               function addInlineGraveDecorations(
@@ -2338,7 +2319,9 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 markType: any
               ) {
-                const spanId = `md_span_${lane.id}_${from}_${to}_${name}`;
+                const ordinal = (spanCounts.get(name) ?? 0) + 1;
+                spanCounts.set(name, ordinal);
+                const spanId = `md_span_${lane.id}_${name}_${ordinal}`;
 
                 // Inline decoration spanning the formatted text
                 decorations.push(
@@ -2348,58 +2331,35 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                   })
                 );
 
-                // Start grave widget
-                decorations.push(
-                  Decoration.widget(
-                    from,
-                    (view) => {
-                      const span = document.createElement('span');
-                      span.className = `md-hover-inline-grave md-grave-open md-grave-type-${name}`;
-                      span.setAttribute('contenteditable', 'false');
-                      span.setAttribute('data-md-span-id', spanId);
-                      span.textContent = openChar;
-                      span.title = `Click to delete ${label}`;
-                      span.onclick = (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const tr = view.state.tr.removeMark(from, to, markType);
-                        view.dispatch(tr);
-                        view.focus();
-                        scheduleMarkdownChange();
-                      };
-                      return span;
-                    },
-                    { side: -1 }
-                  )
-                );
+                // The delimiter widgets are keyed, so ProseMirror keeps their DOM across updates instead of rebuilding
+                // every one in the document on each keystroke (what made holding Backspace lag). A kept widget may
+                // have moved, so a click looks up the span at the widget's current position.
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const graveWidget = (at: number, side: 'open' | 'close') => Decoration.widget(at, (view, getPos) => {
+                  const span = document.createElement('span');
+                  span.className = `md-hover-inline-grave md-grave-${side} md-grave-type-${name}`;
+                  span.setAttribute('contenteditable', 'false');
+                  span.setAttribute('data-md-span-id', spanId);
+                  span.textContent = side === 'open' ? openChar : closeChar;
+                  span.title = `Click to delete ${label}`;
+                  span.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const widgetPos = typeof getPos === 'function' ? getPos() : undefined;
+                    const range = widgetPos == null ? null : markSpanAt(view.state.doc, widgetPos, markType, side);
+                    if (!range) return;
+                    view.dispatch(view.state.tr.removeMark(range.from, range.to, markType));
+                    view.focus();
+                    scheduleMarkdownChange();
+                  };
+                  return span;
+                }, { side: side === 'open' ? -1 : 1, key: `md-grave|${spanId}|${side}` });
 
-                // End grave widget
-                decorations.push(
-                  Decoration.widget(
-                    to,
-                    (view) => {
-                      const span = document.createElement('span');
-                      span.className = `md-hover-inline-grave md-grave-close md-grave-type-${name}`;
-                      span.setAttribute('contenteditable', 'false');
-                      span.setAttribute('data-md-span-id', spanId);
-                      span.textContent = closeChar;
-                      span.title = `Click to delete ${label}`;
-                      span.onclick = (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const tr = view.state.tr.removeMark(from, to, markType);
-                        view.dispatch(tr);
-                        view.focus();
-                        scheduleMarkdownChange();
-                      };
-                      return span;
-                    },
-                    { side: 1 }
-                  )
-                );
+                decorations.push(graveWidget(from, 'open'), graveWidget(to, 'close'));
               }
 
-              return DecorationSet.create(doc, decorations);
+              cached = { doc, set: DecorationSet.create(doc, decorations) };
+              return cached.set;
             }
           }
         })
@@ -2421,11 +2381,18 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
   const HeaderColorExtension = Extension.create({
     name: 'headerColor',
     addProseMirrorPlugins() {
+      // Reused while the document, the lane's tasks and the collapsed headers are unchanged (see the checkbox plugin).
+      let cached: { doc: PMNode; tasks: unknown; collapsedKeys: string; set: DecorationSet } | null = null;
       return [
         new Plugin({
           key: new PluginKey(`headerColor_${lane.id}`),
           props: {
             decorations: (state) => {
+              const collapsedNow = collapsedHeadersRef.current!;
+              const collapsedKeys = [...collapsedNow].join('\n');
+              if (cached && cached.doc === state.doc && cached.tasks === laneTasksRef.current && cached.collapsedKeys === collapsedKeys) {
+                return cached.set;
+              }
               const decos: Decoration[] = [];
               // Open/total tasks under each header, shown on hover.
               const counts = new Map<string, { open: number; total: number }>();
@@ -2497,7 +2464,8 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
                   lastShownWasHeading = false;
                 }
               });
-              return DecorationSet.create(state.doc, decos);
+              cached = { doc: state.doc, tasks: laneTasksRef.current, collapsedKeys, set: DecorationSet.create(state.doc, decos) };
+              return cached.set;
             },
           },
         }),
@@ -2507,56 +2475,13 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
 
   const editor = useEditor({
     extensions: [
-      StarterKit.configure({
-        paragraph: false,
-        heading: false,
-        underline: false,
-        strike: false,
-        code: false,
-        bulletList: { keepMarks: true, keepAttributes: false },
-        orderedList: { keepMarks: true, keepAttributes: false },
-        listItem: false,
-      }),
-      CustomListItem,
-      OuterStrike,
-      StrikeableCode,
-      ColorHeading,
-      MarkdownUnderline,
-      Highlight,
-      Link.configure({
-        openOnClick: false,
-        HTMLAttributes: { class: 'md-link', target: '_blank', rel: 'noopener noreferrer' },
-      }),
-      Placeholder.configure({
-        placeholder: ({ node }) => {
-          if (node.type.name === 'heading') return 'Heading...';
-          return 'Add a task or click + New Task...';
-        },
-      }),
-      Typography,
-      TextColor,
-      LineSpacingParagraph,
-      Image.configure({
-        inline: false,
-        allowBase64: true,
-        HTMLAttributes: {
-          class: 'task-attached-image',
-        },
-      }),
-      Markdown.configure({
-        html: false,
-        tightLists: true,
-        tightListClass: 'tight',
-        bulletListMarker: '-',
-        linkify: true,
-        breaks: false,
-        transformPastedText: true,
-        transformCopiedText: true,
-      }),
+      // The schema and markdown round-trip, shared with the board's card editor (taskEditorExtensions.ts).
+      ...taskEditorExtensions({ placeholder: 'Add a task or click + New Task...' }),
       AutoJoinListsExtension,
       TitledTasksExtension,
       CustomListKeymapExtension,
       TaskCheckboxDecorationExtension,
+      ImageLightboxExtension,
       AutoSurroundExtension,
       TaskAutocompleteExtension,
       TaskCommandExtension,
@@ -2579,30 +2504,21 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
             const file = item.getAsFile();
             if (file) {
               event.preventDefault();
-              const folderPath = project?.folderPath || 'projects/default-workspace';
+              // Through the ref: editorProps are fixed when the editor is built (see useEditor's deps below).
+              const folderPath = projectRef.current?.folderPath || 'projects/default-workspace';
               storageManager.saveMediaFile(folderPath, file).then((relPath) => {
                 if (!view || view.isDestroyed) return;
                 const src = relPath
                   ? bridgeClient.getApiUrl(`/api/media/${relPath}`)
                   : URL.createObjectURL(file); // fallback: blob URL (in-memory only)
-                const { state, dispatch } = view;
-                const imageNode = state.schema.nodes.image?.create({ src, alt: file.name || 'Pasted screenshot' });
-                if (imageNode) {
-                  const tr = state.tr.replaceSelectionWith(imageNode);
-                  dispatch(tr);
-                }
+                insertTaskImage(view, { src, alt: file.name || 'Pasted screenshot' });
               }).catch(() => {
                 // Fallback to base64 on any error
                 const reader = new FileReader();
                 reader.onload = (readerEvent) => {
                   const src = readerEvent.target?.result as string;
                   if (src && view && !view.isDestroyed) {
-                    const { state, dispatch } = view;
-                    const imageNode = state.schema.nodes.image?.create({ src, alt: file.name || 'Pasted screenshot' });
-                    if (imageNode) {
-                      const tr = state.tr.replaceSelectionWith(imageNode);
-                      dispatch(tr);
-                    }
+                    insertTaskImage(view, { src, alt: file.name || 'Pasted screenshot' });
                   }
                 };
                 reader.readAsDataURL(file);
@@ -2680,8 +2596,10 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       const taskText = lineText.trim();
       const hasContent = taskText.length > 0;
       const isPrecededBySpace = prefixText.endsWith(' ');
+      // No prose suggestions inside a code block.
+      const inCodeBlock = !!$from.parent.type.spec.code;
 
-      if (!hasContent || !isPrecededBySpace) {
+      if (!hasContent || !isPrecededBySpace || inCodeBlock) {
         if (activeSuggestionRef.current) {
           activeSuggestionRef.current = null;
           currentEditor.view.dispatch(state.tr);
@@ -2784,7 +2702,15 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         }
       }, 180);
     },
-  });
+    // Deps: the editor is built once per lane. Without them TipTap compared the options on every render, found the
+    // extensions above (rebuilt each render) changed, and called setOptions: two view updates per render, each
+    // recomputing every decoration and redrawing the selection. Every App re-render (a save's status, a run's
+    // progress) then stalled typing, and the redraw could drop a selection mid-gesture. The on* callbacks always run
+    // the latest render's version (useEditor routes them through a ref); the plugins only ever read refs.
+  }, [lane.id]);
+  // The document the editor opened with is the first one the app has seen. (onCreate comes a tick later, after
+  // development's StrictMode remount has already flushed a first emit.)
+  if (editor && !syncedDocRef.current) syncedDocRef.current = editor.state.doc;
 
   const updateSelectionTooltip = useCallback((currentEditor: any) => {
     if (!currentEditor || currentEditor.isDestroyed) {
@@ -2940,14 +2866,14 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
           const src = relPath
             ? bridgeClient.getApiUrl(`/api/media/${relPath}`)
             : URL.createObjectURL(file);
-          capturedEditor.chain().focus().setImage({ src, alt: file.name || 'Attached screenshot' }).run();
+          insertTaskImage(capturedEditor.view, { src, alt: file.name || 'Attached screenshot' });
         }).catch(() => {
           // Fallback to base64
           const reader = new FileReader();
           reader.onload = (readerEvent) => {
             const src = readerEvent.target?.result as string;
             if (src && capturedEditor && !capturedEditor.isDestroyed) {
-              capturedEditor.chain().focus().setImage({ src, alt: file.name || 'Attached screenshot' }).run();
+              insertTaskImage(capturedEditor.view, { src, alt: file.name || 'Attached screenshot' });
             }
           };
           reader.readAsDataURL(file);
@@ -3013,10 +2939,11 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
     };
   }, [editor]);
 
-  // Run states, the queue, briefs and the current task live outside the document: redraw the line decorations.
+  // Run states, the queue, briefs, the current task and the lane's parsed tasks (ids, header counts) live outside the
+  // document: redraw the line decorations. (The editor is built once, so a re-render alone no longer redraws them.)
   useEffect(() => {
     if (editor && !editor.isDestroyed) editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false));
-  }, [editor, selectedTaskId, runningTaskIds, queuedTaskIds, briefs, awaitingTaskIds]);
+  }, [editor, selectedTaskId, runningTaskIds, queuedTaskIds, briefs, awaitingTaskIds, laneTasks, pendingHumanInputs]);
 
   // Live run states on task lines: what each running task's agent is doing, filled into its line's placeholder.
   const liveSessions = useMemo(() => {
@@ -3058,6 +2985,20 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
           <span className="eg-doc-name" onDoubleClick={() => setIsEditingTitle(true)} title={`${lane.filePath} — double-click to rename`}>
             {laneDisplayName}
           </span>
+        )}
+        {/* Hide done is on: how many tasks it hides here, and a click shows them again. */}
+        {hideDone && laneDoneCount > 0 && (
+          <button
+            type="button"
+            className="eg-hidden-chip"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleHideDone();
+            }}
+            title="Show done tasks"
+          >
+            {laneDoneCount} {laneDoneCount === 1 ? 'task' : 'tasks'} hidden
+          </button>
         )}
         <span className="eg-spacer" />
         <span className="eg-hide-sm eg-doc-count">
@@ -3193,6 +3134,14 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
         >
           <EditorContent editor={editor} className="tiptap-editor-root" />
           {editor && <LineRunStates editor={editor} sessions={liveSessions} />}
+          {lightbox && (
+            <ImageLightbox
+              images={lightbox.images}
+              index={lightbox.index}
+              onIndex={(index) => setLightbox((l) => (l ? { ...l, index } : l))}
+              onClose={() => setLightbox(null)}
+            />
+          )}
         </div>
       </div>
 
@@ -3219,7 +3168,7 @@ const SwimLaneColumn: React.FC<SwimLaneColumnProps> = ({
       <Dialog
         open={isDeleteLaneModalOpen}
         title={`Remove ${lane.title}?`}
-        description="The list leaves your workspace view. Its file stays on disk."
+        description="The list leaves your workspace. Nothing is deleted: its file moves to removed-lists/ in the project folder, and moving it back restores the list."
         onClose={() => setIsDeleteLaneModalOpen(false)}
         width={420}
         footer={
@@ -3380,7 +3329,18 @@ interface TaskPaneProps {
   onScheduleTask?: (taskId: string | number, scheduledIso: string, cronExpr?: string) => void;
   autocompleteSettings?: import('../types').AutocompleteSettings;
   onUpdateTaskMcpTools?: (taskId: string | number, toolNames: string[]) => void;
+  /** The project's view (projectView.ts): lanes as documents or as a kanban board. */
+  viewStyle?: ViewStyle;
+  /** List style with several lanes: side by side (scrolling sideways) or one at a time behind tabs. */
+  laneLayout?: LaneLayout;
+  /** Lane file names in display order (project.json). */
+  laneOrder?: string[];
+  /** Board: moves a task into another lane (App carries its brief over to the new id). False when refused. */
+  onMoveTaskToLane?: (taskId: string | number, toLaneId: string, beforeAnchorId: string | null) => boolean;
 }
+
+// The card editor on the board shares the lane editor's list behavior (joining lists, titled tasks, Enter/Tab keys).
+const CARD_EDITOR_BEHAVIORS = [AutoJoinListsExtension, TitledTasksExtension, CustomListKeymapExtension];
 
 export const TaskPane: React.FC<TaskPaneProps> = ({
   rawMarkdown,
@@ -3416,6 +3376,10 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   onScheduleTask,
   autocompleteSettings = { enabled: true, keybinding: 'Tab' },
   onUpdateTaskMcpTools: _onUpdateTaskMcpTools,
+  viewStyle = 'list',
+  laneLayout = 'columns',
+  laneOrder,
+  onMoveTaskToLane,
 }) => {
   // Formatting bar: on unless the user has hidden it.
   const [showStyles, setShowStyles] = useState(readShowFormattingBar);
@@ -3479,7 +3443,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   // Normalize swimLanes: fallback to 1 human view if not provided
   const effectiveSwimLanes = useMemo<SwimLaneDoc[]>(() => {
     if (swimLanes && swimLanes.length > 0) {
-      return swimLanes;
+      return orderLanes(swimLanes, laneOrder);
     }
     return [
       {
@@ -3489,7 +3453,7 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
         markdown: rawMarkdown || '',
       },
     ];
-  }, [swimLanes, project?.todoFilePath, rawMarkdown]);
+  }, [swimLanes, laneOrder, project?.todoFilePath, rawMarkdown]);
 
   const handleLaneMarkdownChange = (laneId: string, newMarkdown: string) => {
     if (onSwimLaneMarkdownChange) {
@@ -3502,11 +3466,34 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   // Active / Highlighted Swim Lane ID (defaults to first lane)
   const [activeSwimLaneId, setActiveSwimLaneId] = useState<string>(effectiveSwimLanes[0]?.id || 'lane-default');
 
+  // The active lane's id can vanish: removed (fall back to the first lane) or renamed, which gives it a new id from its
+  // new file name (stay on it: it's the lane now at the old one's place that the previous list didn't have).
+  const prevLaneIdsRef = useRef<string[]>(effectiveSwimLanes.map((l) => l.id));
   useEffect(() => {
-    if (!effectiveSwimLanes.some((l) => l.id === activeSwimLaneId)) {
-      setActiveSwimLaneId(effectiveSwimLanes[0]?.id || 'lane-default');
-    }
+    const prevIds = prevLaneIdsRef.current;
+    prevLaneIdsRef.current = effectiveSwimLanes.map((l) => l.id);
+    if (effectiveSwimLanes.some((l) => l.id === activeSwimLaneId)) return;
+    const at = prevIds.indexOf(activeSwimLaneId);
+    const renamed = at >= 0 && effectiveSwimLanes.length === prevIds.length ? effectiveSwimLanes[at] : undefined;
+    const isNew = renamed && !prevIds.includes(renamed.id);
+    setActiveSwimLaneId((isNew ? renamed.id : effectiveSwimLanes[0]?.id) || 'lane-default');
   }, [effectiveSwimLanes, activeSwimLaneId]);
+
+  // Tabs: a lane just added (from the tab strip or a lane's menu) opens in its tab.
+  const isBoard = viewStyle === 'kanban';
+  const isTabs = !isBoard && laneLayout === 'tabs' && effectiveSwimLanes.length > 1;
+  const knownLaneIdsRef = useRef<string[]>(effectiveSwimLanes.map((l) => l.id));
+  useEffect(() => {
+    const known = knownLaneIdsRef.current;
+    const added = effectiveSwimLanes.filter((l) => !known.includes(l.id));
+    knownLaneIdsRef.current = effectiveSwimLanes.map((l) => l.id);
+    if (isTabs && added.length === 1 && known.length > 0) setActiveSwimLaneId(added[0].id);
+  }, [effectiveSwimLanes, isTabs]);
+  const openCountByLane = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const t of _tasks) if (t.swimLaneId && !t.isDone && !t.isArchived) counts[t.swimLaneId] = (counts[t.swimLaneId] || 0) + 1;
+    return counts;
+  }, [_tasks]);
 
   // Lane widths state (in pixels) for draggable resizing in multi-swimlane mode
   const [laneWidths, setLaneWidths] = useState<Record<string, number>>({});
@@ -3556,14 +3543,54 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
     <div className="pane pane-left obsidian-pane eg-docpane-root">
 
 
+      {/* ── Board: each lane a column of task cards ── */}
+      {isBoard && (
+        <KanbanBoard
+          lanes={effectiveSwimLanes}
+          selectedTaskId={selectedTaskId}
+          runningTaskIds={runningTaskIds}
+          queuedTaskIds={queuedTaskIds}
+          briefs={briefs}
+          terminalSessions={terminalSessions}
+          pendingHumanInputs={pendingHumanInputs}
+          hideDone={hideDone}
+          onToggleHideDone={toggleHideDone}
+          onRunTask={onRunTask}
+          onStopTask={onStopTask}
+          onSelectTask={onSelectTask}
+          onOpenTaskDetail={onOpenTaskDetail}
+          onLaneMarkdownChange={handleLaneMarkdownChange}
+          onMoveTaskToLane={onMoveTaskToLane}
+          onAddSwimLane={onAddSwimLane}
+          onRenameSwimLane={onRenameSwimLane}
+          onDeleteSwimLane={onDeleteSwimLane}
+          editorBehaviors={CARD_EDITOR_BEHAVIORS}
+        />
+      )}
+
+      {/* ── Tabs: one lane at a time ── */}
+      {isTabs && (
+        <div className="eg-lane-tabs">
+          <Tabs
+            items={effectiveSwimLanes.map((l) => ({ id: l.id, label: laneTabName(l), count: openCountByLane[l.id] || undefined, title: l.filePath }))}
+            value={activeSwimLaneId}
+            onChange={setActiveSwimLaneId}
+          />
+          {onAddSwimLane && (
+            <IconButton icon={Plus} size="sm" label="New list" onClick={() => onAddSwimLane(effectiveSwimLanes[effectiveSwimLanes.length - 1]?.id)} />
+          )}
+        </div>
+      )}
+
       {/* ── Swim Lanes Container ── */}
-      <div className={`swimlanes-wrapper ${effectiveSwimLanes.length > 1 ? 'is-multi-column' : 'is-single-column'}`}>
-        {effectiveSwimLanes.map((lane) => (
-          <React.Fragment key={lane.id}>
+      {!isBoard && (
+      <div className={`swimlanes-wrapper ${isTabs ? 'is-tabs is-single-column' : effectiveSwimLanes.length > 1 ? 'is-multi-column' : 'is-single-column'}`}>
+        {effectiveSwimLanes.map((lane) => {
+          const column = (
             <SwimLaneColumn
               lane={lane}
               totalLanes={effectiveSwimLanes.length}
-              width={laneWidths[lane.id] ? `${laneWidths[lane.id]}px` : (effectiveSwimLanes.length > 1 ? 'calc(100vw / 3)' : undefined)}
+              width={isTabs ? undefined : laneWidths[lane.id] ? `${laneWidths[lane.id]}px` : (effectiveSwimLanes.length > 1 ? 'calc(100vw / 3)' : undefined)}
               isActive={lane.id === activeSwimLaneId}
               onActivate={() => setActiveSwimLaneId(lane.id)}
               selectedTaskId={selectedTaskId}
@@ -3602,6 +3629,18 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
               onAssistantHeightChange={setAssistantDrawerHeight}
               autocompleteSettings={autocompleteSettings}
             />
+          );
+          // Tabs keep every lane's editor mounted (its undo history and scroll), showing only the selected one.
+          if (isTabs) {
+            return (
+              <div key={lane.id} className="eg-lane-tabpanel" role="tabpanel" hidden={lane.id !== activeSwimLaneId}>
+                {column}
+              </div>
+            );
+          }
+          return (
+          <React.Fragment key={lane.id}>
+            {column}
             {/* Resizer & grab bar divider at the right edge of swim lane */}
             <div
               className={`swimlane-resizer-handle ${resizingRef.current?.laneId === lane.id ? 'is-active' : ''}`}
@@ -3611,8 +3650,10 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
               <div className="swimlane-resizer-line" />
             </div>
           </React.Fragment>
-        ))}
+          );
+        })}
       </div>
+      )}
 
 
     </div>

@@ -34,7 +34,8 @@ function commandAt(state: EditorState): Omit<TaskCommandState, 'left' | 'top'> |
   const { selection } = state;
   if (!selection.empty || !(selection instanceof TextSelection)) return null;
   const $from = selection.$from;
-  if (!$from.parent.isTextblock) return null;
+  // Not in a code block: `/` and `@` there are code (paths, decorators), not commands.
+  if (!$from.parent.isTextblock || $from.parent.type.spec.code) return null;
   // Inside an inserted reference (inline code): editing it, not starting a command.
   if ($from.marks().some((m) => m.type.name === 'code')) return null;
   const before = $from.parent.textBetween(0, $from.parentOffset, undefined, '￼');

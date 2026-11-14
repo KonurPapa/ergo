@@ -43,6 +43,7 @@ import {
   parseTodoMarkdown,
   serializeTodoMarkdown,
   serializeTodoMarkdownPreserving,
+  withHeaderComments,
   parseSwimLaneMarkdown,
   cleanAndUnescapeMarkdown
 } from './lib/parser';
@@ -73,7 +74,7 @@ import { RawMarkdownModal } from './components/RawMarkdownModal';
 import { CreateProjectModal } from './components/CreateProjectModal';
 import { BridgeUpdateBanner } from './components/BridgeUpdateBanner';
 import { loadMcpServers, markMcpServerToggled, saveMcpServers } from './lib/mcpConfigStore';
-import { loadPrefs, subscribePrefs } from './lib/userPrefs';
+import { loadPrefs, removeProjectPrefs, subscribePrefs } from './lib/userPrefs';
 import { withDisplayNames } from './lib/projectNames';
 import { ensureAnchors, markdownForExport, taskIdFor } from './lib/taskAnchors';
 import { applyReviewMode } from './lib/reviewMode';
@@ -125,12 +126,14 @@ import { registerWorkspaceActionBridge } from './lib/workspaceMcp';
 import { getWorkspaceSkills, loadWorkspaceSkills } from './lib/skillsManager';
 import type { ImportedLane } from './lib/markdownImport';
 import { loadScopedRules, renameLaneScope, setScopedLanes, withScopedRules } from './lib/scopedRules';
+import { DEFAULT_PROJECT_VIEW, defaultLaneTitles, laneFileForTitle, laneFileName, loadProjectView, orderLanes, sameLaneOrder, saveProjectView, type ProjectViewSettings, type NewProjectView } from './lib/projectView';
+import { moveTaskAcrossLanes } from './lib/laneTaskOps';
 import { describeTaskReferences, formatReferenceNoteForBrief, projectWorkingFolder, resolveTaskReferences } from './lib/taskReferences';
 import { bridgeClient, type BridgeStatus } from './lib/bridgeClient';
-import { Circle, CircleCheck, CornerDownRight, Download, FileCode, FileText, FolderGit2, Heading2, Layers, ListPlus, Moon, PanelRight, Play, Plus, RefreshCw, Save, Settings, Sun, Undo2 } from 'lucide-react';
+import { Circle, CircleCheck, CornerDownRight, Download, FileCode, FileText, FolderGit2, FolderMinus, Heading2, Layers, ListPlus, Moon, PanelRight, Play, Plus, RefreshCw, Save, Settings, Sun, Undo2 } from 'lucide-react';
 import { StatusBar } from './components/StatusBar';
 import { CommandPalette, type PaletteItem } from './components/CommandPalette';
-import { AskDialogHost } from './components/ui/askDialogs';
+import { AskDialogHost, askConfirm } from './components/ui/askDialogs';
 import { RunScreen, RunTaskDialog, type RunDialogRequest, type RunLane, type RunScreenChoice } from './components/RunTaskDialog';
 import { SETTINGS_PAGES, type SettingsPage } from './lib/settingsPages';
 import { SettingsScreen } from './components/SettingsScreen';
@@ -304,6 +307,16 @@ function App() {
   const handleDismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
+
+  // Toasts from components without access to showToast (e.g. a file link whose file isn't there): `ergo:toast` events.
+  useEffect(() => {
+    const onToast = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail && typeof detail.title === 'string') showToast(detail);
+    };
+    window.addEventListener('ergo:toast', onToast);
+    return () => window.removeEventListener('ergo:toast', onToast);
+  }, [showToast]);
 
   // ─── CLI Agent Terminal State ───────────────────────────────────────────────────────
   // CLI agent config (command + flags), persisted to config/secrets.json
@@ -2282,14 +2295,10 @@ function App() {
       );
 
       if (!hasValidKey) {
-        showToast({
-          type: 'warning',
-          title: 'AI API key required',
-          message: 'No active AI provider or API key selected. Please select or add an AI provider configuration to execute tasks with AI.',
-          actionLabel: 'Set Up Key',
-          onAction: () => setSettingsPage('models'),
-          duration: 6000,
-        });
+        // Runs the user starts are checked before anything is created (ensureAiProfileForRun); this catches the rest
+        // (scheduled runs, the assistant's tools).
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define
+        warnNoAiProfile();
         return false;
       }
     }
@@ -3432,11 +3441,52 @@ function App() {
   const runQueueRef = useRef(runQueue);
   runQueueRef.current = runQueue;
 
+  // ── Runs need an AI profile ──
+  // Checked up front by every run the user starts (Run, Queue, Run now, the Run screen, batch runs, the palette,
+  // ⇧⌘↵): with no usable profile nothing starts (no brief, no run card, no queue entry) and a toast says what to do.
+  // Refs, so callers holding an older closure (the assistant's tools) still see the current profiles.
+  const aiProfileStateRef = useRef({ userApiKeys, activeKeyId, cliAgentConfig });
+  aiProfileStateRef.current = { userApiKeys, activeKeyId, cliAgentConfig };
+  /** The profile runs would use names a CLI agent, or is a provider with its key (the in-place path). */
+  const hasUsableAiProfile = (): boolean => {
+    const { userApiKeys: keys, activeKeyId: keyId, cliAgentConfig: cliCfg } = aiProfileStateRef.current;
+    const activeKey = keys.find((k) => k.id === keyId);
+    if (getEffectiveCliAgent(activeKey, cliCfg)?.command) return true;
+    if (!activeKey) return false;
+    const pMeta = SUPPORTED_AI_PROVIDERS.find((p) => p.id === activeKey.provider);
+    const requiresKey = pMeta ? pMeta.requiresKey !== false : true;
+    const isSubscription =
+      activeKey.authMode === 'cli_subscription' || activeKey.apiKey === 'cli_subscription_active' || activeKey.provider === 'cli_subscription';
+    return isSubscription || !requiresKey || Boolean(activeKey.apiKey && activeKey.apiKey.trim().length > 0);
+  };
+  /** Says why nothing started and opens Settings → Models, where AI profiles are added and chosen. */
+  const warnNoAiProfile = () => {
+    const hasProfiles = aiProfileStateRef.current.userApiKeys.length > 0;
+    showToast({
+      id: 'no-ai-profile',
+      type: 'warning',
+      title: hasProfiles ? 'Choose an AI profile to run tasks' : 'Add an AI profile to run tasks',
+      message: hasProfiles
+        ? "No AI profile is selected, so nothing was started. Pick one in Settings → Models, then run the task again."
+        : 'Runs need an AI profile (Claude Code, Codex, Gemini or a local model). Nothing was started.',
+      actionLabel: hasProfiles ? 'Choose profile' : 'Add profile',
+      onAction: () => setSettingsPage('models'),
+      duration: 8000,
+    });
+  };
+  /** True when a run may start; otherwise warns and returns false. */
+  const ensureAiProfileForRun = (): boolean => {
+    if (hasUsableAiProfile()) return true;
+    warnNoAiProfile();
+    return false;
+  };
+
   /**
    * Runs several tasks: one after another (the rest wait as Queued), or all at once. `notes` (the Run dialog's
    * one-time notes) go to every one of these runs; a queued task keeps its notes until its turn.
    */
   const handleRunTasks = (taskList: TaskItem[], laneId: string, laneTitle: string, mode: 'sequence' | 'parallel', notes?: string) => {
+    if (!ensureAiProfileForRun()) return;
     // A task already running keeps going; it isn't started again.
     const runnable = taskList.filter((t) => !cliRunsRef.current.hasActiveCliRun(t.id) && String(executingTaskId) !== String(t.id));
     if (runnable.length === 0) return;
@@ -3492,6 +3542,7 @@ function App() {
 
   /** Asks before running one task; on Confirm it runs (startOver relaunches a run stopped partway). */
   const requestRunTask = (task: TaskItem, opts: { startOver?: boolean; restart?: boolean; ensureBrief?: boolean } = {}) => {
+    if (!ensureAiProfileForRun()) return;
     const key = String(task.id);
     if (queuedTaskIdsRef.current.some((id) => String(id) === key)) {
       requestRunQueuedTaskNow(task.id);
@@ -3529,6 +3580,7 @@ function App() {
   const requestRunQueuedTaskNow = (taskId: string | number) => {
     const task = queuedTaskFor(taskId);
     if (!task) return;
+    if (!ensureAiProfileForRun()) return;
     setRunDialog({
       kind: 'task',
       task,
@@ -3541,6 +3593,7 @@ function App() {
 
   /** Asks before a task joins the end of the queue; its notes wait with it. */
   const requestQueueTask = (task: TaskItem) => {
+    if (!ensureAiProfileForRun()) return;
     setRunDialog({
       kind: 'task',
       task,
@@ -3560,6 +3613,7 @@ function App() {
 
   /** The top bar's Run screen: started what the user chose. */
   const handleRunScreenChoice = (choice: RunScreenChoice) => {
+    if (!ensureAiProfileForRun()) return;
     if (choice.scope === 'task') {
       const lane = laneOfTask(choice.task);
       ensureBriefsForTasks([choice.task], lane.id, lane.title);
@@ -4207,6 +4261,46 @@ function App() {
     });
   }, [projectFolderPath]);
 
+  // How the project's workspace is shown (projects/<folder>/project.json `view`): list or board, lanes side by side or
+  // behind tabs, and the lanes' order. Loaded on project change and bridge (re)connect; until then, the defaults.
+  const [projectView, setProjectView] = useState<{ folder: string; view: ProjectViewSettings } | null>(null);
+  const activeView = projectView && projectView.folder === projectFolderPath ? projectView.view : DEFAULT_PROJECT_VIEW;
+  useEffect(() => {
+    if (!projectFolderPath) return;
+    let wasConnected = false;
+    let current = true;
+    const unsubscribe = bridgeClient.subscribe((status) => {
+      if (status.isConnected && !wasConnected) {
+        void loadProjectView(projectFolderPath).then((view) => {
+          if (current) setProjectView({ folder: projectFolderPath, view });
+        });
+      }
+      wasConnected = status.isConnected;
+    });
+    return () => {
+      current = false;
+      unsubscribe();
+    };
+  }, [projectFolderPath]);
+  const handleChangeProjectView = (patch: Partial<ProjectViewSettings>) => {
+    if (!projectFolderPath) return;
+    const view = { ...activeView, ...patch };
+    setProjectView({ folder: projectFolderPath, view });
+    void saveProjectView(projectFolderPath, view).catch(() => {});
+  };
+  // Lanes keep their order across loads (the bridge lists files in no set order): a lane added or renamed takes its
+  // place in the saved order, which is written back.
+  useEffect(() => {
+    const lanes = activeProject?.swimLanes;
+    if (!projectFolderPath || !projectView || projectView.folder !== projectFolderPath || !lanes || lanes.length < 2) return;
+    if (!lanes.every((l) => l.filePath.startsWith(`${projectFolderPath}/`))) return;
+    const ordered = orderLanes(lanes, projectView.view.laneOrder);
+    if (sameLaneOrder(ordered, projectView.view.laneOrder)) return;
+    const view = { ...projectView.view, laneOrder: ordered.map((l) => laneFileName(l.filePath)) };
+    setProjectView({ folder: projectFolderPath, view });
+    void saveProjectView(projectFolderPath, view).catch(() => {});
+  }, [activeProject?.swimLanes, projectFolderPath, projectView]);
+
   // Save Archived Brief Edit
   const handleSaveArchivedBrief = (updatedBrief: AgentContextItem) => {
     const nextArchivedBriefs = archivedBriefs.map((b) =>
@@ -4315,9 +4409,12 @@ function App() {
         markdown: activeProject.todoMarkdown || ''
       }];
 
-    // Lines that arrive without their anchor (an AI rewrite) get back the one their title had.
+    // Lines that arrive without their anchor (an AI rewrite) get back the one their title had. The editor edits the
+    // body only: the file's leading comments (the lane's saved name) are put back from the lane's markdown.
     const updatedLanes = currentLanes.map((lane) =>
-      lane.id === laneId ? { ...lane, markdown: ensureAnchors(newBodyMd, lane.markdown).markdown } : lane
+      lane.id === laneId
+        ? { ...lane, markdown: ensureAnchors(withHeaderComments(newBodyMd, lane.markdown), lane.markdown).markdown }
+        : lane
     );
 
     // Re-parse all tasks across all swim lanes
@@ -4387,16 +4484,21 @@ function App() {
         markdown: activeProject.todoMarkdown || ''
       }];
 
-    const nextIndex = currentLanes.length + 1;
+    // A name and file no other lane uses (after a removal, "Swim Lane <count + 1>" can already exist and would be
+    // overwritten).
+    const takenFiles = new Set(currentLanes.map((l) => (l.filePath.split('/').pop() || '').toUpperCase()));
+    let nextIndex = currentLanes.length + 1;
+    const fileFor = (n: number) => `SWIM_LANE_${n}.md`;
+    while (takenFiles.has(fileFor(nextIndex))) nextIndex++;
     const title = `Swim Lane ${nextIndex}`;
-    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `lane-${nextIndex}`;
-    const fileName = `${slug.toUpperCase().replace(/-/g, '_')}.md`;
+    const fileName = fileFor(nextIndex);
     const filePath = `${activeProject.folderPath}/${fileName}`;
 
     const defaultContent = `<!-- Swimlane Title: ${title} -->\n<!-- Project: ${activeProject.name} | Folder: ${activeProject.folderPath} -->\n\n## ${title} Tasks\n\n1. Initial Task in ${title}\n    - Define task scope and subtasks\n`;
 
     const newLane: SwimLaneDoc = {
-      id: `lane-${Date.now()}`,
+      // The id the lane gets when it's loaded from disk (lane-<file name>), so its task ids don't change after a reload.
+      id: `lane-${fileName.replace(/\.md$/i, '').toLowerCase()}`,
       title,
       filePath,
       markdown: defaultContent
@@ -4459,6 +4561,34 @@ function App() {
   };
 
   // Rename a SwimLane column title and sync with markdown file on disk
+  /**
+   * Task ids changed (a task moved to another list, a list's file was renamed): the briefs, run steps, schedules and
+   * selection keyed by each old id follow it to its new one. (Memory chunks and saved terminals keep the old id.)
+   */
+  const remapTaskIds = (idMap: Map<string, string>) => {
+    if (idMap.size === 0) return;
+    const to = (id: unknown) => (id != null ? idMap.get(String(id)) : undefined);
+    const nextBriefs = briefsRef.current.some((b) => to(b.sourceTaskId) || to(b.id))
+      ? briefsRef.current.map((b) => (to(b.sourceTaskId) || to(b.id) ? { ...b, ...(to(b.sourceTaskId) ? { sourceTaskId: to(b.sourceTaskId)! } : {}), ...(to(b.id) ? { id: to(b.id)! } : {}) } : b))
+      : briefsRef.current;
+    const steps = taskExecutionStepsRef.current;
+    const nextSteps = Object.keys(steps).some((k) => to(k)) ? Object.fromEntries(Object.entries(steps).map(([k, v]) => [to(k) ?? k, v])) : steps;
+    if (nextBriefs !== briefsRef.current || nextSteps !== steps) {
+      briefsRef.current = nextBriefs;
+      taskExecutionStepsRef.current = nextSteps;
+      setBriefs(nextBriefs);
+      setTaskExecutionSteps(nextSteps);
+      persistRunningJobsDoc(runningJobsRef.current, queuedTaskIdsRef.current, nextBriefs, nextSteps);
+    }
+    const jobs = getScheduledJobs();
+    if (jobs.some((j) => to(j.taskId))) {
+      saveScheduledJobs(jobs.map((j) => (to(j.taskId) ? { ...j, taskId: to(j.taskId)! } : j)));
+      setScheduledJobs(getScheduledJobs());
+    }
+    const selected = to(selectedTaskId);
+    if (selected) setSelectedTaskId(selected);
+  };
+
   const handleRenameSwimLane = (laneId: string, newTitle: string) => {
     if (!activeProject || !newTitle.trim()) return;
 
@@ -4483,8 +4613,18 @@ function App() {
     if (!isPrimaryTodo) {
       const slug = trimmedTitle.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'swim_lane';
       const newFileName = `${slug.toUpperCase()}.md`;
-      newFilePath = `${activeProject.folderPath}/${newFileName}`;
+      const candidate = `${activeProject.folderPath}/${newFileName}`;
+      // Another list already uses that file: keep this list's file (only its title changes) rather than overwrite it.
+      const taken = currentLanes.some((l) => l.id !== laneId && l.filePath.toLowerCase() === candidate.toLowerCase());
+      if (!taken) newFilePath = candidate;
     }
+    // A list's id comes from its file name when it loads (lane-<file>), and its tasks' ids from the list's id. A list
+    // with a task running or queued keeps its file (only the title changes), so no live run loses its task.
+    const laneTaskIds = new Set(tasks.filter((t) => t.swimLaneId === laneId).map((t) => String(t.id)));
+    const busy = [...runningTaskIds, ...queuedTaskIds].some((id) => laneTaskIds.has(String(id)));
+    if (busy && newFilePath !== oldFilePath) newFilePath = oldFilePath;
+    const fileBase = (p: string) => (p.split('/').pop() || '').replace(/\.md$/i, '').toLowerCase();
+    const newLaneId = newFilePath !== oldFilePath ? `lane-${fileBase(newFilePath)}` : laneId;
 
     // Embed or update <!-- Swimlane Title: <title> --> in the lane's markdown
     let updatedMd = targetLane.markdown;
@@ -4498,6 +4638,7 @@ function App() {
       if (lane.id === laneId) {
         return {
           ...lane,
+          id: newLaneId,
           title: trimmedTitle,
           filePath: newFilePath,
           markdown: updatedMd
@@ -4513,6 +4654,32 @@ function App() {
           : p
       )
     );
+
+    // The new file name gives the list a new id now, not only after the next reload, and its tasks' briefs, run
+    // steps and schedules move to their new ids with it.
+    if (newLaneId !== laneId) {
+      const idMap = new Map<string, string>();
+      let allActive: TaskItem[] = [];
+      let allArchived: TaskItem[] = [];
+      let offset = 0;
+      for (const lane of nextLanes) {
+        const parsed = parseSwimLaneMarkdown(lane, offset);
+        if (lane.id === newLaneId) {
+          // The same list under its old id, at the same offset: task k there is task k here.
+          const before = parseSwimLaneMarkdown({ ...lane, id: laneId }, offset);
+          const afterAll = [...parsed.items, ...parsed.archivedItems];
+          [...before.items, ...before.archivedItems].forEach((t, k) => {
+            if (afterAll[k]) idMap.set(String(t.id), String(afterAll[k].id));
+          });
+        }
+        allActive = [...allActive, ...parsed.items];
+        allArchived = [...allArchived, ...parsed.archivedItems];
+        offset += parsed.items.length;
+      }
+      setTasks(allActive);
+      setArchivedTasks(allArchived);
+      remapTaskIds(idMap);
+    }
 
     if (oldFilePath !== newFilePath) {
       void renameLaneScope(oldFilePath, newFilePath); // the lane's skills & rules follow its file
@@ -4563,13 +4730,8 @@ function App() {
       return;
     }
 
+    // The list's file is kept (moved aside below), so its tasks' memory is kept too: restoring the file brings both back.
     const removedLane = currentLanes.find((l) => l.id === laneId);
-    if (removedLane) {
-      const removedParsed = parseSwimLaneMarkdown(removedLane, 0);
-      for (const t of [...removedParsed.items, ...removedParsed.archivedItems]) {
-        void removeChunksByTaskId(t.id, activeProjectId);
-      }
-    }
     const nextLanes = currentLanes.filter((l) => l.id !== laneId);
 
     // Re-parse remaining tasks
@@ -4605,21 +4767,32 @@ function App() {
       ...nextLanes.map((l) => ({ filePath: l.filePath, content: l.markdown })),
     ]);
 
-    // Delete the removed swim lane markdown file from disk so it does not recreate on reload
+    // Move the removed list's file into <project>/removed-lists/: the bridge lists only a project's top-level .md files,
+    // so the list stays gone after a reload, but nothing is deleted and moving the file back restores it.
     if (removedLane && removedLane.filePath) {
-      fetch(bridgeClient.getApiUrl('/api/files/delete'), {
+      const base = (removedLane.filePath.split('/').pop() || 'list.md').replace(/\.md$/i, '');
+      const stamp = new Date().toISOString().replace(/[:T]/g, '-').replace(/\..*$/, '');
+      const movedTo = `${activeProject.folderPath}/removed-lists/${base}-${stamp}.md`;
+      fetch(bridgeClient.getApiUrl('/api/files/rename'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePaths: [removedLane.filePath] }),
+        body: JSON.stringify({ oldPath: removedLane.filePath, newPath: movedTo }),
+      }).then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
       }).catch((err) => {
-        console.error('[Ergo] Failed to delete swim lane file from disk:', err);
+        console.error('[Ergo] Failed to move the removed list out of the project:', err);
+        showToast({
+          type: 'warning',
+          title: "The list's file wasn't moved",
+          message: `${removedLane.filePath} is still in the project folder, so the list comes back after a reload.`,
+        });
       });
     }
 
     showToast({
       type: 'info',
-      title: 'Swim lane removed',
-      message: `Removed swim lane "${removedLane?.title || laneId}".`
+      title: 'List removed',
+      message: `"${removedLane?.title || laneId}" moved to removed-lists/ in the project folder.`
     });
   };
 
@@ -4713,9 +4886,16 @@ function App() {
     customFolder: string,
     description: string,
     initialTodoContent?: string,
-    extraLanes?: ImportedLane[]
+    extraLanes?: ImportedLane[],
+    view?: NewProjectView
   ) => {
     const newProj = createNewProjectData(name, customFolder, description, initialTodoContent);
+    // Lane names for the number of lanes asked for (a board's are its columns: To do, In progress, Done).
+    const laneTitles = defaultLaneTitles(Math.max(1, view?.laneCount ?? 1), view?.style ?? 'list');
+    if (laneTitles[0] !== 'Human Workspace' && newProj.swimLanes?.[0]) {
+      newProj.todoMarkdown = `<!-- Swimlane Title: ${laneTitles[0]} -->\n${newProj.todoMarkdown}`;
+      newProj.swimLanes[0] = { ...newProj.swimLanes[0], title: laneTitles[0], markdown: newProj.todoMarkdown };
+    }
     // Write the project folder and its TODO.md directly to disk
     await createProjectOnDisk(newProj.folderPath, newProj.todoMarkdown);
     if (extraLanes && extraLanes.length > 0) {
@@ -4729,9 +4909,156 @@ function App() {
       await writeFilesToDisk(lanes.map((l) => ({ filePath: l.filePath, content: l.markdown })));
       newProj.swimLanes = [...(newProj.swimLanes || []), ...lanes];
     }
+    if (view) {
+      // Empty lanes up to the number asked for, then the view (and the lanes' order) in project.json.
+      const taken = new Set((newProj.swimLanes || []).map((l) => laneFileName(l.filePath).toUpperCase()));
+      const blank: SwimLaneDoc[] = [];
+      for (let i = newProj.swimLanes?.length ?? 1; i < laneTitles.length; i++) {
+        let file = laneFileForTitle(laneTitles[i]);
+        for (let n = 2; taken.has(file.toUpperCase()); n++) file = laneFileForTitle(`${laneTitles[i]} ${n}`);
+        taken.add(file.toUpperCase());
+        blank.push({
+          id: `lane-${file.replace(/\.md$/i, '').toLowerCase()}`,
+          title: laneTitles[i],
+          filePath: `${newProj.folderPath}/${file}`,
+          markdown: `<!-- Swimlane Title: ${laneTitles[i]} -->\n`,
+        });
+      }
+      if (blank.length > 0) {
+        await writeFilesToDisk(blank.map((l) => ({ filePath: l.filePath, content: l.markdown })));
+        newProj.swimLanes = [...(newProj.swimLanes || []), ...blank];
+      }
+      const projectView: ProjectViewSettings = {
+        style: view.style,
+        layout: view.layout,
+        laneOrder: (newProj.swimLanes || []).map((l) => laneFileName(l.filePath)),
+      };
+      await saveProjectView(newProj.folderPath, projectView).catch(() => {});
+      setProjectView({ folder: newProj.folderPath, view: projectView });
+    }
     setProjects((prev) => [...prev, newProj]);
     setActiveProjectId(newProj.id);
   };
+
+  /**
+   * Board: moves a task, with its subtasks and anchor, into another lane's file. Its id is built from its lane
+   * (`${laneId}_${anchor}`), so what points at the old id — its brief, run steps and schedules — moves to the new one.
+   * A task that is running or queued stays put: its live run and queue entry hold the old id.
+   */
+  const handleMoveTaskToLane = (taskId: string | number, toLaneId: string, beforeAnchorId: string | null): boolean => {
+    const lanes = activeProject?.swimLanes;
+    const oldId = String(taskId);
+    const task = tasks.find((t) => String(t.id) === oldId);
+    const from = lanes?.find((l) => l.id === task?.swimLaneId);
+    const to = lanes?.find((l) => l.id === toLaneId);
+    if (!lanes || !task?.anchorId || !from || !to || from.id === to.id) return false;
+    if (runningTaskIds.some((x) => String(x) === oldId) || queuedTaskIds.some((x) => String(x) === oldId)) {
+      showToast({
+        type: 'warning',
+        title: 'Task is running',
+        message: 'Stop its run, or take it out of the queue, before moving it to another list.',
+      });
+      return false;
+    }
+    const moved = moveTaskAcrossLanes(from.markdown, to.markdown, task.anchorId, beforeAnchorId);
+    if (!moved) return false;
+    const newId = taskIdFor(to.id, moved.anchorId, 0);
+
+    const nextLanes = lanes.map((l) => (l.id === from.id ? { ...l, markdown: moved.source } : l.id === to.id ? { ...l, markdown: moved.target } : l));
+    let allActive: TaskItem[] = [];
+    let allArchived: TaskItem[] = [];
+    let offset = 0;
+    for (const lane of nextLanes) {
+      const parsed = parseSwimLaneMarkdown(lane, offset);
+      allActive = [...allActive, ...parsed.items];
+      allArchived = [...allArchived, ...parsed.archivedItems];
+      offset += parsed.items.length;
+    }
+    setTasks(allActive);
+    setArchivedTasks(allArchived);
+    setProjects((prev) =>
+      prev.map((p) => (p.id === activeProjectId ? { ...p, todoMarkdown: nextLanes[0]?.markdown ?? p.todoMarkdown, swimLanes: nextLanes } : p))
+    );
+    autosave.saveImmediately([from, to].map((l) => ({ filePath: l.filePath, content: l.id === from.id ? moved.source : moved.target })));
+
+    // Everything keyed by the old id follows the task.
+    remapTaskIds(new Map([[oldId, newId]]));
+    return true;
+  };
+
+  // ── Remove a project from Ergo ──
+  // A project is its folder under the storage root (projects/<id>), so it leaves the list by moving that folder to
+  // removed-projects/<id>-<date>: nothing is deleted and moving it back restores it. Code folders are never touched.
+  // The only project can't be removed (create another first); the open one can't while its tasks run.
+  const handleRemoveProject = async (projectId?: string | null) => {
+    const target = namedProjects.find((p) => p.id === (projectId ?? activeProjectId));
+    if (!target) return;
+    const others = namedProjects.filter((p) => p.id !== target.id);
+    if (others.length === 0) {
+      showToast({
+        type: 'info',
+        title: "Can't remove your only project",
+        message: 'Create another project first, then remove this one.',
+        actionLabel: 'New project',
+        onAction: () => setIsCreateProjectModalOpen(true),
+        duration: 7000,
+      });
+      return;
+    }
+    const isActive = target.id === activeProjectId;
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
+    if (isActive && (executingTaskId !== null || runningTaskIds.length > 0)) {
+      showToast({
+        type: 'warning',
+        title: 'Stop its runs first',
+        message: `"${target.name}" has tasks running. Stop them, then remove the project.`,
+        duration: 7000,
+      });
+      return;
+    }
+    const folder = (target.folderPath || '').replace(/\\/g, '/').replace(/\/+$/, '');
+    const onDisk = /^projects\/[^/]+$/.test(folder);
+    const root = (folderMetadata.storageDirectory || '~/.ergo').replace(/\/+$/, '');
+    const next = others[0];
+    const ok = await askConfirm({
+      title: `Remove "${target.name}" from Ergo?`,
+      text: onDisk
+        ? `It leaves the project list${isActive ? ` and Ergo opens "${next.name}"` : ''}. Nothing is deleted: its task lists, briefs and run history move to ${root}/removed-projects/, and your code folders aren't touched. To bring it back, move its folder into ${root}/projects/.`
+        : `It leaves the project list${isActive ? ` and Ergo opens "${next.name}"` : ''}. No files are deleted.`,
+      confirmLabel: 'Remove project',
+      danger: true,
+    });
+    if (!ok) return;
+
+    if (isActive) {
+      // Unsaved edits land in its folder before it moves; then nothing of it stays open to write there.
+      await autosave.saveImmediately();
+      setSelectedTaskId(null);
+      setActiveProjectId(next.id);
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    let movedTo: string | undefined;
+    if (onDisk) {
+      const res = await storageManager.moveProjectOutOfList(folder);
+      if (!res.success) {
+        if (isActive) setActiveProjectId(target.id);
+        showToast({ type: 'error', title: "Couldn't remove the project", message: res.error || 'The folder could not be moved.', duration: 8000 });
+        return;
+      }
+      movedTo = res.movedTo;
+    }
+    setProjects((prev) => prev.filter((p) => p.id !== target.id));
+    // Its display name, review mode and other per-project preferences.
+    removeProjectPrefs(target.id);
+    showToast({
+      type: 'success',
+      title: 'Project removed',
+      message: movedTo ? `"${target.name}" is no longer listed. Its files are in ${root}/${movedTo}.` : `"${target.name}" is no longer listed.`,
+      duration: 6000,
+    });
+  };
+  const handleRemoveProjectRef = useRef(handleRemoveProject);
+  handleRemoveProjectRef.current = handleRemoveProject;
 
   // Trigger Immediate Disk Save from Navbar / Manual Action
   const handleManualSaveNow = () => {
@@ -4870,6 +5197,7 @@ function App() {
           onClearProjectMemory: handleClearActiveProjectMemory,
           onClearAllMemory: handleClearAllMemory,
           onExportProject: handleExportProject,
+          onRemoveProject: () => void handleRemoveProject(),
           onOpenRawMarkdownModal: () => setIsRawMarkdownOpen(true),
         }}
       credentials={{
@@ -5005,6 +5333,9 @@ function App() {
       { id: 'cmd:export', kind: 'command', label: 'Export project', icon: Download, run: handleExportProject },
       { id: 'cmd:save', kind: 'command', label: 'Save to disk now', icon: Save, run: handleManualSaveNow },
       { id: 'cmd:new-project', kind: 'command', label: 'New project', icon: Plus, run: () => setIsCreateProjectModalOpen(true) },
+      ...(projects.length > 1
+        ? [{ id: 'cmd:remove-project', kind: 'command' as const, label: 'Remove this project…', icon: FolderMinus, keywords: 'project delete', run: () => void handleRemoveProjectRef.current() }]
+        : []),
       ...projects
         .filter((p) => p.id !== activeProjectId)
         .map<PaletteItem>((p) => ({ id: `cmd:project:${p.id}`, kind: 'command', label: `Switch to ${p.name}`, icon: FolderGit2, keywords: 'project', run: () => setActiveProjectId(p.id) })),
@@ -5070,12 +5401,15 @@ function App() {
         activeProject={activeProject}
         onSelectProject={(p) => setActiveProjectId(p.id)}
         onNewProject={() => setIsCreateProjectModalOpen(true)}
+        onRemoveProject={() => void handleRemoveProject()}
         onOpenFolderPicker={() => setIsFolderPickerOpen(true)}
         onOpenRawMarkdownModal={() => setIsRawMarkdownOpen(true)}
         onExportProject={handleExportProject}
         onOpenPalette={() => setIsPaletteOpen(true)}
         onOpenDraft={() => setIsDraftModalOpen(true)}
-        onOpenRun={() => setRunDialog({ kind: 'screen' })}
+        onOpenRun={() => {
+          if (ensureAiProfileForRun()) setRunDialog({ kind: 'screen' });
+        }}
         isDetailOpen={isAiPanelOpen}
         onToggleDetail={handleToggleAiPanel}
         isSettingsOpen={settingsPage !== null}
@@ -5083,6 +5417,9 @@ function App() {
         onOpenWelcome={() => setIsOnboardingOpen(true)}
         theme={theme}
         onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+        view={activeView}
+        laneCount={activeProject?.swimLanes?.length ?? 1}
+        onChangeView={handleChangeProjectView}
       />
 
       <div className="eg-frame-body">
@@ -5139,6 +5476,10 @@ function App() {
             }}
             autocompleteSettings={autocompleteSettings}
             onUpdateTaskMcpTools={handleUpdateTaskMcpTools}
+            viewStyle={activeView.style}
+            laneLayout={activeView.layout}
+            laneOrder={activeView.laneOrder}
+            onMoveTaskToLane={handleMoveTaskToLane}
           />
 
           {isAiPanelOpen && (
