@@ -902,17 +902,17 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   const stageList = isFollowUpView ? FOLLOW_UP_STAGES : TASK_STAGES;
   const stageStatus: Record<TaskStageKey, CardStatus> = isFollowUpView
     ? {
-        related: 'done',
-        overview: 'done',
-        actions: runActiveEarly && !followUpRecordRunning ? 'working' : latestSteps.length > 0 || followUpEnded ? 'done' : 'not_started',
-        completion: runActiveEarly && followUpRecordRunning ? 'working' : followUpEnded && !runActiveEarly ? 'done' : 'not_started',
-      }
+      related: 'done',
+      overview: 'done',
+      actions: runActiveEarly && !followUpRecordRunning ? 'working' : latestSteps.length > 0 || followUpEnded ? 'done' : 'not_started',
+      completion: runActiveEarly && followUpRecordRunning ? 'working' : followUpEnded && !runActiveEarly ? 'done' : 'not_started',
+    }
     : {
-        overview: overviewStatus,
-        actions: stepsActionsStatus,
-        completion: completionStatus,
-        related: relatedTasksStatus,
-      };
+      overview: overviewStatus,
+      actions: stepsActionsStatus,
+      completion: completionStatus,
+      related: relatedTasksStatus,
+    };
   const stageReached = (key: TaskStageKey): boolean =>
     stageList.some((s) => s.key === key) &&
     (key === 'overview' ||
@@ -1576,26 +1576,26 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   const moreItems: MenuItem[] = [
     ...(isStoppedPartway
       ? [
-          { label: 'Resume where it stopped', icon: Play, onSelect: () => onExecuteTask(task) },
-          { label: 'Start over', icon: RotateCcw, onSelect: () => onExecuteTask(task, { startOver: true }) },
-          { separator: true } as const,
-        ]
+        { label: 'Resume where it stopped', icon: Play, onSelect: () => onExecuteTask(task) },
+        { label: 'Start over', icon: RotateCcw, onSelect: () => onExecuteTask(task, { startOver: true }) },
+        { separator: true } as const,
+      ]
       : []),
     ...(hasRunBefore && !isStoppedPartway ? [{ label: 'Run again', icon: RotateCcw, onSelect: () => onExecuteTask(task) }, { separator: true } as const] : []),
     // The brief belongs to the run (cycle 0); a follow-up's block has no Brief stage to edit it in.
     ...(isFollowUpView
       ? []
       : [
-          {
-            label: 'Edit brief',
-            icon: Edit3,
-            onSelect: () => {
-              setIsEditing(true);
-              setViewModeSection2('timeline');
-              pickStage('overview');
-            },
+        {
+          label: 'Edit brief',
+          icon: Edit3,
+          onSelect: () => {
+            setIsEditing(true);
+            setViewModeSection2('timeline');
+            pickStage('overview');
           },
-        ]),
+        },
+      ]),
     {
       label: scheduledJob && scheduledJob.status === 'pending' ? 'Edit schedule' : 'Schedule',
       icon: Calendar,
@@ -1792,609 +1792,609 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
           />
         )}
 
-      {/* ── Brief · Runs · Notes · Related ── */}
-      {(
-        <div className="ai-task-card-body">
-          {/* Rich Text Toolbar when editing */}
-          {isEditing && (
-            <RichTextToolbar
-              className="is-inset"
-              targetRef={activeFocusedRef || overviewRef}
-              compact={true}
-            />
-          )}
+        {/* ── Brief · Runs · Notes · Related ── */}
+        {(
+          <div className="ai-task-card-body">
+            {/* Rich Text Toolbar when editing */}
+            {isEditing && (
+              <RichTextToolbar
+                className="is-inset"
+                targetRef={activeFocusedRef || overviewRef}
+                compact={true}
+              />
+            )}
 
-          <div className="brief-container" style={{ padding: 0, gap: '0.45rem' }}>
-            {/* "How did this task do?" after an Auto run Ergo can't judge well on its own */}
-            <RunSurveyCard record={brief?.lastRunOutcome} hidden={runActive} />
+            <div className="brief-container" style={{ padding: 0, gap: '0.45rem' }}>
+              {/* "How did this task do?" after an Auto run Ergo can't judge well on its own */}
+              <RunSurveyCard record={brief?.lastRunOutcome} hidden={runActive} />
 
-            {/* ═══════════════════════════════════════════════════════════
+              {/* ═══════════════════════════════════════════════════════════
                 TIMELINE: earlier cycles (one line each), then the open one
                ═══════════════════════════════════════════════════════════ */}
-            {cycles.length > 1 && (
-              <div className="eg-timeline-earlier">{cycles.slice(0, -1).map((c) => renderEarlierCycle(c))}</div>
-            )}
+              {cycles.length > 1 && (
+                <div className="eg-timeline-earlier">{cycles.slice(0, -1).map((c) => renderEarlierCycle(c))}</div>
+              )}
 
-            <div className="eg-cycle" ref={latestCycleRef}>
-            {isFollowUpView && (
-              <>
-                <div className="eg-cycle-head">
-                  <b>Follow-up {latestCycle}</b>
-                  {formatCycleTime(cycles[latestCycle]?.startedAt) && <span>{formatCycleTime(cycles[latestCycle]?.startedAt)}</span>}
-                </div>
-                {cycles[latestCycle]?.message && <p className="eg-cycle-msg">{cycles[latestCycle].message}</p>}
-              </>
-            )}
+              <div className="eg-cycle" ref={latestCycleRef}>
+                {isFollowUpView && (
+                  <>
+                    <div className="eg-cycle-head">
+                      <b>Follow-up {latestCycle}</b>
+                      {formatCycleTime(cycles[latestCycle]?.startedAt) && <span>{formatCycleTime(cycles[latestCycle]?.startedAt)}</span>}
+                    </div>
+                    {cycles[latestCycle]?.message && <p className="eg-cycle-msg">{cycles[latestCycle].message}</p>}
+                  </>
+                )}
 
-            {/* ═══════════════════════════════════════════════════════════
+                {/* ═══════════════════════════════════════════════════════════
                 STAGES: one bar per stage, filled as the run reaches it
                ═══════════════════════════════════════════════════════════ */}
-            <div className={`stage-tabs-card stage-${shownStage} ${shownStage === 'actions' && hasPendingAlert ? 'has-pending-alert' : ''}`}>
-              <TaskStageBars<TaskStageKey>
-                label={isFollowUpView ? `Follow-up ${latestCycle} stages` : 'Task stages'}
-                value={shownStage}
-                onChange={pickStage}
-                items={stageList.map(({ key, label }, idx) => {
-                  const status = stageStatus[key];
-                  const attention = key === 'actions' && hasPendingAlert;
-                  // A progress bar: every stage before the furthest one the run reached counts as passed.
-                  const passed = stageList.slice(idx + 1).some((later) => stageStatus[later.key] === 'done' || stageStatus[later.key] === 'working');
-                  return {
-                    id: key,
-                    label,
-                    state: status === 'working' ? 'working' : passed ? 'done' : toBarState(status),
-                    title: stageReached(key) ? undefined : `Nothing in ${label} yet: it fills in when the run gets here`,
-                    count: key === 'related' && relatedSelectedCount > 0 ? relatedSelectedCount : key === 'actions' && runCount > 0 && !isFollowUpView ? runCount : undefined,
-                    marker: attention ? <StatusDot state="warning" label="Waiting for you" /> : status === 'working' ? <StatusDot state="live" label="Working" /> : undefined,
-                  };
-                })}
-              />
-
-              <div key={slideKey} className={`eg-stagepanel ${slideClass}`}>
-
-              {shownStage === 'related' && (
-                <div className="ai-sub-card-body stage-panel" role="tabpanel">
-                  <RelatedTasksPanel
-                    baselineContext={contextStep?.baselineContext}
-                    isSearching={isRelatedWorking}
-                    isSelecting={isOverviewSynthesizing}
-                    canOpenTask={canOpenRelatedTask}
-                    onOpenTask={onOpenRelatedTask}
+                <div className={`stage-tabs-card stage-${shownStage} ${shownStage === 'actions' && hasPendingAlert ? 'has-pending-alert' : ''}`}>
+                  <TaskStageBars<TaskStageKey>
+                    label={isFollowUpView ? `Follow-up ${latestCycle} stages` : 'Task stages'}
+                    value={shownStage}
+                    onChange={pickStage}
+                    items={stageList.map(({ key, label }, idx) => {
+                      const status = stageStatus[key];
+                      const attention = key === 'actions' && hasPendingAlert;
+                      // A progress bar: every stage before the furthest one the run reached counts as passed.
+                      const passed = stageList.slice(idx + 1).some((later) => stageStatus[later.key] === 'done' || stageStatus[later.key] === 'working');
+                      return {
+                        id: key,
+                        label,
+                        state: status === 'working' ? 'working' : passed ? 'done' : toBarState(status),
+                        title: stageReached(key) ? undefined : `Nothing in ${label} yet: it fills in when the run gets here`,
+                        count: key === 'related' && relatedSelectedCount > 0 ? relatedSelectedCount : key === 'actions' && runCount > 0 && !isFollowUpView ? runCount : undefined,
+                        marker: attention ? <StatusDot state="warning" label="Waiting for you" /> : status === 'working' ? <StatusDot state="live" label="Working" /> : undefined,
+                      };
+                    })}
                   />
-                </div>
-              )}
 
-              {shownStage === 'overview' && (
-                <div className="ai-sub-card-body stage-panel eg-tabpanel" role="tabpanel">
-                  <div className="eg-panelhead">
-                    <span>
-                      {brief?.overviewSource === 'user'
-                        ? 'Brief · edited by you'
-                        : brief?.overviewSource === 'generated'
-                          ? 'Brief · written by the agent'
-                          : 'Working brief'}
-                    </span>
-                    <span className="eg-spacer" />
-                    {isEditing ? (
-                      <>
-                        <Button size="sm" variant="ghost" onClick={handleCancel}>
-                          Cancel
-                        </Button>
-                        <Button size="sm" icon={Save} onClick={handleSave}>
-                          Save
-                        </Button>
-                      </>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        icon={Pencil}
-                        onClick={() => {
-                          setIsEditing(true);
-                          setViewModeSection2('timeline');
-                        }}
-                      >
-                        Edit
-                      </Button>
+                  <div key={slideKey} className={`eg-stagepanel ${slideClass}`}>
+
+                    {shownStage === 'related' && (
+                      <div className="ai-sub-card-body stage-panel" role="tabpanel">
+                        <RelatedTasksPanel
+                          baselineContext={contextStep?.baselineContext}
+                          isSearching={isRelatedWorking}
+                          isSelecting={isOverviewSynthesizing}
+                          canOpenTask={canOpenRelatedTask}
+                          onOpenTask={onOpenRelatedTask}
+                        />
+                      </div>
                     )}
-                  </div>
-                  {bibleFilePath && (
-                    <button
-                      type="button"
-                      className="bible-deep-link"
-                      onClick={() => { void openFileInIdeOrSystem(bibleFilePath); }}
-                      title={`Open the run's bible: the brief exactly as handed to the manager, plus the execution log (${bibleFilePath})`}
-                    >
-                      <BookOpen size={11} />
-                      <span>TASK_CONTEXT.md</span>
-                      <ExternalLink size={10} />
-                    </button>
-                  )}
-                  {isOverviewOutdated && !isOverviewSynthesizing && (
-                    <div className="stage-panel-note">The task changed after this overview was written. The next run writes a new one.</div>
-                  )}
-                  {isOverviewSynthesizing && isRealOverview && (
-                    <div className="stage-panel-note">
-                      <Loader2 size={10} className="spin-animate" />
-                      <span>Refreshing…</span>
-                    </div>
-                  )}
-                  {isEditing ? (
-                    <textarea
-                      ref={overviewRef}
-                      className="obsidian-card-textarea"
-                      placeholder="Write AI execution brief, acceptance criteria, and tool plan in Markdown..."
-                      value={overviewText}
-                      onChange={(e) => handleFieldChange('overview', e.target.value)}
-                      onKeyDown={(e) => handleMarkdownAutoWrap(e, (val) => handleFieldChange('overview', val))}
-                      onFocus={() => setActiveFocusedRef(overviewRef)}
-                      rows={5}
-                    />
-                  ) : isOverviewSynthesizing && !isRealOverview ? (
-                    <div className="ai-card-hint" style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--accent-cyan)' }}>
-                      <Loader2 size={12} className="spin-animate" />
-                      <span>Summary agent is synthesizing the overview…</span>
-                    </div>
-                  ) : isGatheringContext && !isRealOverview ? (
-                    <div className="ai-card-hint" style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--accent-cyan)' }}>
-                      <Loader2 size={12} className="spin-animate" />
-                      <span>Gathering context — the Summary agent will synthesize the overview next…</span>
-                    </div>
-                  ) : isRealOverview ? (
-                    <div className="brief-markdown-render">
-                      {summaryDoc && !showOverviewText ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
-                          <div style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: '1.45' }}>
-                            <MarkdownRenderer content={summaryDocContent || overviewText} />
-                          </div>
-                        </div>
-                      ) : (
-                        <MarkdownRenderer content={overviewText} />
-                      )}
-                    </div>
-                  ) : (
-                    <EmptyState
-                      icon={FileText}
-                      title="No overview yet"
-                      text="The overview — goals, success criteria and tool plan — is written when the task first runs, and kept for reruns."
-                    />
-                  )}
-                </div>
-              )}
 
-              {(shownStage === 'actions' || shownStage === 'completion') && !stageReached(shownStage) && (
-                <div className="ai-sub-card-body stage-panel eg-tabpanel" role="tabpanel">
-                  {shownStage === 'actions' ? (
-                    <EmptyState
-                      icon={ListChecks}
-                      title={isFollowUpView ? 'This follow-up hasn\'t started' : 'No runs yet'}
-                      text="Nothing has happened here yet. When the task runs, its agents and their steps show up here."
-                    />
-                  ) : (
-                    <EmptyState
-                      icon={NotebookPen}
-                      title="No notes yet"
-                      text="Nothing has happened here yet. The completion notes are written when the agent finishes (or when you stop it)."
-                    />
-                  )}
-                </div>
-              )}
-
-              {shownStage === 'actions' && stageReached('actions') && (
-                <div className="ai-sub-card-body stage-panel" role="tabpanel" style={{ padding: 0 }}>
-                  <BvTokenCounterCard
-                    task={task}
-                    brief={brief}
-                    executionSteps={executionSteps}
-                    isExecuting={isExecuting}
-                    isTaskStarted={isTaskStarted}
-                    defaultBreakdownOpen={false}
-                    billing={taskBilling}
-                  />
-                  {/* High-priority pending action prompts (Permission or Ollama Offline) */}
-                  {(pendingPermission || pendingOllamaFallback || offscreenPromptAgents.length > 0) && (
-                    <div style={{ padding: '0.65rem 0.65rem 0.25rem 0.65rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                      {pendingPermission && onPermissionChoice && (
-                        <div className="pipeline-permission-card">
-                          <div className="pipeline-permission-header">
-                            <div className="pipeline-permission-title">
-                              <ShieldAlert size={16} />
-                              <span>Approve {pendingPermission.toolName}?</span>
-                            </div>
-                            <span className="pipeline-permission-pill">Awaiting Approval</span>
-                          </div>
-                          <p className="pipeline-permission-subtitle">
-                            The agent wants to use <strong>{pendingPermission.serverName} / {pendingPermission.toolName}</strong>:
-                          </p>
-                          <PermissionRequestDetails prompt={pendingPermission} />
-                          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap', marginTop: '0.65rem' }}>
-                            <button
-                              className="btn btn-secondary"
-                              style={{ padding: '0.3rem 0.75rem', fontSize: '0.76rem', fontWeight: 600 }}
-                              onClick={() => onPermissionChoice(false)}
-                            >
-                              Skip / Reject
-                            </button>
-                            {pendingPermission.rememberLabel && (
-                              <button
-                                className="btn btn-secondary"
-                                style={{ padding: '0.3rem 0.75rem', fontSize: '0.76rem', fontWeight: 600 }}
-                                onClick={() => onPermissionChoice('always')}
-                                title={`Approve this and ${pendingPermission.rememberLabel} for the rest of this task`}
-                              >
-                                Allow {pendingPermission.rememberLabel} for this task
-                              </button>
-                            )}
-                            <button
-                              className="btn btn-emerald"
-                              style={{ padding: '0.3rem 0.85rem', fontSize: '0.76rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                              onClick={() => onPermissionChoice(true)}
-                            >
-                              <ShieldCheck size={14} />
-                              <span>Approve</span>
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* CLI agents blocked on a prompt the user can't see in the current view */}
-                      {offscreenPromptAgents.map((agent) => (
-                        <div key={`prompt-${agent.ptySessionId}`} className="agent-prompt-alert-row">
-                          <ShieldAlert size={14} className="agent-prompt-alert-icon" />
-                          <AgentRoleBadge role={agent.role} pieceId={agent.pieceId} label={agent.label} />
-                          <span className="agent-prompt-alert-text" title={agent.pendingPrompt!.rawSnippet}>
-                            {agent.pendingPrompt!.kind === 'approval'
-                              ? 'needs approval'
-                              : agent.pendingPrompt!.kind === 'question'
-                                ? 'is asking'
-                                : 'reports'}
-                            : <code>{promptSummary(agent.pendingPrompt!)}</code>
+                    {shownStage === 'overview' && (
+                      <div className="ai-sub-card-body stage-panel eg-tabpanel" role="tabpanel">
+                        <div className="eg-panelhead">
+                          <span>
+                            {brief?.overviewSource === 'user'
+                              ? 'Brief · edited by you'
+                              : brief?.overviewSource === 'generated'
+                                ? 'Brief · written by the agent'
+                                : 'Working brief'}
                           </span>
+                          <span className="eg-spacer" />
+                          {isEditing ? (
+                            <>
+                              <Button size="sm" variant="ghost" onClick={handleCancel}>
+                                Cancel
+                              </Button>
+                              <Button size="sm" icon={Save} onClick={handleSave}>
+                                Save
+                              </Button>
+                            </>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              icon={Pencil}
+                              onClick={() => {
+                                setIsEditing(true);
+                                setViewModeSection2('timeline');
+                              }}
+                            >
+                              Edit
+                            </Button>
+                          )}
+                        </div>
+                        {bibleFilePath && (
                           <button
                             type="button"
-                            className="agent-prompt-alert-btn"
-                            onClick={() => {
-                              setViewModeSection2('timeline');
-                              pinAgent(agent.ptySessionId);
-                            }}
-                            title={`Show ${agent.label} in the Timeline view to answer`}
+                            className="bible-deep-link"
+                            onClick={() => { void openFileInIdeOrSystem(bibleFilePath); }}
+                            title={`Open the run's bible: the brief exactly as handed to the manager, plus the execution log (${bibleFilePath})`}
                           >
-                            Review
+                            <BookOpen size={11} />
+                            <span>TASK_CONTEXT.md</span>
+                            <ExternalLink size={10} />
                           </button>
-                        </div>
-                      ))}
-
-                      {pendingOllamaFallback && onOllamaFallbackChoice && (
-                        <div
-                          style={{
-                            background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.14) 0%, rgba(20, 22, 28, 0.95) 100%)',
-                            border: '1.5px solid rgba(239, 68, 68, 0.55)',
-                            borderRadius: 'var(--radius-md)',
-                            padding: '0.85rem 1rem',
-                            boxShadow: '0 4px 20px rgba(239, 68, 68, 0.18), 0 0 0 1px rgba(239, 68, 68, 0.1)',
-                            animation: 'fadeIn 0.2s ease',
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.45rem' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#f43f5e', fontWeight: 700, fontSize: '0.84rem' }}>
-                              <ShieldAlert size={16} />
-                              <span>Local Ollama Connection Failed</span>
-                            </div>
-                            <span style={{ fontSize: '0.68rem', fontWeight: 600, color: 'var(--accent-rose)', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
-                              Offline
-                            </span>
-                          </div>
-                          <p style={{ fontSize: '0.8rem', color: 'var(--text-main)', marginBottom: '0.5rem', lineHeight: 1.45 }}>
-                            Ergo was unable to reach your local Ollama instance at <strong style={{ color: 'var(--accent-cyan)' }}>{pendingOllamaFallback.prompt.url}</strong> after {pendingOllamaFallback.prompt.consecutiveFailures} consecutive attempts. You don't seem to be connected locally.
-                          </p>
-                          <div style={{ background: 'rgba(0, 0, 0, 0.4)', padding: '0.55rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(255, 255, 255, 0.08)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.65rem' }}>
-                            {pendingOllamaFallback.prompt.errorMessage || 'NetworkError: Failed to connect to local Ollama daemon'}
-                          </div>
-                          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                            <button
-                              className="btn btn-secondary"
-                              style={{ padding: '0.3rem 0.75rem', fontSize: '0.76rem', fontWeight: 600, borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--accent-rose)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                              onClick={() => onOllamaFallbackChoice('terminate')}
-                            >
-                              <Square size={12} />
-                              <span>Terminate Task</span>
-                            </button>
-                            <button
-                              className="btn btn-emerald"
-                              style={{ padding: '0.3rem 0.85rem', fontSize: '0.76rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                              onClick={() => onOllamaFallbackChoice('switch_cloud')}
-                            >
-                              <Cloud size={14} />
-                              <span>Switch to Cloud Profile</span>
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Internal View Switcher Bar: Timeline (merged Notes + Steps) | Terminal */}
-                  <div className="actions-view-switcher-bar">
-                    <span className="actions-switcher-label">
-                      {showTerminalView
-                        ? shownAgent
-                          ? `Terminal · ${shownAgent.label}`
-                          : 'Terminal'
-                        : latestSteps.length > 0
-                          ? `${latestSteps.length} step${latestSteps.length === 1 ? '' : 's'}`
-                          : shownAgent
-                            ? `Timeline · ${shownAgent.label}`
-                            : 'Timeline'}
-                    </span>
-                    <span className="actions-now-running">
-                      {nowRunningAgent ? (
-                        <span
-                          className={`agent-now-running-chip status-${nowRunningAgent.status}`}
-                          title={`${nowRunningAgent.label} · ${nowRunningAgent.cmd} · ${agentStatusLabel(nowRunningAgent.status)}`}
-                        >
-                          <span className="agent-now-running-prefix">
-                            {nowRunningAgent.status === 'awaiting_approval'
-                              ? 'Needs approval:'
-                              : nowRunningAgent.status === 'waiting'
-                                ? 'Waiting:'
-                                : 'Running:'}
-                          </span>
-                          <AgentRoleBadge role={nowRunningAgent.role} pieceId={nowRunningAgent.pieceId} label={nowRunningAgent.label} />
-                        </span>
-                      ) : runningPipelineStep?.agentRole ? (
-                        <span className="agent-now-running-chip status-running" title={runningPipelineStep.title}>
-                          <span className="agent-now-running-prefix">Running:</span>
-                          <AgentRoleBadge role={runningPipelineStep.agentRole} pieceId={runningPipelineStep.pieceId} />
-                        </span>
-                      ) : null}
-                    </span>
-                    <span className="eg-spacer" />
-                    <SegmentedControl<'timeline' | 'terminal'>
-                      label="Run view"
-                      value={showTerminalView ? 'terminal' : 'timeline'}
-                      onChange={(next) => setViewModeSection2(next)}
-                      options={[
-                        { id: 'timeline', label: 'Timeline', icon: History, title: 'History timeline with checkpoints and diffs' },
-                        { id: 'terminal', label: 'Terminal', icon: Terminal, title: 'Live terminal output for power users' },
-                      ]}
-                    />
-                  </div>
-
-                  {showTerminalView ? (
-                    /* Sub-view 2: Power-user raw Terminal view */
-                    <div className="eg-run-terminal-view">
-                      {agentSessions.length > 1 && (
-                        <div className="eg-run-terminal-bar">
-                          <AgentSessionTabs
-                            sessions={agentSessions}
-                            selectedId={shownAgent?.ptySessionId ?? null}
-                            onSelect={(id) => {
-                              setShowAllTerminals(false);
-                              pinAgent(id);
-                            }}
-                          />
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => setShowAllTerminals((v) => !v)}
-                            title={showAllTerminals ? 'Show only the selected agent terminal' : 'Show all agent terminals stacked'}
-                          >
-                            {showAllTerminals ? 'Single' : `All (${agentSessions.length})`}
-                          </Button>
-                        </div>
-                      )}
-
-                      {agentSessions.length === 0 ? (
-                        <EmptyState
-                          icon={Terminal}
-                          title="No terminal session"
-                          text="This run did not launch a CLI terminal. Switch to Timeline to inspect checkpoints and diffs."
-                          actions={
-                            <Button size="sm" variant="secondary" icon={History} onClick={() => setViewModeSection2('timeline')}>
-                              Open timeline
-                            </Button>
-                          }
-                        />
-                      ) : showAllTerminals ? (
-                        <div className="agent-terminals-list">
-                          {agentSessions.map((agent) => renderAgentTerminal(agent))}
-                        </div>
-                      ) : (
-                        shownAgent && renderAgentTerminal(shownAgent)
-                      )}
-                    </div>
-                  ) : (
-                    /* Sub-view 1: Merged Notes + Steps Vertical Checkpoint Timeline */
-                    <div className="notes-view-container eg-run-timeline-container">
-                      {agentSessions.length > 0 && (
-                        <div className="agent-notes-panel">
-                          {agentSessions.length > 1 && (
-                            <AgentSessionTabs
-                              sessions={agentSessions}
-                              selectedId={shownAgent?.ptySessionId ?? null}
-                              onSelect={pinAgent}
-                            />
-                          )}
-
-                          {managerWaitingOn && (
-                            <div className="agent-waiting-row">
-                              <Clock size={11} />
-                              <span>{managerWaitingOn.text}</span>
-                              {managerWaitingOn.agents.map((agent) => (
-                                <button
-                                  key={agent.ptySessionId}
-                                  type="button"
-                                  className="agent-waiting-chip"
-                                  onClick={() => pinAgent(agent.ptySessionId)}
-                                  title={`Show ${agent.label}`}
-                                >
-                                  <AgentRoleBadge role={agent.role} pieceId={agent.pieceId} label={agent.label} />
-                                  <AgentStatusDot status={agent.status} />
-                                </button>
-                              ))}
-                            </div>
-                          )}
-
-                          {switchBanner && shownAgent && switchBanner.toId === shownAgent.ptySessionId && (
-                            <div className="agent-switch-banner" role="status">
-                              <span className="agent-switch-banner-text">
-                                Now showing <AgentRoleBadge role={shownAgent.role} pieceId={shownAgent.pieceId} label={switchBanner.toLabel} /> — {switchBanner.reason}
-                              </span>
-                              {agentSessions.some((s) => s.ptySessionId === switchBanner.fromId) && (
-                                <button
-                                  type="button"
-                                  className="agent-switch-back-btn"
-                                  onClick={() => pinAgent(switchBanner.fromId)}
-                                  title={`Go back to ${switchBanner.fromLabel} and stop following automatically`}
-                                >
-                                  <CornerUpLeft size={11} />
-                                  <span>Back to {switchBanner.fromLabel}</span>
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                className="agent-switch-dismiss-btn"
-                                onClick={() => setSwitchBanner(null)}
-                                aria-label="Dismiss"
-                                title="Dismiss"
-                              >
-                                <X size={11} />
-                              </button>
-                            </div>
-                          )}
-
-                          {shownAgent && (
-                            <CliAgentNotesBridge
-                              key={agentViewKey(shownAgent)}
-                              sessionId={shownAgent.ptySessionId}
-                              role={shownAgent.role}
-                              label={shownAgent.label}
-                              pieceId={shownAgent.pieceId}
-                              launchPrompt={shownAgent.args[shownAgent.args.length - 1]}
-                              permissionLevel={shownAgent.permissionLevel ?? permissionLevel}
-                              initialPrompt={shownAgent.pendingPrompt ?? null}
-                              onSendMessage={
-                                sendTaskMessage
-                                  ? (text, opts) => sendTaskMessage(text, { ...opts, ptySessionId: shownAgent.ptySessionId })
-                                  : undefined
-                              }
-                              runActive={runActive}
-                              liveStatus={isAgentWorking(shownAgent.status) ? liveStatusFor(shownAgent, false) : null}
-                              hideSteerInput
-                              promptsOnly
-                              onActivityChange={setCliActivityItems}
-                            />
-                          )}
-                        </div>
-                      )}
-
-                      <RunTimelineView
-                        runId={activeRunId}
-                        steps={latestSteps}
-                        runActive={runActive}
-                        cliActivity={cliActivityItems}
-                        shownAgent={shownAgent}
-                        pendingHumanInput={pendingHumanInput}
-                        onHumanInputChoice={onHumanInputChoice}
-                        renderHumanInput={(prompt, onSubmit) => (
-                          <HumanInputCard prompt={prompt} onSubmit={onSubmit} />
                         )}
-                        renderMcpWidget={renderMcpAppWidget}
-                        refreshKey={diffRefreshKey}
-                        onReverted={() => setDiffRefreshKey((k) => k + 1)}
-                        hasTerminal={agentSessions.length > 0}
-                        onOpenTerminal={() => setViewModeSection2('terminal')}
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {shownStage === 'completion' && stageReached('completion') && (
-                <div className="ai-sub-card-body stage-panel eg-tabpanel" role="tabpanel">
-                  <div className="eg-panelhead">
-                    <span>
-                      {isFollowUpView ? `Follow-up ${latestCycle}` : 'Completion'}
-                      {isFollowUpView
-                        ? cycles[latestCycle]?.endedAt
-                          ? ` · ${formatCycleTime(cycles[latestCycle].endedAt)}`
-                          : ''
-                        : brief?.lastRunOutcome?.at
-                          ? ` · ${new Date(brief.lastRunOutcome.at).toLocaleDateString([], { month: 'short', day: 'numeric' })}`
-                          : ''}
-                      {brief?.lastRunOutcome?.family ? ` · ${brief.lastRunOutcome.family}` : ''}
-                    </span>
-                    <span className="eg-spacer" />
-                    {isEditing ? (
-                      <>
-                        <Button size="sm" variant="ghost" onClick={handleCancel}>
-                          Cancel
-                        </Button>
-                        <Button size="sm" icon={Save} onClick={handleSave}>
-                          Save
-                        </Button>
-                      </>
-                    ) : (latestNote || !isCompletionWorking) ? (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        icon={Pencil}
-                        onClick={() => {
-                          setIsEditing(true);
-                          setViewModeSection2('timeline');
-                        }}
-                      >
-                        Edit
-                      </Button>
-                    ) : null}
-                  </div>
-                  {isCompletionWorking && latestNote.trim().length > 0 && (
-                    <div className="stage-panel-note">
-                      <Loader2 size={10} className="spin-animate" />
-                      <span>Updating…</span>
-                    </div>
-                  )}
-                  {isEditing ? (
-                    <textarea
-                      ref={completionRef}
-                      className="obsidian-card-textarea"
-                      placeholder="Record outcomes, commits, test results, pull requests, follow-ups..."
-                      value={latestNote}
-                      onChange={(e) => setLatestNote(e.target.value)}
-                      onKeyDown={(e) => handleMarkdownAutoWrap(e, setLatestNote)}
-                      onFocus={() => setActiveFocusedRef(completionRef)}
-                      rows={4}
-                    />
-                  ) : latestNote ? (
-                    <div className="brief-body" style={{ padding: '0.55rem 0.5rem 0.15rem' }}>
-                      <div className="brief-markdown-render">
-                        <MarkdownRenderer content={isFollowUpView ? cycleNoteForDisplay(latestNote) : latestNote} />
+                        {isOverviewOutdated && !isOverviewSynthesizing && (
+                          <div className="stage-panel-note">The task changed after this overview was written. The next run writes a new one.</div>
+                        )}
+                        {isOverviewSynthesizing && isRealOverview && (
+                          <div className="stage-panel-note">
+                            <Loader2 size={10} className="spin-animate" />
+                            <span>Refreshing…</span>
+                          </div>
+                        )}
+                        {isEditing ? (
+                          <textarea
+                            ref={overviewRef}
+                            className="obsidian-card-textarea"
+                            placeholder="Write AI execution brief, acceptance criteria, and tool plan in Markdown..."
+                            value={overviewText}
+                            onChange={(e) => handleFieldChange('overview', e.target.value)}
+                            onKeyDown={(e) => handleMarkdownAutoWrap(e, (val) => handleFieldChange('overview', val))}
+                            onFocus={() => setActiveFocusedRef(overviewRef)}
+                            rows={5}
+                          />
+                        ) : isOverviewSynthesizing && !isRealOverview ? (
+                          <div className="ai-card-hint" style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--accent-cyan)' }}>
+                            <Loader2 size={12} className="spin-animate" />
+                            <span>Summary agent is synthesizing the overview…</span>
+                          </div>
+                        ) : isGatheringContext && !isRealOverview ? (
+                          <div className="ai-card-hint" style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--accent-cyan)' }}>
+                            <Loader2 size={12} className="spin-animate" />
+                            <span>Gathering context — the Summary agent will synthesize the overview next…</span>
+                          </div>
+                        ) : isRealOverview ? (
+                          <div className="brief-markdown-render">
+                            {summaryDoc && !showOverviewText ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                                <div style={{ fontSize: '0.78rem', color: 'var(--text-main)', lineHeight: '1.45' }}>
+                                  <MarkdownRenderer content={summaryDocContent || overviewText} />
+                                </div>
+                              </div>
+                            ) : (
+                              <MarkdownRenderer content={overviewText} />
+                            )}
+                          </div>
+                        ) : (
+                          <EmptyState
+                            icon={FileText}
+                            title="No overview yet"
+                            text="The overview — goals, success criteria and tool plan — is written when the task first runs, and kept for reruns."
+                          />
+                        )}
                       </div>
-                    </div>
-                  ) : isCompletionWorking ? (
-                    <div className="ai-card-hint" style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--accent-cyan)' }}>
-                      <Loader2 size={12} className="spin-animate" />
-                      <span>Writing the completion log from the agent's results…</span>
-                    </div>
-                  ) : (
-                    <div className="ai-card-hint">
-                      The completion log is written when the agent finishes (or when you stop it).
-                    </div>
-                  )}
-                  <RunChangedFiles
-                    runId={activeRunId}
-                    active={runActive}
-                    refreshKey={diffRefreshKey}
-                    onReverted={() => setDiffRefreshKey((k) => k + 1)}
-                  />
+                    )}
+
+                    {(shownStage === 'actions' || shownStage === 'completion') && !stageReached(shownStage) && (
+                      <div className="ai-sub-card-body stage-panel eg-tabpanel" role="tabpanel">
+                        {shownStage === 'actions' ? (
+                          <EmptyState
+                            icon={ListChecks}
+                            title={isFollowUpView ? 'This follow-up hasn\'t started' : 'No runs yet'}
+                            text="Nothing has happened here yet. When the task runs, its agents and their steps show up here."
+                          />
+                        ) : (
+                          <EmptyState
+                            icon={NotebookPen}
+                            title="No notes yet"
+                            text="Nothing has happened here yet. The completion notes are written when the agent finishes (or when you stop it)."
+                          />
+                        )}
+                      </div>
+                    )}
+
+                    {shownStage === 'actions' && stageReached('actions') && (
+                      <div className="ai-sub-card-body stage-panel" role="tabpanel" style={{ padding: 0 }}>
+                        <BvTokenCounterCard
+                          task={task}
+                          brief={brief}
+                          executionSteps={executionSteps}
+                          isExecuting={isExecuting}
+                          isTaskStarted={isTaskStarted}
+                          defaultBreakdownOpen={false}
+                          billing={taskBilling}
+                        />
+                        {/* High-priority pending action prompts (Permission or Ollama Offline) */}
+                        {(pendingPermission || pendingOllamaFallback || offscreenPromptAgents.length > 0) && (
+                          <div style={{ padding: '0.65rem 0.65rem 0.25rem 0.65rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                            {pendingPermission && onPermissionChoice && (
+                              <div className="pipeline-permission-card">
+                                <div className="pipeline-permission-header">
+                                  <div className="pipeline-permission-title">
+                                    <ShieldAlert size={16} />
+                                    <span>Approve {pendingPermission.toolName}?</span>
+                                  </div>
+                                  <span className="pipeline-permission-pill">Awaiting Approval</span>
+                                </div>
+                                <p className="pipeline-permission-subtitle">
+                                  The agent wants to use <strong>{pendingPermission.serverName} / {pendingPermission.toolName}</strong>:
+                                </p>
+                                <PermissionRequestDetails prompt={pendingPermission} />
+                                <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap', marginTop: '0.65rem' }}>
+                                  <button
+                                    className="btn btn-secondary"
+                                    style={{ padding: '0.3rem 0.75rem', fontSize: '0.76rem', fontWeight: 600 }}
+                                    onClick={() => onPermissionChoice(false)}
+                                  >
+                                    Skip / Reject
+                                  </button>
+                                  {pendingPermission.rememberLabel && (
+                                    <button
+                                      className="btn btn-secondary"
+                                      style={{ padding: '0.3rem 0.75rem', fontSize: '0.76rem', fontWeight: 600 }}
+                                      onClick={() => onPermissionChoice('always')}
+                                      title={`Approve this and ${pendingPermission.rememberLabel} for the rest of this task`}
+                                    >
+                                      Allow {pendingPermission.rememberLabel} for this task
+                                    </button>
+                                  )}
+                                  <button
+                                    className="btn btn-emerald"
+                                    style={{ padding: '0.3rem 0.85rem', fontSize: '0.76rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                                    onClick={() => onPermissionChoice(true)}
+                                  >
+                                    <ShieldCheck size={14} />
+                                    <span>Approve</span>
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* CLI agents blocked on a prompt the user can't see in the current view */}
+                            {offscreenPromptAgents.map((agent) => (
+                              <div key={`prompt-${agent.ptySessionId}`} className="agent-prompt-alert-row">
+                                <ShieldAlert size={14} className="agent-prompt-alert-icon" />
+                                <AgentRoleBadge role={agent.role} pieceId={agent.pieceId} label={agent.label} />
+                                <span className="agent-prompt-alert-text" title={agent.pendingPrompt!.rawSnippet}>
+                                  {agent.pendingPrompt!.kind === 'approval'
+                                    ? 'needs approval'
+                                    : agent.pendingPrompt!.kind === 'question'
+                                      ? 'is asking'
+                                      : 'reports'}
+                                  : <code>{promptSummary(agent.pendingPrompt!)}</code>
+                                </span>
+                                <button
+                                  type="button"
+                                  className="agent-prompt-alert-btn"
+                                  onClick={() => {
+                                    setViewModeSection2('timeline');
+                                    pinAgent(agent.ptySessionId);
+                                  }}
+                                  title={`Show ${agent.label} in the Timeline view to answer`}
+                                >
+                                  Review
+                                </button>
+                              </div>
+                            ))}
+
+                            {pendingOllamaFallback && onOllamaFallbackChoice && (
+                              <div
+                                style={{
+                                  background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.14) 0%, rgba(20, 22, 28, 0.95) 100%)',
+                                  border: '1.5px solid rgba(239, 68, 68, 0.55)',
+                                  borderRadius: 'var(--radius-md)',
+                                  padding: '0.85rem 1rem',
+                                  boxShadow: '0 4px 20px rgba(239, 68, 68, 0.18), 0 0 0 1px rgba(239, 68, 68, 0.1)',
+                                  animation: 'fadeIn 0.2s ease',
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.45rem' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#f43f5e', fontWeight: 700, fontSize: '0.84rem' }}>
+                                    <ShieldAlert size={16} />
+                                    <span>Local Ollama Connection Failed</span>
+                                  </div>
+                                  <span style={{ fontSize: '0.68rem', fontWeight: 600, color: 'var(--accent-rose)', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
+                                    Offline
+                                  </span>
+                                </div>
+                                <p style={{ fontSize: '0.8rem', color: 'var(--text-main)', marginBottom: '0.5rem', lineHeight: 1.45 }}>
+                                  Ergo was unable to reach your local Ollama instance at <strong style={{ color: 'var(--accent-cyan)' }}>{pendingOllamaFallback.prompt.url}</strong> after {pendingOllamaFallback.prompt.consecutiveFailures} consecutive attempts. You don't seem to be connected locally.
+                                </p>
+                                <div style={{ background: 'rgba(0, 0, 0, 0.4)', padding: '0.55rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(255, 255, 255, 0.08)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.65rem' }}>
+                                  {pendingOllamaFallback.prompt.errorMessage || 'NetworkError: Failed to connect to local Ollama daemon'}
+                                </div>
+                                <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                                  <button
+                                    className="btn btn-secondary"
+                                    style={{ padding: '0.3rem 0.75rem', fontSize: '0.76rem', fontWeight: 600, borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--accent-rose)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                                    onClick={() => onOllamaFallbackChoice('terminate')}
+                                  >
+                                    <Square size={12} />
+                                    <span>Terminate Task</span>
+                                  </button>
+                                  <button
+                                    className="btn btn-emerald"
+                                    style={{ padding: '0.3rem 0.85rem', fontSize: '0.76rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                                    onClick={() => onOllamaFallbackChoice('switch_cloud')}
+                                  >
+                                    <Cloud size={14} />
+                                    <span>Switch to Cloud Profile</span>
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Internal View Switcher Bar: Timeline (merged Notes + Steps) | Terminal */}
+                        <div className="actions-view-switcher-bar">
+                          <span className="actions-switcher-label">
+                            {showTerminalView
+                              ? shownAgent
+                                ? `Terminal · ${shownAgent.label}`
+                                : 'Terminal'
+                              : latestSteps.length > 0
+                                ? `${latestSteps.length} step${latestSteps.length === 1 ? '' : 's'}`
+                                : shownAgent
+                                  ? `Timeline · ${shownAgent.label}`
+                                  : 'Timeline'}
+                          </span>
+                          <span className="actions-now-running">
+                            {nowRunningAgent ? (
+                              <span
+                                className={`agent-now-running-chip status-${nowRunningAgent.status}`}
+                                title={`${nowRunningAgent.label} · ${nowRunningAgent.cmd} · ${agentStatusLabel(nowRunningAgent.status)}`}
+                              >
+                                <span className="agent-now-running-prefix">
+                                  {nowRunningAgent.status === 'awaiting_approval'
+                                    ? 'Needs approval:'
+                                    : nowRunningAgent.status === 'waiting'
+                                      ? 'Waiting:'
+                                      : 'Running:'}
+                                </span>
+                                <AgentRoleBadge role={nowRunningAgent.role} pieceId={nowRunningAgent.pieceId} label={nowRunningAgent.label} />
+                              </span>
+                            ) : runningPipelineStep?.agentRole ? (
+                              <span className="agent-now-running-chip status-running" title={runningPipelineStep.title}>
+                                <span className="agent-now-running-prefix">Running:</span>
+                                <AgentRoleBadge role={runningPipelineStep.agentRole} pieceId={runningPipelineStep.pieceId} />
+                              </span>
+                            ) : null}
+                          </span>
+                          <span className="eg-spacer" />
+                          <SegmentedControl<'timeline' | 'terminal'>
+                            label="Run view"
+                            value={showTerminalView ? 'terminal' : 'timeline'}
+                            onChange={(next) => setViewModeSection2(next)}
+                            options={[
+                              { id: 'timeline', label: 'Timeline', icon: History, title: 'History timeline with checkpoints and diffs' },
+                              { id: 'terminal', label: 'Terminal', icon: Terminal, title: 'Live terminal output for power users' },
+                            ]}
+                          />
+                        </div>
+
+                        {showTerminalView ? (
+                          /* Sub-view 2: Power-user raw Terminal view */
+                          <div className="eg-run-terminal-view">
+                            {agentSessions.length > 1 && (
+                              <div className="eg-run-terminal-bar">
+                                <AgentSessionTabs
+                                  sessions={agentSessions}
+                                  selectedId={shownAgent?.ptySessionId ?? null}
+                                  onSelect={(id) => {
+                                    setShowAllTerminals(false);
+                                    pinAgent(id);
+                                  }}
+                                />
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setShowAllTerminals((v) => !v)}
+                                  title={showAllTerminals ? 'Show only the selected agent terminal' : 'Show all agent terminals stacked'}
+                                >
+                                  {showAllTerminals ? 'Single' : `All (${agentSessions.length})`}
+                                </Button>
+                              </div>
+                            )}
+
+                            {agentSessions.length === 0 ? (
+                              <EmptyState
+                                icon={Terminal}
+                                title="No terminal session"
+                                text="This run did not launch a CLI terminal. Switch to Timeline to inspect checkpoints and diffs."
+                                actions={
+                                  <Button size="sm" variant="secondary" icon={History} onClick={() => setViewModeSection2('timeline')}>
+                                    Open timeline
+                                  </Button>
+                                }
+                              />
+                            ) : showAllTerminals ? (
+                              <div className="agent-terminals-list">
+                                {agentSessions.map((agent) => renderAgentTerminal(agent))}
+                              </div>
+                            ) : (
+                              shownAgent && renderAgentTerminal(shownAgent)
+                            )}
+                          </div>
+                        ) : (
+                          /* Sub-view 1: Merged Notes + Steps Vertical Checkpoint Timeline */
+                          <div className="notes-view-container eg-run-timeline-container">
+                            {agentSessions.length > 0 && (
+                              <div className="agent-notes-panel">
+                                {agentSessions.length > 1 && (
+                                  <AgentSessionTabs
+                                    sessions={agentSessions}
+                                    selectedId={shownAgent?.ptySessionId ?? null}
+                                    onSelect={pinAgent}
+                                  />
+                                )}
+
+                                {managerWaitingOn && (
+                                  <div className="agent-waiting-row">
+                                    <Clock size={11} />
+                                    <span>{managerWaitingOn.text}</span>
+                                    {managerWaitingOn.agents.map((agent) => (
+                                      <button
+                                        key={agent.ptySessionId}
+                                        type="button"
+                                        className="agent-waiting-chip"
+                                        onClick={() => pinAgent(agent.ptySessionId)}
+                                        title={`Show ${agent.label}`}
+                                      >
+                                        <AgentRoleBadge role={agent.role} pieceId={agent.pieceId} label={agent.label} />
+                                        <AgentStatusDot status={agent.status} />
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+
+                                {switchBanner && shownAgent && switchBanner.toId === shownAgent.ptySessionId && (
+                                  <div className="agent-switch-banner" role="status">
+                                    <span className="agent-switch-banner-text">
+                                      Now showing <AgentRoleBadge role={shownAgent.role} pieceId={shownAgent.pieceId} label={switchBanner.toLabel} /> — {switchBanner.reason}
+                                    </span>
+                                    {agentSessions.some((s) => s.ptySessionId === switchBanner.fromId) && (
+                                      <button
+                                        type="button"
+                                        className="agent-switch-back-btn"
+                                        onClick={() => pinAgent(switchBanner.fromId)}
+                                        title={`Go back to ${switchBanner.fromLabel} and stop following automatically`}
+                                      >
+                                        <CornerUpLeft size={11} />
+                                        <span>Back to {switchBanner.fromLabel}</span>
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className="agent-switch-dismiss-btn"
+                                      onClick={() => setSwitchBanner(null)}
+                                      aria-label="Dismiss"
+                                      title="Dismiss"
+                                    >
+                                      <X size={11} />
+                                    </button>
+                                  </div>
+                                )}
+
+                                {shownAgent && (
+                                  <CliAgentNotesBridge
+                                    key={agentViewKey(shownAgent)}
+                                    sessionId={shownAgent.ptySessionId}
+                                    role={shownAgent.role}
+                                    label={shownAgent.label}
+                                    pieceId={shownAgent.pieceId}
+                                    launchPrompt={shownAgent.args[shownAgent.args.length - 1]}
+                                    permissionLevel={shownAgent.permissionLevel ?? permissionLevel}
+                                    initialPrompt={shownAgent.pendingPrompt ?? null}
+                                    onSendMessage={
+                                      sendTaskMessage
+                                        ? (text, opts) => sendTaskMessage(text, { ...opts, ptySessionId: shownAgent.ptySessionId })
+                                        : undefined
+                                    }
+                                    runActive={runActive}
+                                    liveStatus={isAgentWorking(shownAgent.status) ? liveStatusFor(shownAgent, false) : null}
+                                    hideSteerInput
+                                    promptsOnly
+                                    onActivityChange={setCliActivityItems}
+                                  />
+                                )}
+                              </div>
+                            )}
+
+                            <RunTimelineView
+                              runId={activeRunId}
+                              steps={latestSteps}
+                              runActive={runActive}
+                              cliActivity={cliActivityItems}
+                              shownAgent={shownAgent}
+                              pendingHumanInput={pendingHumanInput}
+                              onHumanInputChoice={onHumanInputChoice}
+                              renderHumanInput={(prompt, onSubmit) => (
+                                <HumanInputCard prompt={prompt} onSubmit={onSubmit} />
+                              )}
+                              renderMcpWidget={renderMcpAppWidget}
+                              refreshKey={diffRefreshKey}
+                              onReverted={() => setDiffRefreshKey((k) => k + 1)}
+                              hasTerminal={agentSessions.length > 0}
+                              onOpenTerminal={() => setViewModeSection2('terminal')}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {shownStage === 'completion' && stageReached('completion') && (
+                      <div className="ai-sub-card-body stage-panel eg-tabpanel" role="tabpanel">
+                        <div className="eg-panelhead">
+                          <span>
+                            {isFollowUpView ? `Follow-up ${latestCycle}` : 'Completion'}
+                            {isFollowUpView
+                              ? cycles[latestCycle]?.endedAt
+                                ? ` · ${formatCycleTime(cycles[latestCycle].endedAt)}`
+                                : ''
+                              : brief?.lastRunOutcome?.at
+                                ? ` · ${new Date(brief.lastRunOutcome.at).toLocaleDateString([], { month: 'short', day: 'numeric' })}`
+                                : ''}
+                            {brief?.lastRunOutcome?.family ? ` · ${brief.lastRunOutcome.family}` : ''}
+                          </span>
+                          <span className="eg-spacer" />
+                          {isEditing ? (
+                            <>
+                              <Button size="sm" variant="ghost" onClick={handleCancel}>
+                                Cancel
+                              </Button>
+                              <Button size="sm" icon={Save} onClick={handleSave}>
+                                Save
+                              </Button>
+                            </>
+                          ) : (latestNote || !isCompletionWorking) ? (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              icon={Pencil}
+                              onClick={() => {
+                                setIsEditing(true);
+                                setViewModeSection2('timeline');
+                              }}
+                            >
+                              Edit
+                            </Button>
+                          ) : null}
+                        </div>
+                        {isCompletionWorking && latestNote.trim().length > 0 && (
+                          <div className="stage-panel-note">
+                            <Loader2 size={10} className="spin-animate" />
+                            <span>Updating…</span>
+                          </div>
+                        )}
+                        {isEditing ? (
+                          <textarea
+                            ref={completionRef}
+                            className="obsidian-card-textarea"
+                            placeholder="Record outcomes, commits, test results, pull requests, follow-ups..."
+                            value={latestNote}
+                            onChange={(e) => setLatestNote(e.target.value)}
+                            onKeyDown={(e) => handleMarkdownAutoWrap(e, setLatestNote)}
+                            onFocus={() => setActiveFocusedRef(completionRef)}
+                            rows={4}
+                          />
+                        ) : latestNote ? (
+                          <div className="brief-body" style={{ padding: '0.55rem 0.5rem 0.15rem' }}>
+                            <div className="brief-markdown-render">
+                              <MarkdownRenderer content={isFollowUpView ? cycleNoteForDisplay(latestNote) : latestNote} />
+                            </div>
+                          </div>
+                        ) : isCompletionWorking ? (
+                          <div className="ai-card-hint" style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--accent-cyan)' }}>
+                            <Loader2 size={12} className="spin-animate" />
+                            <span>Writing the completion log from the agent's results…</span>
+                          </div>
+                        ) : (
+                          <div className="ai-card-hint">
+                            The completion log is written when the agent finishes (or when you stop it).
+                          </div>
+                        )}
+                        <RunChangedFiles
+                          runId={activeRunId}
+                          active={runActive}
+                          refreshKey={diffRefreshKey}
+                          onReverted={() => setDiffRefreshKey((k) => k + 1)}
+                        />
+                      </div>
+                    )}
+                  </div>
                 </div>
-              )}
               </div>
             </div>
-            </div>
           </div>
-        </div>
-      )}
+        )}
       </div>
 
       {/* The prompt box, under the timeline in every stage: direction mid-run, a follow-up once the task finished. */}
@@ -2714,9 +2714,9 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
       runsSort === 'date'
         ? [{ key: 'date', label: null, rows: [...rows].sort((x, y) => activityAt(y) - activityAt(x)) }]
         : runsSort === 'alpha'
-        ? [{ key: 'alpha', label: null, rows: [...rows].sort((x, y) => x.brief.title.localeCompare(y.brief.title, undefined, { sensitivity: 'base', numeric: true })) }]
-        : runsSort === 'category'
-          ? (() => {
+          ? [{ key: 'alpha', label: null, rows: [...rows].sort((x, y) => x.brief.title.localeCompare(y.brief.title, undefined, { sensitivity: 'base', numeric: true })) }]
+          : runsSort === 'category'
+            ? (() => {
               const byHeading = new Map<string, Row[]>();
               for (const r of rows) {
                 const h = r.task?.category && r.task.category !== 'Untitled' ? cleanHeading(r.task.category) : r.task ? 'No heading' : 'Not in the document';
@@ -2726,7 +2726,7 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
               }
               return [...byHeading].map(([h, list]) => ({ key: `cat-${h}`, label: h, rows: list }));
             })()
-          : GROUPS.map((g) => ({
+            : GROUPS.map((g) => ({
               key: g.key,
               label: g.label,
               rows: rows.filter((r) => r.group === g.key).sort((x, y) => (g.key === 'queued' ? x.queuePos - y.queuePos : 0)),
@@ -2735,18 +2735,18 @@ export const BriefPane: React.FC<BriefPaneProps> = ({
     const metaFor = (r: (typeof rows)[number]) =>
       runsSort === 'date' && r.group !== 'running' && r.group !== 'queued'
         ? (() => {
-            const at = r.brief.lastRunOutcome?.at || r.brief.addedAt;
-            return at ? new Date(at).toLocaleDateString([], { month: 'short', day: 'numeric' }) : 'No date';
-          })()
+          const at = r.brief.lastRunOutcome?.at || r.brief.addedAt;
+          return at ? new Date(at).toLocaleDateString([], { month: 'short', day: 'numeric' }) : 'No date';
+        })()
         : r.group === 'running'
-        ? r.started ? `since ${new Date(r.started).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Running'
-        : r.group === 'waiting'
-          ? 'Needs you'
-          : r.group === 'queued'
-            ? `#${r.queuePos + 1}`
-            : r.brief.lastRunOutcome?.at
-              ? new Date(r.brief.lastRunOutcome.at).toLocaleDateString([], { month: 'short', day: 'numeric' })
-              : '';
+          ? r.started ? `since ${new Date(r.started).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Running'
+          : r.group === 'waiting'
+            ? 'Needs you'
+            : r.group === 'queued'
+              ? `#${r.queuePos + 1}`
+              : r.brief.lastRunOutcome?.at
+                ? new Date(r.brief.lastRunOutcome.at).toLocaleDateString([], { month: 'short', day: 'numeric' })
+                : '';
     const open = (r: (typeof rows)[number]) => {
       onSelectTask?.(r.brief.sourceTaskId || r.brief.id || r.id);
       setShowRuns(false);

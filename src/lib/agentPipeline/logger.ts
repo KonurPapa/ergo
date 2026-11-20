@@ -128,10 +128,10 @@ export async function runLogger(
   // Verifier outcome drives human review.
   if (args.verifier?.verdict === 'fail') {
     needsHumanReview = true;
-    for (const f of args.verifier.failures) humanReviewSteps.push(`Verifier failed: ${f.criterion} — ${f.diagnostics.slice(0, 160)}`);
+    for (const f of args.verifier.failures) humanReviewSteps.push(`Verifier failed: ${f.criterion} — ${f.diagnostics.slice(0, 500)}`);
   } else if (args.verifier?.verdict === 'inconclusive') {
     needsHumanReview = true;
-    humanReviewSteps.push(`Manually confirm verifier: ${(args.verifier.evidence || 'the verifier could not obtain evidence').slice(0, 160)}`);
+    humanReviewSteps.push(`Manually confirm verifier: ${(args.verifier.evidence || 'the verifier could not obtain evidence').slice(0, 500)}`);
   }
   if (!args.allCriteriaPass && !humanReviewSteps.some((s) => s.startsWith('Manager verification'))) {
     needsHumanReview = true;

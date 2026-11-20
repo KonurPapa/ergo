@@ -15,14 +15,16 @@ import {
   Undo2,
 } from 'lucide-react';
 import {
-  bridgeSupportsVisualDiff,
   fetchRunChanges,
   fetchRunDiff,
+  getBridgeVisualDiffCapability,
   openFileRef,
   openRunFileDiff,
   revertRunChanges,
   revertRunFile,
   showAppToast,
+  subscribeBridgeVisualDiffCapability,
+  type BridgeVisualDiffCapability,
   type RunChangedFile,
   type RunChanges,
 } from '../lib/ideLinks';
@@ -66,103 +68,103 @@ const FileRow: React.FC<{
   onOpenVisualDiff,
   onDiscard,
 }) => {
-  const { dir, name } = splitPath(file.path);
-  const deleted = file.status === 'deleted';
-  return (
-    <li className={`eg-runfiles-item is-${file.status} ${expanded ? 'is-expanded' : ''}`}>
-      <div className={`eg-runfiles-row is-${file.status}`}>
-        {canInAppDiff && (
+    const { dir, name } = splitPath(file.path);
+    const deleted = file.status === 'deleted';
+    return (
+      <li className={`eg-runfiles-item is-${file.status} ${expanded ? 'is-expanded' : ''}`}>
+        <div className={`eg-runfiles-row is-${file.status}`}>
+          {canInAppDiff && (
+            <button
+              type="button"
+              className="eg-runfiles-chevron"
+              aria-expanded={expanded}
+              aria-label={expanded ? `Collapse diff for ${file.path}` : `Expand diff for ${file.path}`}
+              onClick={onToggleExpand}
+            >
+              <ChevronRight size={13} strokeWidth={1.75} />
+            </button>
+          )}
           <button
             type="button"
-            className="eg-runfiles-chevron"
-            aria-expanded={expanded}
-            aria-label={expanded ? `Collapse diff for ${file.path}` : `Expand diff for ${file.path}`}
-            onClick={onToggleExpand}
+            className="eg-runfiles-path"
+            aria-label={`${file.path}, ${STATUS_LABEL[file.status].toLowerCase()}`}
+            title={
+              canInAppDiff
+                ? `Inspect diff for ${file.path}`
+                : deleted
+                  ? `${file.path} was deleted. Show what it held`
+                  : `Open ${file.path} in your editor`
+            }
+            onClick={() => {
+              if (canInAppDiff) onToggleExpand();
+              else void (deleted ? openRunFileDiff(runId, file.path, { root }) : openFileRef({ path: file.path }, { root }));
+            }}
           >
-            <ChevronRight size={13} strokeWidth={1.75} />
+            <Icon icon={STATUS_ICON[file.status]} size="sm" className="eg-runfiles-icon" />
+            <span className="eg-runfiles-name">
+              {dir && <span className="eg-runfiles-dir">{dir}</span>}
+              {name}
+            </span>
           </button>
-        )}
-        <button
-          type="button"
-          className="eg-runfiles-path"
-          aria-label={`${file.path}, ${STATUS_LABEL[file.status].toLowerCase()}`}
-          title={
-            canInAppDiff
-              ? `Inspect diff for ${file.path}`
-              : deleted
-                ? `${file.path} was deleted. Show what it held`
-                : `Open ${file.path} in your editor`
-          }
-          onClick={() => {
-            if (canInAppDiff) onToggleExpand();
-            else void (deleted ? openRunFileDiff(runId, file.path, { root }) : openFileRef({ path: file.path }, { root }));
-          }}
-        >
-          <Icon icon={STATUS_ICON[file.status]} size="sm" className="eg-runfiles-icon" />
-          <span className="eg-runfiles-name">
-            {dir && <span className="eg-runfiles-dir">{dir}</span>}
-            {name}
+          <span className="eg-runfiles-stat eg-tabular">
+            {file.binary ? (
+              <span className="eg-subtle">binary</span>
+            ) : (
+              <>
+                <span className="is-add">+{file.additions}</span>
+                <span className="is-del">−{file.deletions}</span>
+              </>
+            )}
           </span>
-        </button>
-        <span className="eg-runfiles-stat eg-tabular">
-          {file.binary ? (
-            <span className="eg-subtle">binary</span>
+          {canInAppDiff ? (
+            <span className="eg-runfiles-actions">
+              <IconButton
+                icon={GitCompare}
+                size="sm"
+                label="Open visual diff"
+                title={`Inspect ${file.path} in the diff viewer`}
+                onClick={onOpenVisualDiff}
+              />
+              <IconButton
+                icon={Undo2}
+                size="sm"
+                label="Discard file"
+                title={active ? 'Stop the run before discarding files' : `Discard changes to ${file.path}`}
+                disabled={Boolean(active) || reverting}
+                onClick={onDiscard}
+              />
+              <IconButton
+                icon={ExternalLink}
+                size="sm"
+                label="Open in editor"
+                title={deleted ? `Compare ${file.path} in your editor` : `Open ${file.path} in your editor`}
+                onClick={() => void (deleted ? openRunFileDiff(runId, file.path, { root }) : openFileRef({ path: file.path }, { root }))}
+              />
+            </span>
           ) : (
-            <>
-              <span className="is-add">+{file.additions}</span>
-              <span className="is-del">−{file.deletions}</span>
-            </>
-          )}
-        </span>
-        {canInAppDiff ? (
-          <span className="eg-runfiles-actions">
             <IconButton
               icon={GitCompare}
               size="sm"
-              label="Open visual diff"
-              title={`Inspect ${file.path} in the diff viewer`}
-              onClick={onOpenVisualDiff}
+              label="Open diff"
+              title={`Compare ${file.path} with how it was when the run started, in your editor`}
+              onClick={() => void openRunFileDiff(runId, file.path, { root })}
             />
-            <IconButton
-              icon={Undo2}
-              size="sm"
-              label="Discard file"
-              title={active ? 'Stop the run before discarding files' : `Discard changes to ${file.path}`}
-              disabled={Boolean(active) || reverting}
-              onClick={onDiscard}
-            />
-            <IconButton
-              icon={ExternalLink}
-              size="sm"
-              label="Open in editor"
-              title={deleted ? `Compare ${file.path} in your editor` : `Open ${file.path} in your editor`}
-              onClick={() => void (deleted ? openRunFileDiff(runId, file.path, { root }) : openFileRef({ path: file.path }, { root }))}
-            />
-          </span>
-        ) : (
-          <IconButton
-            icon={GitCompare}
-            size="sm"
-            label="Open diff"
-            title={`Compare ${file.path} with how it was when the run started, in your editor`}
-            onClick={() => void openRunFileDiff(runId, file.path, { root })}
-          />
-        )}
-      </div>
-      {canInAppDiff && expanded && (
-        <div className="eg-runfiles-inline">
-          <InlineDiffView
-            diffText={diffText}
-            file={file}
-            loading={diffLoading}
-            maxLines={36}
-            onExpandFull={onOpenVisualDiff}
-          />
+          )}
         </div>
-      )}
-    </li>
-  );
-};
+        {canInAppDiff && expanded && (
+          <div className="eg-runfiles-inline">
+            <InlineDiffView
+              diffText={diffText}
+              file={file}
+              loading={diffLoading}
+              maxLines={36}
+              onExpandFull={onOpenVisualDiff}
+            />
+          </div>
+        )}
+      </li>
+    );
+  };
 
 export const RunChangedFiles: React.FC<{
   runId?: string;
@@ -183,11 +185,14 @@ export const RunChangedFiles: React.FC<{
   const [revertingAll, setRevertingAll] = useState(false);
   const [modalFile, setModalFile] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [bridgeCap, setBridgeCap] = useState<BridgeVisualDiffCapability>(() => getBridgeVisualDiffCapability());
   const requestRef = useRef(0);
-  const canInAppDiff = bridgeSupportsVisualDiff();
+  const canInAppDiff = bridgeCap.supported;
+
+  useEffect(() => subscribeBridgeVisualDiffCapability(setBridgeCap), []);
 
   const load = useCallback(async () => {
-    if (!runId) return setChanges(null);
+    if (!runId || !bridgeCap.connected) return setChanges(null);
     const id = ++requestRef.current;
     setLoading(true);
     const next = await fetchRunChanges(runId);
@@ -195,7 +200,7 @@ export const RunChangedFiles: React.FC<{
     setChanges(next);
     setInlineDiffs({});
     setLoading(false);
-  }, [runId]);
+  }, [runId, bridgeCap.connected, bridgeCap.protocol]);
 
   useEffect(() => {
     setShowAll(false);

@@ -363,7 +363,12 @@ function baseCommandName(cmd: string): string {
 
 function truncate(text: string, max: number): string {
   const t = text.replace(/\s+/g, ' ').trim();
-  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+  if (t.length <= max) return t;
+  const slice = t.slice(0, max - 1);
+  const lastSpace = slice.lastIndexOf(' ');
+  // Prefer breaking cleanly on a word boundary so completion notes never cut off mid-word ("cre…", "wo…").
+  const clean = (lastSpace >= Math.floor(max * 0.6) ? slice.slice(0, lastSpace) : slice).replace(/[\s,;:\-–—]+$/, '');
+  return `${clean || slice.trimEnd()}…`;
 }
 
 type PromptMemoryHits = NonNullable<CliRunPromptContext['memoryHits']>;
@@ -424,7 +429,7 @@ function extractHumanReviewItems(md: string): string[] {
       .replace(/^\*\*human review\*\*\s*[-–—:]?\s*/i, '')
       .trim();
     if (!line || NONE_RE.test(line) || /^_?none_?\.?$/i.test(line)) continue;
-    items.push(truncate(line, 240));
+    items.push(truncate(line, 600));
   }
   return items;
 }
@@ -457,7 +462,7 @@ function topFindings(report: string, max: number): string[] {
   for (const raw of section.split('\n')) {
     const line = raw.trim().replace(/^(?:[-*•]\s+|\d+[.)]\s+)/, '').replace(/^\[[ xX]\]\s*/, '').trim();
     if (!line || NONE_RE.test(line) || /^\*\*/.test(line)) continue;
-    out.push(truncate(line, 160));
+    out.push(truncate(line, 500));
     if (out.length >= max) break;
   }
   return out;
@@ -474,7 +479,7 @@ function numberedList(items: string[], max: number, more: (n: number) => string)
 
 /** Review items as the human side writes them: numbered, `**human review**` first, at most 3. */
 function reviewList(items: string[]): string {
-  return numberedList(items.map((i) => `**human review** ${truncate(i, 180)}`), 3, (n) => `…and ${n} more (see the task's review items)`);
+  return numberedList(items.map((i) => `**human review** ${truncate(i, 600)}`), 3, (n) => `…and ${n} more (see the task's review items)`);
 }
 
 /** Items of a list section: top-level items, each with its indented sub-items kept under it. */
@@ -485,8 +490,8 @@ function listItems(text: string): string[] {
     const sub = /^\s{2,}[-*•]\s+/.test(raw);
     const line = raw.trim().replace(/^(?:[-*•]\s+|\d+[.)]\s+)/, '').replace(/^\[[ xX]\]\s*/, '').trim();
     if (!line) continue;
-    if (sub && items.length > 0) items[items.length - 1] += `\n    - ${truncate(line, 160)}`;
-    else items.push(truncate(line, 180));
+    if (sub && items.length > 0) items[items.length - 1] += `\n    - ${truncate(line, 320)}`;
+    else items.push(truncate(line, 400));
   }
   return items;
 }
@@ -505,15 +510,15 @@ function compactCompletionRecord(md: string, reviewItems: string[]): string {
   const verified = extractSection(md, ['verified', 'verification']);
   if (!summary && !changed && !verified) {
     // Not in the expected shape: keep a short excerpt rather than the whole thing.
-    return truncate(md.replace(/\n{3,}/g, '\n\n').trim(), 800);
+    return truncate(md.replace(/\n{3,}/g, '\n\n').trim(), 1200);
   }
   const out: string[] = [];
-  if (summary) out.push(`### Done\n${truncate(summary.replace(/\s*\n\s*/g, ' '), 400)}`);
-  if (tryIt) out.push(`### Try it\n${truncate(tryIt.replace(/\s*\n\s*/g, ' '), 240)}`);
+  if (summary) out.push(`### Done\n${truncate(summary.replace(/\s*\n\s*/g, ' '), 800)}`);
+  if (tryIt) out.push(`### Try it\n${truncate(tryIt.replace(/\s*\n\s*/g, ' '), 500)}`);
   if (changed) out.push(`### Changed\n${numberedList(listItems(changed), RECORD_SECTION_CAP, (n) => `…and ${n} more`)}`);
-  if (verified) out.push(`### Verified\n${truncate(verified.replace(/^\s*(?:[-*•]|\d+[.)])\s*/gm, '').replace(/\s*\n\s*/g, '; '), 300)}`);
+  if (verified) out.push(`### Verified\n${truncate(verified.replace(/^\s*(?:[-*•]|\d+[.)])\s*/gm, '').replace(/\s*\n\s*/g, '; '), 600)}`);
   out.push(`### Needs your review\n${reviewItems.length ? reviewList(reviewItems) : 'None'}`);
-  if (separately && !NONE_RE.test(separately.trim())) out.push(`### Separately\n${truncate(separately.replace(/\s*\n\s*/g, ' '), 200)}`);
+  if (separately && !NONE_RE.test(separately.trim())) out.push(`### Separately\n${truncate(separately.replace(/\s*\n\s*/g, ' '), 500)}`);
   return out.join('\n\n');
 }
 
@@ -662,7 +667,7 @@ interface FinalizeOptions {
 const SUBMIT_ONLY = '\u0000submit';
 
 function withDonePromise(state: PersistedRunState): RunState {
-  let resolveDone: () => void = () => {};
+  let resolveDone: () => void = () => { };
   const done = new Promise<void>((resolve) => {
     resolveDone = resolve;
   });
@@ -935,6 +940,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       stepId: step.id,
       label: step.title,
       changelog: step.detail,
+      root: run.launch?.cwd || run.codeSearchPath || undefined,
     });
   };
 
@@ -1040,11 +1046,11 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       const managerCwd = findSession(run.managerSessionId)?.cwd;
       const withModels: CliLaunchConfig = known
         ? {
-            ...cfg,
-            roles: mergeKnownRoles(cfg.roles, known),
-            ...(run.retryRoles ? { retryRoles: run.retryRoles } : {}),
-            ...(run.startEscalation !== undefined ? { startEscalation: run.startEscalation } : {}),
-          }
+          ...cfg,
+          roles: mergeKnownRoles(cfg.roles, known),
+          ...(run.retryRoles ? { retryRoles: run.retryRoles } : {}),
+          ...(run.startEscalation !== undefined ? { startEscalation: run.startEscalation } : {}),
+        }
         : cfg;
       run.launch = managerCwd ? { ...withModels, cwd: managerCwd } : withModels;
       run.roles = run.launch.roles;
@@ -1226,7 +1232,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     for (const w of waiters || []) {
       try {
         w.dropped();
-      } catch {}
+      } catch { }
     }
   };
 
@@ -1465,9 +1471,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     patchStep(run, run.managerStepId, (s) => ({
       ...s,
       status: 'running',
-      detail: `${s.detail}\n\n${sent ? '↳' : '⚠'} ${okCount}/${round.length} worker(s) finished${
-        sent ? '; results handed back to the manager.' : ', but Ergo could not type the hand-off into the manager terminal — tell it to read the worker result files.'
-      }`,
+      detail: `${s.detail}\n\n${sent ? '↳' : '⚠'} ${okCount}/${round.length} worker(s) finished${sent ? '; results handed back to the manager.' : ', but Ergo could not type the hand-off into the manager terminal — tell it to read the worker result files.'
+        }`,
     }));
   };
 
@@ -1554,9 +1559,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       const sent = await typeIntoAgent(s.ptySessionId, buildWorkerHandoffRequest(runCtx(run), w.piece.id));
       patchStep(run, w.stepId, (st) => ({
         ...st,
-        detail: `${st.detail}\n\n${sent ? '↻' : '⚠'} Context at ${k(context.tokens)} tokens (rotates at ${k(at)}): ${
-          sent ? 'asked the worker for a handoff note; a fresh session on the same model continues from it.' : 'Ergo could not ask the worker for a handoff note, so it continues in this session.'
-        }`,
+        detail: `${st.detail}\n\n${sent ? '↻' : '⚠'} Context at ${k(context.tokens)} tokens (rotates at ${k(at)}): ${sent ? 'asked the worker for a handoff note; a fresh session on the same model continues from it.' : 'Ergo could not ask the worker for a handoff note, so it continues in this session.'
+          }`,
       }));
     })();
   };
@@ -1828,9 +1832,9 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     // agent reports (that only costs tokens wherever the log is read back). Long agent text is cut down here too.
     const parts: string[] = followUp
       ? [
-          `## Follow-up ${followUp} (${date}) — ${run.cliName}, ${reasonText}`,
-          ...(run.followUpText ? [`_You: "${truncate(run.followUpText, 240)}"_`] : []),
-        ]
+        `## Follow-up ${followUp} (${date}) — ${run.cliName}, ${reasonText}`,
+        ...(run.followUpText ? [`_You: "${truncate(run.followUpText, 240)}"_`] : []),
+      ]
       : [`## Completion (${date}) — ${run.cliName}, ${reasonText}`];
     if (agentRecord) {
       parts.push(compactCompletionRecord(agentRecord, reviewItems));
@@ -1847,7 +1851,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     if (run.workers.length > 0) {
       parts.push(
         `### Workers\n` +
-          numberedList(run.workers.map((w) => `${w.piece.id} ${w.status === 'done' ? '✓' : '✗ did not finish'}`), run.workers.length, () => '')
+        numberedList(run.workers.map((w) => `${w.piece.id} ${w.status === 'done' ? '✓' : '✗ did not finish'}`), run.workers.length, () => '')
       );
     }
     if (verifier) {
@@ -1855,7 +1859,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       const findings = verifier.verdict === 'FAIL' ? topFindings(stripVerdictLine(verifier.content), 3) : [];
       parts.push(`### Verifier\n${verifier.verdict === 'PASS' ? 'Passed' : 'Failed'}${verifier.attempt > 1 ? ` (attempt ${verifier.attempt})` : ''}${findings.length ? `\n${numberedList(findings, findings.length, () => '')}` : ''}`);
     } else if (run.verifierNote) {
-      parts.push(`### Verifier\n${truncate(run.verifierNote, 200)}`);
+      parts.push(`### Verifier\n${truncate(run.verifierNote, 500)}`);
     }
     if (ergoReviewItems.length > 0 && !agentRecord) {
       parts.push(`### Needs your review\n${reviewList(ergoReviewItems)}`);
@@ -1954,10 +1958,10 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         rating: (briefAtStart ?? latestBrief(run))?.overviewDocument?.taskRating,
         models: run.launch || run.roles
           ? {
-              manager: (run.launch?.roles ?? run.roles)!.manager,
-              worker: (run.launch?.roles ?? run.roles)!.worker,
-              verifier: (run.launch?.roles ?? run.roles)!.verifier,
-            }
+            manager: (run.launch?.roles ?? run.roles)!.manager,
+            worker: (run.launch?.roles ?? run.roles)!.worker,
+            verifier: (run.launch?.roles ?? run.roles)!.verifier,
+          }
           : undefined,
         startModels: run.startRoles
           ? { manager: run.startRoles.manager, worker: run.startRoles.worker, verifier: run.startRoles.verifier }
@@ -1975,13 +1979,12 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     patchStep(run, run.managerStepId, (s) => ({
       ...s,
       status: managerStepStatus,
-      detail: `${s.detail}\n\n${
-        managerStepStatus === 'success'
+      detail: `${s.detail}\n\n${managerStepStatus === 'success'
           ? `✓ Manager finished (${reasonText}).`
           : managerStepStatus === 'cancelled'
             ? '■ Run stopped by user.'
             : `✗ ${reasonText.charAt(0).toUpperCase()}${reasonText.slice(1)}.`
-      }`,
+        }`,
     }));
     patchStep(run, recordStepId, {
       status: 'success',
@@ -2459,10 +2462,10 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         idx === -1
           ? briefs
           : briefs.map((b, i) =>
-              i === idx
-                ? { ...b, status: 'in_progress', thread: withCycleStarted(b.thread, { n: run.followUps!, message, runId: run.runId }) }
-                : b
-            );
+            i === idx
+              ? { ...b, status: 'in_progress', thread: withCycleStarted(b.thread, { n: run.followUps!, message, runId: run.runId }) }
+              : b
+          );
       d.syncAndSaveProject(nextTasks, nextBriefs, true);
     }
     reviveRunJob(run);
@@ -2539,10 +2542,10 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     const prompt = resumeId
       ? buildFollowUpMessage(message, ctx)
       : buildContinuationPrompt(task, ctx, {
-          userMessage: message,
-          completionLog: brief?.completion,
-          createdFiles: Array.from(new Set([...(task.createdFiles || []), ...(brief?.createdFiles || [])])),
-        });
+        userMessage: message,
+        completionLog: brief?.completion,
+        createdFiles: Array.from(new Set([...(task.createdFiles || []), ...(brief?.createdFiles || [])])),
+      });
     // A resumed Claude session log holds the earlier turns too: count them once.
     if (resumeId && base === 'claude' && previous?.spawnId) forgetSpawnUsage(run, previous.spawnId);
     const res = await spawnAgent(run, 'manager', { label: 'Manager', prompt, ...(resumeId ? { resumeSessionId: resumeId } : {}) });
@@ -2589,7 +2592,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     run.cliSessionId = undefined;
     saveRunState(run);
     noteOnStep(run, run.managerStepId, `⚠ Resuming the conversation failed (exit code ${code}); starting a new manager from the completion log instead.`);
-    const res = await restartManager(run, attempt.message, { followUps: run.followUps, followUpText: run.followUpText, verifierBase: run.verifierBase, verifierRetriesUsed: run.verifierRetriesUsed, managerStepId: run.managerStepId }, () => {}, false);
+    const res = await restartManager(run, attempt.message, { followUps: run.followUps, followUpText: run.followUpText, verifierBase: run.verifierBase, verifierRetriesUsed: run.verifierRetriesUsed, managerStepId: run.managerStepId }, () => { }, false);
     return res.ok;
   };
 
@@ -2839,22 +2842,22 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         },
         ...(approveOption
           ? [
-              {
-                label: approveOption.label.length > 24 ? 'Approve' : approveOption.label,
-                variant: 'emerald' as const,
-                onClick: () => {
-                  const live = findSession(ptySessionId);
-                  // Only answer the prompt the toast was raised for.
-                  const livePrompt = live?.pendingPrompt;
-                  if (livePrompt?.signature === prompt.signature) {
-                    // Keys depend on the highlighted option, which may have moved since the toast was raised.
-                    const liveOption = pickApproveOption(livePrompt);
-                    if (liveOption) void sendAgentInput(ptySessionId, keystrokesForOption(livePrompt, liveOption));
-                  }
-                  depsRef.current.dismissToast(toastId);
-                },
+            {
+              label: approveOption.label.length > 24 ? 'Approve' : approveOption.label,
+              variant: 'emerald' as const,
+              onClick: () => {
+                const live = findSession(ptySessionId);
+                // Only answer the prompt the toast was raised for.
+                const livePrompt = live?.pendingPrompt;
+                if (livePrompt?.signature === prompt.signature) {
+                  // Keys depend on the highlighted option, which may have moved since the toast was raised.
+                  const liveOption = pickApproveOption(livePrompt);
+                  if (liveOption) void sendAgentInput(ptySessionId, keystrokesForOption(livePrompt, liveOption));
+                }
+                depsRef.current.dismissToast(toastId);
               },
-            ]
+            },
+          ]
           : []),
       ],
     });
@@ -3062,12 +3065,12 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       s.spawnId !== session.spawnId
         ? s
         : {
-            ...s,
-            status: exitStatus,
-            pendingPrompt: null,
-            endedAt: new Date().toISOString(),
-            session: { ...s.session, isActive: false, exitCode: ev.code },
-          }
+          ...s,
+          status: exitStatus,
+          pendingPrompt: null,
+          endedAt: new Date().toISOString(),
+          session: { ...s.session, isActive: false, exitCode: ev.code },
+        }
     );
 
     // Final usage reading once the CLI has flushed its log.
@@ -3188,9 +3191,9 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       : run.projectId && run.projectId !== d.projectId
         ? { success: false, error: `Ergo has another project open. Open "${run.taskTitle}"'s project in Ergo and try again.` }
         : await executeWorkspaceToolAction(ev.tool, ev.args || {}).catch((err: unknown) => ({
-            success: false,
-            error: err instanceof Error ? err.message : String(err),
-          }));
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        }));
     await sendWorkspaceCallResult(ev.callId, { success: result.success, ...('data' in result ? { data: result.data } : {}), ...(result.error ? { error: result.error } : {}) });
     noteOnStep(run, run.managerStepId, `↳ Workspace: ${ev.tool}${result.success ? '' : ` failed — ${result.error || 'unknown error'}`}`);
   };
@@ -3232,7 +3235,7 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
       let pieces: CliWorkerPiece[] = [];
       try {
         pieces = parseDelegatePlan(latest.content, state.maxWorkers);
-      } catch {}
+      } catch { }
       state.delegateRounds = 1;
       // The manager wrote completion.md after delegating, so it already had the workers' results: replaying the
       // worker-done signals must not type the "workers finished" hand-off into it a second time.
@@ -3738,8 +3741,8 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         // Antigravity share one config entry, so they run skills without the workspace tools (and their checklist is
         // checked off when the run completes).
         ...((references?.skills.some((s) => s.usesWorkspaceTools) || hasOpenChecklist(task)) &&
-        bridgeSupportsTaskReferences() &&
-        /^(claude|codex)$/.test(baseCommandName(launch.cmd))
+          bridgeSupportsTaskReferences() &&
+          /^(claude|codex)$/.test(baseCommandName(launch.cmd))
           ? { workspaceTools: true }
           : {}),
       });
@@ -3817,11 +3820,9 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         ptySessionId: managerSessionId,
         bibleFilePath: run.bibleFilePath,
         title: `Manager Agent (${launch.cliName || launch.cmd})`,
-        detail: `Running \`${launch.cmd}\` in \`${launch.cwd}\`. ${
-          run.maxWorkers >= 2 ? 'The manager works through the task and may delegate separable pieces to worker agents' : 'The manager works through the task itself'
-        }${run.verifierEnabled ? '; a verifier checks the result before the completion log is written' : ''}.${
-          runPlanNote && runPlanNote.trim() ? `\n${runPlanNote.trim()}` : ''
-        }`,
+        detail: `Running \`${launch.cmd}\` in \`${launch.cwd}\`. ${run.maxWorkers >= 2 ? 'The manager works through the task and may delegate separable pieces to worker agents' : 'The manager works through the task itself'
+          }${run.verifierEnabled ? '; a verifier checks the result before the completion log is written' : ''}.${runPlanNote && runPlanNote.trim() ? `\n${runPlanNote.trim()}` : ''
+          }`,
         status: 'running',
       };
       updateSteps(run, () => [...preSteps, managerStep]);
@@ -3933,24 +3934,24 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
         rollbackIdx === -1
           ? currentBriefs
           : currentBriefs.map((b, i) =>
-              i === rollbackIdx
-                ? {
-                    ...b,
-                    // App's overview merge may already have marked the brief in progress for this attempt, so prefer
-                    // the status App captured before it; without one, the task's pre-launch status is the best guess.
-                    status:
-                      typeof priorBriefStatus === 'string'
-                        ? priorBriefStatus
-                        : !baseBrief || baseBrief.status === 'in_progress' || priorBriefStatus === null
-                          ? task.status
-                          : baseBrief.status,
-                    completion: baseBrief?.completion ?? '',
-                    validation: baseBrief?.validation ?? '',
-                    humanReview: baseBrief?.humanReview ?? '',
-                    followUps: baseBrief?.followUps ?? '',
-                  }
-                : b
-            );
+            i === rollbackIdx
+              ? {
+                ...b,
+                // App's overview merge may already have marked the brief in progress for this attempt, so prefer
+                // the status App captured before it; without one, the task's pre-launch status is the best guess.
+                status:
+                  typeof priorBriefStatus === 'string'
+                    ? priorBriefStatus
+                    : !baseBrief || baseBrief.status === 'in_progress' || priorBriefStatus === null
+                      ? task.status
+                      : baseBrief.status,
+                completion: baseBrief?.completion ?? '',
+                validation: baseBrief?.validation ?? '',
+                humanReview: baseBrief?.humanReview ?? '',
+                followUps: baseBrief?.followUps ?? '',
+              }
+              : b
+          );
       depsRef.current.syncAndSaveProject(latestTasks, latestBriefs, true);
       failToast();
       run.resolveDone();

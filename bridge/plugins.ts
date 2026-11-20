@@ -155,12 +155,12 @@ async function syncSkillCopy(storageDir: string, skillName: string): Promise<{ c
   let manifest: Record<string, string> = {};
   try {
     manifest = JSON.parse(await fs.readFile(manifestPath, 'utf-8'));
-  } catch {}
+  } catch { }
   const bundled = await bundledSkillDoc(skillName);
   let current: string | null = null;
   try {
     current = await fs.readFile(filePath, 'utf-8');
-  } catch {}
+  } catch { }
 
   const writeDefault = async () => {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -372,7 +372,7 @@ async function loadAllowedRoots(storageDir: string, projectId?: unknown): Promis
         if (!roots.includes(resolvedRoot)) roots.push(resolvedRoot);
       }
     }
-  } catch {}
+  } catch { }
   return roots;
 }
 
@@ -416,7 +416,7 @@ async function locateAllowedFile(storageDir: string, projectId: unknown, rawPath
     raw = raw.replace(/^file:\/\//, '');
     try {
       raw = decodeURIComponent(raw);
-    } catch {}
+    } catch { }
     if (/^\/[A-Za-z]:[\\/]/.test(raw)) raw = raw.slice(1); // file:///C:/x
   }
   const { bases, allowed } = await fileLinkBases(storageDir, projectId, root);
@@ -475,8 +475,8 @@ async function resolveInsideAllowedRoots(rawPath: string, storageDir: string, pr
   const fullPath = path.isAbsolute(targetPath)
     ? path.resolve(targetPath)
     : targetPath.startsWith('.agents')
-    ? path.resolve(process.cwd(), targetPath)
-    : path.resolve(storageDir, targetPath || '.');
+      ? path.resolve(process.cwd(), targetPath)
+      : path.resolve(storageDir, targetPath || '.');
   const allowedRoots = await loadAllowedRoots(storageDir, projectId);
   const agentsDir = path.resolve(process.cwd(), '.agents');
   const isAgentCustomization = fullPath === agentsDir || fullPath.startsWith(agentsDir + path.sep);
@@ -561,7 +561,7 @@ class GithubMcpClient {
       return this.proc;
     }
     if (this.proc) {
-      try { this.proc.kill(); } catch {}
+      try { this.proc.kill(); } catch { }
     }
     this.token = token;
     const { spawn } = await import('node:child_process');
@@ -587,7 +587,7 @@ class GithubMcpClient {
             if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
             else resolve(msg.result);
           }
-        } catch {}
+        } catch { }
       }
     });
 
@@ -607,7 +607,7 @@ class GithubMcpClient {
         resolve: () => {
           try {
             this.proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-          } catch {}
+          } catch { }
           resolve();
         },
         reject: (err) => {
@@ -664,7 +664,7 @@ class GithubMcpClient {
 
   kill() {
     if (this.proc) {
-      try { this.proc.kill(); } catch {}
+      try { this.proc.kill(); } catch { }
       this.proc = null;
       this.token = null;
     }
@@ -680,7 +680,7 @@ function syncClaudeConfig(apiKey?: string, projectCwd?: string) {
     if (fsSync.existsSync(claudeJsonPath)) {
       try {
         claudeConfig = JSON.parse(fsSync.readFileSync(claudeJsonPath, 'utf-8'));
-      } catch {}
+      } catch { }
     }
 
     let modified = false;
@@ -706,7 +706,7 @@ function syncClaudeConfig(apiKey?: string, projectCwd?: string) {
       if (fsSync.existsSync(personalKeyScript)) {
         try {
           fsSync.writeFileSync(personalKeyScript, `#!/bin/bash\necho "${apiKey.trim()}"\n`, { mode: 0o755 });
-        } catch {}
+        } catch { }
       }
     }
 
@@ -865,7 +865,7 @@ function parseClaudeJsonResult(stdout: string): { text: string; usage: BridgeUsa
         if (usage && typeof obj.total_cost_usd === 'number' && Number.isFinite(obj.total_cost_usd)) usage.costUsd = obj.total_cost_usd;
         return { text: typeof obj.result === 'string' ? obj.result : '', usage, isError: Boolean(obj.is_error) };
       }
-    } catch {}
+    } catch { }
   }
   return null;
 }
@@ -1120,7 +1120,7 @@ async function runCliProcess(options: {
     const timer = setTimeout(() => {
       timedOut = true;
       if (proc) {
-        try { proc.kill('SIGTERM'); } catch {}
+        try { proc.kill('SIGTERM'); } catch { }
       }
     }, timeoutMs);
 
@@ -1141,7 +1141,7 @@ async function runCliProcess(options: {
       if (options.req) {
         options.req.on('close', () => {
           if (proc && !proc.killed) {
-            try { proc.kill('SIGTERM'); } catch {}
+            try { proc.kill('SIGTERM'); } catch { }
           }
         });
       }
@@ -1190,14 +1190,14 @@ async function runCliProcess(options: {
             try {
               lastMessage = fsSync.readFileSync(codexLastMessageFile, 'utf-8');
               fsSync.unlinkSync(codexLastMessageFile);
-            } catch {}
+            } catch { }
           }
           output = (lastMessage || parsed.text).trim();
         }
         if (completionSystemFile) {
           try {
             fsSync.unlinkSync(completionSystemFile);
-          } catch {}
+          } catch { }
         }
         resolve({
           exitCode: code ?? (timedOut ? 124 : 0),
@@ -1218,7 +1218,7 @@ async function runCliProcess(options: {
           }
           proc.stdin.end();
         }
-      } catch {}
+      } catch { }
     } catch (err: any) {
       clearTimeout(timer);
       resolve({
@@ -1383,7 +1383,7 @@ function checkBridgeAccess(req: IncomingMessage): BridgeAccess {
   let hostname = '';
   try {
     hostname = new URL(`http://${hostHeader}`).hostname;
-  } catch {}
+  } catch { }
   if (!hostname || !isLoopbackHostname(hostname)) {
     return { ok: false, reason: `non-loopback Host header "${hostHeader}"` };
   }
@@ -1483,7 +1483,7 @@ function setupProjectWatcher(storageDir: string) {
   if (fileWatcher) {
     try {
       fileWatcher.close();
-    } catch {}
+    } catch { }
     fileWatcher = null;
   }
 
@@ -1969,7 +1969,7 @@ export function ergoFileSystemPlugin(): Plugin {
           if (typeof content === 'string') {
             await fs.writeFile(newFullPath, content, 'utf-8');
             if (oldFullPath !== newFullPath) {
-              try { await fs.unlink(oldFullPath); } catch {}
+              try { await fs.unlink(oldFullPath); } catch { }
             }
           } else {
             if (oldFullPath !== newFullPath) {
@@ -2176,7 +2176,7 @@ export function ergoFileSystemPlugin(): Plugin {
                       filePath: relPath,
                       markdown: content
                     });
-                  } catch {}
+                  } catch { }
                 }
               }
 
@@ -2211,7 +2211,7 @@ export function ergoFileSystemPlugin(): Plugin {
                 };
                 try {
                   await fs.writeFile(runningJobsPath, JSON.stringify(runningJobsDoc, null, 2), 'utf-8');
-                } catch {}
+                } catch { }
               }
 
               const folders = await loadProjectFolders(storageDir, entry.name);
@@ -2264,7 +2264,7 @@ export function ergoFileSystemPlugin(): Plugin {
             let existing: any = {};
             try {
               existing = JSON.parse(await fs.readFile(file, 'utf-8'));
-            } catch {}
+            } catch { }
             await fs.mkdir(path.dirname(file), { recursive: true });
             await fs.writeFile(file, JSON.stringify({ ...existing, version: 1, folders }, null, 2), 'utf-8');
             void syncCodeIndexRoots();
@@ -2298,7 +2298,7 @@ export function ergoFileSystemPlugin(): Plugin {
             if (Array.isArray(parsed) && parsed.length > 0) {
               roots = parsed;
             }
-          } catch {}
+          } catch { }
           return sendJson(res, 200, { success: true, roots });
         } catch (err: any) {
           return sendJson(res, 500, { error: err.message });
@@ -2329,7 +2329,7 @@ export function ergoFileSystemPlugin(): Plugin {
         let body: any = {};
         try {
           body = await parseJsonBody(req);
-        } catch {}
+        } catch { }
         // The same folder an agent launched with this cwd works in.
         const root = typeof body.root === 'string' && body.root.trim() ? resolvePtyCwd(body.root.trim()) : '';
         const query = typeof body.query === 'string' ? body.query.trim().slice(0, 300) : '';
@@ -2346,7 +2346,7 @@ export function ergoFileSystemPlugin(): Plugin {
         let body: any = {};
         try {
           body = await parseJsonBody(req);
-        } catch {}
+        } catch { }
         let defaultPath = typeof body.defaultPath === 'string' ? path.resolve(expandHome(body.defaultPath.trim() || '~')) : os.homedir();
         if (!(await fs.stat(defaultPath).catch(() => null))?.isDirectory()) defaultPath = os.homedir();
         try {
@@ -2363,7 +2363,7 @@ export function ergoFileSystemPlugin(): Plugin {
         let body: any = {};
         try {
           body = await parseJsonBody(req);
-        } catch {}
+        } catch { }
         // The same folder an agent launched with this cwd works in.
         const root = typeof body.root === 'string' && body.root.trim() ? resolvePtyCwd(body.root.trim()) : '';
         const refs: string[] = Array.isArray(body.refs) ? body.refs.filter((r: unknown) => typeof r === 'string' && r.trim()).slice(0, 30) : [];
@@ -2411,7 +2411,7 @@ export function ergoFileSystemPlugin(): Plugin {
         let body: any = {};
         try {
           body = await parseJsonBody(req);
-        } catch {}
+        } catch { }
         const located = await locateRunBase(storageDir, body.projectId, body.runId, body.root);
         if (!located) return sendJson(res, 200, { success: true, baseline: false, git: false, files: [] });
         const { base, cwd } = located;
@@ -2437,7 +2437,7 @@ export function ergoFileSystemPlugin(): Plugin {
         } else {
           try {
             params = await parseJsonBody(req);
-          } catch {}
+          } catch { }
         }
         const located = await locateRunBase(storageDir, params.projectId, params.runId, params.root);
         if (!located) return sendJson(res, 200, { success: true, baseline: false, git: false, files: [], diffs: {} });
@@ -2457,7 +2457,7 @@ export function ergoFileSystemPlugin(): Plugin {
         let body: any = {};
         try {
           body = await parseJsonBody(req);
-        } catch {}
+        } catch { }
         const rel = typeof body.path === 'string' ? body.path.trim() : typeof body.file === 'string' ? body.file.trim() : '';
         if (!rel) return sendJson(res, 400, { success: false, error: 'path is required.' });
         const located = await locateRunBase(storageDir, body.projectId, body.runId, body.root);
@@ -2481,7 +2481,7 @@ export function ergoFileSystemPlugin(): Plugin {
         let body: any = {};
         try {
           body = await parseJsonBody(req);
-        } catch {}
+        } catch { }
         const located = await locateRunBase(storageDir, body.projectId, body.runId, body.root);
         if (!located?.base.git || !located.base.tree) {
           return sendJson(res, 404, { success: false, error: 'This run has no recorded snapshot to revert to.' });
@@ -2509,7 +2509,7 @@ export function ergoFileSystemPlugin(): Plugin {
         let body: any = {};
         try {
           body = await parseJsonBody(req);
-        } catch {}
+        } catch { }
         const runId = typeof body.runId === 'string' && /^[A-Za-z0-9._-]{1,80}$/.test(body.runId) ? body.runId : null;
         if (!runId) return sendJson(res, 400, { success: false, error: 'A valid runId is required.' });
         let located = await locateRunBase(storageDir, body.projectId, runId, body.root);
@@ -2519,7 +2519,7 @@ export function ergoFileSystemPlugin(): Plugin {
           if (!targetCwd) return sendJson(res, 404, { success: false, error: 'No approved folder found for this run.' });
           const runDir = path.join(targetCwd, '.ergo', 'runs', runId);
           await fs.mkdir(runDir, { recursive: true });
-          await recordRunGitBase(targetCwd, runDir).catch(() => {});
+          await recordRunGitBase(targetCwd, runDir).catch(() => { });
           const base = await readRunGitBase(runDir);
           if (base) located = { base, cwd: path.resolve(base.cwd || targetCwd), runDir };
           else {
@@ -2570,10 +2570,10 @@ export function ergoFileSystemPlugin(): Plugin {
         } else {
           try {
             params = await parseJsonBody(req);
-          } catch {}
+          } catch { }
         }
         const located = await locateRunBase(storageDir, params.projectId, params.runId, params.root);
-        if (!located) return sendJson(res, 200, { success: true, baseline: false, git: false, checkpoints: [] });
+        if (!located) return sendJson(res, 200, { success: true, baseline: false, git: false, reason: 'no-snapshot', checkpoints: [] });
         const { base, cwd, runDir } = located;
         const checkpoints = await readRunCheckpoints(runDir);
         if (base.git && base.tree && !checkpoints.some((c) => c.isBaseline)) {
@@ -2587,10 +2587,12 @@ export function ergoFileSystemPlugin(): Plugin {
             files: [],
           });
         }
+        const reason = !base.git ? 'not-git' : !base.tree ? 'snapshot-failed' : undefined;
         return sendJson(res, 200, {
           success: true,
           baseline: Boolean(base.git && base.tree),
           git: base.git,
+          ...(reason ? { reason } : {}),
           root: cwd,
           baseTree: base.tree,
           checkpoints,
@@ -2602,7 +2604,7 @@ export function ergoFileSystemPlugin(): Plugin {
         let body: any = {};
         try {
           body = await parseJsonBody(req);
-        } catch {}
+        } catch { }
         const rel = typeof body.path === 'string' ? body.path.trim() : '';
         if (!rel) return sendJson(res, 400, { success: false, error: 'path is required.' });
         const located = await locateRunBase(storageDir, body.projectId, body.runId, body.root);
@@ -2629,7 +2631,7 @@ export function ergoFileSystemPlugin(): Plugin {
           try {
             const raw = await fs.readFile(secretsPath, 'utf-8');
             mcpSecrets = JSON.parse(raw).mcpSecrets || {};
-          } catch {}
+          } catch { }
 
           const ghEntry = mcpSecrets['mcp-github'];
           const token = ghEntry?.token || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GITHUB_TOKEN;
@@ -2747,7 +2749,7 @@ export function ergoFileSystemPlugin(): Plugin {
           try {
             const raw = await fs.readFile(secretsPath, 'utf-8');
             currentSecrets = JSON.parse(raw);
-          } catch {}
+          } catch { }
 
           if (!currentSecrets.mcpSecrets) currentSecrets.mcpSecrets = {};
           currentSecrets.mcpSecrets['mcp-github'] = {
@@ -2788,7 +2790,7 @@ export function ergoFileSystemPlugin(): Plugin {
               secrets.updatedAt = new Date().toISOString();
               await fs.writeFile(secretsPath, JSON.stringify(secrets, null, 2), 'utf-8');
             }
-          } catch {}
+          } catch { }
 
           githubMcpClient.kill();
           return sendJson(res, 200, { success: true });
@@ -2805,7 +2807,7 @@ export function ergoFileSystemPlugin(): Plugin {
           try {
             const raw = await fs.readFile(secretsPath, 'utf-8');
             mcpSecrets = JSON.parse(raw).mcpSecrets || {};
-          } catch {}
+          } catch { }
 
           const providers: Record<string, any> = {};
           const knownProviders = ['mcp-github', 'mcp-gcal', 'mcp-slack', 'mcp-notion', 'mcp-salesforce'];
@@ -2949,7 +2951,7 @@ export function ergoFileSystemPlugin(): Plugin {
             if (userRes.ok) {
               user = await userRes.json();
             }
-          } catch {}
+          } catch { }
 
           // 2. Discover live tools from official GitHub MCP server
           let rawTools: any[] = [];
@@ -2974,7 +2976,7 @@ export function ergoFileSystemPlugin(): Plugin {
           try {
             const raw = await fs.readFile(secretsPath, 'utf-8');
             currentSecrets = JSON.parse(raw);
-          } catch {}
+          } catch { }
 
           if (!currentSecrets.mcpSecrets) currentSecrets.mcpSecrets = {};
           currentSecrets.mcpSecrets['mcp-github'] = {
@@ -3037,7 +3039,7 @@ export function ergoFileSystemPlugin(): Plugin {
                 accountInfo.username = `${slackData.user || 'bot'} (${slackData.team || 'Slack'})`;
                 accountInfo.name = slackData.team;
               }
-            } catch {}
+            } catch { }
           }
 
           // Verification for Notion if an integration token was provided
@@ -3056,7 +3058,7 @@ export function ergoFileSystemPlugin(): Plugin {
                 accountInfo.username = notionData.name || 'Notion Workspace';
                 if (notionData.avatar_url) accountInfo.avatarUrl = notionData.avatar_url;
               }
-            } catch {}
+            } catch { }
           }
 
           // Save to secrets.json
@@ -3065,7 +3067,7 @@ export function ergoFileSystemPlugin(): Plugin {
           try {
             const raw = await fs.readFile(secretsPath, 'utf-8');
             currentSecrets = JSON.parse(raw);
-          } catch {}
+          } catch { }
 
           if (!currentSecrets.mcpSecrets) currentSecrets.mcpSecrets = {};
           currentSecrets.mcpSecrets[serverId] = {
@@ -3110,7 +3112,7 @@ export function ergoFileSystemPlugin(): Plugin {
               secrets.updatedAt = new Date().toISOString();
               await fs.writeFile(secretsPath, JSON.stringify(secrets, null, 2), 'utf-8');
             }
-          } catch {}
+          } catch { }
 
           if (serverId === 'mcp-github') {
             githubMcpClient.kill();
@@ -3178,7 +3180,7 @@ export function ergoFileSystemPlugin(): Plugin {
                   status: getRes.status
                 });
               }
-            } catch {}
+            } catch { }
             return sendJson(res, 502, {
               error: `Unable to connect to MCP endpoint (${fetchErr.message}). Check URL and network connectivity.`
             });
@@ -3232,7 +3234,7 @@ export function ergoFileSystemPlugin(): Plugin {
                 const rawSecrets = await fs.readFile(secretsPath, 'utf-8');
                 const parsed = JSON.parse(rawSecrets);
                 token = parsed.mcpSecrets?.['mcp-github']?.token || '';
-              } catch {}
+              } catch { }
             }
             if (!token) {
               token = process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GITHUB_TOKEN || '';
@@ -3371,7 +3373,7 @@ export function ergoFileSystemPlugin(): Plugin {
                     try {
                       const raw = await fs.readFile(secretsPath, 'utf-8');
                       token = JSON.parse(raw).mcpSecrets?.['mcp-github']?.token || '';
-                    } catch {}
+                    } catch { }
                   }
                   if (!token) token = process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GITHUB_TOKEN || '';
                   if (!token) {
@@ -3489,7 +3491,7 @@ export function ergoFileSystemPlugin(): Plugin {
             let currentSecrets: any = { version: 1, updatedAt: new Date().toISOString(), userApiKeys: [], mcpSecrets: {} };
             try {
               currentSecrets = JSON.parse(await fs.readFile(secretsPath, 'utf-8'));
-            } catch {}
+            } catch { }
             if (!currentSecrets.mcpSecrets) currentSecrets.mcpSecrets = {};
             currentSecrets.mcpSecrets['mcp-github'] = {
               token: cleanToken,
@@ -3553,7 +3555,7 @@ export function ergoFileSystemPlugin(): Plugin {
                 let currentSecrets: any = { version: 1, updatedAt: new Date().toISOString(), userApiKeys: [], mcpSecrets: {} };
                 try {
                   currentSecrets = JSON.parse(await fs.readFile(secretsPath, 'utf-8'));
-                } catch {}
+                } catch { }
                 if (!currentSecrets.mcpSecrets) currentSecrets.mcpSecrets = {};
                 currentSecrets.mcpSecrets[serverId] = {
                   token: authHeader.trim(),
@@ -3563,7 +3565,7 @@ export function ergoFileSystemPlugin(): Plugin {
                 };
                 currentSecrets.updatedAt = new Date().toISOString();
                 await fs.writeFile(secretsPath, JSON.stringify(currentSecrets, null, 2), 'utf-8');
-              } catch {}
+              } catch { }
             }
 
             return sendJson(res, 200, {
@@ -3800,7 +3802,7 @@ export function ergoFileSystemPlugin(): Plugin {
                           if (contentMatches.length >= maxResults) { truncated = true; break; }
                         }
                       }
-                    } catch {}
+                    } catch { }
                   }
                 }
               }
@@ -3918,7 +3920,7 @@ export function ergoFileSystemPlugin(): Plugin {
                 const rawSecrets = await fs.readFile(secretsPath, 'utf-8');
                 const parsed = JSON.parse(rawSecrets);
                 token = parsed.mcpSecrets?.['mcp-github']?.token || '';
-              } catch {}
+              } catch { }
             }
             if (!token) {
               token = process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GITHUB_TOKEN || '';
@@ -4325,7 +4327,7 @@ export function ergoFileSystemPlugin(): Plugin {
                   message = userEmail ? `Authenticated as ${userEmail}` : 'Authenticated with Claude Pro/Team';
                 }
               }
-            } catch {}
+            } catch { }
 
             if (!isAuthenticated) {
               userEmail = null;
@@ -4354,7 +4356,7 @@ export function ergoFileSystemPlugin(): Plugin {
                   const accData = JSON.parse(await fs.readFile(accountsFile, 'utf-8'));
                   userEmail = accData?.active || accData?.current || (Array.isArray(accData?.accounts) ? accData.accounts[0]?.email : null) || null;
                 }
-              } catch {}
+              } catch { }
               message = userEmail ? `Authenticated with Google as ${userEmail}` : 'Antigravity CLI (agy) is authenticated with your Google account.';
             } else if (fsSync.existsSync(settingsFile) || fsSync.existsSync(mcpTokens) || fsSync.existsSync(path.join(geminiConfigDir, 'settings.json'))) {
               isAuthenticated = true;
@@ -4388,7 +4390,7 @@ export function ergoFileSystemPlugin(): Plugin {
                     userEmail = authData.tokens.account_id;
                   }
                 }
-              } catch {}
+              } catch { }
               message = userEmail ? `Authenticated with OpenAI as ${userEmail}` : 'Codex authenticated';
             } else {
               isAuthenticated = false;
@@ -4486,7 +4488,7 @@ export function ergoFileSystemPlugin(): Plugin {
           if (cli === 'antigravity' || cli === 'agy' || cli === 'gemini') {
             const flag = path.join(os.homedir(), '.gemini', '.ergo_disconnected_agy');
             if (fsSync.existsSync(flag)) {
-              await fs.unlink(flag).catch(() => {});
+              await fs.unlink(flag).catch(() => { });
             }
           }
 
@@ -4614,36 +4616,36 @@ export function ergoFileSystemPlugin(): Plugin {
             for (const file of filesToWipe) {
               const fullPath = path.join(codexDir, file);
               if (fsSync.existsSync(fullPath)) {
-                await fs.unlink(fullPath).catch(() => {});
+                await fs.unlink(fullPath).catch(() => { });
               }
             }
             // Execute codex logout if binary exists
-            await runShellCommand('codex logout', storageDir, 5000).catch(() => {});
+            await runShellCommand('codex logout', storageDir, 5000).catch(() => { });
           } else if (cli === 'antigravity' || cli === 'agy' || cli === 'gemini') {
             const geminiDir = path.join(os.homedir(), '.gemini');
             const filesToWipe = ['google_accounts.json', 'oauth_creds.json', 'tokens.json', 'state.json'];
             for (const file of filesToWipe) {
               const fullPath = path.join(geminiDir, file);
               if (fsSync.existsSync(fullPath)) {
-                await fs.unlink(fullPath).catch(() => {});
+                await fs.unlink(fullPath).catch(() => { });
               }
             }
             const configGeminiDir = path.join(os.homedir(), '.config', 'gemini');
             for (const file of filesToWipe) {
               const fullPath = path.join(configGeminiDir, file);
               if (fsSync.existsSync(fullPath)) {
-                await fs.unlink(fullPath).catch(() => {});
+                await fs.unlink(fullPath).catch(() => { });
               }
             }
             // Mark provider as disconnected so onboarding reset persists
             try {
               await fs.writeFile(path.join(geminiDir, '.ergo_disconnected_agy'), Date.now().toString());
-            } catch {}
+            } catch { }
             // Execute agy logout if available
-            await runShellCommand('agy auth logout || agy logout', storageDir, 5000).catch(() => {});
+            await runShellCommand('agy auth logout || agy logout', storageDir, 5000).catch(() => { });
           } else if (cli === 'claude') {
             // 1. Run claude auth logout to clear keychain/secure storage if supported
-            await runShellCommand('claude auth logout || claude logout', storageDir, 6000).catch(() => {});
+            await runShellCommand('claude auth logout || claude logout', storageDir, 6000).catch(() => { });
 
             // 2. Clear credentials from ~/.claude
             const claudeDir = path.join(os.homedir(), '.claude');
@@ -4657,7 +4659,7 @@ export function ergoFileSystemPlugin(): Plugin {
             for (const file of claudeFilesToWipe) {
               const fullPath = path.join(claudeDir, file);
               if (fsSync.existsSync(fullPath)) {
-                await fs.unlink(fullPath).catch(() => {});
+                await fs.unlink(fullPath).catch(() => { });
               }
             }
 
@@ -4676,7 +4678,7 @@ export function ergoFileSystemPlugin(): Plugin {
                 delete parsed.user;
                 delete parsed.tokens;
                 await fs.writeFile(claudeConfig, JSON.stringify(parsed, null, 2), 'utf-8');
-              } catch {}
+              } catch { }
             }
           }
 
@@ -4894,7 +4896,7 @@ async function readJsonlFile(file: string): Promise<any[]> {
   const out: any[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    try { out.push(JSON.parse(line)); } catch {}
+    try { out.push(JSON.parse(line)); } catch { }
   }
   return out;
 }
@@ -5084,7 +5086,7 @@ async function findCodexRollout(meta: PtyUsageMeta): Promise<string | null> {
       if (!stat || stat.mtimeMs < startMs - 5_000) continue;
       const lines = (await fs.readFile(file, 'utf-8').catch(() => '')).split('\n', 200);
       let meta0: any = null;
-      try { meta0 = JSON.parse(lines[0]); } catch {}
+      try { meta0 = JSON.parse(lines[0]); } catch { }
       const payload = meta0?.payload ?? meta0;
       const metaCwd = payload?.cwd;
       const started = Date.parse(payload?.timestamp || meta0?.timestamp || '');
@@ -5802,7 +5804,7 @@ function closeTerminalHistory(session: PtySessionState) {
   h.closed = true;
   try {
     fsSync.writeFileSync(h.metaFile, JSON.stringify(terminalHistoryMeta(session), null, 2));
-  } catch {}
+  } catch { }
 }
 
 /** The saved terminal of a session (its last TERMINAL_REPLAY_MAX_CHARS), or null when none was kept. */
@@ -5817,7 +5819,7 @@ async function readTerminalHistory(sessionKey: string): Promise<{ meta: Terminal
       try {
         const [log, meta] = await Promise.all([fs.readFile(`${base}.log`, 'utf-8'), fs.readFile(`${base}.json`, 'utf-8')]);
         return { meta: JSON.parse(meta), data: log.length > TERMINAL_REPLAY_MAX_CHARS ? log.slice(-TERMINAL_REPLAY_MAX_CHARS) : log };
-      } catch {}
+      } catch { }
     }
   }
   return null;
@@ -5833,7 +5835,7 @@ async function listTerminalHistory(projectId: string): Promise<TerminalHistoryMe
       if (!file.endsWith('.json')) continue;
       try {
         out.push(JSON.parse(await fs.readFile(path.join(taskDir, file), 'utf-8')));
-      } catch {}
+      } catch { }
     }
   }
   return out;
@@ -5858,7 +5860,7 @@ async function deleteTerminalHistory(projectId: string, taskIds: string[], title
       let meta: TerminalHistoryMeta | null = null;
       try {
         meta = JSON.parse(await fs.readFile(path.join(taskDir, file), 'utf-8'));
-      } catch {}
+      } catch { }
       if (!meta || !(ids.has(String(meta.taskId)) || titleKeys.has(historyTitleKey(meta.taskTitle)))) continue;
       const base = path.join(taskDir, file.slice(0, -'.json'.length));
       await Promise.all([fs.rm(`${base}.json`, { force: true }), fs.rm(`${base}.log`, { force: true })]);
@@ -5939,7 +5941,7 @@ function safeWsSend(ws: any, obj: Record<string, unknown>) {
   if (ws?.readyState === 1 /* OPEN */) {
     try {
       ws.send(JSON.stringify(obj));
-    } catch {}
+    } catch { }
   }
 }
 
@@ -5950,7 +5952,7 @@ function sendToSubscribers(session: PtySessionState, obj: Record<string, unknown
     if (subscriber.readyState === 1 /* OPEN */) {
       try {
         subscriber.send(payload);
-      } catch {}
+      } catch { }
     }
   }
 }
@@ -6002,7 +6004,7 @@ function ensureRunDir(cwd: string, runId: string): string {
   if (!fsSync.existsSync(gitignore)) {
     try {
       fsSync.writeFileSync(gitignore, '*\n', 'utf-8');
-    } catch {}
+    } catch { }
   }
   return runDir;
 }
@@ -6020,10 +6022,10 @@ function signalFilesFor(session: PtySessionState): Array<{ name: string; signal:
   if (session.role === 'worker') {
     return session.pieceId && SAFE_PIECE_ID_RE.test(session.pieceId)
       ? [
-          { name: `worker-${session.pieceId}.md`, signal: 'worker-done' },
-          // Context rotation (protocol 8): the worker's handoff note; a fresh worker on the same model continues from it.
-          { name: `handoff-${session.pieceId}.md`, signal: 'handoff' },
-        ]
+        { name: `worker-${session.pieceId}.md`, signal: 'worker-done' },
+        // Context rotation (protocol 8): the worker's handoff note; a fresh worker on the same model continues from it.
+        { name: `handoff-${session.pieceId}.md`, signal: 'handoff' },
+      ]
       : [];
   }
   return [{ name: 'qa.md', signal: 'qa-verdict' }];
@@ -6609,23 +6611,23 @@ function terminateProcess(session: PtySessionState) {
       } catch {
         try {
           process.kill(pid, 'SIGTERM');
-        } catch {}
+        } catch { }
       }
       try {
         session.ptyProcess.kill('SIGKILL');
       } catch {
         try {
           session.ptyProcess.kill();
-        } catch {}
+        } catch { }
       }
       // Ensure the process group is gone
       setTimeout(() => {
         try {
           process.kill(-pid, 'SIGKILL');
-        } catch {}
+        } catch { }
       }, 200);
     }
-  } catch {}
+  } catch { }
 }
 
 /** Kills a session (if running) and moves it to endedPtySessions. Its exit is reported when the process dies. */
@@ -6654,7 +6656,7 @@ function resizeSession(session: PtySessionState, cols: unknown, rows: unknown) {
   if (session.isActive) {
     try {
       session.ptyProcess?.resize(c, r);
-    } catch {}
+    } catch { }
   }
   session.screen.resize(c, r);
   // Observers (Notes view) keep their own screen model in sync with the PTY size.
@@ -6672,7 +6674,7 @@ function writeAgentClaudeSettings(opts: { apiKeyHelperOff: boolean; keepModel: b
     let user: Record<string, unknown> = {};
     try {
       user = JSON.parse(fsSync.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf-8')) || {};
-    } catch {}
+    } catch { }
     const { enabledPlugins: _plugins, ...rest } = user;
     if (!opts.keepModel) delete rest.model;
     if (opts.apiKeyHelperOff) rest.apiKeyHelper = '';
@@ -6703,7 +6705,7 @@ function spawnPtySession(pty: any, opts: PtySpawnOptions): PtySessionState {
   if (cmd.includes('agy') || cmd === 'antigravity') {
     const flag = path.join(os.homedir(), '.gemini', '.ergo_disconnected_agy');
     if (fsSync.existsSync(flag)) {
-      try { fsSync.unlinkSync(flag); } catch {}
+      try { fsSync.unlinkSync(flag); } catch { }
     }
   }
 
@@ -6850,7 +6852,7 @@ function spawnPtySession(pty: any, opts: PtySpawnOptions): PtySessionState {
     session.trailingEvalTimer = null;
     try {
       observeTranscript(session);
-    } catch {}
+    } catch { }
     if (session.prompt) {
       const wasVisible = session.promptVisible;
       session.prompt = null;
@@ -6990,7 +6992,7 @@ export function ergoPtyPlugin(): Plugin {
             try {
               observeTranscript(live);
               liveRows = live.screen.visibleRows();
-            } catch {}
+            } catch { }
           }
           const { activity, source } = await readAgentActivity(meta, live ? live.transcript : ended?.transcript, liveRows);
           const body: AgentActivityResponse = {
@@ -7023,7 +7025,7 @@ export function ergoPtyPlugin(): Plugin {
               if (file) {
                 const first = (await fs.readFile(file, 'utf-8').catch(() => '')).split('\n', 1)[0];
                 let head: any = null;
-                try { head = JSON.parse(first); } catch {}
+                try { head = JSON.parse(first); } catch { }
                 const fromMeta = head?.payload?.id ?? head?.id;
                 cliSessionId = typeof fromMeta === 'string' && uuidRe.test(fromMeta) ? fromMeta : path.basename(file).match(uuidRe)?.[1] ?? null;
               }
@@ -7047,7 +7049,7 @@ export function ergoPtyPlugin(): Plugin {
           if (live) {
             try {
               observeTranscript(live);
-            } catch {}
+            } catch { }
           }
           const tailLines = transcript ? transcript.tail(300) : transcriptFromBuffer(meta.buffer).slice(-300);
           let transcriptTail = tailLines.join('\n');
@@ -7096,7 +7098,7 @@ export function ergoPtyPlugin(): Plugin {
               return sendJson(res, 500, { success: false, error: `Could not create the run folder: ${err?.message || err}` });
             }
             // The repo as it was before the run's first agent, for "changed by this run" (once per run; a few seconds at most).
-            await recordRunGitBase(cwd, runDir).catch(() => {});
+            await recordRunGitBase(cwd, runDir).catch(() => { });
           }
           try {
             const pty = await loadNodePty();
@@ -7169,7 +7171,7 @@ export function ergoPtyPlugin(): Plugin {
           let body: any = {};
           try {
             body = await parseJsonBody(req);
-          } catch {}
+          } catch { }
           let targets: PtySessionState[] = [];
           if (body?.sessionId) {
             const s = activePtySessions.get(String(body.sessionId));
@@ -7440,7 +7442,7 @@ export function ergoPtyPlugin(): Plugin {
               if (session?.isActive && session.ptyProcess && typeof msg.data === 'string') {
                 try {
                   session.ptyProcess.write(msg.data);
-                } catch {}
+                } catch { }
               }
 
             } else if (msg.type === 'resize') {
@@ -7538,7 +7540,7 @@ const memoryIo: MemoryStoreIo = {
       await fs.writeFile(tmp, data);
       await fs.rename(tmp, file);
     } catch (err) {
-      await fs.rm(tmp, { force: true }).catch(() => {});
+      await fs.rm(tmp, { force: true }).catch(() => { });
       throw err;
     }
   },
@@ -7551,7 +7553,7 @@ const memoryIo: MemoryStoreIo = {
     } catch (err) {
       try {
         fsSync.rmSync(tmp, { force: true });
-      } catch {}
+      } catch { }
       throw err;
     }
   },
@@ -7595,7 +7597,7 @@ function registerBridgeExitHook(name: string, hook: () => void) {
     for (const fn of hooks.values()) {
       try {
         fn();
-      } catch {}
+      } catch { }
     }
   };
   process.once('exit', runAll);
@@ -7846,7 +7848,7 @@ function mergeMcpServerEntry(
   let target = file;
   try {
     target = fsSync.realpathSync(file);
-  } catch {}
+  } catch { }
   let text: string | null = null;
   let mode: number | undefined;
   try {
@@ -7881,7 +7883,7 @@ function mergeMcpServerEntry(
   } catch (err) {
     try {
       fsSync.rmSync(tmp, { force: true });
-    } catch {}
+    } catch { }
     throw err;
   }
   return 'written';
@@ -7906,7 +7908,7 @@ function geminiSettingsGitState(cwd: string): { tracked: boolean; excluded: bool
     try {
       execFileSync('git', ['ls-files', '--error-unmatch', '--', '.gemini/settings.json'], { cwd, timeout: 3_000, stdio: 'ignore' });
       tracked = true;
-    } catch {}
+    } catch { }
     state = { tracked, excluded: false, gitDir: path.resolve(cwd, gitDirRaw.trim()), prefix: prefixRaw.trim() };
   } catch {
     // not a git repo (or no git): nothing to exclude
@@ -7933,7 +7935,7 @@ function registerGeminiProjectMcp(cwd: string, url: string) {
     let current = '';
     try {
       current = fsSync.readFileSync(excludeFile, 'utf-8');
-    } catch {}
+    } catch { }
     if (!current.split('\n').some((l) => l.trim() === pattern)) {
       fsSync.mkdirSync(path.dirname(excludeFile), { recursive: true });
       fsSync.appendFileSync(excludeFile, `${current && !current.endsWith('\n') ? '\n' : ''}${pattern}\n`, 'utf-8');
@@ -8023,7 +8025,7 @@ function renderDelegatePlan(json: string): string {
         return `- Worker ${id}: ${title}${files.length ? ` — files: ${files.join(', ')}` : ''}`;
       });
     if (lines.length > 0) return `Delegation plan (${lines.length} worker${lines.length === 1 ? '' : 's'}):\n${lines.join('\n')}`;
-  } catch {}
+  } catch { }
   return json;
 }
 
@@ -8037,9 +8039,9 @@ async function ingestRunSignal(session: PtySessionState, name: string, signal: A
   if (!session.runId || signal === 'question' || signal === 'handoff') return;
   const title =
     signal === 'delegate' ? 'Delegation plan'
-    : signal === 'complete' ? 'Completion record'
-    : signal === 'worker-done' ? `Worker ${session.pieceId || ''} report`.replace(/\s+report$/, ' report')
-    : 'Verifier report';
+      : signal === 'complete' ? 'Completion record'
+        : signal === 'worker-done' ? `Worker ${session.pieceId || ''} report`.replace(/\s+report$/, ' report')
+          : 'Verifier report';
   const body = signal === 'delegate' ? renderDelegatePlan(text) : text;
   const work = getMemoryStore()
     .upsertDocument({
@@ -8049,7 +8051,7 @@ async function ingestRunSignal(session: PtySessionState, name: string, signal: A
       metadata: { ...sessionMemoryMeta(session), kind: SIGNAL_MEMORY_KIND[signal], title, source: 'run-signal' },
     })
     .then(
-      () => {},
+      () => { },
       (err) => console.warn(`[Ergo Memory] Ingesting ${name} of run ${session.runId} failed:`, err)
     );
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -8139,7 +8141,7 @@ async function pollClaudeTodos(session: PtySessionState, final: boolean) {
   for (const n of names) {
     try {
       lists.push(JSON.parse(await fs.readFile(path.join(dir, n), 'utf-8')));
-    } catch {}
+    } catch { }
   }
   const text = renderClaudeTodos(lists);
   if (!text) return;
@@ -8504,7 +8506,7 @@ export function ergoMemoryPlugin(): Plugin {
           let body: any = {};
           try {
             body = await parseJsonBody(req);
-          } catch {}
+          } catch { }
           const cwd = typeof body.cwd === 'string' ? body.cwd.trim() : '';
           const taskText = typeof body.task === 'string' ? body.task : '';
           const cli = typeof body.cli === 'string' && body.cli.trim() ? body.cli.trim() : 'claude';
@@ -8547,7 +8549,7 @@ export function ergoMemoryPlugin(): Plugin {
           let body: any = {};
           try {
             body = await parseJsonBody(req);
-          } catch {}
+          } catch { }
           let target = typeof body.path === 'string' ? body.path.trim() : '';
           if (target.startsWith('~')) target = path.join(os.homedir(), target.slice(1));
           const idx = target && path.isAbsolute(target) ? getCodeIndexManager().forPath(target) : null;
@@ -8893,7 +8895,7 @@ const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 
 /** Removes a directory tree, retrying briefly when Windows still holds a handle open. */
 async function removeTree(target: string) {
-  await fs.rm(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
+  await fs.rm(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => { });
 }
 
 async function ensureFreeDiskSpace(dir: string, needed: number) {
@@ -8966,7 +8968,7 @@ async function downloadVerified(
     }
     await fs.rename(part, dest);
   } catch (err) {
-    await fs.rm(part, { force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
+    await fs.rm(part, { force: true, maxRetries: 5, retryDelay: 100 }).catch(() => { });
     if (signal.aborted) throw new Error('cancelled');
     throw stallError ?? err;
   } finally {
@@ -9147,7 +9149,7 @@ class LocalModelManager {
       this.gaveUp = false;
       this.crashTimes = [];
       this.lastError = null;
-      this.inUse(() => this.ensureStarted()).catch(() => {}); // starts the idle countdown too
+      this.inUse(() => this.ensureStarted()).catch(() => { }); // starts the idle countdown too
       return { ok: true };
     }
     const job: LocalModelInstallJob = {
@@ -9210,7 +9212,7 @@ class LocalModelManager {
     if (this.job !== job) return;
     this.job = null;
     console.log(`[Ergo Local Model] Installed ${LOCAL_MODEL_ID} (llama.cpp ${LOCAL_MODEL_RUNTIME_VERSION}) in ${p.dir}.`);
-    this.inUse(() => this.ensureStarted()).catch(() => {}); // starts the idle countdown too
+    this.inUse(() => this.ensureStarted()).catch(() => { }); // starts the idle countdown too
   }
 
   /** Aborts a running install; its cleanup removes the partial files before this resolves. */
@@ -9258,7 +9260,7 @@ class LocalModelManager {
             this.port = 0;
             try {
               child.kill('SIGKILL');
-            } catch {}
+            } catch { }
           }
           this.noteCrash(`could not start: ${errorText(err)}`);
         }
@@ -9343,14 +9345,14 @@ class LocalModelManager {
       if (!wasReady) return; // a failed start: ensureStarted reports it
       this.noteCrash(`crashed (${reason})`);
       // Restart once per crash; noteCrash gives up after LOCAL_MODEL_MAX_CRASHES in the window.
-      if (!this.gaveUp && !this.disposed) this.ensureStarted().catch(() => {});
+      if (!this.gaveUp && !this.disposed) this.ensureStarted().catch(() => { });
     };
     child.once('error', (err) => onGone(`failed to launch: ${err.message}`));
     child.once('exit', (code, signal) => onGone(signal ? `killed by ${signal}` : `exit code ${code}`));
     if (child.pid) this.writePidFile(child.pid, serverPath);
 
     const deadline = Date.now() + LOCAL_MODEL_HEALTH_TIMEOUT_MS;
-    for (;;) {
+    for (; ;) {
       if (exit.reason) throw new Error(`llama-server ${exit.reason}`);
       if (gen !== this.generation) throw stopped();
       if (Date.now() > deadline) throw new Error(`llama-server was not ready within ${LOCAL_MODEL_HEALTH_TIMEOUT_MS / 1000} s`);
@@ -9358,7 +9360,7 @@ class LocalModelManager {
         const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1_000) });
         await res.arrayBuffer().catch(() => null); // release the connection
         if (res.ok && !exit.reason) return; // 503 while the model loads
-      } catch {}
+      } catch { }
       await delay(150);
     }
   }
@@ -9377,7 +9379,7 @@ class LocalModelManager {
         const force = setTimeout(() => {
           try {
             child.kill('SIGKILL');
-          } catch {}
+          } catch { }
         }, 3_000);
         const giveUp = setTimeout(finish, 6_000);
         function finish() {
@@ -9400,14 +9402,14 @@ class LocalModelManager {
   private writePidFile(pid: number, serverPath: string) {
     try {
       fsSync.writeFileSync(this.paths.pidFile, JSON.stringify({ pid, ownerPid: process.pid, server: serverPath, startedAt: new Date().toISOString() }));
-    } catch {}
+    } catch { }
   }
 
   private removePidFile(pid: number | undefined) {
     const file = this.paths.pidFile;
     try {
       if (JSON.parse(fsSync.readFileSync(file, 'utf-8'))?.pid === pid) fsSync.rmSync(file, { force: true });
-    } catch {}
+    } catch { }
   }
 
   /** Stops a server left behind by a bridge that was killed outright (SIGKILL), so orphans don't pile up. */
@@ -9434,10 +9436,10 @@ class LocalModelManager {
           process.kill(pid, 'SIGKILL');
           console.log(`[Ergo Local Model] Stopped an orphaned llama-server (pid ${pid}).`);
           for (let i = 0; i < 20 && isPidAlive(pid); i++) await delay(100); // let it release its port
-        } catch {}
+        } catch { }
       }
     }
-    await fs.rm(file, { force: true }).catch(() => {});
+    await fs.rm(file, { force: true }).catch(() => { });
   }
 
   private async llamaPost(route: string, body: unknown): Promise<any> {
@@ -9468,7 +9470,7 @@ class LocalModelManager {
     let value: unknown;
     try {
       value = JSON.parse(typeof content === 'string' ? content : '')?.[question.key];
-    } catch {}
+    } catch { }
     if (typeof value !== 'boolean') throw new Error(`The local model gave no usable "${question.key}" answer.`);
     return value;
   }
@@ -9552,7 +9554,7 @@ class LocalModelManager {
       if (child.exitCode === null && child.signalCode === null) {
         try {
           child.kill('SIGKILL');
-        } catch {}
+        } catch { }
       }
       this.removePidFile(child.pid);
     }
@@ -9737,12 +9739,12 @@ async function fetchCatalogJson(url: string, headers: Record<string, string> = {
     throw new CatalogFetchError('network', String(cause).slice(0, 200));
   }
   if (!res.ok) {
-    await res.body?.cancel().catch(() => {});
+    await res.body?.cancel().catch(() => { });
     throw new CatalogFetchError('http', `HTTP ${res.status}`, res.status);
   }
   const tooLarge = () => new CatalogFetchError('size', `response larger than ${CATALOG_MAX_BODY_BYTES / (1024 * 1024)} MB`);
   if (Number(res.headers.get('content-length')) > CATALOG_MAX_BODY_BYTES) {
-    await res.body?.cancel().catch(() => {});
+    await res.body?.cancel().catch(() => { });
     throw tooLarge();
   }
   const chunks: Uint8Array[] = [];
@@ -9750,12 +9752,12 @@ async function fetchCatalogJson(url: string, headers: Record<string, string> = {
   try {
     const reader = res.body?.getReader();
     if (!reader) throw new CatalogFetchError('parse', 'empty response');
-    for (;;) {
+    for (; ;) {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
       if (total > CATALOG_MAX_BODY_BYTES) {
-        await reader.cancel().catch(() => {});
+        await reader.cancel().catch(() => { });
         throw tooLarge();
       }
       chunks.push(value);
@@ -9780,7 +9782,7 @@ async function writeCatalogCacheFile(file: string, data: unknown): Promise<void>
       await fs.writeFile(tmp, JSON.stringify(data), 'utf-8');
       await fs.rename(tmp, file);
     } catch (err) {
-      await fs.rm(tmp, { force: true }).catch(() => {});
+      await fs.rm(tmp, { force: true }).catch(() => { });
       throw err;
     }
   } catch (err) {
@@ -9963,7 +9965,7 @@ class ModelCatalogService {
       return { fetchedAt: cache.fetchedAt, models: cache.models, source: 'litellm' };
     }
     if (cache) {
-      if (!backedOff) this.fetchPrices().catch(() => {});
+      if (!backedOff) this.fetchPrices().catch(() => { });
       return { fetchedAt: cache.fetchedAt, models: cache.models, source: 'litellm-cache' };
     }
     if (backedOff && !this.pricesInFlight) return snapshot();
@@ -10018,7 +10020,7 @@ class ModelCatalogService {
     const cache = this.benchmarks;
     if (cache && catalogCacheFresh(cache, CATALOG_BENCHMARKS_TTL_MS)) return fromCache();
     if (cache) {
-      if (!backedOff) this.fetchBenchmarks(key, fp).catch(() => {});
+      if (!backedOff) this.fetchBenchmarks(key, fp).catch(() => { });
       return fromCache();
     }
     if (backedOff && !this.benchInFlight.has(fp)) return fromCache();

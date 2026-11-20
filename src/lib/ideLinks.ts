@@ -5,7 +5,7 @@
  *
  * Problems surface as toasts (`ergo:toast` events, shown by App) so a click on a link never fails silently.
  */
-import { bridgeClient } from './bridgeClient';
+import { bridgeClient, type BridgeStatus } from './bridgeClient';
 import { IDE_LINKS_PROTOCOL, VISUAL_DIFF_PROTOCOL } from './bridgeProtocol';
 import { DEFAULT_IDE, IDE_PREF_KEY, isIdeId, type IdeId } from './ideLaunch';
 import { getRootsProject, openFileInIdeOrSystem } from './mcpClient';
@@ -31,12 +31,39 @@ export function bridgeSupportsVisualDiff(): boolean {
   return (bridgeClient.getStatus().bridgeInfo?.protocol ?? 0) >= VISUAL_DIFF_PROTOCOL;
 }
 
+export interface BridgeVisualDiffCapability {
+  connected: boolean;
+  protocol: number | null;
+  supported: boolean;
+}
+
+export function getBridgeVisualDiffCapability(status: BridgeStatus = bridgeClient.getStatus()): BridgeVisualDiffCapability {
+  const protocol = status.bridgeInfo?.protocol ?? null;
+  return {
+    connected: Boolean(status.isConnected),
+    protocol,
+    supported: Boolean(status.isConnected && (protocol ?? 0) >= VISUAL_DIFF_PROTOCOL),
+  };
+}
+
+/** Subscribes to bridge protocol changes so visual diff & checkpoint views react once the handshake finishes. */
+export function subscribeBridgeVisualDiffCapability(cb: (cap: BridgeVisualDiffCapability) => void): () => void {
+  let prevKey = '';
+  return bridgeClient.subscribe((status) => {
+    const cap = getBridgeVisualDiffCapability(status);
+    const key = `${cap.connected}:${cap.protocol ?? ''}:${cap.supported}`;
+    if (key === prevKey) return;
+    prevKey = key;
+    cb(cap);
+  });
+}
+
 type ToastType = 'warning' | 'info' | 'error' | 'success';
 
 export function showAppToast(type: ToastType, title: string, message: string): void {
   try {
     window.dispatchEvent(new CustomEvent('ergo:toast', { detail: { type, title, message, duration: 6000 } }));
-  } catch {}
+  } catch { }
 }
 
 /** "src/a.ts:42" for messages. */
@@ -122,6 +149,7 @@ export interface RunCheckpointRecord {
 export interface RunCheckpointsResponse {
   baseline: boolean;
   git: boolean;
+  reason?: 'not-git' | 'no-snapshot' | 'snapshot-failed';
   root?: string;
   baseTree?: string;
   checkpoints: RunCheckpointRecord[];
@@ -294,6 +322,10 @@ export async function fetchRunCheckpoints(runId: string, opts: { root?: string }
     return {
       baseline: Boolean(data.baseline),
       git: Boolean(data.git),
+      reason:
+        data.reason === 'not-git' || data.reason === 'no-snapshot' || data.reason === 'snapshot-failed'
+          ? data.reason
+          : undefined,
       root: typeof data.root === 'string' ? data.root : undefined,
       baseTree: typeof data.baseTree === 'string' ? data.baseTree : undefined,
       checkpoints: Array.isArray(data.checkpoints) ? (data.checkpoints as RunCheckpointRecord[]) : [],
@@ -316,7 +348,7 @@ export async function recordRunCheckpointClient(
     root?: string;
   },
 ): Promise<RunCheckpointRecord | null> {
-  if (!runId) return null;
+  if (!runId || !bridgeSupportsVisualDiff()) return null;
   try {
     const res = await bridgeClient.fetch('/api/git/checkpoint', {
       method: 'POST',
@@ -335,6 +367,44 @@ export async function recordRunCheckpointClient(
 }
 
 const checkpointQueues = new Map<string, Promise<unknown>>();
+const checkpointListeners = new Map<string, Set<(checkpoint: RunCheckpointRecord | null) => void>>();
+
+function notifyRunCheckpoint(runId: string, checkpoint: RunCheckpointRecord | null): void {
+  const set = checkpointListeners.get(runId);
+  if (!set) return;
+  for (const cb of set) {
+    try {
+      cb(checkpoint);
+    } catch { }
+  }
+}
+
+/** Subscribes to checkpoint write completions for a run so the timeline refreshes without racing bridge writes. */
+export function subscribeRunCheckpoints(
+  runId: string,
+  cb: (checkpoint: RunCheckpointRecord | null) => void,
+): () => void {
+  if (!runId) return () => {};
+  let set = checkpointListeners.get(runId);
+  if (!set) {
+    set = new Set();
+    checkpointListeners.set(runId, set);
+  }
+  set.add(cb);
+  return () => {
+    set?.delete(cb);
+    if (set && set.size === 0) checkpointListeners.delete(runId);
+  };
+}
+
+/** Resolves once any in-flight checkpoint writes for `runId` have settled. */
+export async function waitForPendingCheckpoints(runId: string): Promise<void> {
+  const pending = checkpointQueues.get(runId);
+  if (!pending) return;
+  try {
+    await pending;
+  } catch { }
+}
 
 const MAJOR_CHECKPOINT_STAGES = new Set([
   'overview',
@@ -366,8 +436,12 @@ export function queueRunCheckpoint(
   if (!runId) return Promise.resolve(null);
   const prev = checkpointQueues.get(runId) ?? Promise.resolve();
   const next = prev
-    .catch(() => {})
-    .then(() => recordRunCheckpointClient(runId, payload));
+    .catch(() => { })
+    .then(() => recordRunCheckpointClient(runId, payload))
+    .then((cp) => {
+      notifyRunCheckpoint(runId, cp);
+      return cp;
+    });
   checkpointQueues.set(runId, next);
   void next.finally(() => {
     if (checkpointQueues.get(runId) === next) checkpointQueues.delete(runId);

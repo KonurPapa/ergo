@@ -222,7 +222,7 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
       if (isDisposed) {
         try {
           ws.close();
-        } catch {}
+        } catch { }
         return;
       }
       try {
@@ -305,7 +305,7 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
       if (observeTimer) clearTimeout(observeTimer);
       try {
         ws.close();
-      } catch {}
+      } catch { }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
@@ -378,7 +378,7 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
 
   const handleCopyCommand = (text: string) => {
     if (!text) return;
-    navigator.clipboard?.writeText(text).catch(() => {});
+    navigator.clipboard?.writeText(text).catch(() => { });
     setIsCopiedCommand(true);
     setTimeout(() => setIsCopiedCommand(false), 2000);
   };
@@ -392,9 +392,9 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
 
   const promptTitle = detectedPrompt
     ? detectedPrompt.toolLabel ||
-      (detectedPrompt.kind === 'approval'
-        ? 'Action Requires Approval'
-        : detectedPrompt.kind === 'notice'
+    (detectedPrompt.kind === 'approval'
+      ? 'Action Requires Approval'
+      : detectedPrompt.kind === 'notice'
         ? detectedPrompt.title || 'Notice'
         : 'Agent is asking')
     : '';
@@ -486,9 +486,8 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
                   <button
                     key={`${opt.key}-${opt.index ?? ''}`}
                     type="button"
-                    className={`prompt-option-btn ${opt.isDefault ? 'is-default' : ''} ${
-                      opt.isDestructive ? 'is-destructive' : ''
-                    } ${isSubmitting ? 'is-submitting' : ''}`}
+                    className={`prompt-option-btn ${opt.isDefault ? 'is-default' : ''} ${opt.isDestructive ? 'is-destructive' : ''
+                      } ${isSubmitting ? 'is-submitting' : ''}`}
                     onClick={() => handleSelectOption(opt)}
                     disabled={submitting !== null}
                   >
@@ -535,83 +534,83 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
 
       {/* ── Activity Stream (hidden when embedded in unified timeline) ── */}
       {!promptsOnly && (
-      <div className={`cli-notes-feed-container ${isFeedCollapsed ? 'is-collapsed' : ''}`}>
-        <div
-          className="feed-container-header"
-          onClick={() => setIsFeedCollapsed((v) => !v)}
-          title={isFeedCollapsed ? 'Expand activity stream' : 'Collapse activity stream'}
-        >
-          <div className="feed-header-left">
-            <Sparkles size={12} color="var(--accent-cyan)" />
-            <span>{label} · Activity</span>
-            {allEntries.length > 0 && <span className="feed-count-badge">{allEntries.length}</span>}
+        <div className={`cli-notes-feed-container ${isFeedCollapsed ? 'is-collapsed' : ''}`}>
+          <div
+            className="feed-container-header"
+            onClick={() => setIsFeedCollapsed((v) => !v)}
+            title={isFeedCollapsed ? 'Expand activity stream' : 'Collapse activity stream'}
+          >
+            <div className="feed-header-left">
+              <Sparkles size={12} color="var(--accent-cyan)" />
+              <span>{label} · Activity</span>
+              {allEntries.length > 0 && <span className="feed-count-badge">{allEntries.length}</span>}
+            </div>
+            <button type="button" className="feed-toggle-btn" aria-label="Toggle feed">
+              {isFeedCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+            </button>
           </div>
-          <button type="button" className="feed-toggle-btn" aria-label="Toggle feed">
-            {isFeedCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
-          </button>
-        </div>
 
-        {!isFeedCollapsed && (
-          <div className="feed-scroll-body" ref={feedScrollRef}>
-            {allEntries.length === 0 ? (
-              <div className="feed-empty-hint">
-                <span>
-                  {role === 'verifier'
-                    ? 'Verifier will check the work once the Manager finishes. (You can turn Verification off from the task menu.)'
-                    : `Watching ${label}… actions and thoughts will stream here in real time.`}
-                </span>
-              </div>
-            ) : (
-              allEntries.map((item) => (
-                <div key={item.id} className={`feed-item is-${item.type}`}>
-                  <div className="feed-item-icon">
-                    {item.type === 'tool' && <Command size={11} color="var(--accent-cyan)" />}
-                    {item.type === 'thought' && <Brain size={11} color="var(--accent-violet)" />}
-                    {item.type === 'user' && <MessageSquare size={11} color="var(--accent-emerald)" />}
-                    {item.type === 'approval' && <ShieldCheck size={11} color="var(--accent-emerald)" />}
-                    {item.type === 'status' && <Sparkles size={11} color="var(--text-muted)" />}
-                  </div>
-                  <div className="feed-item-content">
-                    <span className="feed-item-text"><FileLinkText text={item.text} /></span>
-                    {item.detail && item.detail !== item.text && <code className="feed-item-detail"><FileLinkText text={item.detail} inCode /></code>}
-                  </div>
-                  <span className="feed-item-time">{item.timestamp}</span>
+          {!isFeedCollapsed && (
+            <div className="feed-scroll-body" ref={feedScrollRef}>
+              {allEntries.length === 0 ? (
+                <div className="feed-empty-hint">
+                  <span>
+                    {role === 'verifier'
+                      ? 'Verifier will check the work once the Manager finishes. (You can turn Verification off from the task menu.)'
+                      : `Watching ${label}… actions and thoughts will stream here in real time.`}
+                  </span>
                 </div>
-              ))
-            )}
-          </div>
-        )}
-      </div>
+              ) : (
+                allEntries.map((item) => (
+                  <div key={item.id} className={`feed-item is-${item.type}`}>
+                    <div className="feed-item-icon">
+                      {item.type === 'tool' && <Command size={11} color="var(--accent-cyan)" />}
+                      {item.type === 'thought' && <Brain size={11} color="var(--accent-violet)" />}
+                      {item.type === 'user' && <MessageSquare size={11} color="var(--accent-emerald)" />}
+                      {item.type === 'approval' && <ShieldCheck size={11} color="var(--accent-emerald)" />}
+                      {item.type === 'status' && <Sparkles size={11} color="var(--text-muted)" />}
+                    </div>
+                    <div className="feed-item-content">
+                      <span className="feed-item-text"><FileLinkText text={item.text} /></span>
+                      {item.detail && item.detail !== item.text && <code className="feed-item-detail"><FileLinkText text={item.detail} inCode /></code>}
+                    </div>
+                    <span className="feed-item-time">{item.timestamp}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
       )}
 
       {!hideSteerInput && liveStatus}
 
       {/* ── Mid-Task Steering Prompt Box ── */}
       {!hideSteerInput && (
-      <form onSubmit={handleSteerSubmit} className="cli-notes-steer-form">
-        <div className="steer-input-wrapper">
-          <input
-            type="text"
-            className="steer-input-field"
-            placeholder={
-              runActive
-                ? `Message ${label} while it works — it takes it in at its next step…`
-                : 'Send a follow-up — continues this task from where it left off…'
-            }
-            value={steerInput}
-            onChange={(e) => setSteerInput(e.target.value)}
-          />
-          <button
-            type="submit"
-            className="steer-send-btn"
-            disabled={!steerInput.trim()}
-            title={runActive ? `Send this to ${label}` : 'Continue the task with this message'}
-          >
-            <Send size={12} />
-            <span>{runActive ? 'Send' : 'Continue'}</span>
-          </button>
-        </div>
-      </form>
+        <form onSubmit={handleSteerSubmit} className="cli-notes-steer-form">
+          <div className="steer-input-wrapper">
+            <input
+              type="text"
+              className="steer-input-field"
+              placeholder={
+                runActive
+                  ? `Message ${label} while it works — it takes it in at its next step…`
+                  : 'Send a follow-up — continues this task from where it left off…'
+              }
+              value={steerInput}
+              onChange={(e) => setSteerInput(e.target.value)}
+            />
+            <button
+              type="submit"
+              className="steer-send-btn"
+              disabled={!steerInput.trim()}
+              title={runActive ? `Send this to ${label}` : 'Continue the task with this message'}
+            >
+              <Send size={12} />
+              <span>{runActive ? 'Send' : 'Continue'}</span>
+            </button>
+          </div>
+        </form>
       )}
     </div>
   );

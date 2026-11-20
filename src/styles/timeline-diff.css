@@ -36,6 +36,26 @@
   margin-bottom: var(--space-1);
 }
 
+/* Calm status notice when git checkpointing / 1-click revert is unavailable */
+.eg-tl-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  color: var(--ink-muted);
+  font-size: calc(12px * var(--type-scale));
+  line-height: calc(17px * var(--type-scale));
+}
+
+.eg-tl-notice-icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--ink-subtle);
+}
+
 /* Summary diff bar above timeline when workspace files changed */
 .eg-tl-diffbar {
   display: flex;

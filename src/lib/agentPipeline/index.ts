@@ -96,6 +96,8 @@ export type ExecuteTaskOptions = Partial<AgentPipelineOptions> & {
   baseUsage?: TokenUsage;
   /** The user's one-time notes from the Run dialog: every agent of this run reads them in the bible. */
   runNotes?: string;
+  /** Optional pre-generated runId so the UI can bind checkpoints/diffs before the run completes. */
+  runId?: string;
 };
 
 const PERMISSION_LABELS: Record<PermissionLevel, string> = {
@@ -133,9 +135,10 @@ export async function executeTaskWithAi(
     return runOfflineExecution(task, brief, project, connectedMcps, onStepUpdate, onRequestPermission, onRequestHumanInput);
   }
 
-  const runId = makeRunId();
+  const { getPermissionLevel: liveLevelSource, steering, baseUsage, runNotes, runId: providedRunId, ...staticOptions } = options || {};
+  const runId = providedRunId?.trim() || makeRunId();
   const runDir = BibleStore.runDirFor(project.id || slugify(project.name || 'project'), task.id, runId);
-  const { getPermissionLevel: liveLevelSource, steering, baseUsage, runNotes, ...staticOptions } = options || {};
+  const checkpointRoot = projectWorkingFolder(project) || undefined;
   steering?.attach(runId);
   const resolvedOptions: AgentPipelineOptions = { ...DEFAULT_AGENT_PIPELINE_OPTIONS, ...staticOptions };
   if (aiConfig.provider === 'ollama') {
@@ -199,7 +202,7 @@ export async function executeTaskWithAi(
       try {
         const live = liveLevelSource();
         if (live && PERMISSION_LEVEL_SET.has(live)) level = live;
-      } catch {}
+      } catch { }
     }
     if (level !== lastSeenLevel) {
       const previous = lastSeenLevel;
@@ -259,6 +262,7 @@ export async function executeTaskWithAi(
           stepId: fullStep.id,
           label: fullStep.title,
           changelog: fullStep.detail,
+          root: checkpointRoot,
         });
       }
     }
@@ -267,7 +271,7 @@ export async function executeTaskWithAi(
 
   try {
     ctx.allowedRoots = await getAllowedRoots();
-    void queueRunCheckpoint(runId, { initBase: true });
+    void queueRunCheckpoint(runId, { initBase: true, root: checkpointRoot });
     ctx.references = await resolveTaskReferences(task, brief, getWorkspaceSkills(), projectWorkingFolder(project));
     if (ctx.references) {
       ctx.emit({ id: 'step-task-commands', stage: 'context', title: 'Task Commands', detail: describeTaskReferences(ctx.references), status: 'success' });
@@ -431,120 +435,120 @@ export async function executeTaskWithAi(
     let userPasses = 0;
     // A user pass: the user's messages as a follow-up on the work so far (continue, don't start over).
     let passFollowUp: { message: string; priorState: string } | undefined;
-    for (;;) {
-    for (; attempt <= maxAttempts; attempt++) {
-      ctx.steering?.setManagerDone(false);
-      mgr = await runManager(ctx, bible, tools, locks, attempt, diagnostics, passFollowUp);
-      // Messages sent from here on (verifier, cleaner) run the manager once more before the completion log.
-      ctx.steering?.setManagerDone(true);
-      for (const f of mgr.createdFiles) createdFiles.add(f);
+    for (; ;) {
+      for (; attempt <= maxAttempts; attempt++) {
+        ctx.steering?.setManagerDone(false);
+        mgr = await runManager(ctx, bible, tools, locks, attempt, diagnostics, passFollowUp);
+        // Messages sent from here on (verifier, cleaner) run the manager once more before the completion log.
+        ctx.steering?.setManagerDone(true);
+        for (const f of mgr.createdFiles) createdFiles.add(f);
 
-      // Step 4: Cleaner - strictly skipped for straightforward or single-file deliverables to avoid token waste & markup corruption
-      const filesArray = Array.from(createdFiles);
-      const isStraightforward = isStraightforwardTask(bible);
-      const isSingleStandaloneFile = filesArray.length <= 1;
-      const shouldRunCleaner =
-        resolvedOptions.enableCleaner &&
-        summary.taskKind === 'coding' &&
-        filesArray.length > 1 &&
-        !isStraightforward;
+        // Step 4: Cleaner - strictly skipped for straightforward or single-file deliverables to avoid token waste & markup corruption
+        const filesArray = Array.from(createdFiles);
+        const isStraightforward = isStraightforwardTask(bible);
+        const isSingleStandaloneFile = filesArray.length <= 1;
+        const shouldRunCleaner =
+          resolvedOptions.enableCleaner &&
+          summary.taskKind === 'coding' &&
+          filesArray.length > 1 &&
+          !isStraightforward;
 
-      if (shouldRunCleaner) {
-        await runCleaner(ctx, bible, tools, filesArray, attempt);
-      } else {
-        const skipReason = !resolvedOptions.enableCleaner
-          ? 'Cleaner is disabled in pipeline options.'
-          : summary.taskKind !== 'coding'
-          ? `Non-coding task (${summary.taskKind}) needs no code cleaning.`
-          : isStraightforward || isSingleStandaloneFile
-          ? `Straightforward / single-file deliverable (${filesArray.join(', ') || 'deliverable'}); Cleaner strictly skipped for token efficiency.`
-          : 'No created files recorded.';
-        bible.appendEvent({ actor: 'pipeline', kind: 'info', text: `Step 4 Cleaner skipped: ${skipReason}` });
-        await bible.persist();
-      }
-
-      const verifierEval = evaluateVerifierNecessity({
-        verification: brief?.verification !== false,
-        attempt,
-        summaryRequiresVerifier: summary.requiresVerifier,
-      });
-
-      if (!verifierEval.shouldRun) {
-        bible.appendEvent({ actor: 'pipeline', kind: 'info', text: `Step 5 Verifier skipped: ${verifierEval.reason}` });
-        await bible.persist();
-        ctx.emit({
-          id: `step-verifier-skipped-a${attempt}`,
-          stage: 'verifier',
-          agentRole: 'verifier',
-          title: 'Verifier: Skipped (Token Efficiency)',
-          detail: verifierEval.reason,
-          status: 'success'
-        });
-
-        // If the manager verified every criterion, the straightforward task is complete
-        if (mgr.allCriteriaPass) {
-          break;
+        if (shouldRunCleaner) {
+          await runCleaner(ctx, bible, tools, filesArray, attempt);
+        } else {
+          const skipReason = !resolvedOptions.enableCleaner
+            ? 'Cleaner is disabled in pipeline options.'
+            : summary.taskKind !== 'coding'
+              ? `Non-coding task (${summary.taskKind}) needs no code cleaning.`
+              : isStraightforward || isSingleStandaloneFile
+                ? `Straightforward / single-file deliverable (${filesArray.join(', ') || 'deliverable'}); Cleaner strictly skipped for token efficiency.`
+                : 'No created files recorded.';
+          bible.appendEvent({ actor: 'pipeline', kind: 'info', text: `Step 4 Cleaner skipped: ${skipReason}` });
+          await bible.persist();
         }
 
-        // If manager verification failed (e.g. deliverable missing on disk), retry up to maxAttempts
-        if (attempt >= maxAttempts) {
-          break;
+        const verifierEval = evaluateVerifierNecessity({
+          verification: brief?.verification !== false,
+          attempt,
+          summaryRequiresVerifier: summary.requiresVerifier,
+        });
+
+        if (!verifierEval.shouldRun) {
+          bible.appendEvent({ actor: 'pipeline', kind: 'info', text: `Step 5 Verifier skipped: ${verifierEval.reason}` });
+          await bible.persist();
+          ctx.emit({
+            id: `step-verifier-skipped-a${attempt}`,
+            stage: 'verifier',
+            agentRole: 'verifier',
+            title: 'Verifier: Skipped (Token Efficiency)',
+            detail: verifierEval.reason,
+            status: 'success'
+          });
+
+          // If the manager verified every criterion, the straightforward task is complete
+          if (mgr.allCriteriaPass) {
+            break;
+          }
+
+          // If manager verification failed (e.g. deliverable missing on disk), retry up to maxAttempts
+          if (attempt >= maxAttempts) {
+            break;
+          }
+
+          diagnostics = mgr.verificationSummary;
+          bible.appendEvent({
+            actor: 'pipeline',
+            kind: 'retry',
+            text: `Manager execution failed verification on attempt ${attempt}; re-running with diagnostics:\n${diagnostics}`
+          });
+          await bible.persist();
+          ctx.emit({
+            id: `step-retry-${attempt}`,
+            stage: 'retry',
+            title: `Manager Execution Failed — Retrying (attempt ${attempt + 1} of ${maxAttempts})`,
+            detail: diagnostics.slice(0, 200),
+            status: 'warning'
+          });
+          await stepUpForRetry(attempt);
+          continue;
         }
 
-        diagnostics = mgr.verificationSummary;
-        bible.appendEvent({
-          actor: 'pipeline',
-          kind: 'retry',
-          text: `Manager execution failed verification on attempt ${attempt}; re-running with diagnostics:\n${diagnostics}`
-        });
+        verifier = await runVerifier(ctx, bible, tools, summary.taskKind, Array.from(createdFiles), attempt);
+        if (verifier.verdict !== 'fail') break;
+        if (attempt >= maxAttempts) break;
+
+        diagnostics = verifier.failures.map((f) => `- [${f.criterion}] ${f.diagnostics}`).join('\n') + (verifier.evidence ? `\n\nEvidence: ${verifier.evidence}` : '');
+        bible.appendEvent({ actor: 'pipeline', kind: 'retry', text: `Verifier failed on attempt ${attempt}; re-running the manager with fresh contexts and the diagnostics above.` });
         await bible.persist();
         ctx.emit({
           id: `step-retry-${attempt}`,
           stage: 'retry',
-          title: `Manager Execution Failed — Retrying (attempt ${attempt + 1} of ${maxAttempts})`,
-          detail: diagnostics.slice(0, 200),
+          title: `Verifier Failed — Retrying Manager (attempt ${attempt + 1} of ${maxAttempts})`,
+          detail: verifier.failures.map((f) => `✗ ${f.criterion}: ${f.diagnostics.slice(0, 200)}`).join('\n'),
           status: 'warning'
         });
         await stepUpForRetry(attempt);
-        continue;
       }
-
-      verifier = await runVerifier(ctx, bible, tools, summary.taskKind, Array.from(createdFiles), attempt);
-      if (verifier.verdict !== 'fail') break;
-      if (attempt >= maxAttempts) break;
-
-      diagnostics = verifier.failures.map((f) => `- [${f.criterion}] ${f.diagnostics}`).join('\n') + (verifier.evidence ? `\n\nEvidence: ${verifier.evidence}` : '');
-      bible.appendEvent({ actor: 'pipeline', kind: 'retry', text: `Verifier failed on attempt ${attempt}; re-running the manager with fresh contexts and the diagnostics above.` });
+      if (attempt > maxAttempts) attempt = maxAttempts;
+      if (!mgr || !ctx.steering?.hasPendingForManager() || userPasses >= MAX_USER_PASSES) break;
+      userPasses++;
+      attempt += 1;
+      maxAttempts = attempt;
+      diagnostics = undefined;
+      passFollowUp = {
+        message: (ctx.steering.drain('manager') || []).map((it) => it.text).join('\n\n'),
+        priorState: bible.renderEventLog({ last: 15 })
+      };
+      bible.appendEvent({ actor: 'user', kind: 'info', text: `Message after the manager finished its work: ${passFollowUp.message}` });
       await bible.persist();
       ctx.emit({
-        id: `step-retry-${attempt}`,
+        id: `step-user-pass-${userPasses}`,
         stage: 'retry',
-        title: `Verifier Failed — Retrying Manager (attempt ${attempt + 1} of ${maxAttempts})`,
-        detail: verifier.failures.map((f) => `✗ ${f.criterion}: ${f.diagnostics.slice(0, 200)}`).join('\n'),
-        status: 'warning'
+        agentRole: 'manager',
+        title: 'Your message: the manager continues',
+        detail: 'You sent a message while the work was being checked — the manager takes it now, then it is checked again.',
+        status: 'success'
       });
-      await stepUpForRetry(attempt);
-    }
-    if (attempt > maxAttempts) attempt = maxAttempts;
-    if (!mgr || !ctx.steering?.hasPendingForManager() || userPasses >= MAX_USER_PASSES) break;
-    userPasses++;
-    attempt += 1;
-    maxAttempts = attempt;
-    diagnostics = undefined;
-    passFollowUp = {
-      message: (ctx.steering.drain('manager') || []).map((it) => it.text).join('\n\n'),
-      priorState: bible.renderEventLog({ last: 15 })
-    };
-    bible.appendEvent({ actor: 'user', kind: 'info', text: `Message after the manager finished its work: ${passFollowUp.message}` });
-    await bible.persist();
-    ctx.emit({
-      id: `step-user-pass-${userPasses}`,
-      stage: 'retry',
-      agentRole: 'manager',
-      title: 'Your message: the manager continues',
-      detail: 'You sent a message while the work was being checked — the manager takes it now, then it is checked again.',
-      status: 'success'
-    });
     }
     if (!mgr) throw new Error('Manager did not run.');
 

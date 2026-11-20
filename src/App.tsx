@@ -2806,6 +2806,17 @@ function App() {
 
       if (runNotes) upsertTaskStep(task.id, { ...runNotesStep(Date.now().toString(36)), cycle: cycleN });
 
+      // Pre-generate the in-app runId so the timeline can bind git checkpoints/diffs from the start of the run.
+      const priorPipelineRunId =
+        recallPipelineRun(pipelineRunKey(activeProject, task.id))?.runId ||
+        (currentBrief?.lastRunOutcome?.runId && !currentBrief.lastRunOutcome.runId.startsWith(`${task.id}-`)
+          ? currentBrief.lastRunOutcome.runId
+          : '');
+      const inAppRunId =
+        followUp && priorPipelineRunId
+          ? priorPipelineRunId
+          : `${Date.now().toString(36).slice(-4)}${Math.random().toString(36).slice(2, 5)}`;
+
       // Set task status to in_progress
       const inProgressTasks = tasksRef.current.map((t) => (String(t.id) === String(task.id) ? { ...t, status: 'in_progress' as const } : t));
       tasksRef.current = inProgressTasks;
@@ -2814,7 +2825,7 @@ function App() {
       if (currentBrief && (followUp || !isResuming)) {
         const nextBriefs = briefsRef.current.map((b) =>
           b === currentBrief
-            ? { ...b, thread: withCycleStarted(b.thread, { n: cycleN, startedAt: cycleStartedAt, ...(followUp ? { message: followUp } : {}) }) }
+            ? { ...b, thread: withCycleStarted(b.thread, { n: cycleN, runId: inAppRunId, startedAt: cycleStartedAt, ...(followUp ? { message: followUp } : {}) }) }
             : b
         );
         syncAndSaveProjectRef.current(inProgressTasks, nextBriefs, true);
@@ -2982,6 +2993,7 @@ function App() {
             // Read on every tool call, so switching the approval mode mid-run takes effect immediately.
             getPermissionLevel: () => agentPipelineOptionsRef.current.permissionLevel,
             steering,
+            runId: inAppRunId,
             ...(baseUsage ? { baseUsage } : {}),
             ...(runNotes ? { runNotes } : {}),
           },

@@ -31,8 +31,10 @@ import type {
   TaskKind,
 } from '../../types';
 import { bridgeClient } from '../bridgeClient';
+import { isMajorCheckpointStep, queueRunCheckpoint } from '../ideLinks';
 import { getAllowedRoots } from '../mcpClient';
 import { overviewDocumentFor } from '../overviewUtils';
+import { projectWorkingFolder } from '../taskReferences';
 import { BibleStore, FileLockRegistry, buildBibleSections } from './bible';
 import { buildOfflineTaskBrief } from './taskBrief';
 import { runCleaner } from './cleaner';
@@ -160,7 +162,9 @@ export async function continueTaskWithAi(
   // Step ids of this follow-up get their own suffix: the earlier run's steps (same ids) stay as they were.
   const suffix = `~fu${Date.now().toString(36).slice(-5)}`;
 
-  const { getPermissionLevel: liveLevelSource, steering, baseUsage, ...staticOptions } = options || {};
+  const { getPermissionLevel: liveLevelSource, steering, baseUsage, runId: _ignoredRunId, ...staticOptions } = options || {};
+  const checkpointRoot = projectWorkingFolder(project) || undefined;
+  const recordedCheckpoints = new Set<string>();
   steering?.attach(runId);
   const resolvedOptions = { ...DEFAULT_AGENT_PIPELINE_OPTIONS, ...staticOptions };
   if (aiConfig.provider === 'ollama') resolvedOptions.maxConcurrentAgents = 1;
@@ -197,14 +201,29 @@ export async function continueTaskWithAi(
     onRequestHumanInput,
     onRequestOllamaFallback,
     steering,
-    emit: (step) =>
-      onStepUpdate({
+    emit: (step) => {
+      const fullStep: ExecutionStep = {
         time: new Date().toLocaleTimeString(),
         taskId: task.id,
         ...step,
         totalUsage: step.totalUsage || runningTaskUsage(ctx),
         id: `${step.id}${suffix}`,
-      } as ExecutionStep),
+      } as ExecutionStep;
+      onStepUpdate(fullStep);
+      if (
+        (fullStep.status === 'success' || fullStep.status === 'warning') &&
+        isMajorCheckpointStep(fullStep) &&
+        !recordedCheckpoints.has(fullStep.id)
+      ) {
+        recordedCheckpoints.add(fullStep.id);
+        void queueRunCheckpoint(runId, {
+          stepId: fullStep.id,
+          label: fullStep.title,
+          changelog: fullStep.detail,
+          root: checkpointRoot,
+        });
+      }
+    },
   };
 
   const date = new Date().toISOString().split('T')[0];
@@ -233,6 +252,7 @@ export async function continueTaskWithAi(
 
   try {
     ctx.allowedRoots = await getAllowedRoots();
+    void queueRunCheckpoint(runId, { initBase: true, root: checkpointRoot });
     ctx.emit({
       id: 'step-model-routing',
       stage: 'context',

@@ -18,6 +18,7 @@ import {
   FilePlus,
   GitCompare,
   History,
+  Info,
   RotateCcw,
   Terminal as TerminalIcon,
   Undo2,
@@ -25,16 +26,21 @@ import {
 import type { ExecutionStep, HumanInputPrompt, SpawnedSession } from '../types';
 import type { ActivityFeedItem } from '../lib/cliActivityFeed';
 import {
-  bridgeSupportsVisualDiff,
   fetchRunChanges,
   fetchRunCheckpoints,
   fetchRunDiff,
+  getBridgeVisualDiffCapability,
   isMajorCheckpointStep,
   revertRunChanges,
   revertRunFile,
   showAppToast,
+  subscribeBridgeVisualDiffCapability,
+  subscribeRunCheckpoints,
+  waitForPendingCheckpoints,
+  type BridgeVisualDiffCapability,
   type RunChangedFile,
   type RunCheckpointRecord,
+  type RunCheckpointsResponse,
   type RunChanges,
 } from '../lib/ideLinks';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -127,9 +133,13 @@ export const RunTimelineView: React.FC<RunTimelineViewProps> = ({
 }) => {
   const [checkpoints, setCheckpoints] = useState<RunCheckpointRecord[]>([]);
   const [hasGitBaseline, setHasGitBaseline] = useState(false);
+  const [gitStateLoaded, setGitStateLoaded] = useState(false);
+  const [checkpointReason, setCheckpointReason] = useState<RunCheckpointsResponse['reason']>(undefined);
   const [baseTree, setBaseTree] = useState<string | undefined>(undefined);
   const [runRoot, setRunRoot] = useState<string | undefined>(undefined);
   const [runChanges, setRunChanges] = useState<RunChanges | null>(null);
+  const [bridgeCap, setBridgeCap] = useState<BridgeVisualDiffCapability>(() => getBridgeVisualDiffCapability());
+  const loadSeqRef = useRef(0);
 
   // Expanded state for checkpoint changelog arrows
   const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>({});
@@ -158,35 +168,48 @@ export const RunTimelineView: React.FC<RunTimelineViewProps> = ({
   const [followCurrent, setFollowCurrent] = useState(true);
   const programmaticScrollRef = useRef(false);
 
-  const canVisualDiff = bridgeSupportsVisualDiff();
+  // React when the bridge connects or completes its protocol handshake.
+  useEffect(() => subscribeBridgeVisualDiffCapability(setBridgeCap), []);
+
+  const canVisualDiff = bridgeCap.supported;
+  const hintRoot = shownAgent?.cwd;
 
   // Load checkpoints + current git diff summary for this run.
   const loadGitState = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     if (!runId || !canVisualDiff) {
       setCheckpoints([]);
       setHasGitBaseline(false);
+      setGitStateLoaded(false);
+      setCheckpointReason(undefined);
       setBaseTree(undefined);
       setRunChanges(null);
       return;
     }
+    await waitForPendingCheckpoints(runId);
+    if (seq !== loadSeqRef.current) return;
     const [cpRes, chRes] = await Promise.all([
-      fetchRunCheckpoints(runId),
-      fetchRunChanges(runId),
+      fetchRunCheckpoints(runId, { root: hintRoot }),
+      fetchRunChanges(runId, { root: hintRoot }),
     ]);
+    if (seq !== loadSeqRef.current) return;
     if (cpRes) {
       setCheckpoints(cpRes.checkpoints);
       setHasGitBaseline(cpRes.baseline);
+      setCheckpointReason(cpRes.reason);
       setBaseTree(cpRes.baseTree);
-      setRunRoot(cpRes.root ?? chRes?.root);
+      setRunRoot(cpRes.root ?? chRes?.root ?? hintRoot);
     } else {
       setCheckpoints([]);
       setHasGitBaseline(Boolean(chRes?.baseline));
+      setCheckpointReason(undefined);
       setBaseTree(chRes?.baseTree);
-      setRunRoot(chRes?.root);
+      setRunRoot(chRes?.root ?? hintRoot);
     }
+    setGitStateLoaded(true);
     setRunChanges(chRes);
     setDiffCache({});
-  }, [runId, canVisualDiff]);
+  }, [runId, canVisualDiff, hintRoot]);
 
   // Refresh git checkpoints when run changes, stops/starts, or new steps finish.
   const completedStepCount = useMemo(
@@ -197,6 +220,14 @@ export const RunTimelineView: React.FC<RunTimelineViewProps> = ({
   useEffect(() => {
     void loadGitState();
   }, [loadGitState, runActive, completedStepCount, refreshKey]);
+
+  // Re-fetch immediately whenever an async checkpoint write finishes for this run (avoids write/read races).
+  useEffect(() => {
+    if (!runId || !canVisualDiff) return;
+    return subscribeRunCheckpoints(runId, () => {
+      void loadGitState();
+    });
+  }, [runId, canVisualDiff, loadGitState]);
 
   // Reset reverted marker when switching to another run.
   useEffect(() => {
@@ -480,12 +511,38 @@ export const RunTimelineView: React.FC<RunTimelineViewProps> = ({
 
   const totalRunFiles = runChanges?.files.length ?? 0;
 
+  // Explain calmly why checkpoint revert / diff controls aren't shown instead of silently omitting them.
+  const unavailableReason = useMemo(() => {
+    if (nodes.length === 0) return null;
+    if (bridgeCap.connected && !bridgeCap.supported) {
+      return 'Checkpoint diffs and 1-click revert need an updated Ergo Bridge (protocol 10). Restart or update your local bridge to enable them.';
+    }
+    if (runId && canVisualDiff && gitStateLoaded && !hasGitBaseline && !runActive) {
+      if (checkpointReason === 'not-git') {
+        return "This workspace folder isn't a git repository, so file diffs and checkpoint reverts aren't available. Point this project to a git folder under Settings › Folders to enable 1-click revert.";
+      }
+      if (checkpointReason === 'snapshot-failed') {
+        return "Couldn't capture a git snapshot before this run, so checkpoint reverts aren't available.";
+      }
+      return 'No git snapshot was recorded for this run (it ran outside a git repository or before checkpoint tracking was enabled).';
+    }
+    return null;
+  }, [nodes.length, bridgeCap.connected, bridgeCap.supported, runId, canVisualDiff, gitStateLoaded, hasGitBaseline, runActive, checkpointReason]);
+
   return (
     <div className="eg-tl-root">
       {/* Interactive Mid-Build Human Clarification Card (in-app pipeline) */}
       {pendingHumanInput && onHumanInputChoice && renderHumanInput && (
         <div className="eg-tl-prompt-slot">
           {renderHumanInput(pendingHumanInput.prompt, onHumanInputChoice)}
+        </div>
+      )}
+
+      {/* Calm explanation when git checkpointing / revert is unavailable for this run */}
+      {unavailableReason && (
+        <div className="eg-tl-notice" role="status">
+          <Icon icon={Info} size="sm" className="eg-tl-notice-icon" />
+          <span>{unavailableReason}</span>
         </div>
       )}
 
@@ -661,6 +718,8 @@ export const RunTimelineView: React.FC<RunTimelineViewProps> = ({
                               </Button>
                             ) : node.kind === 'baseline' && isCurrent ? (
                               <Badge tone="accent">Baseline</Badge>
+                            ) : isCurrent && hasGitBaseline && Boolean(node.revertTree) ? (
+                              <Badge tone="neutral">Current</Badge>
                             ) : null
                           )}
                         </div>
@@ -678,6 +737,24 @@ export const RunTimelineView: React.FC<RunTimelineViewProps> = ({
                                     <span className="is-del">−{deletions}</span>
                                   </span>
                                   <span className="eg-spacer" />
+                                  {canRevert && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      icon={RotateCcw}
+                                      disabled={runActive || isReverting}
+                                      title={
+                                        runActive
+                                          ? 'Stop the run before reverting to a checkpoint'
+                                          : node.kind === 'baseline'
+                                            ? 'Revert all workspace files to before this run'
+                                            : `Revert workspace to "${node.title}"`
+                                      }
+                                      onClick={() => void handleRevertToCheckpoint(node)}
+                                    >
+                                      {isReverting ? 'Reverting…' : 'Revert here'}
+                                    </Button>
+                                  )}
                                   {runId && canVisualDiff && (
                                     <Button
                                       size="sm"
@@ -772,6 +849,27 @@ export const RunTimelineView: React.FC<RunTimelineViewProps> = ({
                                 {!hasDiffLog && (
                                   <div className="eg-tl-drawer-head">
                                     <span className="eg-tl-drawer-label">Changelog</span>
+                                    {canRevert && (
+                                      <>
+                                        <span className="eg-spacer" />
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          icon={RotateCcw}
+                                          disabled={runActive || isReverting}
+                                          title={
+                                            runActive
+                                              ? 'Stop the run before reverting to a checkpoint'
+                                              : node.kind === 'baseline'
+                                                ? 'Revert all workspace files to before this run'
+                                                : `Revert workspace to "${node.title}"`
+                                          }
+                                          onClick={() => void handleRevertToCheckpoint(node)}
+                                        >
+                                          {isReverting ? 'Reverting…' : 'Revert here'}
+                                        </Button>
+                                      </>
+                                    )}
                                   </div>
                                 )}
                                 <div className="eg-tl-changelog-body">
