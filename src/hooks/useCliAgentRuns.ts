@@ -33,6 +33,7 @@ import type {
 } from '../types';
 import type { ToastMessage } from '../components/Toast';
 import { bridgeClient } from '../lib/bridgeClient';
+import { isMajorCheckpointStep, queueRunCheckpoint } from '../lib/ideLinks';
 import {
   agentProjectKey,
   agentSessionId,
@@ -921,20 +922,48 @@ export function useCliAgentRuns(deps: CliAgentRunsDeps): {
     );
   };
 
-  const upsertStep = (run: RunState, step: ExecutionStep) => {
-    updateSteps(run, (steps) => {
-      const idx = steps.findIndex((s) => s.id === step.id);
-      if (idx === -1) return [...steps, step];
-      const next = [...steps];
-      next[idx] = { ...steps[idx], ...step };
-      return next;
+  const recordedCheckpointsRef = useRef<Set<string>>(new Set());
+
+  const maybeRecordCheckpoint = (run: RunState, step: ExecutionStep | undefined) => {
+    if (!step) return;
+    if (step.status !== 'success' && step.status !== 'warning') return;
+    if (!isMajorCheckpointStep(step)) return;
+    const key = `${run.runId}:${step.id}`;
+    if (recordedCheckpointsRef.current.has(key)) return;
+    recordedCheckpointsRef.current.add(key);
+    void queueRunCheckpoint(run.runId, {
+      stepId: step.id,
+      label: step.title,
+      changelog: step.detail,
     });
   };
 
+  const upsertStep = (run: RunState, step: ExecutionStep) => {
+    let saved: ExecutionStep | undefined;
+    updateSteps(run, (steps) => {
+      const idx = steps.findIndex((s) => s.id === step.id);
+      if (idx === -1) {
+        saved = step;
+        return [...steps, step];
+      }
+      const next = [...steps];
+      saved = { ...steps[idx], ...step };
+      next[idx] = saved;
+      return next;
+    });
+    maybeRecordCheckpoint(run, saved);
+  };
+
   const patchStep = (run: RunState, stepId: string, patch: Partial<ExecutionStep> | ((s: ExecutionStep) => ExecutionStep)) => {
+    let saved: ExecutionStep | undefined;
     updateSteps(run, (steps) =>
-      steps.map((s) => (s.id === stepId ? (typeof patch === 'function' ? patch(s) : { ...s, ...patch }) : s))
+      steps.map((s) => {
+        if (s.id !== stepId) return s;
+        saved = typeof patch === 'function' ? patch(s) : { ...s, ...patch };
+        return saved;
+      })
     );
+    maybeRecordCheckpoint(run, saved);
   };
 
   const updateJobs = (fn: (jobs: RunningJobInfo[]) => RunningJobInfo[]) => {

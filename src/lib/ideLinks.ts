@@ -6,7 +6,7 @@
  * Problems surface as toasts (`ergo:toast` events, shown by App) so a click on a link never fails silently.
  */
 import { bridgeClient } from './bridgeClient';
-import { IDE_LINKS_PROTOCOL } from './bridgeProtocol';
+import { IDE_LINKS_PROTOCOL, VISUAL_DIFF_PROTOCOL } from './bridgeProtocol';
 import { DEFAULT_IDE, IDE_PREF_KEY, isIdeId, type IdeId } from './ideLaunch';
 import { getRootsProject, openFileInIdeOrSystem } from './mcpClient';
 import { getPref, setPref } from './userPrefs';
@@ -24,6 +24,11 @@ export function setIdeChoice(id: IdeId): void {
 /** The bridge honors the editor choice and serves run changes and diffs. */
 export function bridgeSupportsIdeLinks(): boolean {
   return (bridgeClient.getStatus().bridgeInfo?.protocol ?? 0) >= IDE_LINKS_PROTOCOL;
+}
+
+/** The bridge serves in-app unified diffs, checkpoint snapshots, and 1-click revert. */
+export function bridgeSupportsVisualDiff(): boolean {
+  return (bridgeClient.getStatus().bridgeInfo?.protocol ?? 0) >= VISUAL_DIFF_PROTOCOL;
 }
 
 type ToastType = 'warning' | 'info' | 'error' | 'success';
@@ -73,7 +78,53 @@ export interface RunChanges {
   truncated?: boolean;
   /** The run's working folder (absolute): changed files are relative to it. */
   root?: string;
+  /** The recorded pre-run git tree hash, when available. */
+  baseTree?: string;
+  startedAt?: string;
   error?: string;
+}
+
+export interface RunDiffPayload {
+  baseline: boolean;
+  git: boolean;
+  files: RunChangedFile[];
+  diffs: Record<string, string>;
+  root?: string;
+  baseTree?: string;
+  fromTree?: string;
+  toTree?: string;
+  truncated?: boolean;
+  error?: string;
+}
+
+export interface RunRevertResponse {
+  success: boolean;
+  reverted: string[];
+  deleted: string[];
+  failed: Array<{ path: string; error: string }>;
+  restoredTree?: string;
+  error?: string;
+}
+
+export interface RunCheckpointRecord {
+  id: string;
+  stepId?: string;
+  label: string;
+  summary?: string;
+  at: string;
+  tree?: string;
+  prevTree?: string;
+  files?: RunChangedFile[];
+  isBaseline?: boolean;
+  changelog?: string;
+}
+
+export interface RunCheckpointsResponse {
+  baseline: boolean;
+  git: boolean;
+  root?: string;
+  baseTree?: string;
+  checkpoints: RunCheckpointRecord[];
 }
 
 /** The files a run changed since its first agent started; null when the bridge can't tell (older bridge, offline). */
@@ -92,11 +143,236 @@ export async function fetchRunChanges(runId: string, opts: { root?: string } = {
       files: Array.isArray(data.files) ? data.files : [],
       truncated: Boolean(data.truncated),
       root: typeof data.root === 'string' ? data.root : undefined,
+      baseTree: typeof data.baseTree === 'string' ? data.baseTree : undefined,
+      startedAt: typeof data.startedAt === 'string' ? data.startedAt : undefined,
       error: data.success === false ? data.error || 'Could not read the changes.' : undefined,
     };
   } catch {
     return null;
   }
+}
+
+/** Fetches standard unified diffs for a run (all changed files, a single file, or between two checkpoint trees). */
+export async function fetchRunDiff(
+  runId: string,
+  opts: { file?: string; fromTree?: string; toTree?: string; root?: string } = {},
+): Promise<RunDiffPayload | null> {
+  if (!runId) return null;
+  try {
+    const res = await bridgeClient.fetch('/api/git/run-diff', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        runId,
+        file: opts.file,
+        fromTree: opts.fromTree,
+        toTree: opts.toTree,
+        root: opts.root,
+        projectId: getRootsProject() || undefined,
+      }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!data || typeof data !== 'object') return null;
+    return {
+      baseline: Boolean(data.baseline),
+      git: Boolean(data.git),
+      files: Array.isArray(data.files) ? data.files : [],
+      diffs: data.diffs && typeof data.diffs === 'object' ? (data.diffs as Record<string, string>) : {},
+      root: typeof data.root === 'string' ? data.root : undefined,
+      baseTree: typeof data.baseTree === 'string' ? data.baseTree : undefined,
+      fromTree: typeof data.fromTree === 'string' ? data.fromTree : undefined,
+      toTree: typeof data.toTree === 'string' ? data.toTree : undefined,
+      truncated: Boolean(data.truncated),
+      error: data.success === false ? data.error || 'Could not generate the diff.' : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Reverts a single file back to the run baseline (or a specific checkpoint tree). */
+export async function revertRunFile(
+  runId: string,
+  filePath: string,
+  opts: { tree?: string; root?: string } = {},
+): Promise<RunRevertResponse> {
+  try {
+    const res = await bridgeClient.fetch('/api/git/revert-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        runId,
+        path: filePath,
+        tree: opts.tree,
+        root: opts.root,
+        projectId: getRootsProject() || undefined,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.success === false) {
+      return {
+        success: false,
+        reverted: [],
+        deleted: [],
+        failed: [{ path: filePath, error: data.error || `The bridge answered ${res.status}.` }],
+        error: data.error || `The bridge answered ${res.status}.`,
+      };
+    }
+    return {
+      success: true,
+      reverted: Array.isArray(data.reverted) ? data.reverted : [],
+      deleted: Array.isArray(data.deleted) ? data.deleted : [],
+      failed: Array.isArray(data.failed) ? data.failed : [],
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      reverted: [],
+      deleted: [],
+      failed: [{ path: filePath, error: err?.message || 'The bridge did not answer.' }],
+      error: err?.message || 'The bridge did not answer.',
+    };
+  }
+}
+
+/** Reverts all files changed in a run back to the run baseline or to a specific checkpoint tree. */
+export async function revertRunChanges(
+  runId: string,
+  opts: { tree?: string; checkpointId?: string; root?: string } = {},
+): Promise<RunRevertResponse> {
+  try {
+    const res = await bridgeClient.fetch('/api/git/revert-run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        runId,
+        tree: opts.tree,
+        checkpointId: opts.checkpointId,
+        root: opts.root,
+        projectId: getRootsProject() || undefined,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.success === false) {
+      return {
+        success: false,
+        reverted: Array.isArray(data.reverted) ? data.reverted : [],
+        deleted: Array.isArray(data.deleted) ? data.deleted : [],
+        failed: Array.isArray(data.failed) ? data.failed : [],
+        error: data.error || `The bridge answered ${res.status}.`,
+      };
+    }
+    return {
+      success: true,
+      reverted: Array.isArray(data.reverted) ? data.reverted : [],
+      deleted: Array.isArray(data.deleted) ? data.deleted : [],
+      failed: Array.isArray(data.failed) ? data.failed : [],
+      restoredTree: typeof data.restoredTree === 'string' ? data.restoredTree : undefined,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      reverted: [],
+      deleted: [],
+      failed: [],
+      error: err?.message || 'The bridge did not answer.',
+    };
+  }
+}
+
+/** Fetches the checkpoints recorded for a run (including the initial baseline when git is available). */
+export async function fetchRunCheckpoints(runId: string, opts: { root?: string } = {}): Promise<RunCheckpointsResponse | null> {
+  if (!runId) return null;
+  try {
+    const res = await bridgeClient.fetch('/api/git/checkpoints', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId, projectId: getRootsProject() || undefined, root: opts.root }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!data || typeof data !== 'object') return null;
+    return {
+      baseline: Boolean(data.baseline),
+      git: Boolean(data.git),
+      root: typeof data.root === 'string' ? data.root : undefined,
+      baseTree: typeof data.baseTree === 'string' ? data.baseTree : undefined,
+      checkpoints: Array.isArray(data.checkpoints) ? (data.checkpoints as RunCheckpointRecord[]) : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Records a checkpoint snapshot for a major run step (non-blocking, best-effort). */
+export async function recordRunCheckpointClient(
+  runId: string,
+  payload: {
+    id?: string;
+    stepId?: string;
+    label?: string;
+    summary?: string;
+    changelog?: string;
+    initBase?: boolean;
+    root?: string;
+  },
+): Promise<RunCheckpointRecord | null> {
+  if (!runId) return null;
+  try {
+    const res = await bridgeClient.fetch('/api/git/checkpoint', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        runId,
+        projectId: getRootsProject() || undefined,
+        ...payload,
+      }),
+    });
+    const data = await res.json().catch(() => null);
+    return data?.checkpoint && typeof data.checkpoint === 'object' ? (data.checkpoint as RunCheckpointRecord) : null;
+  } catch {
+    return null;
+  }
+}
+
+const checkpointQueues = new Map<string, Promise<unknown>>();
+
+const MAJOR_CHECKPOINT_STAGES = new Set([
+  'overview',
+  'decompose',
+  'subagent',
+  'execution',
+  'verify',
+  'cleaner',
+  'verifier',
+  'retry',
+  'built_record',
+  'done',
+]);
+
+const READ_ONLY_TOOL_RE = /^(?:read_file|read_files|read_many|list_dir|list_directory|ls|glob|grep|search_files|find_files|get_|fetch_|inspect_)/i;
+
+/** Whether an execution step represents a major milestone / mutating action that warrants a checkpoint snapshot. */
+export function isMajorCheckpointStep(step: { stage?: string; mcpToolUsed?: string; status?: string }): boolean {
+  if (step.stage && MAJOR_CHECKPOINT_STAGES.has(step.stage)) return true;
+  if (step.stage === 'mcp_call' && step.mcpToolUsed && !READ_ONLY_TOOL_RE.test(step.mcpToolUsed)) return true;
+  return false;
+}
+
+/** Serializes checkpoint writes per runId so checkpoints.json never races under parallel workers. */
+export function queueRunCheckpoint(
+  runId: string,
+  payload: Parameters<typeof recordRunCheckpointClient>[1],
+): Promise<RunCheckpointRecord | null> {
+  if (!runId) return Promise.resolve(null);
+  const prev = checkpointQueues.get(runId) ?? Promise.resolve();
+  const next = prev
+    .catch(() => {})
+    .then(() => recordRunCheckpointClient(runId, payload));
+  checkpointQueues.set(runId, next);
+  void next.finally(() => {
+    if (checkpointQueues.get(runId) === next) checkpointQueues.delete(runId);
+  });
+  return next;
 }
 
 /** Opens one file's change in a run as a side-by-side diff (or the file, for editors without a diff view). */

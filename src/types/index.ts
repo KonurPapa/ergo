@@ -654,6 +654,10 @@ export interface ExecutionStep {
   baselineContext?: AssembledBaselineContext;
   /** Timeline cycle this step belongs to (AgentContextItem.thread): 0 or unset = the run, n = follow-up n. */
   cycle?: number;
+  /** Recorded checkpoint id for this step (under .ergo/runs/<runId>/checkpoints.json). */
+  checkpointId?: string;
+  /** Recorded git tree hash at this checkpoint, when the workspace is a git repo. */
+  checkpointTree?: string;
 }
 
 export interface AssembledMemoryHit {

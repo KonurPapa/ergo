@@ -21,6 +21,8 @@ import {
 import { AgentTerminal } from './AgentTerminal';
 import { ResizableTerminalContainer } from './ResizableTerminalContainer';
 import { CliAgentNotesBridge } from './CliAgentNotesBridge';
+import { RunTimelineView } from './RunTimelineView';
+import type { ActivityFeedItem } from '../lib/cliActivityFeed';
 import { TaskPromptBox, type TaskPromptTarget } from './TaskPromptBox';
 import { TaskStageBars, type StageBarState } from './TaskStageBars';
 import { cycleNoteForDisplay, joinCompletionCycles, partitionStepsByCycle, splitCompletionByCycle, taskCycles } from '../lib/taskThread';
@@ -40,7 +42,7 @@ import { hasUsableOverview, isOverviewStale, overviewTaskFingerprint } from '../
 import { isTaskBrief } from '../lib/agentPipeline/taskBrief';
 import { openFileInIdeOrSystem } from '../lib/mcpClient';
 import { promptSummary } from '../lib/cliPromptParser';
-import { StepStatusIcon, StepUsageBadge, PieceChip, BiblePreview, RelatedTasksPanel } from './ExecutionStepExtras';
+import { RelatedTasksPanel } from './ExecutionStepExtras';
 import { BvTokenCounterCard, type TaskBilling } from './BvTokenCounterCard';
 import {
   Edit3,
@@ -61,7 +63,6 @@ import {
   FileText,
   ChevronDown,
   ChevronRight,
-  Sparkles,
   Wrench,
   Archive,
   HelpCircle,
@@ -83,6 +84,7 @@ import {
   CalendarDays,
   ArrowDownAZ,
   Activity,
+  History,
 } from 'lucide-react';
 import { getPref, setPref, subscribePrefs } from '../lib/userPrefs';
 import { Banner, Button, EmptyState, Icon, IconButton, MenuButton, RunRow, SegmentedControl, StatusDot, StatusIcon, STATUS_LABEL, PriorityIcon, PRIORITY_LABEL, type Priority, type DesignTaskStatus, type MenuItem } from './ui';
@@ -566,7 +568,10 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   const [overviewText, setOverviewText] = useState('');
   const [buildVerificationText, setBuildVerificationText] = useState('');
   const [completionText, setCompletionText] = useState('');
-  const [viewModeSection2, setViewModeSection2] = useState<'notes' | 'steps'>('notes');
+  const [viewModeSection2, setViewModeSection2] = useState<'timeline' | 'terminal'>('timeline');
+  const [cliActivityItems, setCliActivityItems] = useState<ActivityFeedItem[]>([]);
+  const [diffRefreshKey, setDiffRefreshKey] = useState(0);
+  const [showAllTerminals, setShowAllTerminals] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isMcpModalOpen, setIsMcpModalOpen] = useState(false);
 
@@ -686,11 +691,11 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   // The stage tab shown below the token card (follows the run; see the stage tabs block below).
   const [activeStage, setActiveStage] = useState<TaskStageKey>('overview');
 
-  // Open Actions (Steps view) when an interactive clarification prompt is waiting
+  // Open Runs (Timeline view) when an interactive clarification prompt is waiting
   useEffect(() => {
     if (pendingHumanInput) {
       setActiveStage('actions');
-      setViewModeSection2('steps');
+      setViewModeSection2('timeline');
     }
   }, [pendingHumanInput]);
 
@@ -973,8 +978,8 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     if (latestCycle > prev) latestCycleRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [latestCycle]);
 
-  // Determine what to display in Section 2 (Build & Verification / Steps & Actions)
-  const showExecutionSteps = viewModeSection2 === 'steps' && !isEditing;
+  // Determine what to display in Runs (merged Timeline vs power-user Terminal view)
+  const showTerminalView = viewModeSection2 === 'terminal' && !isEditing;
 
   // Editing the overview makes it the user's (kept and reused by runs); clearing it lets the next run generate one.
   const overviewProvenance = (text: string): Partial<AgentContextItem> => {
@@ -1337,39 +1342,18 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
     handleFieldChange('completion', joinCompletionCycles(parts));
   };
 
-  // Prompts on agents the user isn't looking at in the Notes view (or any prompt while in Steps view).
+  // Prompts on agents the user isn't looking at in Timeline view (or any prompt while in Terminal view).
   const offscreenPromptAgents = agentsWithPrompt.filter(
-    (s) => showExecutionSteps || s.ptySessionId !== shownAgent?.ptySessionId
+    (s) => showTerminalView || s.ptySessionId !== shownAgent?.ptySessionId
   );
 
-  // Steps view: each agent's terminal lives under its own step (step.ptySessionId). Legacy manager steps without
-  // an id take the manager's terminal; sessions no step claims are listed under "Agent terminals".
-  const { stepTerminals, unclaimedAgents } = React.useMemo(() => {
-    const byId = new Map(agentSessions.map((s) => [s.ptySessionId, s] as const));
-    const map = new Map<string, SpawnedSession>();
-    const claimed = new Set<string>();
-    // Latest step wins (a verifier retry reuses the verifier session id).
-    for (let i = executionSteps.length - 1; i >= 0; i--) {
-      const st = executionSteps[i];
-      const agent = st.ptySessionId ? byId.get(st.ptySessionId) : undefined;
-      if (agent && !claimed.has(agent.ptySessionId)) {
-        map.set(st.id, agent);
-        claimed.add(agent.ptySessionId);
-      }
-    }
-    if (managerSession && !claimed.has(managerSession.ptySessionId)) {
-      // Only CLI manager steps (`step-manager-*`, written before steps carried a ptySessionId) qualify: in-app
-      // pipeline steps also use agentRole 'manager' / stage 'execution' but never belong to a CLI terminal.
-      const legacy = [...executionSteps]
-        .reverse()
-        .find((st) => !st.ptySessionId && st.id.startsWith('step-manager-'));
-      if (legacy) {
-        map.set(legacy.id, managerSession);
-        claimed.add(managerSession.ptySessionId);
-      }
-    }
-    return { stepTerminals: map, unclaimedAgents: agentSessions.filter((s) => !claimed.has(s.ptySessionId) && s.status !== 'waiting') };
-  }, [executionSteps, agentSessions, managerSession]);
+  // Reset streamed CLI activity when switching focused agent or task.
+  useEffect(() => {
+    setCliActivityItems([]);
+  }, [shownAgent?.ptySessionId, task.id]);
+
+  // Active runId for checkpoints, diffs, and Changed files.
+  const activeRunId = cycles[latestCycle]?.runId || cycles[0]?.runId || brief?.lastRunOutcome?.runId || agentSessions[0]?.runId;
 
   /** Terminal for one agent (attach-only: App launched it), headed by who it is. */
   const renderAgentTerminal = (agent: SpawnedSession) => {
@@ -1476,28 +1460,15 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                   <MarkdownRenderer content={summaryDocContent || overviewText || '_No brief was saved._'} />
                 </div>
               )}
-              {view === 'actions' &&
-                (steps.length === 0 ? (
-                  <div className="ai-card-hint">No steps were recorded for this {c.n === 0 ? 'run' : 'follow-up'}.</div>
-                ) : (
-                  <div className="execution-steps">
-                    {steps.map((step) => (
-                      <div key={step.id} className={`step-card ${step.status} stage-${step.stage}`}>
-                        <div className="step-header">
-                          <div className="step-title">
-                            <StepStatusIcon step={step} size={13} />
-                            {step.agentRole && <AgentRoleBadge role={step.agentRole} pieceId={step.pieceId} />}
-                            <span style={{ fontSize: '0.8rem' }}>{step.title}</span>
-                          </div>
-                          <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>{step.time}</span>
-                        </div>
-                        <div className="step-detail">
-                          <MarkdownRenderer content={step.detail} />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ))}
+              {view === 'actions' && (
+                <RunTimelineView
+                  runId={c.runId}
+                  steps={steps}
+                  runActive={false}
+                  refreshKey={diffRefreshKey}
+                  onReverted={() => setDiffRefreshKey((k) => k + 1)}
+                />
+              )}
               {view === 'completion' &&
                 (note ? (
                   <div className="brief-markdown-render">
@@ -1620,7 +1591,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
             icon: Edit3,
             onSelect: () => {
               setIsEditing(true);
-              setViewModeSection2('notes');
+              setViewModeSection2('timeline');
               pickStage('overview');
             },
           },
@@ -1920,7 +1891,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                         icon={Pencil}
                         onClick={() => {
                           setIsEditing(true);
-                          setViewModeSection2('notes');
+                          setViewModeSection2('timeline');
                         }}
                       >
                         Edit
@@ -2083,10 +2054,10 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                             type="button"
                             className="agent-prompt-alert-btn"
                             onClick={() => {
-                              setViewModeSection2('notes');
+                              setViewModeSection2('timeline');
                               pinAgent(agent.ptySessionId);
                             }}
-                            title={`Show ${agent.label} in the Notes view to answer`}
+                            title={`Show ${agent.label} in the Timeline view to answer`}
                           >
                             Review
                           </button>
@@ -2142,158 +2113,108 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                     </div>
                   )}
 
-                  {/* Internal View Switcher Bar */}
+                  {/* Internal View Switcher Bar: Timeline (merged Notes + Steps) | Terminal */}
                   <div className="actions-view-switcher-bar">
                     <span className="actions-switcher-label">
-                      {showExecutionSteps
-                        ? latestSteps.length > 0
-                          ? `${latestSteps.length} action${latestSteps.length === 1 ? '' : 's'}`
-                          : 'Execution Steps'
-                        : shownAgent
-                          ? `Notes · ${shownAgent.label}`
-                          : 'Notes'}
+                      {showTerminalView
+                        ? shownAgent
+                          ? `Terminal · ${shownAgent.label}`
+                          : 'Terminal'
+                        : latestSteps.length > 0
+                          ? `${latestSteps.length} step${latestSteps.length === 1 ? '' : 's'}`
+                          : shownAgent
+                            ? `Timeline · ${shownAgent.label}`
+                            : 'Timeline'}
                     </span>
-                    {showExecutionSteps && (
-                      <span className="actions-now-running">
-                        {nowRunningAgent ? (
-                          <span
-                            className={`agent-now-running-chip status-${nowRunningAgent.status}`}
-                            title={`${nowRunningAgent.label} · ${nowRunningAgent.cmd} · ${agentStatusLabel(nowRunningAgent.status)}`}
-                          >
-                            <span className="agent-now-running-prefix">
-                              {nowRunningAgent.status === 'awaiting_approval'
-                                ? 'Needs approval:'
-                                : nowRunningAgent.status === 'waiting'
-                                  ? 'Waiting:'
-                                  : 'Now running:'}
-                            </span>
-                            <AgentRoleBadge role={nowRunningAgent.role} pieceId={nowRunningAgent.pieceId} label={nowRunningAgent.label} />
+                    <span className="actions-now-running">
+                      {nowRunningAgent ? (
+                        <span
+                          className={`agent-now-running-chip status-${nowRunningAgent.status}`}
+                          title={`${nowRunningAgent.label} · ${nowRunningAgent.cmd} · ${agentStatusLabel(nowRunningAgent.status)}`}
+                        >
+                          <span className="agent-now-running-prefix">
+                            {nowRunningAgent.status === 'awaiting_approval'
+                              ? 'Needs approval:'
+                              : nowRunningAgent.status === 'waiting'
+                                ? 'Waiting:'
+                                : 'Running:'}
                           </span>
-                        ) : runningPipelineStep?.agentRole ? (
-                          <span className="agent-now-running-chip status-running" title={runningPipelineStep.title}>
-                            <span className="agent-now-running-prefix">Now running:</span>
-                            <AgentRoleBadge role={runningPipelineStep.agentRole} pieceId={runningPipelineStep.pieceId} />
-                          </span>
-                        ) : null}
-                      </span>
-                    )}
-                    <div className="steps-notes-chip">
-                      <button
-                        type="button"
-                        className={`steps-notes-segment ${!showExecutionSteps ? 'active' : ''}`}
-                        onClick={() => setViewModeSection2('notes')}
-                        title="Switch to Notes view"
-                      >
-                        <FileText size={10} />
-                        <span>Notes</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={`steps-notes-segment ${showExecutionSteps ? 'active' : ''}`}
-                        onClick={() => setViewModeSection2('steps')}
-                        title="Switch to Steps view"
-                      >
-                        <Sparkles size={10} />
-                        <span>Steps</span>
-                      </button>
-                    </div>
+                          <AgentRoleBadge role={nowRunningAgent.role} pieceId={nowRunningAgent.pieceId} label={nowRunningAgent.label} />
+                        </span>
+                      ) : runningPipelineStep?.agentRole ? (
+                        <span className="agent-now-running-chip status-running" title={runningPipelineStep.title}>
+                          <span className="agent-now-running-prefix">Running:</span>
+                          <AgentRoleBadge role={runningPipelineStep.agentRole} pieceId={runningPipelineStep.pieceId} />
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="eg-spacer" />
+                    <SegmentedControl<'timeline' | 'terminal'>
+                      label="Run view"
+                      value={showTerminalView ? 'terminal' : 'timeline'}
+                      onChange={(next) => setViewModeSection2(next)}
+                      options={[
+                        { id: 'timeline', label: 'Timeline', icon: History, title: 'History timeline with checkpoints and diffs' },
+                        { id: 'terminal', label: 'Terminal', icon: Terminal, title: 'Live terminal output for power users' },
+                      ]}
+                    />
                   </div>
 
-                  {showExecutionSteps ? (
-                    /* Sub-view 1: In-place Execution Steps & Workflow */
-                    <div className="execution-steps-wrapper" style={{ padding: '0.65rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                      {showExecutionSteps && agentSessions.length > 1 && (
-                        <div style={{ padding: '0.2rem 0.2rem 0.4rem 0.2rem' }}>
+                  {showTerminalView ? (
+                    /* Sub-view 2: Power-user raw Terminal view */
+                    <div className="eg-run-terminal-view">
+                      {agentSessions.length > 1 && (
+                        <div className="eg-run-terminal-bar">
                           <AgentSessionTabs
                             sessions={agentSessions}
                             selectedId={shownAgent?.ptySessionId ?? null}
                             onSelect={(id) => {
-                              setViewModeSection2('notes');
+                              setShowAllTerminals(false);
                               pinAgent(id);
                             }}
                           />
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setShowAllTerminals((v) => !v)}
+                            title={showAllTerminals ? 'Show only the selected agent terminal' : 'Show all agent terminals stacked'}
+                          >
+                            {showAllTerminals ? 'Single' : `All (${agentSessions.length})`}
+                          </Button>
                         </div>
                       )}
-                      {/* Interactive Mid-Build Human Clarification Card if active */}
-                      {pendingHumanInput && onHumanInputChoice && (
-                        <HumanInputCard
-                          prompt={pendingHumanInput.prompt}
-                          onSubmit={onHumanInputChoice}
+
+                      {agentSessions.length === 0 ? (
+                        <EmptyState
+                          icon={Terminal}
+                          title="No terminal session"
+                          text="This run did not launch a CLI terminal. Switch to Timeline to inspect checkpoints and diffs."
+                          actions={
+                            <Button size="sm" variant="secondary" icon={History} onClick={() => setViewModeSection2('timeline')}>
+                              Open timeline
+                            </Button>
+                          }
                         />
-                      )}
-
-                      {/* Agent terminals no step claims (e.g. restored sessions, or steps not recorded yet) */}
-                      {unclaimedAgents.length > 0 && (
+                      ) : showAllTerminals ? (
                         <div className="agent-terminals-list">
-                          <div className="agent-terminals-list-title">
-                            <Terminal size={12} />
-                            <span>Agent terminals</span>
-                          </div>
-                          {unclaimedAgents.map((agent) => renderAgentTerminal(agent))}
+                          {agentSessions.map((agent) => renderAgentTerminal(agent))}
                         </div>
+                      ) : (
+                        shownAgent && renderAgentTerminal(shownAgent)
                       )}
-
-                      {/* Execution Steps */}
-                      <div className="execution-steps">
-                        {latestSteps.length === 0 ? (
-                          <div className="ai-card-hint" style={{ margin: '0.4rem 0' }}>
-                            No execution steps recorded yet. Agent actions and tool logs will appear here when the task runs.
-                          </div>
-                        ) : (
-                          latestSteps.map((step) => (
-                            <div key={step.id} className={`step-card ${step.status} stage-${step.stage}`} style={step.stage === 'mcp_call' && step.pieceId ? { marginLeft: '0.65rem' } : undefined}>
-                              <div className="step-header">
-                                <div className="step-title">
-                                  <StepStatusIcon step={step} size={13} />
-                                  {step.agentRole ? (
-                                    <AgentRoleBadge role={step.agentRole} pieceId={step.pieceId} />
-                                  ) : (
-                                    <PieceChip pieceId={step.stage === 'mcp_call' ? step.pieceId : undefined} />
-                                  )}
-                                  <span style={{ fontSize: '0.8rem', color: step.status === 'cancelled' ? 'var(--text-muted)' : undefined }}>{step.title}</span>
-                                </div>
-                                <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                                  <StepUsageBadge usage={step.usage} />
-                                  <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-                                    {step.time}
-                                  </span>
-                                </span>
-                              </div>
-
-                              <div className="step-detail"><MarkdownRenderer content={step.detail} /></div>
-                              <BiblePreview markdown={step.bibleMarkdown} filePath={step.bibleMarkdown ? step.bibleFilePath : undefined} />
-
-                              {/* This agent's live terminal, embedded in its own step */}
-                              {stepTerminals.has(step.id) && (
-                                <div style={{ marginTop: '0.65rem' }}>{renderAgentTerminal(stepTerminals.get(step.id)!)}</div>
-                              )}
-
-                              {step.humanInputPrompt && step.status === 'running' && onHumanInputChoice && !pendingHumanInput && (
-                                <div style={{ marginTop: '0.4rem' }}>
-                                  <HumanInputCard
-                                    prompt={step.humanInputPrompt}
-                                    onSubmit={onHumanInputChoice}
-                                  />
-                                </div>
-                              )}
-
-                              {step.widgetType && renderMcpAppWidget(step.widgetType, step.widgetData)}
-                            </div>
-                          ))
-                        )}
-                      </div>
-
                     </div>
                   ) : (
-                    /* Sub-view 2: Notes View (the run's agents, one at a time, clearly labelled + Notes editor) */
-                    <div className="notes-view-container" style={{ display: 'flex', flexDirection: 'column' }}>
+                    /* Sub-view 1: Merged Notes + Steps Vertical Checkpoint Timeline */
+                    <div className="notes-view-container eg-run-timeline-container">
                       {agentSessions.length > 0 && (
                         <div className="agent-notes-panel">
-                          <AgentSessionTabs
-                            sessions={agentSessions}
-                            selectedId={shownAgent?.ptySessionId ?? null}
-                            onSelect={pinAgent}
-                          />
+                          {agentSessions.length > 1 && (
+                            <AgentSessionTabs
+                              sessions={agentSessions}
+                              selectedId={shownAgent?.ptySessionId ?? null}
+                              onSelect={pinAgent}
+                            />
+                          )}
 
                           {managerWaitingOn && (
                             <div className="agent-waiting-row">
@@ -2360,16 +2281,30 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                               runActive={runActive}
                               liveStatus={isAgentWorking(shownAgent.status) ? liveStatusFor(shownAgent, false) : null}
                               hideSteerInput
+                              promptsOnly
+                              onActivityChange={setCliActivityItems}
                             />
                           )}
                         </div>
                       )}
 
-                      {agentSessions.length === 0 && (
-                        <div className="ai-card-hint" style={{ padding: '0.55rem 0.75rem' }}>
-                          The task's agents appear here while it runs.
-                        </div>
-                      )}
+                      <RunTimelineView
+                        runId={activeRunId}
+                        steps={latestSteps}
+                        runActive={runActive}
+                        cliActivity={cliActivityItems}
+                        shownAgent={shownAgent}
+                        pendingHumanInput={pendingHumanInput}
+                        onHumanInputChoice={onHumanInputChoice}
+                        renderHumanInput={(prompt, onSubmit) => (
+                          <HumanInputCard prompt={prompt} onSubmit={onSubmit} />
+                        )}
+                        renderMcpWidget={renderMcpAppWidget}
+                        refreshKey={diffRefreshKey}
+                        onReverted={() => setDiffRefreshKey((k) => k + 1)}
+                        hasTerminal={agentSessions.length > 0}
+                        onOpenTerminal={() => setViewModeSection2('terminal')}
+                      />
                     </div>
                   )}
                 </div>
@@ -2406,7 +2341,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                         icon={Pencil}
                         onClick={() => {
                           setIsEditing(true);
-                          setViewModeSection2('notes');
+                          setViewModeSection2('timeline');
                         }}
                       >
                         Edit
@@ -2446,7 +2381,12 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                       The completion log is written when the agent finishes (or when you stop it).
                     </div>
                   )}
-                  <RunChangedFiles runId={cycles[latestCycle]?.runId || cycles[0]?.runId || brief?.lastRunOutcome?.runId} active={runActive} />
+                  <RunChangedFiles
+                    runId={activeRunId}
+                    active={runActive}
+                    refreshKey={diffRefreshKey}
+                    onReverted={() => setDiffRefreshKey((k) => k + 1)}
+                  />
                 </div>
               )}
               </div>

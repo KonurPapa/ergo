@@ -32,13 +32,20 @@
 .eg-runfiles-head .is-loading .eg-icon { animation: eg-runfiles-spin 0.9s linear infinite; }
 @keyframes eg-runfiles-spin { to { transform: rotate(360deg); } }
 .eg-runfiles-empty { color: var(--ink-subtle); font-size: calc(12px * var(--type-scale)); line-height: calc(16px * var(--type-scale)); padding: var(--space-1) 0; }
-.eg-runfiles-list { list-style: none; margin: 0; padding: 0; }
-.eg-runfiles-row { display: flex; align-items: center; gap: var(--space-2); min-height: 28px; padding: 0 var(--space-1); border-radius: var(--radius-sm); }
+.eg-runfiles-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.eg-runfiles-item { border-radius: var(--radius-sm); }
+.eg-runfiles-row { display: flex; align-items: center; gap: var(--space-1); min-height: 28px; padding: 0 var(--space-1); border-radius: var(--radius-sm); }
 .eg-runfiles-row:hover { background: var(--surface-2); }
+.eg-runfiles-chevron { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex: none; padding: 0; border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--ink-subtle); cursor: pointer; transition: transform var(--duration-base) var(--ease-out), color var(--duration-fast) var(--ease-out); }
+.eg-runfiles-chevron:hover { color: var(--ink); }
+.eg-runfiles-chevron[aria-expanded="true"] { transform: rotate(90deg); color: var(--ink); }
+.eg-runfiles-actions { display: inline-flex; align-items: center; gap: 2px; flex: none; }
 .eg-runfiles-row .eg-btn-icon { opacity: 0; }
 .eg-runfiles-row:hover .eg-btn-icon,
-.eg-runfiles-row:focus-within .eg-btn-icon { opacity: 1; }
+.eg-runfiles-row:focus-within .eg-btn-icon,
+.eg-runfiles-item.is-expanded .eg-btn-icon { opacity: 1; }
 @media (hover: none) { .eg-runfiles-row .eg-btn-icon { opacity: 1; } }
+.eg-runfiles-inline { margin: var(--space-1) 0 var(--space-2) var(--space-4); }
 .eg-runfiles-path { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: 0; border: 0; background: none; color: var(--ink); font-family: var(--font-mono); font-size: calc(12px * var(--type-scale)); line-height: calc(18px * var(--type-scale)); text-align: left; cursor: pointer; }
 .eg-runfiles-path:hover .eg-runfiles-name { color: var(--accent-text); text-decoration: underline; text-underline-offset: 2px; }
 .eg-runfiles-path:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; border-radius: var(--radius-xs); }

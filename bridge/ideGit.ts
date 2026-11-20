@@ -345,15 +345,36 @@ export interface ChangedFile {
 }
 
 const MAX_CHANGED_FILES = 300;
+const MAX_SINGLE_FILE_DIFF_CHARS = 250_000;
+const MAX_TOTAL_DIFF_CHARS = 1_500_000;
+const CHECKPOINTS_FILE = 'checkpoints.json';
 
-/** What changed in the run's working folder since the run started. */
-export async function runChangedFiles(base: RunGitBase, cwd: string): Promise<{ files: ChangedFile[]; truncated: boolean } | null> {
-  if (!base.git || !base.tree || !base.top) return null;
-  const tree = await snapshotTree(base.top, Boolean(base.trackedOnly), 30_000);
-  if (!tree) return null;
-  if (tree === base.tree) return { files: [], truncated: false };
+function normalizeRelPath(relPath: string): string {
+  return relPath.replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+/** Internal Ergo run metadata (.ergo/runs/...) must never appear in diffs or be deleted by reverts. */
+function isErgoRunMetaPath(relPath: string): boolean {
+  const rel = normalizeRelPath(relPath);
+  return rel === '.ergo/runs' || rel.startsWith('.ergo/runs/') || rel.includes('/.ergo/runs/');
+}
+
+function isSafeTreeHash(hash: unknown): hash is string {
+  return typeof hash === 'string' && /^[0-9a-f]{40,64}$/i.test(hash.trim());
+}
+
+/** Files changed between two git tree objects, scoped to `cwd` with paths relative to `cwd`. */
+export async function diffTrees(
+  fromTree: string,
+  toTree: string,
+  cwd: string,
+  fileFilter?: string,
+): Promise<{ files: ChangedFile[]; truncated: boolean } | null> {
+  if (fromTree === toTree) return { files: [], truncated: false };
+  const pathArgs = fileFilter ? ['--', fileFilter] : [];
   // --relative (run from the working folder): only files under it, with paths relative to it.
-  const diff = (format: string) => git(['diff', format, '-z', '--no-renames', '--no-ext-diff', '--relative', base.tree!, tree], cwd);
+  const diff = (format: string) =>
+    git(['diff', format, '-z', '--no-renames', '--no-ext-diff', '--relative', fromTree, toTree, ...pathArgs], cwd);
   const [numstat, names] = await Promise.all([diff('--numstat'), diff('--name-status')]);
   if (!numstat.ok || !names.ok) return null;
   const statusOf = new Map<string, ChangedFile['status']>();
@@ -366,6 +387,7 @@ export async function runChangedFiles(base: RunGitBase, cwd: string): Promise<{ 
   for (const entry of numstat.stdout.split('\0')) {
     const m = /^(-|\d+)\t(-|\d+)\t([\s\S]+)$/.exec(entry);
     if (!m) continue;
+    if (isErgoRunMetaPath(m[3])) continue;
     const binary = m[1] === '-';
     files.push({
       path: m[3],
@@ -376,6 +398,344 @@ export async function runChangedFiles(base: RunGitBase, cwd: string): Promise<{ 
     });
   }
   return { files: files.slice(0, MAX_CHANGED_FILES), truncated: files.length > MAX_CHANGED_FILES };
+}
+
+/** What changed in the run's working folder since the run started. */
+export async function runChangedFiles(base: RunGitBase, cwd: string): Promise<{ files: ChangedFile[]; truncated: boolean } | null> {
+  if (!base.git || !base.tree || !base.top) return null;
+  const tree = await snapshotTree(base.top, Boolean(base.trackedOnly), 30_000);
+  if (!tree) return null;
+  return diffTrees(base.tree, tree, cwd);
+}
+
+export interface RunDiffResult {
+  files: ChangedFile[];
+  diffs: Record<string, string>;
+  fromTree: string;
+  toTree: string;
+  truncated: boolean;
+}
+
+/**
+ * Generates standard unified diffs for a run (or between two checkpoint trees), optionally narrowed to one file.
+ * Snapshots the live working tree when `toTree` is omitted so untracked/added files are included.
+ */
+export async function runFileDiff(
+  base: RunGitBase,
+  cwd: string,
+  opts: { file?: string; fromTree?: string; toTree?: string } = {},
+): Promise<RunDiffResult | null> {
+  if (!base.git || !base.tree || !base.top) return null;
+  const fromTree = isSafeTreeHash(opts.fromTree) ? opts.fromTree.trim() : base.tree;
+  const toTree = isSafeTreeHash(opts.toTree)
+    ? opts.toTree.trim()
+    : await snapshotTree(base.top, Boolean(base.trackedOnly), 30_000);
+  if (!toTree) return null;
+
+  const relFilter = opts.file ? normalizeRelPath(opts.file) : undefined;
+  if (relFilter) {
+    const target = path.resolve(cwd, relFilter);
+    if (!(target === cwd || target.startsWith(cwd + path.sep))) return null;
+  }
+
+  const changed = await diffTrees(fromTree, toTree, cwd, relFilter);
+  if (!changed) return null;
+
+  const diffs: Record<string, string> = {};
+  let totalChars = 0;
+
+  for (const f of changed.files) {
+    if (f.binary) {
+      diffs[f.path] = `Binary file ${f.path} (${f.status})`;
+      continue;
+    }
+    if (!relFilter && totalChars >= MAX_TOTAL_DIFF_CHARS) break;
+    const res = await git(
+      ['diff', '--no-renames', '--no-ext-diff', '--no-color', '--relative', '-U3', fromTree, toTree, '--', f.path],
+      cwd,
+      { timeoutMs: 20_000 },
+    );
+    if (!res.ok) continue;
+    let text = res.stdout;
+    if (text.length > MAX_SINGLE_FILE_DIFF_CHARS) {
+      text = `${text.slice(0, MAX_SINGLE_FILE_DIFF_CHARS)}\n... (diff truncated at ${MAX_SINGLE_FILE_DIFF_CHARS} characters)`;
+    }
+    diffs[f.path] = text;
+    totalChars += text.length;
+  }
+
+  return { files: changed.files, diffs, fromTree, toTree, truncated: changed.truncated };
+}
+
+export interface FileRevertOutcome {
+  ok: boolean;
+  path: string;
+  fullPath?: string;
+  action?: 'restored' | 'deleted';
+  error?: string;
+}
+
+async function pruneEmptyParents(filePath: string, stopAtDir: string): Promise<void> {
+  const root = path.resolve(stopAtDir);
+  let dir = path.dirname(path.resolve(filePath));
+  while (dir !== root && dir.startsWith(root + path.sep)) {
+    try {
+      const entries = await fs.readdir(dir);
+      if (entries.length > 0) break;
+      await fs.rmdir(dir);
+      dir = path.dirname(dir);
+    } catch {
+      break;
+    }
+  }
+}
+
+/**
+ * Restores a single file to how it existed in `targetTree` (defaults to the run's pre-run base tree).
+ * Files that did not exist in `targetTree` are cleanly deleted (and unstaged if newly added to the git index).
+ */
+export async function revertFileToTree(
+  base: RunGitBase,
+  cwd: string,
+  relPath: string,
+  targetTree?: string,
+): Promise<FileRevertOutcome> {
+  const rel = normalizeRelPath(relPath);
+  if (!rel || rel === '.git' || rel.startsWith('.git/') || rel.includes('/.git/') || isErgoRunMetaPath(rel)) {
+    return { ok: false, path: rel, error: 'Refusing to modify internal git or run metadata.' };
+  }
+  const tree = isSafeTreeHash(targetTree) ? targetTree.trim() : base.tree;
+  if (!base.git || !tree || !base.top) {
+    return { ok: false, path: rel, error: 'This run has no recorded git snapshot to revert to.' };
+  }
+  const absCwd = path.resolve(cwd);
+  const fullPath = path.resolve(absCwd, rel);
+  if (!(fullPath === absCwd || fullPath.startsWith(absCwd + path.sep))) {
+    return { ok: false, path: rel, error: 'That file is outside the run folder.' };
+  }
+  const inTree = `${base.prefix || ''}${rel}`;
+
+  // Inspect whether the file existed in the target tree (and capture its file mode).
+  const ls = await git(['ls-tree', '--', tree, inTree], base.top, { timeoutMs: 10_000 });
+  const entry = ls.ok ? ls.stdout.trim() : '';
+  if (entry) {
+    const modeMatch = /^(\d{6})\s+blob\s+([0-9a-f]{40,64})\t/.exec(entry);
+    if (!modeMatch) {
+      return { ok: false, path: rel, error: 'Target entry is not a regular file.' };
+    }
+    const blob = await gitBuffer(['cat-file', 'blob', `${tree}:${inTree}`], base.top);
+    if (!blob) {
+      return { ok: false, path: rel, error: 'Could not read the saved file snapshot from git.' };
+    }
+    try {
+      await fs.mkdir(path.dirname(fullPath), { recursive: true });
+      await fs.writeFile(fullPath, blob);
+      if (process.platform !== 'win32' && modeMatch[1] === '100755') {
+        await fs.chmod(fullPath, 0o755).catch(() => {});
+      }
+      return { ok: true, path: rel, fullPath, action: 'restored' };
+    } catch (err: any) {
+      return { ok: false, path: rel, error: err?.message || String(err) };
+    }
+  }
+
+  // The file did not exist in the target tree — remove it from disk (and unstage if newly staged).
+  try {
+    await git(['rm', '-f', '--cached', '--ignore-unmatch', '--', inTree], base.top, { timeoutMs: 10_000 }).catch(() => {});
+    await fs.unlink(fullPath).catch((e: any) => {
+      if (e?.code !== 'ENOENT') throw e;
+    });
+    await pruneEmptyParents(fullPath, absCwd);
+    return { ok: true, path: rel, fullPath, action: 'deleted' };
+  } catch (err: any) {
+    return { ok: false, path: rel, error: err?.message || String(err) };
+  }
+}
+
+export interface RunRevertResult {
+  success: boolean;
+  reverted: string[];
+  deleted: string[];
+  failed: Array<{ path: string; error: string }>;
+  fullPaths: string[];
+  restoredTree?: string;
+  error?: string;
+}
+
+/** Reverts every file in `cwd` that differs from `targetTree` (defaults to the run's pre-run base tree). */
+export async function revertRunToTree(base: RunGitBase, cwd: string, targetTree?: string): Promise<RunRevertResult> {
+  const tree = isSafeTreeHash(targetTree) ? targetTree.trim() : base.tree;
+  if (!base.git || !tree || !base.top) {
+    return {
+      success: false,
+      reverted: [],
+      deleted: [],
+      failed: [],
+      fullPaths: [],
+      error: 'This run has no recorded git snapshot to revert to.',
+    };
+  }
+  const curTree = await snapshotTree(base.top, Boolean(base.trackedOnly), 30_000);
+  if (!curTree) {
+    return {
+      success: false,
+      reverted: [],
+      deleted: [],
+      failed: [],
+      fullPaths: [],
+      error: 'Could not inspect the current working tree.',
+    };
+  }
+  const changed = await diffTrees(tree, curTree, cwd);
+  if (!changed) {
+    return {
+      success: false,
+      reverted: [],
+      deleted: [],
+      failed: [],
+      fullPaths: [],
+      error: 'Could not compute changed files to revert.',
+    };
+  }
+  const reverted: string[] = [];
+  const deleted: string[] = [];
+  const failed: Array<{ path: string; error: string }> = [];
+  const fullPaths: string[] = [];
+
+  for (const f of changed.files) {
+    const out = await revertFileToTree(base, cwd, f.path, tree);
+    if (out.ok) {
+      if (out.action === 'deleted') deleted.push(f.path);
+      else reverted.push(f.path);
+      if (out.fullPath) fullPaths.push(out.fullPath);
+    } else {
+      failed.push({ path: f.path, error: out.error || 'Revert failed' });
+    }
+  }
+
+  return {
+    success: failed.length === 0,
+    reverted,
+    deleted,
+    failed,
+    fullPaths,
+    restoredTree: tree,
+  };
+}
+
+// ── Run Checkpoints (<runDir>/checkpoints.json) ──
+
+export interface RunCheckpoint {
+  id: string;
+  stepId?: string;
+  label: string;
+  summary?: string;
+  at: string;
+  tree?: string;
+  prevTree?: string;
+  files?: ChangedFile[];
+  isBaseline?: boolean;
+  changelog?: string;
+}
+
+interface StoredCheckpointsFile {
+  version: 1;
+  checkpoints: RunCheckpoint[];
+}
+
+export async function readRunCheckpoints(runDir: string): Promise<RunCheckpoint[]> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(path.join(runDir, CHECKPOINTS_FILE), 'utf-8'));
+    if (parsed && parsed.version === 1 && Array.isArray(parsed.checkpoints)) {
+      return parsed.checkpoints as RunCheckpoint[];
+    }
+  } catch {}
+  return [];
+}
+
+async function writeRunCheckpoints(runDir: string, checkpoints: RunCheckpoint[]): Promise<void> {
+  await fs.mkdir(runDir, { recursive: true });
+  const payload: StoredCheckpointsFile = { version: 1, checkpoints };
+  await fs.writeFile(path.join(runDir, CHECKPOINTS_FILE), JSON.stringify(payload, null, 2), 'utf-8');
+}
+
+/**
+ * Records a checkpoint for a major step in a run.
+ * For git repos, captures a lightweight working-tree snapshot and computes the changed files since the previous
+ * checkpoint (or run baseline). For non-git tasks, records the changelog and metadata cleanly without git.
+ */
+export async function recordRunCheckpoint(
+  base: RunGitBase | null,
+  runDir: string,
+  cwd: string,
+  input: {
+    id?: string;
+    stepId?: string;
+    label: string;
+    summary?: string;
+    changelog?: string;
+  },
+): Promise<{ checkpoint: RunCheckpoint; checkpoints: RunCheckpoint[] }> {
+  const existing = await readRunCheckpoints(runDir);
+  const checkpoints = [...existing];
+
+  // Ensure the baseline checkpoint is always first when git base is available.
+  if (base?.git && base.tree && !checkpoints.some((c) => c.isBaseline)) {
+    checkpoints.unshift({
+      id: 'cp-base',
+      label: 'Before run',
+      summary: 'Initial workspace snapshot before the agent made any changes.',
+      at: base.at || new Date().toISOString(),
+      tree: base.tree,
+      isBaseline: true,
+      files: [],
+    });
+  }
+
+  let curTree: string | undefined;
+  let prevTree: string | undefined;
+  let files: ChangedFile[] | undefined;
+
+  if (base?.git && base.tree && base.top) {
+    const snapped = await snapshotTree(base.top, Boolean(base.trackedOnly), 20_000);
+    if (snapped) {
+      curTree = snapped;
+      // Find the last checkpoint with a tree (excluding an existing entry for this exact stepId/id).
+      const prior = [...checkpoints]
+        .reverse()
+        .find((c) => c.tree && c.id !== input.id && (!input.stepId || c.stepId !== input.stepId));
+      prevTree = prior?.tree || base.tree;
+      const diff = await diffTrees(prevTree, curTree, cwd);
+      files = diff?.files ?? [];
+    }
+  }
+
+  const now = new Date().toISOString();
+  const matchIdx = checkpoints.findIndex(
+    (c) => (input.id && c.id === input.id) || (input.stepId && c.stepId === input.stepId),
+  );
+  const id = input.id || (matchIdx >= 0 ? checkpoints[matchIdx].id : `cp-${Date.now().toString(36)}-${randomBytes(2).toString('hex')}`);
+
+  const checkpoint: RunCheckpoint = {
+    id,
+    ...(input.stepId ? { stepId: input.stepId } : {}),
+    label: input.label.trim() || 'Checkpoint',
+    ...(input.summary ? { summary: input.summary } : {}),
+    at: matchIdx >= 0 ? checkpoints[matchIdx].at : now,
+    ...(curTree ? { tree: curTree } : {}),
+    ...(prevTree ? { prevTree } : {}),
+    ...(files ? { files } : {}),
+    ...(input.changelog ? { changelog: input.changelog } : {}),
+  };
+
+  if (matchIdx >= 0) {
+    checkpoints[matchIdx] = checkpoint;
+  } else {
+    checkpoints.push(checkpoint);
+  }
+
+  await writeRunCheckpoints(runDir, checkpoints);
+  return { checkpoint, checkpoints };
 }
 
 /**

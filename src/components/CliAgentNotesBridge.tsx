@@ -53,6 +53,10 @@ export interface CliAgentNotesBridgeProps {
   liveStatus?: React.ReactNode;
   /** The task pane's pinned prompt box takes messages instead of this view's own input. */
   hideSteerInput?: boolean;
+  /** When true, only renders interactive approval/question prompts (activity streams into the unified timeline). */
+  promptsOnly?: boolean;
+  /** Callback receiving extracted live activity entries from this CLI session's PTY stream. */
+  onActivityChange?: (items: ActivityFeedItem[]) => void;
 }
 
 /** Screen size the Notes view renders the agent's output at until the bridge reports the PTY's real size. */
@@ -81,6 +85,8 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
   runActive = true,
   liveStatus,
   hideSteerInput = false,
+  promptsOnly = false,
+  onActivityChange,
 }) => {
   const [detectedPrompt, setDetectedPrompt] = useState<CliDetectedPrompt | null>(initialPrompt);
   const [activityFeed, setActivityFeed] = useState<ActivityFeedItem[]>([]);
@@ -310,6 +316,12 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
     return [...activityFeed, ...localEntries].sort((a, b) => order(a) - order(b));
   }, [activityFeed, localEntries]);
 
+  const onActivityChangeRef = useRef(onActivityChange);
+  onActivityChangeRef.current = onActivityChange;
+  useEffect(() => {
+    onActivityChangeRef.current?.(allEntries);
+  }, [allEntries]);
+
   // Auto-scroll feed to bottom when entries update
   useEffect(() => {
     if (feedScrollRef.current) {
@@ -388,8 +400,12 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
     : '';
   const hasOptions = Boolean(detectedPrompt?.options && detectedPrompt.options.length > 0);
 
+  if (promptsOnly && !connectionError && !detectedPrompt) {
+    return null;
+  }
+
   return (
-    <div className={`cli-notes-bridge role-${role}`}>
+    <div className={`cli-notes-bridge role-${role}${promptsOnly ? ' is-prompts-only' : ''}`}>
       {connectionError && (
         <div className="bridge-connection-error">
           <AlertTriangle size={12} />
@@ -517,7 +533,8 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
         </div>
       )}
 
-      {/* ── Activity Stream ── */}
+      {/* ── Activity Stream (hidden when embedded in unified timeline) ── */}
+      {!promptsOnly && (
       <div className={`cli-notes-feed-container ${isFeedCollapsed ? 'is-collapsed' : ''}`}>
         <div
           className="feed-container-header"
@@ -565,6 +582,7 @@ export const CliAgentNotesBridge: React.FC<CliAgentNotesBridgeProps> = ({
           </div>
         )}
       </div>
+      )}
 
       {!hideSteerInput && liveStatus}
 

@@ -33,8 +33,14 @@
  *      /api/ide/detect, /api/git/run-changes (files a run changed since its first agent started, recorded in
  *      `.ergo/runs/<runId>/git-base.json`) and /api/files/diff (a run's change to one file as a diff in the editor).
  *      Optional: with an older bridge paths still open (in its auto-detected editor) but runs list no changed files.
+ * 10 — in-app visual diff & checkpoint rollback: /api/git/run-diff (unified diff payload), /api/git/revert-file,
+ *      /api/git/revert-run, /api/git/checkpoint and /api/git/checkpoints (per-step tree snapshots and 1-click revert).
+ *      Optional: older bridges still open diffs in the external editor.
  */
-export const BRIDGE_PROTOCOL = 9;
+export const BRIDGE_PROTOCOL = 10;
+
+/** First protocol whose bridge serves in-app unified diffs, checkpoints, and 1-click revert. */
+export const VISUAL_DIFF_PROTOCOL = 10;
 
 /** First protocol whose bridge honors the editor choice and serves run changes and diffs (ideLinks.ts). */
 export const IDE_LINKS_PROTOCOL = 9;

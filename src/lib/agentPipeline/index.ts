@@ -43,6 +43,7 @@ import { runVerifier, type VerifierResult } from './verifier';
 import { runLogger } from './logger';
 import { routeModelsForRun, describeRouting, familyForTarget, EFFORT_LABELS, type RoutingResult } from './modelRouter';
 import { rateTask } from './taskRating';
+import { isMajorCheckpointStep, queueRunCheckpoint } from '../ideLinks';
 import { buildRunOutcomeRecord, describeRerunEscalation, rerunEscalation, workEscalation } from './escalation';
 import { isOverviewReusable, overviewTaskFingerprint } from '../overviewUtils';
 import type { SteeringQueue } from './steeringQueue';
@@ -240,17 +241,33 @@ export async function executeTaskWithAi(
     steering,
     // Every step carries the task's running total (calls of loops still in flight included), so the token card
     // keeps counting during a long agent loop and keeps the figure when the run is stopped.
-    emit: (step) =>
-      onStepUpdate({
+    emit: (step) => {
+      const fullStep: ExecutionStep = {
         time: new Date().toLocaleTimeString(),
         taskId: task.id,
         ...step,
         totalUsage: step.totalUsage || runningTaskUsage(ctx)
-      } as ExecutionStep)
+      } as ExecutionStep;
+      onStepUpdate(fullStep);
+      if (
+        (fullStep.status === 'success' || fullStep.status === 'warning') &&
+        isMajorCheckpointStep(fullStep) &&
+        !recordedCheckpoints.has(fullStep.id)
+      ) {
+        recordedCheckpoints.add(fullStep.id);
+        void queueRunCheckpoint(runId, {
+          stepId: fullStep.id,
+          label: fullStep.title,
+          changelog: fullStep.detail,
+        });
+      }
+    }
   };
+  const recordedCheckpoints = new Set<string>();
 
   try {
     ctx.allowedRoots = await getAllowedRoots();
+    void queueRunCheckpoint(runId, { initBase: true });
     ctx.references = await resolveTaskReferences(task, brief, getWorkspaceSkills(), projectWorkingFolder(project));
     if (ctx.references) {
       ctx.emit({ id: 'step-task-commands', stage: 'context', title: 'Task Commands', detail: describeTaskReferences(ctx.references), status: 'success' });

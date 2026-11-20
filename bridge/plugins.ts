@@ -48,9 +48,14 @@ import {
   detectIdes,
   openDiffInIde,
   openInIde,
+  readRunCheckpoints,
   readRunGitBase,
+  recordRunCheckpoint,
   recordRunGitBase,
+  revertFileToTree,
+  revertRunToTree,
   runChangedFiles,
+  runFileDiff,
   writeDeletedStandIn,
   writeRunBaseFile,
   type RunGitBase,
@@ -441,16 +446,22 @@ async function locateAllowedFile(storageDir: string, projectId: unknown, rawPath
   return { ok: false, status: 404, error: `File not found: ${rawPath}` };
 }
 
-/** A run's recorded starting point (git-base.json) and its working folder, looked up in the project's folders. */
-async function locateRunBase(storageDir: string, projectId: unknown, runId: unknown, root?: unknown): Promise<{ base: RunGitBase; cwd: string } | null> {
+/** A run's recorded starting point (git-base.json), runDir, and working folder, looked up in the project's folders. */
+async function locateRunBase(
+  storageDir: string,
+  projectId: unknown,
+  runId: unknown,
+  root?: unknown,
+): Promise<{ base: RunGitBase; cwd: string; runDir: string } | null> {
   if (typeof runId !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(runId)) return null;
   const { bases, allowed } = await fileLinkBases(storageDir, projectId, typeof root === 'string' ? root : undefined);
   for (const b of bases) {
-    const base = await readRunGitBase(path.join(b, '.ergo', 'runs', runId));
+    const runDir = path.join(b, '.ergo', 'runs', runId);
+    const base = await readRunGitBase(runDir);
     if (!base) continue;
     const cwd = path.resolve(base.cwd || b);
     if (!isInsideRoots(cwd, allowed)) return null;
-    return { base, cwd };
+    return { base, cwd, runDir };
   }
   return null;
 }
@@ -2407,7 +2418,183 @@ export function ergoFileSystemPlugin(): Plugin {
         if (!base.git || !base.tree) return sendJson(res, 200, { success: true, baseline: false, git: base.git, files: [] });
         const changes = await runChangedFiles(base, cwd);
         if (!changes) return sendJson(res, 200, { success: false, baseline: true, git: true, files: [], error: 'git could not compare the run’s changes.' });
-        return sendJson(res, 200, { success: true, baseline: true, git: true, root: cwd, startedAt: base.at, ...changes });
+        return sendJson(res, 200, { success: true, baseline: true, git: true, root: cwd, startedAt: base.at, baseTree: base.tree, ...changes });
+      }
+
+      if (url === '/api/git/run-diff' && (req.method === 'GET' || req.method === 'POST')) {
+        // Unified diff payload for in-app visual diff review (whole run, single file, or between two checkpoint trees).
+        let params: { runId?: unknown; file?: unknown; fromTree?: unknown; toTree?: unknown; projectId?: unknown; root?: unknown } = {};
+        if (req.method === 'GET') {
+          const sp = new URL(req.url || '', 'http://bridge').searchParams;
+          params = {
+            runId: sp.get('runId') ?? undefined,
+            file: sp.get('file') ?? undefined,
+            fromTree: sp.get('fromTree') ?? undefined,
+            toTree: sp.get('toTree') ?? undefined,
+            projectId: sp.get('projectId') ?? undefined,
+            root: sp.get('root') ?? undefined,
+          };
+        } else {
+          try {
+            params = await parseJsonBody(req);
+          } catch {}
+        }
+        const located = await locateRunBase(storageDir, params.projectId, params.runId, params.root);
+        if (!located) return sendJson(res, 200, { success: true, baseline: false, git: false, files: [], diffs: {} });
+        const { base, cwd } = located;
+        if (!base.git || !base.tree) return sendJson(res, 200, { success: true, baseline: false, git: base.git, files: [], diffs: {} });
+        const result = await runFileDiff(base, cwd, {
+          file: typeof params.file === 'string' && params.file.trim() ? params.file.trim() : undefined,
+          fromTree: typeof params.fromTree === 'string' && params.fromTree.trim() ? params.fromTree.trim() : undefined,
+          toTree: typeof params.toTree === 'string' && params.toTree.trim() ? params.toTree.trim() : undefined,
+        });
+        if (!result) return sendJson(res, 200, { success: false, baseline: true, git: true, files: [], diffs: {}, error: 'git could not generate the diff.' });
+        return sendJson(res, 200, { success: true, baseline: true, git: true, root: cwd, baseTree: base.tree, ...result });
+      }
+
+      if (url === '/api/git/revert-file' && req.method === 'POST') {
+        // Restore a single file back to the run's pre-run snapshot (or a specific checkpoint tree), deleting it if newly added.
+        let body: any = {};
+        try {
+          body = await parseJsonBody(req);
+        } catch {}
+        const rel = typeof body.path === 'string' ? body.path.trim() : typeof body.file === 'string' ? body.file.trim() : '';
+        if (!rel) return sendJson(res, 400, { success: false, error: 'path is required.' });
+        const located = await locateRunBase(storageDir, body.projectId, body.runId, body.root);
+        if (!located?.base.git || !located.base.tree) {
+          return sendJson(res, 404, { success: false, error: 'This run has no recorded snapshot to revert to.' });
+        }
+        const out = await revertFileToTree(located.base, located.cwd, rel, typeof body.tree === 'string' ? body.tree : undefined);
+        if (out.fullPath) recentWrites.set(out.fullPath, Date.now());
+        if (!out.ok) return sendJson(res, 400, { success: false, error: out.error || 'Could not revert file.' });
+        return sendJson(res, 200, {
+          success: true,
+          reverted: out.action === 'restored' ? [out.path] : [],
+          deleted: out.action === 'deleted' ? [out.path] : [],
+          failed: [],
+          action: out.action,
+        });
+      }
+
+      if (url === '/api/git/revert-run' && req.method === 'POST') {
+        // Revert all files changed in a run back to the run baseline or to a specific checkpoint tree.
+        let body: any = {};
+        try {
+          body = await parseJsonBody(req);
+        } catch {}
+        const located = await locateRunBase(storageDir, body.projectId, body.runId, body.root);
+        if (!located?.base.git || !located.base.tree) {
+          return sendJson(res, 404, { success: false, error: 'This run has no recorded snapshot to revert to.' });
+        }
+        let targetTree: string | undefined = typeof body.tree === 'string' && body.tree.trim() ? body.tree.trim() : undefined;
+        if (!targetTree && typeof body.checkpointId === 'string' && body.checkpointId.trim()) {
+          const checkpoints = await readRunCheckpoints(located.runDir);
+          const match = checkpoints.find((c) => c.id === body.checkpointId || c.stepId === body.checkpointId);
+          if (match?.tree) targetTree = match.tree;
+        }
+        const out = await revertRunToTree(located.base, located.cwd, targetTree);
+        for (const fp of out.fullPaths) recentWrites.set(fp, Date.now());
+        return sendJson(res, out.success ? 200 : 500, {
+          success: out.success,
+          reverted: out.reverted,
+          deleted: out.deleted,
+          failed: out.failed,
+          restoredTree: out.restoredTree,
+          ...(out.error ? { error: out.error } : {}),
+        });
+      }
+
+      if (url === '/api/git/checkpoint' && req.method === 'POST') {
+        // Record a checkpoint snapshot for a major step in a run (and optionally initialize git-base.json for in-app runs).
+        let body: any = {};
+        try {
+          body = await parseJsonBody(req);
+        } catch {}
+        const runId = typeof body.runId === 'string' && /^[A-Za-z0-9._-]{1,80}$/.test(body.runId) ? body.runId : null;
+        if (!runId) return sendJson(res, 400, { success: false, error: 'A valid runId is required.' });
+        let located = await locateRunBase(storageDir, body.projectId, runId, body.root);
+        if (!located) {
+          const { bases, allowed } = await fileLinkBases(storageDir, body.projectId, typeof body.root === 'string' ? body.root : undefined);
+          const targetCwd = bases.find((b) => isInsideRoots(path.resolve(b), allowed));
+          if (!targetCwd) return sendJson(res, 404, { success: false, error: 'No approved folder found for this run.' });
+          const runDir = path.join(targetCwd, '.ergo', 'runs', runId);
+          await fs.mkdir(runDir, { recursive: true });
+          await recordRunGitBase(targetCwd, runDir).catch(() => {});
+          const base = await readRunGitBase(runDir);
+          if (base) located = { base, cwd: path.resolve(base.cwd || targetCwd), runDir };
+          else {
+            const fallbackBase: RunGitBase = { version: 1, git: false, cwd: targetCwd, at: new Date().toISOString() };
+            located = { base: fallbackBase, cwd: targetCwd, runDir };
+          }
+        }
+        if (body.initBase && !body.label) {
+          const checkpoints = await readRunCheckpoints(located.runDir);
+          return sendJson(res, 200, {
+            success: true,
+            baseline: Boolean(located.base.git && located.base.tree),
+            git: located.base.git,
+            baseTree: located.base.tree,
+            checkpoints,
+          });
+        }
+        try {
+          const recorded = await recordRunCheckpoint(located.base, located.runDir, located.cwd, {
+            id: typeof body.id === 'string' ? body.id : undefined,
+            stepId: typeof body.stepId === 'string' ? body.stepId : undefined,
+            label: typeof body.label === 'string' ? body.label : 'Checkpoint',
+            summary: typeof body.summary === 'string' ? body.summary : undefined,
+            changelog: typeof body.changelog === 'string' ? body.changelog : undefined,
+          });
+          return sendJson(res, 200, {
+            success: true,
+            baseline: Boolean(located.base.git && located.base.tree),
+            git: located.base.git,
+            baseTree: located.base.tree,
+            ...recorded,
+          });
+        } catch (err: any) {
+          return sendJson(res, 500, { success: false, error: err?.message || String(err) });
+        }
+      }
+
+      if (url === '/api/git/checkpoints' && (req.method === 'GET' || req.method === 'POST')) {
+        // Read all checkpoints recorded for a run (always includes the initial git baseline when available).
+        let params: { runId?: unknown; projectId?: unknown; root?: unknown } = {};
+        if (req.method === 'GET') {
+          const sp = new URL(req.url || '', 'http://bridge').searchParams;
+          params = {
+            runId: sp.get('runId') ?? undefined,
+            projectId: sp.get('projectId') ?? undefined,
+            root: sp.get('root') ?? undefined,
+          };
+        } else {
+          try {
+            params = await parseJsonBody(req);
+          } catch {}
+        }
+        const located = await locateRunBase(storageDir, params.projectId, params.runId, params.root);
+        if (!located) return sendJson(res, 200, { success: true, baseline: false, git: false, checkpoints: [] });
+        const { base, cwd, runDir } = located;
+        const checkpoints = await readRunCheckpoints(runDir);
+        if (base.git && base.tree && !checkpoints.some((c) => c.isBaseline)) {
+          checkpoints.unshift({
+            id: 'cp-base',
+            label: 'Before run',
+            summary: 'Initial workspace snapshot before the agent made any changes.',
+            at: base.at || new Date().toISOString(),
+            tree: base.tree,
+            isBaseline: true,
+            files: [],
+          });
+        }
+        return sendJson(res, 200, {
+          success: true,
+          baseline: Boolean(base.git && base.tree),
+          git: base.git,
+          root: cwd,
+          baseTree: base.tree,
+          checkpoints,
+        });
       }
 
       if (url === '/api/files/diff' && req.method === 'POST') {
