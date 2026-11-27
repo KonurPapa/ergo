@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ChevronRight,
   ExternalLink,
+  Eye,
   FileDiff,
   FileMinus,
   FilePlus,
@@ -28,6 +29,7 @@ import {
   type RunChangedFile,
   type RunChanges,
 } from '../lib/ideLinks';
+import { isPreviewableFile } from '../lib/preview';
 import { askConfirm, Button, Icon, IconButton } from './ui';
 import { InlineDiffView, VisualDiffModal } from './VisualDiffModal';
 
@@ -54,6 +56,7 @@ const FileRow: React.FC<{
   onToggleExpand: () => void;
   onOpenVisualDiff: () => void;
   onDiscard: () => void;
+  onPreview?: () => void;
 }> = ({
   file,
   runId,
@@ -67,6 +70,7 @@ const FileRow: React.FC<{
   onToggleExpand,
   onOpenVisualDiff,
   onDiscard,
+  onPreview,
 }) => {
     const { dir, name } = splitPath(file.path);
     const deleted = file.status === 'deleted';
@@ -118,6 +122,7 @@ const FileRow: React.FC<{
           </span>
           {canInAppDiff ? (
             <span className="eg-runfiles-actions">
+              {onPreview && <IconButton icon={Eye} size="sm" label="Preview" title={`Preview ${file.path} in Ergo`} onClick={onPreview} />}
               <IconButton
                 icon={GitCompare}
                 size="sm"
@@ -174,7 +179,9 @@ export const RunChangedFiles: React.FC<{
   refreshKey?: number;
   /** Called after any file or full-run revert completes. */
   onReverted?: () => void;
-}> = ({ runId, active, refreshKey, onReverted }) => {
+  /** Opens a changed HTML file in the Preview tab; no Preview buttons without it. */
+  onPreview?: (path: string) => void;
+}> = ({ runId, active, refreshKey, onReverted, onPreview }) => {
   const [changes, setChanges] = useState<RunChanges | null>(null);
   const [loading, setLoading] = useState(false);
   const [showAll, setShowAll] = useState(false);
@@ -351,6 +358,7 @@ export const RunChangedFiles: React.FC<{
                   setModalOpen(true);
                 }}
                 onDiscard={() => void handleDiscardFile(f)}
+                onPreview={onPreview && f.status !== 'deleted' && isPreviewableFile(f.path) ? () => onPreview(f.path) : undefined}
               />
             ))}
           </ul>

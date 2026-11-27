@@ -43,6 +43,7 @@ import { createMemoryStore, embedWithMemoryModel, MEMORY_NAMESPACES, AGENT_NOTE_
 import { CodeIndexManager, SKIP_DIR } from '../src/lib/codeIndex/codeIndex.ts';
 import { rankPaths } from '../src/lib/pathRank.ts';
 import { WORKSPACE_MCP_TOOLS } from '../src/lib/workspaceMcp.ts';
+import { createPreviewSession, handlePreviewFile, listDevServers, PREVIEW_FILE_PREFIX } from './preview.ts';
 import { bridgeInfo, hostFilePicker, requestBridgeUpdate, setActiveSessionCounter, setBridgeProblem } from './selfUpdate.ts';
 import {
   detectIdes,
@@ -1388,6 +1389,12 @@ function checkBridgeAccess(req: IncomingMessage): BridgeAccess {
     return { ok: false, reason: `non-loopback Host header "${hostHeader}"` };
   }
 
+  // Live Web Preview files load in an iframe (no Origin, or "null" from the sandboxed page). They are read-only,
+  // served only under an unguessable per-folder token, and always sandboxed into an opaque origin (bridge/preview.ts).
+  if ((req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') && req.url?.startsWith(PREVIEW_FILE_PREFIX)) {
+    return { ok: true, corsOrigin: null };
+  }
+
   const origin = req.headers.origin;
   if (origin) {
     if (origin === `http://${hostHeader}` || origin === `https://${hostHeader}`) {
@@ -1686,10 +1693,47 @@ export function ergoFileSystemPlugin(): Plugin {
     setupProjectWatcher(storageDir);
 
     server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: Function) => {
+      // Lets the Preview tab's dev-server scan skip Ergo bridges (bridge/preview.ts).
+      res.setHeader('X-Ergo-Bridge', '1');
       const url = req.url?.split('?')[0];
       if (!url?.startsWith('/api/')) return next();
       if (!guardBridgeRequest(req, res)) return;
       const storageDir = getActiveStorageDir();
+
+      // ─────────────────────────────────────────────────────────────
+      // Live Web Preview (bridge/preview.ts)
+      // ─────────────────────────────────────────────────────────────
+      if (url.startsWith(PREVIEW_FILE_PREFIX)) {
+        await handlePreviewFile(req, res, url);
+        return;
+      }
+
+      if (url === '/api/preview/session' && req.method === 'POST') {
+        try {
+          const body = await parseJsonBody(req);
+          const rawRoot = typeof body?.root === 'string' ? body.root.trim() : '';
+          const root = rawRoot ? resolveRootPath(rawRoot) : await projectWorkingRoot(storageDir, body?.projectId);
+          if (!root) return sendJson(res, 400, { success: false, error: 'No folder to preview.' });
+          const allowed = await loadAllowedRoots(storageDir, body?.projectId);
+          if (!isInsideRoots(root, allowed)) {
+            return sendJson(res, 403, { success: false, error: `${root} is outside this project's Allowed Folders.` });
+          }
+          const st = await fs.stat(root).catch(() => null);
+          if (!st?.isDirectory()) return sendJson(res, 404, { success: false, error: `Folder not found: ${root}` });
+          const token = createPreviewSession(root);
+          return sendJson(res, 200, { success: true, token, base: `${PREVIEW_FILE_PREFIX}${token}/`, root });
+        } catch (e: any) {
+          return sendJson(res, 500, { success: false, error: e?.message || 'Could not start the preview.' });
+        }
+      }
+
+      if (url === '/api/preview/ports' && req.method === 'GET') {
+        try {
+          return sendJson(res, 200, { success: true, servers: await listDevServers(req.socket.localPort) });
+        } catch (e: any) {
+          return sendJson(res, 500, { success: false, error: e?.message || 'Could not scan for dev servers.' });
+        }
+      }
 
       // ─────────────────────────────────────────────────────────────
       // SSE Real-time File Change Subscription Endpoint
@@ -2517,8 +2561,8 @@ export function ergoFileSystemPlugin(): Plugin {
           const { bases, allowed } = await fileLinkBases(storageDir, body.projectId, typeof body.root === 'string' ? body.root : undefined);
           const targetCwd = bases.find((b) => isInsideRoots(path.resolve(b), allowed));
           if (!targetCwd) return sendJson(res, 404, { success: false, error: 'No approved folder found for this run.' });
-          const runDir = path.join(targetCwd, '.ergo', 'runs', runId);
-          await fs.mkdir(runDir, { recursive: true });
+          // ensureRunDir also writes <cwd>/.ergo/.gitignore so in-app runs don't leave `.ergo/` untracked in the repo.
+          const runDir = ensureRunDir(targetCwd, runId);
           await recordRunGitBase(targetCwd, runDir).catch(() => { });
           const base = await readRunGitBase(runDir);
           if (base) located = { base, cwd: path.resolve(base.cwd || targetCwd), runDir };

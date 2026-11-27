@@ -252,7 +252,8 @@ export async function continueTaskWithAi(
 
   try {
     ctx.allowedRoots = await getAllowedRoots();
-    void queueRunCheckpoint(runId, { initBase: true, root: checkpointRoot });
+    // The pre-run snapshot runs alongside context gathering; awaited before the manager can write any file.
+    const baseReady = queueRunCheckpoint(runId, { initBase: true, root: checkpointRoot }).catch(() => null);
     ctx.emit({
       id: 'step-model-routing',
       stage: 'context',
@@ -331,6 +332,9 @@ export async function continueTaskWithAi(
     const priorState =
       `${previousCompletion ? `Completion log so far:\n${previousCompletion.replace(/<!--[\s\S]*?-->/g, '').slice(-2500)}\n\n` : ''}` +
       runBible.renderEventLog({ last: 15 });
+
+    // Every Undo/diff compares against this snapshot, so it must exist before the first write.
+    await baseReady;
 
     // ── Manager → Cleaner → Verifier (bounded verifier retries), as in a normal run ──
     let mgr: ManagerRunResult | null = null;

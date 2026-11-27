@@ -13,6 +13,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDown,
   ChevronRight,
+  Eye,
   FileDiff,
   FileMinus,
   FilePlus,
@@ -48,6 +49,7 @@ import { BiblePreview, StepUsageBadge } from './ExecutionStepExtras';
 import { AgentRoleBadge } from './AgentSessionTabs';
 import { FileLinkText } from './FileLink';
 import { InlineDiffView, VisualDiffModal } from './VisualDiffModal';
+import { isPreviewableFile } from '../lib/preview';
 import { askConfirm, Badge, Button, EmptyState, Icon, IconButton, StatusDot } from './ui';
 
 const STATUS_ICON = { added: FilePlus, deleted: FileMinus, modified: FileDiff, changed: FileDiff } as const;
@@ -114,6 +116,8 @@ export interface RunTimelineViewProps {
   onOpenTerminal?: () => void;
   /** Whether any CLI terminal exists for this run. */
   hasTerminal?: boolean;
+  /** Opens a changed HTML file in the Preview tab; no Preview buttons without it. */
+  onPreview?: (path: string) => void;
 }
 
 export const RunTimelineView: React.FC<RunTimelineViewProps> = ({
@@ -130,6 +134,7 @@ export const RunTimelineView: React.FC<RunTimelineViewProps> = ({
   onReverted,
   onOpenTerminal,
   hasTerminal,
+  onPreview,
 }) => {
   const [checkpoints, setCheckpoints] = useState<RunCheckpointRecord[]>([]);
   const [hasGitBaseline, setHasGitBaseline] = useState(false);
@@ -806,6 +811,15 @@ export const RunTimelineView: React.FC<RunTimelineViewProps> = ({
                                               </>
                                             )}
                                           </span>
+                                          {onPreview && f.status !== 'deleted' && isPreviewableFile(f.path) && (
+                                            <IconButton
+                                              icon={Eye}
+                                              size="sm"
+                                              label="Preview"
+                                              title={`Preview ${f.path} in Ergo`}
+                                              onClick={() => onPreview(f.path)}
+                                            />
+                                          )}
                                           {!runActive && runId && canVisualDiff && (
                                             <IconButton
                                               icon={Undo2}

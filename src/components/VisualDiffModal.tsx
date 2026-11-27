@@ -16,6 +16,7 @@ import {
   Undo2,
 } from 'lucide-react';
 import {
+  fetchRunCheckpoints,
   fetchRunDiff,
   openFileRef,
   openRunFileDiff,
@@ -155,6 +156,30 @@ export const VisualDiffModal: React.FC<VisualDiffModalProps> = ({
   const [revertingFile, setRevertingFile] = useState<string | null>(null);
   const [revertingAll, setRevertingAll] = useState(false);
   const [loadedSingleDiffs, setLoadedSingleDiffs] = useState<Record<string, string>>({});
+  /** path → labels of the run steps (checkpoints) that changed it: the zero-token "why" for each file. */
+  const [stepsByPath, setStepsByPath] = useState<Record<string, string[]>>({});
+
+  useEffect(() => {
+    if (!open || !runId) return;
+    let cancelled = false;
+    void fetchRunCheckpoints(runId, { root }).then((res) => {
+      if (cancelled) return;
+      const map: Record<string, string[]> = {};
+      for (const cp of res?.checkpoints ?? []) {
+        if (cp.isBaseline || !cp.files?.length) continue;
+        // Viewing one checkpoint's range: only that step explains the files.
+        if (toTree && cp.tree !== toTree) continue;
+        for (const f of cp.files) {
+          const labels = (map[f.path] ??= []);
+          if (!labels.includes(cp.label)) labels.push(cp.label);
+        }
+      }
+      setStepsByPath(map);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, runId, root, toTree]);
 
   const loadDiff = useCallback(async () => {
     if (!open || !runId) return;
@@ -201,7 +226,10 @@ export const VisualDiffModal: React.FC<VisualDiffModalProps> = ({
   const activeDiffText = activeFile ? (payload?.diffs[activeFile.path] ?? loadedSingleDiffs[activeFile.path] ?? '') : '';
   const parsed = useMemo(() => parseUnifiedDiff(activeDiffText), [activeDiffText]);
   const splitRows = useMemo(() => (viewMode === 'split' ? buildSplitRows(parsed) : []), [viewMode, parsed]);
-  const summaryLine = useMemo(() => (activeFile ? summarizeFileChange(activeFile, activeDiffText) : ''), [activeFile, activeDiffText]);
+  const summaryLine = useMemo(
+    () => (activeFile ? summarizeFileChange(activeFile, activeDiffText, stepsByPath[activeFile.path]) : ''),
+    [activeFile, activeDiffText, stepsByPath],
+  );
 
   const totalAdditions = useMemo(() => files.reduce((n, f) => n + f.additions, 0), [files]);
   const totalDeletions = useMemo(() => files.reduce((n, f) => n + f.deletions, 0), [files]);

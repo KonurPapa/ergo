@@ -131,12 +131,18 @@ Allow any user (developer or non-coder) to inspect changed files directly inside
 #### Goal
 Provide an immediate visual feedback tab in the execution pane so users can test web deliverables (games, components, dashboards) directly inside Ergo without leaving the app.
 
-#### Key Files
+#### Status: built (bridge protocol 11)
+- `bridge/preview.ts`: `POST /api/preview/session` issues an unguessable token for one Allowed Folder. `GET /api/preview/s/<token>/<path>` serves that folder's files, so relative CSS, JS and images load. Every response sends a CSP `sandbox` without allow-same-origin, which means the page can never use the app's or the bridge's origin. HTML responses also get a console relay injected. `GET /api/preview/ports` finds dev servers on common ports and skips Ergo bridges.
+- `src/components/LivePreviewPane.tsx` is the **Preview** tab, next to Timeline and Terminal in the task pane's Actions stage. It shows the run's HTML pages, detected dev servers, or a typed `localhost` URL. It has Desktop/Tablet/Mobile widths, Reload and Open in browser. While the task runs, the shown page reloads when its file changes. A console drawer captures output for run pages only, because dev servers are other origins and aren't proxied.
+- Changed-file rows (`RunChangedFiles`, `RunTimelineView`) have a Preview button on HTML files.
+- Differences from the original sketch below: the frame loads bridge-served files instead of `srcDoc`, because `srcDoc` can't load a page's relative assets. There is no dev-server proxy, and so no console capture for dev servers.
+
+#### Key Files (original sketch)
 - `src/components/LivePreviewPane.tsx` (New component)
 - `src/components/BriefPane.tsx` & `src/components/TaskPane.tsx` (Add "Preview" tab alongside Terminal and Notes)
 - `bridge/plugins.ts` (Add static file serving / local proxy endpoint)
 
-#### Detailed Implementation Steps
+#### Detailed Implementation Steps (original sketch)
 1. **Direct HTML / Standalone Deliverable Preview:**
    - Detect if the task generated an HTML bundle (e.g. `*.html` files) or single-page app.
    - Render an isolated `<iframe>` with strict sandbox flags:

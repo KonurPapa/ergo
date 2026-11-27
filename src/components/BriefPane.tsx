@@ -85,6 +85,7 @@ import {
   ArrowDownAZ,
   Activity,
   History,
+  MonitorSmartphone,
 } from 'lucide-react';
 import { getPref, setPref, subscribePrefs } from '../lib/userPrefs';
 import { Banner, Button, EmptyState, Icon, IconButton, MenuButton, RunRow, SegmentedControl, StatusDot, StatusIcon, STATUS_LABEL, PriorityIcon, PRIORITY_LABEL, type Priority, type DesignTaskStatus, type MenuItem } from './ui';
@@ -95,6 +96,8 @@ import { MOD, SHIFT } from '../lib/shortcuts';
 import { RichTextToolbar } from './RichTextToolbar';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { RunChangedFiles } from './RunChangedFiles';
+import { LivePreviewPane } from './LivePreviewPane';
+import { useBridgeSupportsPreview } from '../lib/preview';
 import { ScheduleTaskModal } from './ScheduleTaskModal';
 import { TaskMcpToolsModal } from './TaskMcpToolsModal';
 import { type ScheduledJob } from '../lib/taskScheduler';
@@ -568,7 +571,10 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
   const [overviewText, setOverviewText] = useState('');
   const [buildVerificationText, setBuildVerificationText] = useState('');
   const [completionText, setCompletionText] = useState('');
-  const [viewModeSection2, setViewModeSection2] = useState<'timeline' | 'terminal'>('timeline');
+  const [viewModeSection2, setViewModeSection2] = useState<'timeline' | 'terminal' | 'preview'>('timeline');
+  /** A file a Preview button asked the Preview tab to show. */
+  const [previewRequest, setPreviewRequest] = useState<{ path: string; nonce: number } | null>(null);
+  const previewSupported = useBridgeSupportsPreview();
   const [cliActivityItems, setCliActivityItems] = useState<ActivityFeedItem[]>([]);
   const [diffRefreshKey, setDiffRefreshKey] = useState(0);
   const [showAllTerminals, setShowAllTerminals] = useState(false);
@@ -980,6 +986,13 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
 
   // Determine what to display in Runs (merged Timeline vs power-user Terminal view)
   const showTerminalView = viewModeSection2 === 'terminal' && !isEditing;
+  const showPreviewView = viewModeSection2 === 'preview' && !isEditing && previewSupported;
+  /** A Preview button (changed files, timeline): show that page in the Preview tab. */
+  const openPreview = (path: string) => {
+    setPreviewRequest({ path, nonce: Date.now() });
+    setViewModeSection2('preview');
+    pickStage('actions');
+  };
 
   // Editing the overview makes it the user's (kept and reused by runs); clearing it lets the next run generate one.
   const overviewProvenance = (text: string): Partial<AgentContextItem> => {
@@ -2116,7 +2129,9 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                         {/* Internal View Switcher Bar: Timeline (merged Notes + Steps) | Terminal */}
                         <div className="actions-view-switcher-bar">
                           <span className="actions-switcher-label">
-                            {showTerminalView
+                            {showPreviewView
+                              ? 'Preview'
+                              : showTerminalView
                               ? shownAgent
                                 ? `Terminal · ${shownAgent.label}`
                                 : 'Terminal'
@@ -2149,18 +2164,23 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                             ) : null}
                           </span>
                           <span className="eg-spacer" />
-                          <SegmentedControl<'timeline' | 'terminal'>
+                          <SegmentedControl<'timeline' | 'terminal' | 'preview'>
                             label="Run view"
-                            value={showTerminalView ? 'terminal' : 'timeline'}
+                            value={showPreviewView ? 'preview' : showTerminalView ? 'terminal' : 'timeline'}
                             onChange={(next) => setViewModeSection2(next)}
                             options={[
                               { id: 'timeline', label: 'Timeline', icon: History, title: 'History timeline with checkpoints and diffs' },
                               { id: 'terminal', label: 'Terminal', icon: Terminal, title: 'Live terminal output for power users' },
+                              ...(previewSupported
+                                ? [{ id: 'preview' as const, label: 'Preview', icon: MonitorSmartphone, title: 'See web pages this task made, or a running dev server' }]
+                                : []),
                             ]}
                           />
                         </div>
 
-                        {showTerminalView ? (
+                        {showPreviewView ? (
+                          <LivePreviewPane runId={activeRunId} runActive={runActive} refreshKey={diffRefreshKey} requestedFile={previewRequest} />
+                        ) : showTerminalView ? (
                           /* Sub-view 2: Power-user raw Terminal view */
                           <div className="eg-run-terminal-view">
                             {agentSessions.length > 1 && (
@@ -2304,6 +2324,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                               onReverted={() => setDiffRefreshKey((k) => k + 1)}
                               hasTerminal={agentSessions.length > 0}
                               onOpenTerminal={() => setViewModeSection2('terminal')}
+                              onPreview={previewSupported ? openPreview : undefined}
                             />
                           </div>
                         )}
@@ -2386,6 +2407,7 @@ const AiTaskCard: React.FC<AiTaskCardProps> = ({
                           active={runActive}
                           refreshKey={diffRefreshKey}
                           onReverted={() => setDiffRefreshKey((k) => k + 1)}
+                          onPreview={previewSupported ? openPreview : undefined}
                         />
                       </div>
                     )}

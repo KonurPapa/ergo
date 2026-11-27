@@ -36,8 +36,14 @@
  * 10 — in-app visual diff & checkpoint rollback: /api/git/run-diff (unified diff payload), /api/git/revert-file,
  *      /api/git/revert-run, /api/git/checkpoint and /api/git/checkpoints (per-step tree snapshots and 1-click revert).
  *      Optional: older bridges still open diffs in the external editor.
+ * 11 — Live Web Preview: /api/preview/session (a token for one folder), GET /api/preview/s/<token>/<path> (that
+ *      folder's files, sandboxed, with a console relay injected into HTML) and /api/preview/ports (dev servers on
+ *      common ports). Optional: with an older bridge the task pane has no Preview tab.
  */
-export const BRIDGE_PROTOCOL = 10;
+export const BRIDGE_PROTOCOL = 11;
+
+/** First protocol whose bridge serves the Live Web Preview (preview.ts). */
+export const PREVIEW_PROTOCOL = 11;
 
 /** First protocol whose bridge serves in-app unified diffs, checkpoints, and 1-click revert. */
 export const VISUAL_DIFF_PROTOCOL = 10;

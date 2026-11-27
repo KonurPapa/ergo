@@ -151,9 +151,17 @@ const SYMBOL_RE =
 
 /**
  * Generates a calm, zero-token 1-sentence summary of what changed in a file from its diff stats
- * and top-level added/modified symbol names.
+ * and top-level added/modified symbol names, prefixed with the run step(s) that changed it (the "why") when known.
  */
-export function summarizeFileChange(file: RunChangedFile, diffText?: string): string {
+export function summarizeFileChange(file: RunChangedFile, diffText?: string, stepLabels?: string[]): string {
+  const what = describeFileChange(file, diffText);
+  const steps = (stepLabels ?? []).map((l) => l.trim()).filter(Boolean);
+  if (steps.length === 0) return what;
+  const more = steps.length > 1 ? ` (+${steps.length - 1} more step${steps.length === 2 ? '' : 's'})` : '';
+  return `Changed during “${steps[0]}”${more}. ${what}`;
+}
+
+function describeFileChange(file: RunChangedFile, diffText?: string): string {
   if (file.binary) {
     if (file.status === 'added') return 'Added a new binary file.';
     if (file.status === 'deleted') return 'Removed this binary file.';

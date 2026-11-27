@@ -1,0 +1,142 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   Live Web Preview (LivePreviewPane): the task pane's Preview tab.
+   Built on Ergo's /public/design/ergo-design/ tokens.
+   ────────────────────────────────────────────────────────────────────────── */
+
+.eg-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.eg-preview-toolbar,
+.eg-preview-urlbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.eg-preview-select {
+  flex: 1 1 14rem;
+  min-width: 0;
+  max-width: 28rem;
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--type-scale));
+}
+
+.eg-preview-urlbar .eg-input-wrap,
+.eg-preview-urlbar > .eg-input {
+  flex: 1 1 12rem;
+  min-width: 0;
+  max-width: 20rem;
+}
+
+.eg-preview-hint {
+  color: var(--ink-subtle);
+  font-size: calc(12px * var(--type-scale));
+  line-height: calc(17px * var(--type-scale));
+  padding: var(--space-1) 0;
+}
+
+.eg-preview-hint.is-error {
+  color: var(--danger);
+}
+
+.eg-preview-stage {
+  display: flex;
+  justify-content: center;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  overflow: auto;
+}
+
+.eg-preview-device {
+  width: 100%;
+  max-width: 100%;
+  height: min(70vh, 760px);
+  min-height: 320px;
+  resize: vertical;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  transition: width var(--duration-base) var(--ease-out);
+}
+
+.eg-preview-device.is-tablet,
+.eg-preview-device.is-mobile {
+  flex: none;
+  box-shadow: var(--shadow-popover);
+}
+
+.eg-preview-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.eg-preview-console {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  max-height: 14rem;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1) var(--space-2);
+}
+
+.eg-preview-console-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--ink-muted);
+  font-size: calc(12px * var(--type-scale));
+}
+
+.eg-preview-console-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: calc(11.5px * var(--type-scale));
+  line-height: calc(16px * var(--type-scale));
+}
+
+.eg-preview-console-list li {
+  display: flex;
+  gap: var(--space-2);
+  padding: 2px 0;
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.eg-preview-console-list li.is-warn {
+  color: var(--warning);
+}
+
+.eg-preview-console-list li.is-error {
+  color: var(--danger);
+}
+
+.eg-preview-console-list li.is-debug {
+  color: var(--ink-subtle);
+}
+
+.eg-preview-console-time {
+  flex: none;
+  color: var(--ink-subtle);
+}
+
+.eg-preview-console-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-width: 0;
+}

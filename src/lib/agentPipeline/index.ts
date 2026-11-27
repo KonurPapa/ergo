@@ -271,7 +271,8 @@ export async function executeTaskWithAi(
 
   try {
     ctx.allowedRoots = await getAllowedRoots();
-    void queueRunCheckpoint(runId, { initBase: true, root: checkpointRoot });
+    // The pre-run snapshot runs alongside context gathering; awaited before the manager can write any file.
+    const baseReady = queueRunCheckpoint(runId, { initBase: true, root: checkpointRoot }).catch(() => null);
     ctx.references = await resolveTaskReferences(task, brief, getWorkspaceSkills(), projectWorkingFolder(project));
     if (ctx.references) {
       ctx.emit({ id: 'step-task-commands', stage: 'context', title: 'Task Commands', detail: describeTaskReferences(ctx.references), status: 'success' });
@@ -424,6 +425,9 @@ export async function executeTaskWithAi(
         status: 'success'
       });
     };
+
+    // Every Undo/diff compares against this snapshot, so it must exist before the first write.
+    await baseReady;
 
     // Step 3 → 4 → 5 with bounded verifier retry loop
     let mgr: ManagerRunResult | null = null;
